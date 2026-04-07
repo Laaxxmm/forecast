@@ -18,8 +18,12 @@ export interface OneglanceSyncResult {
 
 const TIMEOUT = 120_000;
 
+// Use persistent volume in production
+const isProd = process.env.NODE_ENV === 'production';
+const DATA_DIR = process.env.DATA_DIR || (isProd ? '/data' : '.');
+
 // Debug screenshots directory
-const DEBUG_DIR = path.resolve('uploads', 'debug');
+const DEBUG_DIR = path.join(DATA_DIR, 'uploads', 'debug');
 
 function progress(opts: OneglanceSyncOptions, step: string, msg: string, pct: number) {
   opts.onProgress?.(step, msg, pct);
@@ -178,7 +182,7 @@ async function downloadReport(
  * Main Oneglance sync function
  */
 export async function syncOneglance(opts: OneglanceSyncOptions): Promise<OneglanceSyncResult> {
-  const downloadDir = path.resolve('uploads');
+  const downloadDir = path.join(DATA_DIR, 'uploads');
   if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
 
   // Use system Chrome locally, system Chromium (apt) on cloud

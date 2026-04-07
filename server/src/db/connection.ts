@@ -2,17 +2,22 @@ import initSqlJs, { Database } from 'sql.js';
 import path from 'path';
 import fs from 'fs';
 
-// Use /tmp in production (Railway ephemeral fs), or local data/ folder
+// Use Railway Volume (/data) in production, or local data/ folder
+// IMPORTANT: Attach a Railway Volume mounted at /data to persist across deploys
 const isProd = process.env.NODE_ENV === 'production';
-const dataDir = process.env.DATA_DIR || (isProd ? '/tmp' : path.join(__dirname, '..', '..', '..', 'data'));
+const dataDir = process.env.DATA_DIR || (isProd ? '/data' : path.join(__dirname, '..', '..', '..', 'data'));
 try {
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 } catch (e) {
   console.error(`[DB] Failed to create data dir ${dataDir}, falling back to /tmp`);
 }
 
-const dbPath = path.join(fs.existsSync(dataDir) ? dataDir : '/tmp', 'magna_tracker.db');
+const effectiveDir = fs.existsSync(dataDir) ? dataDir : '/tmp';
+const dbPath = path.join(effectiveDir, 'magna_tracker.db');
 console.log(`[DB] Using database at: ${dbPath}`);
+if (effectiveDir === '/tmp') {
+  console.warn('[DB] WARNING: Using /tmp — database will NOT persist across deploys! Attach a Railway Volume at /data.');
+}
 
 let db: Database;
 

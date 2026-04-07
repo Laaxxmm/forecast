@@ -55,7 +55,14 @@
       "Bash(curl -s \"http://localhost:3000/api/dashboard/variance?fy_id=2&business_unit=CLINIC\" -b /tmp/cookiesF.txt)",
       "Bash(npx --prefix client tsc --noEmit)",
       "Bash(grep -r \"ForecastPage\\\\|ForecastModulePage\" C:UsersLENOVODesktopMagna_Trackerclientsrc --include=*.tsx --include=*.ts)",
-      "WebFetch(domain:forecast-production-5f93.up.railway.app)"
+      "WebFetch(domain:forecast-production-5f93.up.railway.app)",
+      "Bash(curl -s -X POST https://forecast-production-5f93.up.railway.app/api/auth/login -H \"Content-Type: application/json\" -d '{\"\"username\"\":\"\"admin\"\",\"\"password\"\":\"\"admin123\"\"}')",
+      "Read(//mnt/c/Users/LENOVO/Desktop/Magna_Tracker/**)",
+      "Bash(dir \"C:\\\\Users\\\\LENOVO\\\\Desktop\\\\Magna_Tracker\\\\server\")",
+      "Bash(grep -r \"VITE_API_URL\\\\|RAILWAY\\\\|railway.app\" /c/Users/LENOVO/Desktop/Magna_Tracker --include=*.json --include=*.ts --include=*.js --include=*.env*)",
+      "Bash(grep -r \"router.get\\\\|router.post\\\\|app.get\\\\|app.post\" /c/Users/LENOVO/Desktop/Magna_Tracker/server/src/routes/ --include=*.ts)",
+      "Bash(grep -r \"admin\\\\|viewer\\\\|export\\\\|download\" /c/Users/LENOVO/Desktop/Magna_Tracker/server/src/routes/ --include=*.ts -i)",
+      "Bash(RAILWAY_URL=\"https://forecast-production-5f93.up.railway.app\" TOKEN=\"77560203748ac12ee058dd7e726f710372ab62ef9b10bcd34719d4995e5349b2\" __NEW_LINE_120ece78b797a26d__ curl -s \"$RAILWAY_URL/api/dashboard-actuals/?scenario_id=1\" -H \"Authorization: Bearer $TOKEN\")"
     ]
   }
 }

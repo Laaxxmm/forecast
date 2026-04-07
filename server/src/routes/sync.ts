@@ -459,8 +459,11 @@ router.post('/oneglance/reset', (_req: Request, res: Response) => {
 
 // ─── Debug Screenshots ──────────────────────────────────────────────────────
 
+const isProdEnv = process.env.NODE_ENV === 'production';
+const persistentDir = process.env.DATA_DIR || (isProdEnv ? '/data' : '.');
+
 router.get('/debug/screenshots', (_req: Request, res: Response) => {
-  const debugDir = path.resolve('uploads', 'debug');
+  const debugDir = path.join(persistentDir, 'uploads', 'debug');
   if (!fs.existsSync(debugDir)) {
     return res.json({ screenshots: [] });
   }
@@ -476,7 +479,7 @@ router.get('/debug/screenshots', (_req: Request, res: Response) => {
 });
 
 router.get('/debug/screenshots/:filename', (req: Request, res: Response) => {
-  const debugDir = path.resolve('uploads', 'debug');
+  const debugDir = path.join(persistentDir, 'uploads', 'debug');
   const filePath = path.join(debugDir, req.params.filename);
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: 'Not found' });

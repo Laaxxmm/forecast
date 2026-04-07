@@ -186,11 +186,10 @@ async function selectDateInCalendar(page: Page, targetDate: { year: number; mont
  * 6. Click download (⬇) icon next to "Billed" row
  */
 export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
-  const downloadDir = path.resolve('uploads');
-  if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
-
-  // Use system Chrome locally, system Chromium (apt) on cloud
   const isProd = process.env.NODE_ENV === 'production';
+  const dataDir = process.env.DATA_DIR || (isProd ? '/data' : '.');
+  const downloadDir = path.join(dataDir, 'uploads');
+  if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
   const chromiumPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium';
   const browser = await chromium.launch({
     ...(isProd ? { executablePath: chromiumPath } : { channel: 'chrome' }),
