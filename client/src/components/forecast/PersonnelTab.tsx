@@ -250,18 +250,18 @@ export default function PersonnelTab({ category, label, scenario, months, items,
     const itemValues = allValues[item.id] || {};
     const rowTotal = months.reduce((sum, m) => sum + (itemValues[m] || 0), 0);
     return (
-      <tr key={item.id} className="border-b border-slate-100 hover:bg-slate-50 group">
-        <td className="py-2.5 px-4 sticky left-0 bg-white z-10 group-hover:bg-slate-50">
+      <tr key={item.id} className="border-b border-dark-400/30 hover:bg-dark-600 group">
+        <td className="py-2.5 px-4 sticky left-0 bg-dark-700 z-10 group-hover:bg-dark-600">
           <div className="flex items-center gap-2">
             <GripVertical size={14} className="text-slate-300 cursor-grab opacity-0 group-hover:opacity-100" />
             <button
               onClick={() => setEditingItem(item)}
-              className="text-primary-600 hover:text-primary-700 font-medium hover:underline text-left"
+              className="text-accent-400 hover:text-accent-300 font-medium hover:underline text-left"
             >
               {item.name}
             </button>
             {item.item_type === 'group' && (
-              <span className="text-xs px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded">Group</span>
+              <span className="text-xs px-1.5 py-0.5 bg-dark-500 text-slate-500 rounded">Group</span>
             )}
             <div className="relative ml-auto">
               <button
@@ -275,7 +275,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
                     setMenuOpenId(item.id);
                   }
                 }}
-                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-slate-200 rounded"
+                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-dark-400 rounded"
               >
                 <MoreVertical size={14} />
               </button>
@@ -283,11 +283,11 @@ export default function PersonnelTab({ category, label, scenario, months, items,
           </div>
         </td>
         {months.map(m => (
-          <td key={m} className="text-right py-2.5 px-3 text-slate-700 tabular-nums">
+          <td key={m} className="text-right py-2.5 px-3 text-slate-300 tabular-nums">
             {itemValues[m] ? formatRs(itemValues[m]) : <span className="text-slate-300">-</span>}
           </td>
         ))}
-        <td className="text-right py-2.5 px-4 font-semibold text-slate-800 bg-slate-50 tabular-nums">
+        <td className="text-right py-2.5 px-4 font-semibold text-white bg-dark-600 tabular-nums">
           {formatRs(rowTotal)}
         </td>
       </tr>
@@ -297,16 +297,16 @@ export default function PersonnelTab({ category, label, scenario, months, items,
   const renderSectionSubtotal = (sectionLabel: string, totals: Record<string, number>) => {
     const sectionTotal = months.reduce((s, m) => s + (totals[m] || 0), 0);
     return (
-      <tr className="border-b border-slate-200 bg-slate-50/50">
-        <td className="py-2 px-4 font-semibold text-slate-600 text-sm sticky left-0 bg-slate-50/50 z-10">
+      <tr className="border-b border-dark-400/50 bg-dark-600/50">
+        <td className="py-2 px-4 font-semibold text-slate-400 text-sm sticky left-0 bg-dark-600/50 z-10">
           {sectionLabel}
         </td>
         {months.map(m => (
-          <td key={m} className="text-right py-2 px-3 text-slate-600 font-medium tabular-nums text-sm">
+          <td key={m} className="text-right py-2 px-3 text-slate-400 font-medium tabular-nums text-sm">
             {formatRs(totals[m] || 0)}
           </td>
         ))}
-        <td className="text-right py-2 px-4 font-semibold text-slate-700 bg-slate-100 tabular-nums text-sm">
+        <td className="text-right py-2 px-4 font-semibold text-slate-300 bg-dark-500 tabular-nums text-sm">
           {formatRs(sectionTotal)}
         </td>
       </tr>
@@ -318,8 +318,8 @@ export default function PersonnelTab({ category, label, scenario, months, items,
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
-          <h2 className="text-xl font-bold text-slate-800">{label}</h2>
-          <span className="text-xs px-2.5 py-1 rounded-full bg-amber-100 text-amber-700 font-medium cursor-pointer">In Progress</span>
+          <h2 className="text-xl font-bold text-white">{label}</h2>
+          <span className="text-xs px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-400 font-medium cursor-pointer">In Progress</span>
         </div>
         <div className="relative">
           <button
@@ -333,23 +333,23 @@ export default function PersonnelTab({ category, label, scenario, months, items,
           {showAddDropdown && (
             <>
               <div className="fixed inset-0 z-[49]" onClick={() => setShowAddDropdown(false)} />
-              <div className="absolute right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-64">
+              <div className="absolute right-0 mt-1 bg-dark-700 border border-dark-400/50 rounded-lg shadow-lg z-50 w-64">
                 <button
                   onClick={() => {
                     pendingLaborType.current = 'regular_labor';
                     setShowTypeSelection(true);
                     setShowAddDropdown(false);
                   }}
-                  className="w-full text-left px-4 py-3 hover:bg-slate-50 rounded-t-lg"
+                  className="w-full text-left px-4 py-3 hover:bg-dark-600 rounded-t-lg"
                 >
-                  <div className="font-medium text-sm text-slate-800">Add Personnel</div>
+                  <div className="font-medium text-sm text-white">Add Personnel</div>
                   <div className="text-xs text-slate-500">Add an individual employee or group</div>
                 </button>
                 <button
                   onClick={() => handleAdd('employee_benefits')}
-                  className="w-full text-left px-4 py-3 hover:bg-slate-50 rounded-b-lg border-t border-slate-100"
+                  className="w-full text-left px-4 py-3 hover:bg-dark-600 rounded-b-lg border-t border-dark-400/30"
                 >
-                  <div className="font-medium text-sm text-slate-800">Employee Taxes or Benefits</div>
+                  <div className="font-medium text-sm text-white">Employee Taxes or Benefits</div>
                   <div className="text-xs text-slate-500">Add a burden rate for on-staff employees</div>
                 </button>
               </div>
@@ -361,7 +361,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
       {/* Chart */}
       {items.length > 0 && (
         <div className="card mb-4">
-          <h3 className="text-sm font-semibold text-slate-600 mb-3">Personnel Totals</h3>
+          <h3 className="text-sm font-semibold text-slate-400 mb-3">Personnel Totals</h3>
           <div className="h-48">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData}>
@@ -371,7 +371,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
                     <stop offset="95%" stopColor="#0d9488" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" />
                 <XAxis dataKey="month" tick={{ fontSize: 11 }} stroke="#94a3b8" />
                 <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={v => `Rs${(v / 1000).toFixed(0)}k`} />
                 <Tooltip
@@ -396,28 +396,28 @@ export default function PersonnelTab({ category, label, scenario, months, items,
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm" style={{ minWidth: months.length * 100 + 300 }}>
           <thead>
-            <tr className="border-b border-slate-200 bg-slate-50">
-              <th className="text-left py-3 px-4 font-semibold text-slate-600 sticky left-0 bg-slate-50 z-10 min-w-[240px]">
+            <tr className="border-b border-dark-400/50 bg-dark-600">
+              <th className="text-left py-3 px-4 font-semibold text-slate-400 sticky left-0 bg-dark-600 z-10 min-w-[240px]">
                 <div className="flex items-center gap-2">
                   <span>{label}</span>
-                  <button className="text-xs text-slate-400 hover:text-slate-600 border border-slate-300 rounded px-2 py-0.5">Organize</button>
+                  <button className="text-xs text-slate-400 hover:text-slate-400 border border-dark-400 rounded px-2 py-0.5">Organize</button>
                 </div>
               </th>
               {months.map(m => (
-                <th key={m} className="text-right py-3 px-3 font-semibold text-slate-600 whitespace-nowrap min-w-[100px]">
+                <th key={m} className="text-right py-3 px-3 font-semibold text-slate-400 whitespace-nowrap min-w-[100px]">
                   {getMonthLabel(m)}
                 </th>
               ))}
-              <th className="text-right py-3 px-4 font-semibold text-slate-600 bg-slate-100 min-w-[120px]">Total</th>
+              <th className="text-right py-3 px-4 font-semibold text-slate-400 bg-dark-500 min-w-[120px]">Total</th>
             </tr>
           </thead>
           <tbody>
             {/* ── Direct Labor Section ── */}
             {directLaborItems.length > 0 && (
               <>
-                <tr className="border-b border-slate-200 bg-blue-50/30">
+                <tr className="border-b border-dark-400/50 bg-blue-500/10/30">
                   <td colSpan={months.length + 2} className="py-2 px-4 sticky left-0 z-10">
-                    <span className="text-xs font-bold text-blue-700 uppercase tracking-wider">Direct Labor</span>
+                    <span className="text-xs font-bold text-blue-400 uppercase tracking-wider">Direct Labor</span>
                   </td>
                 </tr>
                 {directLaborItems.map(renderItemRow)}
@@ -427,11 +427,11 @@ export default function PersonnelTab({ category, label, scenario, months, items,
 
             {/* Add direct labor link */}
             {directLaborItems.length > 0 && (
-              <tr className="border-b border-slate-100">
-                <td className="py-2 px-4 sticky left-0 bg-white z-10" colSpan={months.length + 2}>
+              <tr className="border-b border-dark-400/30">
+                <td className="py-2 px-4 sticky left-0 bg-dark-700 z-10" colSpan={months.length + 2}>
                   <button
                     onClick={() => handleAddPersonnel('direct_labor')}
-                    className="flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700"
+                    className="flex items-center gap-2 text-sm text-accent-400 hover:text-accent-300"
                   >
                     <Plus size={14} />
                     Add new direct labor
@@ -443,9 +443,9 @@ export default function PersonnelTab({ category, label, scenario, months, items,
             {/* ── Other Labor Section ── */}
             {otherLaborItems.length > 0 && (
               <>
-                <tr className="border-b border-slate-200 bg-slate-50/50">
+                <tr className="border-b border-dark-400/50 bg-dark-600/50">
                   <td colSpan={months.length + 2} className="py-2 px-4 sticky left-0 z-10">
-                    <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Other Labor</span>
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Other Labor</span>
                   </td>
                 </tr>
                 {otherLaborItems.map(renderItemRow)}
@@ -454,14 +454,14 @@ export default function PersonnelTab({ category, label, scenario, months, items,
             )}
 
             {/* Add personnel link */}
-            <tr className="border-b border-slate-100">
-              <td className="py-2 px-4 sticky left-0 bg-white z-10" colSpan={months.length + 2}>
+            <tr className="border-b border-dark-400/30">
+              <td className="py-2 px-4 sticky left-0 bg-dark-700 z-10" colSpan={months.length + 2}>
                 <button
                   onClick={() => {
                     pendingLaborType.current = 'regular_labor';
                     setShowTypeSelection(true);
                   }}
-                  className="flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700"
+                  className="flex items-center gap-2 text-sm text-accent-400 hover:text-accent-300"
                 >
                   <Plus size={14} />
                   Add new personnel
@@ -471,64 +471,64 @@ export default function PersonnelTab({ category, label, scenario, months, items,
 
             {/* ── Employee Taxes & Benefits Row ── */}
             {benefitsItems.length > 0 && (
-              <tr className="border-b border-slate-200 bg-amber-50/30">
-                <td className="py-2.5 px-4 sticky left-0 bg-amber-50/30 z-10">
+              <tr className="border-b border-dark-400/50 bg-amber-500/10/30">
+                <td className="py-2.5 px-4 sticky left-0 bg-amber-500/10/30 z-10">
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => {
                         const bi = benefitsItems[0];
                         if (bi) setEditingItem(bi);
                       }}
-                      className="text-primary-600 hover:text-primary-700 font-medium hover:underline text-left"
+                      className="text-accent-400 hover:text-accent-300 font-medium hover:underline text-left"
                     >
                       Employee Taxes & Benefits
                     </button>
-                    <span className="text-xs px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">
+                    <span className="text-xs px-1.5 py-0.5 bg-amber-500/10 text-amber-400 rounded">
                       {benefitsRate}%
                     </span>
                   </div>
                 </td>
                 {months.map(m => (
-                  <td key={m} className="text-right py-2.5 px-3 text-slate-700 tabular-nums">
+                  <td key={m} className="text-right py-2.5 px-3 text-slate-300 tabular-nums">
                     {benefitsTotals[m] ? formatRs(benefitsTotals[m]) : <span className="text-slate-300">-</span>}
                   </td>
                 ))}
-                <td className="text-right py-2.5 px-4 font-semibold text-slate-800 bg-slate-50 tabular-nums">
+                <td className="text-right py-2.5 px-4 font-semibold text-white bg-dark-600 tabular-nums">
                   {formatRs(months.reduce((s, m) => s + (benefitsTotals[m] || 0), 0))}
                 </td>
               </tr>
             )}
 
             {/* ── Totals Row ── */}
-            <tr className="border-t-2 border-primary-200 bg-slate-50 font-semibold">
-              <td className="py-3 px-4 text-slate-700 sticky left-0 bg-slate-50 z-10">Totals</td>
+            <tr className="border-t-2 border-primary-200 bg-dark-600 font-semibold">
+              <td className="py-3 px-4 text-slate-300 sticky left-0 bg-dark-600 z-10">Totals</td>
               {months.map(m => (
-                <td key={m} className="text-right py-3 px-3 text-slate-800 tabular-nums">
+                <td key={m} className="text-right py-3 px-3 text-white tabular-nums">
                   {formatRs(monthlyTotals[m] || 0)}
                 </td>
               ))}
-              <td className="text-right py-3 px-4 text-slate-900 bg-slate-100 tabular-nums">
+              <td className="text-right py-3 px-4 text-slate-900 bg-dark-500 tabular-nums">
                 {formatRs(grandTotal)}
               </td>
             </tr>
 
             {/* ── Head Count Row ── */}
             <tr
-              className="border-t border-slate-200 bg-slate-50/50 cursor-pointer hover:bg-slate-100/50"
+              className="border-t border-dark-400/50 bg-dark-600/50 cursor-pointer hover:bg-dark-500/50"
               onClick={() => setHeadCountExpanded(!headCountExpanded)}
             >
-              <td className="py-2.5 px-4 text-slate-600 font-medium sticky left-0 bg-slate-50/50 z-10">
+              <td className="py-2.5 px-4 text-slate-400 font-medium sticky left-0 bg-dark-600/50 z-10">
                 <div className="flex items-center gap-2">
                   {headCountExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                   Head Count
                 </div>
               </td>
               {months.map(m => (
-                <td key={m} className="text-right py-2.5 px-3 text-slate-600 tabular-nums">
+                <td key={m} className="text-right py-2.5 px-3 text-slate-400 tabular-nums">
                   {headCountPerMonth[m] || 0}
                 </td>
               ))}
-              <td className="text-right py-2.5 px-4 font-semibold text-slate-700 bg-slate-100 tabular-nums">
+              <td className="text-right py-2.5 px-4 font-semibold text-slate-300 bg-dark-500 tabular-nums">
                 {totalHeadCount}
               </td>
             </tr>
@@ -537,8 +537,8 @@ export default function PersonnelTab({ category, label, scenario, months, items,
             {headCountExpanded && items.filter(i => i.item_type !== 'employee_benefits').map(item => {
               const isGroup = item.item_type === 'group';
               return (
-                <tr key={`hc-${item.id}`} className="border-b border-slate-50 bg-white">
-                  <td className="py-1.5 px-4 pl-10 text-slate-500 text-xs sticky left-0 bg-white z-10">
+                <tr key={`hc-${item.id}`} className="border-b border-slate-50 bg-dark-700">
+                  <td className="py-1.5 px-4 pl-10 text-slate-500 text-xs sticky left-0 bg-dark-700 z-10">
                     {item.name}
                   </td>
                   {months.map(m => {
@@ -550,7 +550,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
                       </td>
                     );
                   })}
-                  <td className="text-right py-1.5 px-4 text-slate-500 bg-slate-50 tabular-nums text-xs">
+                  <td className="text-right py-1.5 px-4 text-slate-500 bg-dark-600 tabular-nums text-xs">
                     {isGroup
                       ? Math.max(...months.map(m => item.meta?.stepValues?.headcount?.[m] || 0), 0)
                       : (months.some(m => (allValues[item.id]?.[m] || 0) > 0) ? 1 : 0)
@@ -568,12 +568,12 @@ export default function PersonnelTab({ category, label, scenario, months, items,
         <>
           <div className="fixed inset-0 z-[49]" onClick={() => setMenuOpenId(null)} />
           <div
-            className="fixed bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-40"
+            className="fixed bg-dark-700 border border-dark-400/50 rounded-lg shadow-lg z-50 w-40"
             style={{ top: menuPos.top, left: menuPos.left }}
           >
-            <button onClick={() => { const item = items.find(i => i.id === menuOpenId); if (item) { setEditingItem(item); setMenuOpenId(null); } }} className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 rounded-t-lg">Edit</button>
-            <button onClick={() => { const item = items.find(i => i.id === menuOpenId); if (item) handleDuplicate(item); }} className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50">Duplicate</button>
-            <button onClick={() => { if (menuOpenId) handleDelete(menuOpenId); }} className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-b-lg">Delete</button>
+            <button onClick={() => { const item = items.find(i => i.id === menuOpenId); if (item) { setEditingItem(item); setMenuOpenId(null); } }} className="w-full text-left px-3 py-2 text-sm hover:bg-dark-600 rounded-t-lg">Edit</button>
+            <button onClick={() => { const item = items.find(i => i.id === menuOpenId); if (item) handleDuplicate(item); }} className="w-full text-left px-3 py-2 text-sm hover:bg-dark-600">Duplicate</button>
+            <button onClick={() => { if (menuOpenId) handleDelete(menuOpenId); }} className="w-full text-left px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 rounded-b-lg">Delete</button>
           </div>
         </>
       )}

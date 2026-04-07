@@ -35,7 +35,6 @@ export default function DashboardModulePage() {
   const [settings, setSettings] = useState<Record<string, any>>({});
   const [actuals, setActuals] = useState<Record<string, Record<string, number>>>({});
 
-  // Load FYs
   useEffect(() => {
     api.get('/settings/fy').then(res => {
       setFYs(res.data);
@@ -45,7 +44,6 @@ export default function DashboardModulePage() {
     });
   }, []);
 
-  // Ensure scenario
   useEffect(() => {
     if (!selectedFY) return;
     api.post('/forecast-module/scenarios/ensure', { fy_id: selectedFY.id }).then(res => {
@@ -54,7 +52,6 @@ export default function DashboardModulePage() {
     }).then(res => setScenarios(res.data));
   }, [selectedFY]);
 
-  // Load forecast data + actuals
   const loadData = useCallback(async () => {
     if (!scenario) return;
     const [itemsRes, valuesRes, settingsRes, actualsRes] = await Promise.all([
@@ -72,7 +69,6 @@ export default function DashboardModulePage() {
     setAllValues(lookup);
     setSettings(settingsRes.data);
 
-    // Build actuals lookup: category -> month -> total
     const aLookup: Record<string, Record<string, number>> = {};
     actualsRes.data.forEach((r: any) => {
       if (!aLookup[r.category]) aLookup[r.category] = {};
@@ -97,9 +93,9 @@ export default function DashboardModulePage() {
   };
 
   return (
-    <div className="dashboard-module">
+    <div className="dashboard-module animate-fade-in">
       {/* Top Navigation */}
-      <div className="bg-white border-b border-slate-200 -mx-6 -mt-6 px-6 mb-0">
+      <div className="bg-dark-800 border-b border-dark-400/30 -mx-8 -mt-8 px-8 mb-0 rounded-none">
         <div className="flex items-center justify-between">
           <div className="flex overflow-x-auto">
             {tabs.map(tab => (
@@ -107,10 +103,10 @@ export default function DashboardModulePage() {
                 key={tab.path}
                 to={`/analysis/${tab.path}`}
                 className={({ isActive }) =>
-                  `flex items-center gap-2 px-4 py-4 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
+                  `flex items-center gap-2 px-4 py-4 text-[13px] font-medium border-b-2 whitespace-nowrap transition-all ${
                     isActive
-                      ? 'border-primary-500 text-primary-600 bg-primary-50/30'
-                      : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                      ? 'border-accent-500 text-accent-400'
+                      : 'border-transparent text-slate-500 hover:text-slate-300 hover:border-dark-300'
                   }`
                 }
               >
@@ -145,7 +141,7 @@ export default function DashboardModulePage() {
       </div>
 
       {/* Content */}
-      <div className="mt-4">
+      <div className="mt-6">
         <Routes>
           <Route index element={<Navigate to="overview" replace />} />
           <Route path="overview" element={<DashboardOverview {...sharedProps} />} />

@@ -22,9 +22,9 @@ export function getMonthLabel(month: string): string {
 
 export function ragColor(rag: string): string {
   switch (rag) {
-    case 'GREEN': return 'text-emerald-600 bg-emerald-50';
-    case 'AMBER': return 'text-amber-600 bg-amber-50';
-    case 'RED': return 'text-red-600 bg-red-50';
-    default: return 'text-slate-600 bg-slate-50';
+    case 'GREEN': return 'text-emerald-400 bg-emerald-500/15';
+    case 'AMBER': return 'text-amber-400 bg-amber-500/15';
+    case 'RED': return 'text-red-400 bg-red-500/15';
+    default: return 'text-slate-400 bg-dark-500';
   }
 }

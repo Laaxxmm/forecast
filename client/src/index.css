@@ -2,26 +2,101 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background-color: #f8fafc;
+  background-color: #0a0a10;
+  color: #e2e8f0;
+}
+
+/* Custom scrollbar for dark theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0f0f18;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2a3d;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #353548;
 }
 
 @layer components {
   .btn-primary {
-    @apply bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors font-medium;
+    @apply text-white px-4 py-2.5 rounded-xl transition-all font-medium shadow-sm;
+    background-color: #10b981;
+  }
+  .btn-primary:hover {
+    background-color: #059669;
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.15);
   }
   .btn-secondary {
-    @apply bg-slate-100 text-slate-700 px-4 py-2 rounded-lg hover:bg-slate-200 transition-colors font-medium;
+    @apply text-slate-300 px-4 py-2.5 rounded-xl transition-all font-medium;
+    background-color: #212133;
+    border: 1px solid #353548;
+  }
+  .btn-secondary:hover {
+    background-color: #2a2a3d;
   }
   .btn-danger {
-    @apply bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 transition-colors font-medium;
+    @apply text-red-400 px-4 py-2.5 rounded-xl transition-all font-medium;
+    background-color: rgba(239, 68, 68, 0.2);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+  }
+  .btn-danger:hover {
+    background-color: rgba(239, 68, 68, 0.3);
   }
   .card {
-    @apply bg-white rounded-lg shadow-sm border border-slate-200 p-6;
+    @apply rounded-2xl p-6;
+    background-color: #14141f;
+    border: 1px solid rgba(42, 42, 61, 0.5);
+  }
+  .card-hover {
+    @apply rounded-2xl p-6 transition-all;
+    background-color: #14141f;
+    border: 1px solid rgba(42, 42, 61, 0.5);
+  }
+  .card-hover:hover {
+    border-color: rgba(16, 185, 129, 0.3);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   }
   .input {
-    @apply w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent;
+    @apply w-full px-3 py-2.5 rounded-xl text-slate-200 placeholder-slate-500 transition-all;
+    background-color: #0f0f18;
+    border: 1px solid #2a2a3d;
+  }
+  .input:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.5);
+    border-color: rgba(16, 185, 129, 0.5);
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium;
+  }
+  .badge-success {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium text-emerald-400;
+    background-color: rgba(16, 185, 129, 0.15);
+    border: 1px solid rgba(16, 185, 129, 0.2);
+  }
+  .badge-warning {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium text-amber-400;
+    background-color: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.2);
+  }
+  .badge-danger {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium text-red-400;
+    background-color: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.2);
+  }
+  .badge-info {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium text-blue-400;
+    background-color: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.2);
   }
 }
 
@@ -32,4 +107,45 @@ body {
 }
 .animate-slide-in-right {
   animation: slide-in-right 0.25s ease-out;
+}
+
+/* Fade in animation */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: fade-in 0.4s ease-out;
+}
+
+/* Pulse glow for active elements */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.2); }
+  50% { box-shadow: 0 0 20px 4px rgba(16, 185, 129, 0.15); }
+}
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Recharts dark theme overrides */
+.recharts-cartesian-grid line {
+  stroke: #1a1a28 !important;
+}
+.recharts-text {
+  fill: #64748b !important;
+}
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background-color: #14141f !important;
+  border: 1px solid #2a2a3d !important;
+  border-radius: 12px !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+}
+.recharts-tooltip-item {
+  color: #e2e8f0 !important;
+}
+.recharts-tooltip-label {
+  color: #94a3b8 !important;
+}
+.recharts-legend-item-text {
+  color: #94a3b8 !important;
 }

@@ -159,12 +159,12 @@ export default function DashboardPnL({ items, allValues, months, settings, actua
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-bold text-slate-800">Profit & Loss</h2>
+        <h2 className="text-xl font-bold text-white">Profit & Loss</h2>
         <div className="flex items-center gap-3">
           <select value={selectedPeriod} onChange={e => setSelectedPeriod(e.target.value)} className="input text-sm py-1.5 w-56">
             {periodOptions.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
           </select>
-          <div className="flex bg-slate-100 rounded-lg p-1">
+          <div className="flex bg-dark-500 rounded-lg p-1">
             <button onClick={() => setView('overall')} className={`px-3 py-1.5 rounded-md text-xs font-medium ${view === 'overall' ? 'bg-slate-800 text-white' : 'text-slate-500'}`}>Overall</button>
             <button onClick={() => setView('monthly')} className={`px-3 py-1.5 rounded-md text-xs font-medium ${view === 'monthly' ? 'bg-slate-800 text-white' : 'text-slate-500'}`}>By Month</button>
           </div>
@@ -174,17 +174,17 @@ export default function DashboardPnL({ items, allValues, months, settings, actua
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm" style={view === 'monthly' ? { minWidth: periodMonths.length * 200 + 280 } : undefined}>
           <thead>
-            <tr className="border-b border-slate-200 bg-slate-50">
-              <th className="text-left py-3 px-4 font-semibold text-slate-600 sticky left-0 bg-slate-50 z-10 min-w-[250px]">Profit & Loss</th>
+            <tr className="border-b border-dark-400/50 bg-dark-600">
+              <th className="text-left py-3 px-4 font-semibold text-slate-400 sticky left-0 bg-dark-600 z-10 min-w-[250px]">Profit & Loss</th>
               {view === 'overall' ? (
                 <>
-                  <th className="text-right py-3 px-4 font-semibold text-slate-600 min-w-[120px]">Actual</th>
-                  <th className="text-right py-3 px-4 font-semibold text-slate-600 min-w-[120px]">Forecast</th>
-                  <th className="text-right py-3 px-4 font-semibold text-slate-600 min-w-[100px]">Change</th>
+                  <th className="text-right py-3 px-4 font-semibold text-slate-400 min-w-[120px]">Actual</th>
+                  <th className="text-right py-3 px-4 font-semibold text-slate-400 min-w-[120px]">Forecast</th>
+                  <th className="text-right py-3 px-4 font-semibold text-slate-400 min-w-[100px]">Change</th>
                 </>
               ) : (
                 periodMonths.map(m => (
-                  <th key={m} className="text-right py-3 px-2 font-semibold text-slate-600 whitespace-nowrap min-w-[180px]" colSpan={1}>
+                  <th key={m} className="text-right py-3 px-2 font-semibold text-slate-400 whitespace-nowrap min-w-[180px]" colSpan={1}>
                     <div>{monthLabel(m)}</div>
                     <div className="flex justify-end gap-4 text-xs mt-1 font-normal text-slate-400">
                       <span>Actual</span><span>Forecast</span><span>Chg</span>
@@ -201,22 +201,22 @@ export default function DashboardPnL({ items, allValues, months, settings, actua
                 const forecast = row.getForecast(periodMonths);
                 const change = calcChange(actual, forecast);
                 return (
-                  <tr key={row.key} className={`border-b border-slate-100 ${row.isTotal ? 'font-semibold bg-slate-50/50' : ''}`}>
-                    <td className={`py-2.5 px-4 sticky left-0 z-10 ${row.isTotal ? 'bg-slate-50/50' : 'bg-white'} ${row.indent ? 'pl-10' : ''}`}>
+                  <tr key={row.key} className={`border-b border-dark-400/30 ${row.isTotal ? 'font-semibold bg-dark-600/50' : ''}`}>
+                    <td className={`py-2.5 px-4 sticky left-0 z-10 ${row.isTotal ? 'bg-dark-600/50' : 'bg-dark-700'} ${row.indent ? 'pl-10' : ''}`}>
                       <div className="flex items-center gap-1">
                         {row.expandable && (
-                          <button onClick={() => toggleExpand(row.key)} className="p-0.5 hover:bg-slate-200 rounded">
+                          <button onClick={() => toggleExpand(row.key)} className="p-0.5 hover:bg-dark-400 rounded">
                             {expanded[row.key] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                           </button>
                         )}
-                        <span className="text-slate-700">{row.label}</span>
+                        <span className="text-slate-300">{row.label}</span>
                       </div>
                     </td>
-                    <td className={`text-right py-2.5 px-4 tabular-nums ${actual < 0 ? 'text-red-600' : ''}`}>{actual !== 0 ? fmtVal(actual, !!row.isPct) : '--'}</td>
+                    <td className={`text-right py-2.5 px-4 tabular-nums ${actual < 0 ? 'text-red-400' : ''}`}>{actual !== 0 ? fmtVal(actual, !!row.isPct) : '--'}</td>
                     <td className="text-right py-2.5 px-4 tabular-nums">{forecast !== 0 ? fmtVal(forecast, !!row.isPct) : '--'}</td>
                     <td className="text-right py-2.5 px-4">
                       {actual !== 0 || forecast !== 0 ? (
-                        <span className={`text-xs font-semibold ${change.direction === 'up' ? 'text-emerald-600' : change.direction === 'down' ? 'text-red-500' : 'text-slate-400'}`}>
+                        <span className={`text-xs font-semibold ${change.direction === 'up' ? 'text-emerald-400' : change.direction === 'down' ? 'text-red-500' : 'text-slate-400'}`}>
                           {change.direction === 'up' ? '↑' : change.direction === 'down' ? '↓' : ''} {fmtPct(change.pct)}
                         </span>
                       ) : '--'}
@@ -226,15 +226,15 @@ export default function DashboardPnL({ items, allValues, months, settings, actua
               } else {
                 // By Month view
                 return (
-                  <tr key={row.key} className={`border-b border-slate-100 ${row.isTotal ? 'font-semibold bg-slate-50/50' : ''}`}>
-                    <td className={`py-2 px-4 sticky left-0 z-10 ${row.isTotal ? 'bg-slate-50/50' : 'bg-white'} ${row.indent ? 'pl-10' : ''}`}>
+                  <tr key={row.key} className={`border-b border-dark-400/30 ${row.isTotal ? 'font-semibold bg-dark-600/50' : ''}`}>
+                    <td className={`py-2 px-4 sticky left-0 z-10 ${row.isTotal ? 'bg-dark-600/50' : 'bg-dark-700'} ${row.indent ? 'pl-10' : ''}`}>
                       <div className="flex items-center gap-1">
                         {row.expandable && (
-                          <button onClick={() => toggleExpand(row.key)} className="p-0.5 hover:bg-slate-200 rounded">
+                          <button onClick={() => toggleExpand(row.key)} className="p-0.5 hover:bg-dark-400 rounded">
                             {expanded[row.key] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                           </button>
                         )}
-                        <span className="text-slate-700">{row.label}</span>
+                        <span className="text-slate-300">{row.label}</span>
                       </div>
                     </td>
                     {periodMonths.map(m => {
@@ -244,9 +244,9 @@ export default function DashboardPnL({ items, allValues, months, settings, actua
                       return (
                         <td key={m} className="text-right py-2 px-2">
                           <div className="flex justify-end gap-3 text-xs tabular-nums">
-                            <span className={a < 0 ? 'text-red-600' : ''}>{a !== 0 ? fmtVal(a, !!row.isPct) : '--'}</span>
+                            <span className={a < 0 ? 'text-red-400' : ''}>{a !== 0 ? fmtVal(a, !!row.isPct) : '--'}</span>
                             <span className="text-slate-500">{f !== 0 ? fmtVal(f, !!row.isPct) : '--'}</span>
-                            <span className={`font-semibold ${ch.direction === 'up' ? 'text-emerald-600' : ch.direction === 'down' ? 'text-red-500' : 'text-slate-400'}`}>
+                            <span className={`font-semibold ${ch.direction === 'up' ? 'text-emerald-400' : ch.direction === 'down' ? 'text-red-500' : 'text-slate-400'}`}>
                               {a !== 0 || f !== 0 ? `${ch.direction === 'up' ? '↑' : ch.direction === 'down' ? '↓' : ''}${Math.abs(ch.pct).toFixed(0)}%` : '--'}
                             </span>
                           </div>

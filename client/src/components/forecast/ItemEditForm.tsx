@@ -777,8 +777,8 @@ export default function ItemEditForm({ item, category, months, values: initialVa
       {/* ──── Header ──── */}
       <div className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-3">
-          <button onClick={onDiscard} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
-            <ArrowLeft size={20} className="text-slate-600" />
+          <button onClick={onDiscard} className="p-2 hover:bg-dark-500 rounded-lg transition-colors">
+            <ArrowLeft size={20} className="text-slate-400" />
           </button>
           {isEditingName ? (
             <input
@@ -788,29 +788,29 @@ export default function ItemEditForm({ item, category, months, values: initialVa
               onBlur={() => setIsEditingName(false)}
               onKeyDown={e => e.key === 'Enter' && setIsEditingName(false)}
               autoFocus
-              className="text-2xl font-bold text-slate-800 bg-white border-2 border-primary-400 rounded-lg outline-none px-3 py-1"
+              className="text-2xl font-bold text-white bg-dark-700 border-2 border-primary-400 rounded-lg outline-none px-3 py-1"
             />
           ) : (
             <div className="flex items-center gap-2">
-              <h2 className="text-2xl font-bold text-slate-800">{name}</h2>
-              <button onClick={() => setIsEditingName(true)} className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-slate-600">
+              <h2 className="text-2xl font-bold text-white">{name}</h2>
+              <button onClick={() => setIsEditingName(true)} className="p-1 hover:bg-dark-500 rounded text-slate-400 hover:text-slate-400">
                 <Edit3 size={14} />
               </button>
             </div>
           )}
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex border border-slate-300 rounded-lg overflow-hidden text-sm mr-3">
-            <button className="px-4 py-1.5 bg-white text-slate-500 hover:bg-slate-50">Yearly</button>
+          <div className="flex border border-dark-400 rounded-lg overflow-hidden text-sm mr-3">
+            <button className="px-4 py-1.5 bg-dark-700 text-slate-500 hover:bg-dark-600">Yearly</button>
             <button className="px-4 py-1.5 bg-slate-800 text-white font-medium">Monthly</button>
           </div>
-          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 rounded-lg text-sm mr-3">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-dark-500 rounded-lg text-sm mr-3">
             <span className="w-5 h-5 rounded bg-teal-600 text-white text-[10px] font-bold flex items-center justify-center">F</span>
-            <span className="text-slate-600 font-medium">Forecast</span>
+            <span className="text-slate-400 font-medium">Forecast</span>
           </div>
-          <button className="p-2 hover:bg-slate-100 rounded-lg text-slate-400" title="Comment"><MessageSquare size={16} /></button>
-          <button className="p-2 hover:bg-slate-100 rounded-lg text-slate-400" title="Add"><Plus size={16} /></button>
-          <button onClick={handleDelete} className="p-2 hover:bg-red-50 text-slate-400 hover:text-red-600 rounded-lg" title="Delete"><Trash2 size={16} /></button>
+          <button className="p-2 hover:bg-dark-500 rounded-lg text-slate-400" title="Comment"><MessageSquare size={16} /></button>
+          <button className="p-2 hover:bg-dark-500 rounded-lg text-slate-400" title="Add"><Plus size={16} /></button>
+          <button onClick={handleDelete} className="p-2 hover:bg-red-500/10 text-slate-400 hover:text-red-400 rounded-lg" title="Delete"><Trash2 size={16} /></button>
         </div>
       </div>
 
@@ -864,13 +864,13 @@ export default function ItemEditForm({ item, category, months, values: initialVa
             ))}
           </select>
         ) : (
-          <div className="flex items-center gap-2 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white">
+          <div className="flex items-center gap-2 px-3 py-1.5 border border-dark-400/50 rounded-lg text-sm bg-dark-700">
             <span className="text-base">
               {itemType === 'unit_sales' ? '🏥' : itemType === 'billable_hours' ? '⏱' : itemType === 'recurring' ? '🔄' : itemType === 'revenue_only' ? '💰' :
                itemType === 'individual' ? '👤' : itemType === 'group' ? '👥' :
                itemType === 'rent' ? '🏢' : itemType === 'marketing' ? '📣' : itemType === 'loan' ? '🏦' : '📋'}
             </span>
-            <span className="font-medium text-slate-700">
+            <span className="font-medium text-slate-300">
               {steps.length > 1 ? typeDef.formula?.split('=')[0]?.trim() || itemType.replace(/_/g, ' ') : activeStep.label}
             </span>
           </div>
@@ -879,7 +879,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
 
       {/* ──── Personnel Config Dropdowns ──── */}
       {category === 'personnel' && itemType !== 'employee_benefits' && (
-        <div className="bg-white rounded-xl border border-slate-200 p-4 mb-5">
+        <div className="bg-dark-700 rounded-xl border border-dark-400/50 p-4 mb-5">
           <div className="grid grid-cols-3 gap-4">
             <div>
               <label className="text-xs font-medium text-slate-500 mb-1 block">Personnel Type</label>
@@ -919,12 +919,12 @@ export default function ItemEditForm({ item, category, months, values: initialVa
       )}
 
       {/* ──── Chart ──── */}
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden mb-5">
+      <div className="bg-dark-700 rounded-xl border border-dark-400/50 overflow-hidden mb-5">
         <div className="p-5">
           <div className="h-52">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" />
                 <XAxis dataKey="month" tick={{ fontSize: 11 }} stroke="#94a3b8" />
                 <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={v => {
                   if (v >= 100000) return `Rs${(v / 100000).toFixed(1)}L`;
@@ -943,11 +943,11 @@ export default function ItemEditForm({ item, category, months, values: initialVa
         </div>
 
         {/* Monthly values scroll row */}
-        <div className="flex overflow-x-auto border-t border-slate-100">
+        <div className="flex overflow-x-auto border-t border-dark-400/30">
           {months.map(m => (
             <div key={m} className="text-center min-w-[85px] flex-shrink-0 py-2.5 border-r border-slate-50 last:border-0">
               <div className="text-[10px] text-slate-400 mb-0.5">{getMonthLabel(m)}</div>
-              <div className="text-xs font-semibold text-slate-700 tabular-nums">{formatRs(computedValues[m] || 0)}</div>
+              <div className="text-xs font-semibold text-slate-300 tabular-nums">{formatRs(computedValues[m] || 0)}</div>
             </div>
           ))}
         </div>
@@ -955,7 +955,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
 
       {/* ──── Step Tabs (only show if multiple steps) ──── */}
       {steps.length > 1 && (
-        <div className="bg-white rounded-t-xl border border-b-0 border-slate-200 flex">
+        <div className="bg-dark-700 rounded-t-xl border border-b-0 border-dark-400/50 flex">
           {steps.map((step, idx) => {
             const isActive = idx === activeStepIdx;
             const status = stepStatus(step.key);
@@ -966,15 +966,15 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                 className={`flex-1 py-4 px-6 flex items-center justify-center gap-2.5 transition-all border-b-[3px] ${
                   isActive
                     ? 'border-teal-500 bg-teal-50/30'
-                    : 'border-transparent hover:bg-slate-50'
+                    : 'border-transparent hover:bg-dark-600'
                 }`}
               >
                 <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold border-2 ${
-                  isActive ? 'border-teal-500 text-teal-600' : 'border-slate-300 text-slate-400'
+                  isActive ? 'border-teal-500 text-teal-600' : 'border-dark-400 text-slate-400'
                 }`}>
                   {idx + 1}
                 </span>
-                <span className={`font-semibold text-sm ${isActive ? 'text-slate-800' : 'text-slate-500'}`}>
+                <span className={`font-semibold text-sm ${isActive ? 'text-white' : 'text-slate-500'}`}>
                   {step.label}
                 </span>
                 {status === 'incomplete' && !isActive && (
@@ -990,10 +990,10 @@ export default function ItemEditForm({ item, category, months, values: initialVa
       )}
 
       {/* ──── Step Content ──── */}
-      <div className={`bg-white border border-slate-200 p-6 ${steps.length > 1 ? 'rounded-b-xl' : 'rounded-xl'} mb-5`}>
+      <div className={`bg-dark-700 border border-dark-400/50 p-6 ${steps.length > 1 ? 'rounded-b-xl' : 'rounded-xl'} mb-5`}>
         {/* Entry mode selector */}
         <div className="flex items-center gap-3 mb-6">
-          <span className="text-sm font-medium text-slate-600">{isDirectCost ? 'How do you want to enter this cost?' : 'How will you enter this?'}</span>
+          <span className="text-sm font-medium text-slate-400">{isDirectCost ? 'How do you want to enter this cost?' : 'How will you enter this?'}</span>
           <select
             value={stepEntryModes[activeStep.key]}
             onChange={e => setStepEntryModes(prev => ({ ...prev, [activeStep.key]: e.target.value }))}
@@ -1005,12 +1005,12 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           </select>
         </div>
 
-        <div className="border-t border-slate-100 pt-6">
+        <div className="border-t border-dark-400/30 pt-6">
           {/* ── Constant mode — simple price layout (single Rs input) ── */}
           {stepEntryModes[activeStep.key] === 'constant' && activeStep.unit === 'Rs' && !isDirectCost && !isExpense && category !== 'personnel' && (
             <div className="flex items-start gap-8">
               <div className="flex-1">
-                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-2">
+                <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-2">
                   {activeStep.question}
                   <Info size={16} className="text-teal-500 cursor-help" />
                 </h3>
@@ -1039,7 +1039,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
             <div>
               <div className="flex items-start gap-6 mb-4">
                 <div className="flex-1">
-                  <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-2">
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-2">
                     {activeStep.question}
                     <Info size={16} className="text-teal-500 cursor-help" />
                   </h3>
@@ -1092,8 +1092,8 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                 </div>
               </div>
               {/* Annual raise */}
-              <div className="flex items-center gap-3 pt-3 border-t border-slate-100">
-                <label className="text-sm text-slate-600 font-medium">Annual raise</label>
+              <div className="flex items-center gap-3 pt-3 border-t border-dark-400/30">
+                <label className="text-sm text-slate-400 font-medium">Annual raise</label>
                 <input
                   type="number"
                   value={annualRaisePct || ''}
@@ -1111,7 +1111,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'constant' && activeStep.unit === '%' && (
             <div className="flex items-start gap-8">
               <div className="flex-1">
-                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-2">
+                <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-2">
                   {activeStep.question}
                   <Info size={16} className="text-teal-500 cursor-help" />
                 </h3>
@@ -1141,7 +1141,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'constant' && (isDirectCost || isExpense) && (
             <div className="flex items-start gap-6">
               <div className="flex-1">
-                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-2">
+                <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-2">
                   {activeStep.question}
                 </h3>
               </div>
@@ -1197,7 +1197,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'constant' && activeStep.unit !== 'Rs' && !isDirectCost && (
             <>
               <div className="mb-2">
-                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
                   {activeStep.question}
                   <Info size={16} className="text-teal-500 cursor-help" />
                 </h3>
@@ -1255,7 +1255,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'percent' && (
             <div className="flex items-start gap-6">
               <div className="flex-1">
-                <h3 className="text-lg font-bold text-slate-800 mb-2">
+                <h3 className="text-lg font-bold text-white mb-2">
                   What percentage of this revenue stream?
                 </h3>
               </div>
@@ -1285,7 +1285,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'pct_overall' && (
             <div className="flex items-start gap-6">
               <div className="flex-1">
-                <h3 className="text-lg font-bold text-slate-800 mb-2">
+                <h3 className="text-lg font-bold text-white mb-2">
                   What percentage of overall revenue?
                 </h3>
                 <p className="text-sm text-slate-500 leading-relaxed">This salary will be calculated as a percentage of your total revenue across all streams.</p>
@@ -1316,7 +1316,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'pct_specific' && (
             <div className="flex items-start gap-6">
               <div className="flex-1">
-                <h3 className="text-lg font-bold text-slate-800 mb-2">
+                <h3 className="text-lg font-bold text-white mb-2">
                   What percentage of a specific revenue stream?
                 </h3>
                 <p className="text-sm text-slate-500 leading-relaxed">Select a revenue stream and enter the percentage.</p>
@@ -1359,7 +1359,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'one_time' && (
             <div className="flex items-start gap-6">
               <div className="flex-1">
-                <h3 className="text-lg font-bold text-slate-800 mb-2">
+                <h3 className="text-lg font-bold text-white mb-2">
                   When will this expense occur?
                 </h3>
                 <p className="text-sm text-slate-500">Select the month and enter the one-time amount.</p>
@@ -1391,7 +1391,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'varying' && (
             <>
               <div className="mb-2">
-                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
                   {activeStep.question}
                   <Info size={16} className="text-teal-500 cursor-help" />
                 </h3>
@@ -1403,25 +1403,25 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {/* Varying mode — monthly grid table */}
           {stepEntryModes[activeStep.key] === 'varying' && (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm border border-slate-200 rounded-lg overflow-hidden" style={{ minWidth: '900px' }}>
+              <table className="w-full text-sm border border-dark-400/50 rounded-lg overflow-hidden" style={{ minWidth: '900px' }}>
                 <thead>
-                  <tr className="bg-slate-50">
-                    <th className="text-left py-2.5 px-3 font-semibold text-slate-600 w-20 border-r border-slate-200"></th>
+                  <tr className="bg-dark-600">
+                    <th className="text-left py-2.5 px-3 font-semibold text-slate-400 w-20 border-r border-dark-400/50"></th>
                     {months.map(m => {
                       const [, mo] = m.split('-');
                       const monthNames = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
                       return (
-                        <th key={m} className="text-center py-2.5 px-1.5 font-semibold text-slate-600 border-r border-slate-200 last:border-0 min-w-[70px]">
+                        <th key={m} className="text-center py-2.5 px-1.5 font-semibold text-slate-400 border-r border-dark-400/50 last:border-0 min-w-[70px]">
                           {monthNames[parseInt(mo)]}
                         </th>
                       );
                     })}
-                    <th className="text-center py-2.5 px-3 font-bold text-slate-700 min-w-[80px] bg-slate-100">TOTAL</th>
+                    <th className="text-center py-2.5 px-3 font-bold text-slate-300 min-w-[80px] bg-dark-500">TOTAL</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="border-t border-slate-200">
-                    <td className="py-2 px-3 text-sm font-medium text-slate-600 border-r border-slate-200 bg-white">
+                  <tr className="border-t border-dark-400/50">
+                    <td className="py-2 px-3 text-sm font-medium text-slate-400 border-r border-dark-400/50 bg-dark-700">
                       <div className="flex items-center gap-1">
                         <div className="w-1 h-6 bg-primary-400 rounded-full"></div>
                         <span className="text-xs text-slate-500">
@@ -1430,17 +1430,17 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                       </div>
                     </td>
                     {months.map(m => (
-                      <td key={m} className="py-1 px-1 border-r border-slate-200 last:border-0">
+                      <td key={m} className="py-1 px-1 border-r border-dark-400/50 last:border-0">
                         <input
                           type="number"
                           value={currentStepValues[m] || ''}
                           onChange={e => updateStepMonthValue(m, e.target.value)}
                           placeholder=""
-                          className="w-full text-center py-1.5 px-1 text-sm border-0 focus:bg-primary-50 focus:ring-2 focus:ring-primary-300 rounded outline-none tabular-nums"
+                          className="w-full text-center py-1.5 px-1 text-sm border-0 focus:bg-accent-500/10 focus:ring-2 focus:ring-primary-300 rounded outline-none tabular-nums"
                         />
                       </td>
                     ))}
-                    <td className="py-2 px-3 text-center font-bold text-slate-700 bg-slate-50 tabular-nums">
+                    <td className="py-2 px-3 text-center font-bold text-slate-300 bg-dark-600 tabular-nums">
                       {currentStepTotal > 0 ? currentStepTotal.toLocaleString('en-IN') : '0'}
                     </td>
                   </tr>
@@ -1454,7 +1454,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                   months.forEach(m => { cleared[m] = 0; });
                   setStepValues(prev => ({ ...prev, [activeStep.key]: cleared }));
                 }}
-                className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 mt-3 px-2 py-1 border border-slate-300 rounded-lg hover:bg-slate-50"
+                className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-300 mt-3 px-2 py-1 border border-dark-400 rounded-lg hover:bg-dark-600"
               >
                 <span className="text-xs">✕</span> Reset Form
               </button>

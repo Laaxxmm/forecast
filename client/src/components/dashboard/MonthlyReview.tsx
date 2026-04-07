@@ -83,14 +83,14 @@ export default function MonthlyReview({ items, allValues, months, settings, actu
           >
             {months.map(m => <option key={m} value={m}>{monthFullLabel(m)}</option>)}
           </select>
-          <div className="flex bg-slate-100 rounded-lg p-1">
+          <div className="flex bg-dark-500 rounded-lg p-1">
             <button
               onClick={() => setViewMode('monthly')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium ${viewMode === 'monthly' ? 'bg-primary-600 text-white' : 'text-slate-500'}`}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium ${viewMode === 'monthly' ? 'bg-accent-500 text-white' : 'text-slate-500'}`}
             >Monthly Insights</button>
             <button
               onClick={() => setViewMode('ytd')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium ${viewMode === 'ytd' ? 'bg-primary-600 text-white' : 'text-slate-500'}`}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium ${viewMode === 'ytd' ? 'bg-accent-500 text-white' : 'text-slate-500'}`}
             >Year to Date Insights</button>
           </div>
         </div>
@@ -106,25 +106,25 @@ export default function MonthlyReview({ items, allValues, months, settings, actu
       {!isComplete ? (
         /* Incomplete State */
         <div className="card text-center py-16">
-          <div className="mx-auto w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mb-4">
-            <AlertCircle size={32} className="text-amber-600" />
+          <div className="mx-auto w-16 h-16 bg-amber-500/15 rounded-full flex items-center justify-center mb-4">
+            <AlertCircle size={32} className="text-amber-400" />
           </div>
-          <h3 className="text-lg font-semibold text-slate-800 mb-2">Your data for this month is incomplete</h3>
+          <h3 className="text-lg font-semibold text-white mb-2">Your data for this month is incomplete</h3>
           <p className="text-sm text-slate-500 max-w-md mx-auto mb-4">
             The monthly review compares your actual results to your forecast values. One or both are missing for {monthFullLabel(selectedMonth)}.
             Please check your forecast and accounting data, and then try again.
           </p>
           <div className="flex items-center justify-center gap-4 text-sm">
-            <span className={`flex items-center gap-2 ${hasForecast ? 'text-emerald-600' : 'text-red-500'}`}>
+            <span className={`flex items-center gap-2 ${hasForecast ? 'text-emerald-400' : 'text-red-500'}`}>
               <span className={`w-2 h-2 rounded-full ${hasForecast ? 'bg-emerald-500' : 'bg-red-500'}`} />
               Forecast: {hasForecast ? 'Available' : 'Missing'}
             </span>
-            <span className={`flex items-center gap-2 ${hasActuals ? 'text-emerald-600' : 'text-red-500'}`}>
+            <span className={`flex items-center gap-2 ${hasActuals ? 'text-emerald-400' : 'text-red-500'}`}>
               <span className={`w-2 h-2 rounded-full ${hasActuals ? 'bg-emerald-500' : 'bg-red-500'}`} />
               Actuals: {hasActuals ? 'Available' : 'Missing'}
             </span>
           </div>
-          <a href="/analysis/update-actuals" className="text-primary-600 text-sm mt-4 inline-block hover:underline">
+          <a href="/analysis/update-actuals" className="text-accent-400 text-sm mt-4 inline-block hover:underline">
             Update your actuals →
           </a>
         </div>
@@ -134,8 +134,8 @@ export default function MonthlyReview({ items, allValues, months, settings, actu
           {/* Header */}
           <div className="card">
             <div className="flex items-center gap-3 mb-4">
-              <FileText size={20} className="text-primary-600" />
-              <h2 className="text-lg font-bold text-slate-800">
+              <FileText size={20} className="text-accent-400" />
+              <h2 className="text-lg font-bold text-white">
                 {viewMode === 'monthly' ? 'Monthly' : 'Year to Date'} Financial Review — {monthFullLabel(selectedMonth)}
               </h2>
             </div>
@@ -146,35 +146,35 @@ export default function MonthlyReview({ items, allValues, months, settings, actu
 
           {/* Revenue Section */}
           <div className="card">
-            <h3 className="text-md font-semibold text-slate-700 mb-3 flex items-center gap-2">
-              <span className="w-3 h-3 rounded bg-primary-500" /> Revenue Performance
+            <h3 className="text-md font-semibold text-slate-300 mb-3 flex items-center gap-2">
+              <span className="w-3 h-3 rounded bg-accent-500" /> Revenue Performance
             </h3>
-            <p className="text-sm text-slate-600 leading-relaxed">{generateInsight('Revenue', metrics.aRev, metrics.fRev)}</p>
+            <p className="text-sm text-slate-400 leading-relaxed">{generateInsight('Revenue', metrics.aRev, metrics.fRev)}</p>
           </div>
 
           {/* Expenses Section */}
           <div className="card">
-            <h3 className="text-md font-semibold text-slate-700 mb-3 flex items-center gap-2">
+            <h3 className="text-md font-semibold text-slate-300 mb-3 flex items-center gap-2">
               <span className="w-3 h-3 rounded bg-amber-500" /> Expense Analysis
             </h3>
-            <p className="text-sm text-slate-600 leading-relaxed mb-2">{generateInsight('Direct Costs', metrics.aDC, metrics.fDC)}</p>
-            <p className="text-sm text-slate-600 leading-relaxed">{generateInsight('Operating Expenses', metrics.aOpex, metrics.fOpex)}</p>
+            <p className="text-sm text-slate-400 leading-relaxed mb-2">{generateInsight('Direct Costs', metrics.aDC, metrics.fDC)}</p>
+            <p className="text-sm text-slate-400 leading-relaxed">{generateInsight('Operating Expenses', metrics.aOpex, metrics.fOpex)}</p>
           </div>
 
           {/* Profitability */}
           <div className="card">
-            <h3 className="text-md font-semibold text-slate-700 mb-3 flex items-center gap-2">
+            <h3 className="text-md font-semibold text-slate-300 mb-3 flex items-center gap-2">
               <span className="w-3 h-3 rounded bg-emerald-500" /> Profitability Insights
             </h3>
-            <p className="text-sm text-slate-600 leading-relaxed mb-2">{generateInsight('Gross Profit', metrics.aGrossProfit, metrics.fGrossProfit)}</p>
-            <p className="text-sm text-slate-600 leading-relaxed mb-2">{generateInsight('Operating Income', metrics.aOpIncome, metrics.fOpIncome)}</p>
-            <p className="text-sm text-slate-600 leading-relaxed">{generateInsight('Net Profit', metrics.aNetProfit, metrics.fNetProfit)}</p>
+            <p className="text-sm text-slate-400 leading-relaxed mb-2">{generateInsight('Gross Profit', metrics.aGrossProfit, metrics.fGrossProfit)}</p>
+            <p className="text-sm text-slate-400 leading-relaxed mb-2">{generateInsight('Operating Income', metrics.aOpIncome, metrics.fOpIncome)}</p>
+            <p className="text-sm text-slate-400 leading-relaxed">{generateInsight('Net Profit', metrics.aNetProfit, metrics.fNetProfit)}</p>
           </div>
 
           {/* Key Takeaways */}
-          <div className="card border-l-4 border-primary-500">
-            <h3 className="text-md font-semibold text-slate-700 mb-3">Key Takeaways</h3>
-            <ul className="space-y-2 text-sm text-slate-600">
+          <div className="card border-l-4 border-accent-500">
+            <h3 className="text-md font-semibold text-slate-300 mb-3">Key Takeaways</h3>
+            <ul className="space-y-2 text-sm text-slate-400">
               {metrics.aRev > metrics.fRev && <li className="flex items-start gap-2"><span className="text-emerald-500 mt-0.5">✓</span> Revenue exceeded forecast — strong top-line performance.</li>}
               {metrics.aRev < metrics.fRev && <li className="flex items-start gap-2"><span className="text-red-500 mt-0.5">✗</span> Revenue fell short of forecast — review sales strategy and pipeline.</li>}
               {metrics.aOpex < metrics.fOpex && <li className="flex items-start gap-2"><span className="text-emerald-500 mt-0.5">✓</span> Operating expenses were below forecast — good cost control.</li>}

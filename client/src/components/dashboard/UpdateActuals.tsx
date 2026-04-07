@@ -111,12 +111,12 @@ function ActualsEntryForm({ category, items, scenario, selectedMonth, onReload }
       {category === 'revenue' && (
         <div className="flex items-center gap-3 mb-4">
           <label className="flex items-center gap-2 cursor-pointer">
-            <input type="radio" checked={enterMode === 'individual'} onChange={() => setEnterMode('individual')} className="text-primary-600" />
-            <span className="text-sm text-slate-600">Enter individual revenue streams</span>
+            <input type="radio" checked={enterMode === 'individual'} onChange={() => setEnterMode('individual')} className="text-accent-400" />
+            <span className="text-sm text-slate-400">Enter individual revenue streams</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
-            <input type="radio" checked={enterMode === 'overall'} onChange={() => setEnterMode('overall')} className="text-primary-600" />
-            <span className="text-sm text-slate-600">Enter overall revenue only</span>
+            <input type="radio" checked={enterMode === 'overall'} onChange={() => setEnterMode('overall')} className="text-accent-400" />
+            <span className="text-sm text-slate-400">Enter overall revenue only</span>
           </label>
         </div>
       )}
@@ -129,7 +129,7 @@ function ActualsEntryForm({ category, items, scenario, selectedMonth, onReload }
             : entries
           ).map((entry, idx) => (
             <div key={idx} className="flex items-center gap-4">
-              <label className="text-sm text-slate-700 w-64 flex-shrink-0 truncate" title={entry.item_name}>
+              <label className="text-sm text-slate-300 w-64 flex-shrink-0 truncate" title={entry.item_name}>
                 {entry.item_name}
               </label>
               <div className="relative flex-1 max-w-xs">
@@ -146,7 +146,7 @@ function ActualsEntryForm({ category, items, scenario, selectedMonth, onReload }
           ))}
         </div>
 
-        <div className="flex items-center gap-3 mt-6 pt-4 border-t border-slate-200">
+        <div className="flex items-center gap-3 mt-6 pt-4 border-t border-dark-400/50">
           <button
             onClick={handleSave}
             disabled={saving}
@@ -174,7 +174,7 @@ export default function UpdateActuals({ items, months, scenario, onReload }: Pro
     <div>
       {/* Header */}
       <div className="mb-6">
-        <h2 className="text-xl font-bold text-slate-800 mb-1">Update your actuals</h2>
+        <h2 className="text-xl font-bold text-white mb-1">Update your actuals</h2>
         <p className="text-sm text-slate-500">Enter actual financial results for {monthFullLabel(selectedMonth)}</p>
       </div>
 
@@ -190,16 +190,16 @@ export default function UpdateActuals({ items, months, scenario, onReload }: Pro
       </div>
 
       {/* CSV Import Banner */}
-      <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 mb-6 flex items-center gap-3 cursor-pointer hover:bg-emerald-100 transition-colors">
-        <Upload size={20} className="text-emerald-600 flex-shrink-0" />
+      <div className="bg-emerald-500/10 border border-emerald-200 rounded-lg p-4 mb-6 flex items-center gap-3 cursor-pointer hover:bg-emerald-500/15 transition-colors">
+        <Upload size={20} className="text-emerald-400 flex-shrink-0" />
         <div>
           <p className="text-sm font-semibold text-emerald-800">Import Actuals from a Comma Separated Value (CSV) file</p>
-          <p className="text-xs text-emerald-600">Use our CSV template to manually update your actuals</p>
+          <p className="text-xs text-emerald-400">Use our CSV template to manually update your actuals</p>
         </div>
       </div>
 
       {/* Sub-tabs */}
-      <div className="flex gap-1 overflow-x-auto pb-2 mb-4 border-b border-slate-200">
+      <div className="flex gap-1 overflow-x-auto pb-2 mb-4 border-b border-dark-400/50">
         {SUB_TABS.map(tab => (
           <NavLink
             key={tab.path}
@@ -207,8 +207,8 @@ export default function UpdateActuals({ items, months, scenario, onReload }: Pro
             className={({ isActive }) =>
               `px-4 py-2 text-xs font-medium rounded-t-lg whitespace-nowrap border-b-2 transition-colors ${
                 isActive
-                  ? 'border-primary-500 text-primary-600 bg-primary-50/50'
-                  : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                  ? 'border-accent-500 text-accent-400 bg-accent-500/10/50'
+                  : 'border-transparent text-slate-500 hover:text-slate-300 hover:bg-dark-600'
               }`
             }
           >

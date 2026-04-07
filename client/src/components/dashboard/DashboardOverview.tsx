@@ -22,7 +22,7 @@ function ChangeIndicator({ pct, direction }: { pct: number; direction: 'up' | 'd
   if (direction === 'neutral') return <span className="flex items-center gap-1 text-xs text-slate-400"><Minus size={12} />0%</span>;
   const isUp = direction === 'up';
   return (
-    <span className={`flex items-center gap-0.5 text-xs font-semibold ${isUp ? 'text-emerald-600' : 'text-red-500'}`}>
+    <span className={`flex items-center gap-0.5 text-xs font-semibold ${isUp ? 'text-emerald-400' : 'text-red-500'}`}>
       {isUp ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
       {fmtPct(pct)}
     </span>
@@ -46,10 +46,10 @@ function MetricCard({ title, actual, forecast, change, periodLabel, onClick, wid
       className={`card cursor-pointer hover:shadow-md transition-shadow ${wide ? 'col-span-1' : ''}`}
     >
       <div className="flex items-start justify-between mb-3">
-        <h3 className="text-sm font-semibold text-slate-600">{title}</h3>
+        <h3 className="text-sm font-semibold text-slate-400">{title}</h3>
         <ChangeIndicator pct={change.pct} direction={change.direction} />
       </div>
-      <p className="text-2xl font-bold text-slate-800 mb-3">
+      <p className="text-2xl font-bold text-white mb-3">
         {hasData ? (typeof actual === 'number' ? fmtRs(actual) : actual) : '--'}
       </p>
       {children || (
@@ -69,8 +69,8 @@ function MetricCard({ title, actual, forecast, change, periodLabel, onClick, wid
         </div>
       )}
       <div className="flex items-center gap-4 mt-2 text-xs text-slate-400">
-        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-primary-500" />Actual ({periodLabel})</span>
-        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-slate-300" />Forecast ({periodLabel})</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-accent-500" />Actual ({periodLabel})</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-dark-400" />Forecast ({periodLabel})</span>
       </div>
     </div>
   );
@@ -200,7 +200,7 @@ export default function DashboardOverview({ items, allValues, months, settings, 
       {/* Row 2: Breakdowns */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         <div className="card">
-          <h3 className="text-sm font-semibold text-slate-600 mb-3">Revenue Breakdown</h3>
+          <h3 className="text-sm font-semibold text-slate-400 mb-3">Revenue Breakdown</h3>
           {revBreakdown.length > 0 ? (
             <div className="h-52">
               <ResponsiveContainer width="100%" height="100%">
@@ -219,7 +219,7 @@ export default function DashboardOverview({ items, allValues, months, settings, 
           )}
         </div>
         <div className="card">
-          <h3 className="text-sm font-semibold text-slate-600 mb-3">Expense & Cost Breakdown</h3>
+          <h3 className="text-sm font-semibold text-slate-400 mb-3">Expense & Cost Breakdown</h3>
           {expCategories.length > 0 ? (
             <div className="h-52">
               <ResponsiveContainer width="100%" height="100%">

@@ -74,7 +74,7 @@ export default function BalanceSheet({ items, allValues, months, viewMode: _view
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-bold text-slate-800">Projected Balance Sheet</h2>
+        <h2 className="text-xl font-bold text-white">Projected Balance Sheet</h2>
         <div className="flex gap-2">
           <button className="btn-secondary text-sm">Set Initial Balances</button>
           <button className="btn-primary text-sm">Add Financing</button>
@@ -84,10 +84,10 @@ export default function BalanceSheet({ items, allValues, months, viewMode: _view
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm" style={{ minWidth: months.length * 100 + 280 }}>
           <thead>
-            <tr className="border-b border-slate-200 bg-slate-50">
-              <th className="text-left py-3 px-4 font-semibold text-slate-600 sticky left-0 bg-slate-50 z-10 min-w-[250px]">Balance Sheet</th>
+            <tr className="border-b border-dark-400/50 bg-dark-600">
+              <th className="text-left py-3 px-4 font-semibold text-slate-400 sticky left-0 bg-dark-600 z-10 min-w-[250px]">Balance Sheet</th>
               {months.map(m => (
-                <th key={m} className="text-right py-3 px-3 font-semibold text-slate-600 whitespace-nowrap min-w-[100px]">{getMonthLabel(m)}</th>
+                <th key={m} className="text-right py-3 px-3 font-semibold text-slate-400 whitespace-nowrap min-w-[100px]">{getMonthLabel(m)}</th>
               ))}
             </tr>
           </thead>
@@ -96,21 +96,21 @@ export default function BalanceSheet({ items, allValues, months, viewMode: _view
               if (row.key === 'spacer') return <tr key={row.key} className="h-4"><td colSpan={months.length + 1} /></tr>;
               if (row.isHeader) {
                 return (
-                  <tr key={row.key} className="bg-slate-50 border-b border-slate-200">
-                    <td className="py-2.5 px-4 font-semibold text-slate-700 sticky left-0 bg-slate-50 z-10">{row.label}</td>
+                  <tr key={row.key} className="bg-dark-600 border-b border-dark-400/50">
+                    <td className="py-2.5 px-4 font-semibold text-slate-300 sticky left-0 bg-dark-600 z-10">{row.label}</td>
                     <td colSpan={months.length} />
                   </tr>
                 );
               }
               return (
-                <tr key={row.key} className={`border-b border-slate-100 ${row.isTotal ? 'font-semibold bg-slate-50/50' : ''}`}>
-                  <td className={`py-2 px-4 text-slate-700 sticky left-0 z-10 ${row.isTotal ? 'bg-slate-50/50' : 'bg-white'} ${row.indent ? 'pl-8' : ''}`}>
+                <tr key={row.key} className={`border-b border-dark-400/30 ${row.isTotal ? 'font-semibold bg-dark-600/50' : ''}`}>
+                  <td className={`py-2 px-4 text-slate-300 sticky left-0 z-10 ${row.isTotal ? 'bg-dark-600/50' : 'bg-dark-700'} ${row.indent ? 'pl-8' : ''}`}>
                     {row.label}
                   </td>
                   {months.map(m => {
                     const val = getVal(row, m);
                     return (
-                      <td key={m} className={`text-right py-2 px-3 tabular-nums ${(val || 0) < 0 ? 'text-red-600' : 'text-slate-700'}`}>
+                      <td key={m} className={`text-right py-2 px-3 tabular-nums ${(val || 0) < 0 ? 'text-red-400' : 'text-slate-300'}`}>
                         {val != null && val !== 0 ? formatRs(val) : <span className="text-slate-300">-</span>}
                       </td>
                     );

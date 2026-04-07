@@ -174,16 +174,16 @@ export default function DashboardDownloadPrint({ items, allValues, months, setti
   return (
     <div className="max-w-2xl">
       <div className="flex items-center gap-3 mb-6">
-        <Printer size={24} className="text-primary-600" />
+        <Printer size={24} className="text-accent-400" />
         <div>
-          <h2 className="text-xl font-bold text-slate-800">Download & Print</h2>
+          <h2 className="text-xl font-bold text-white">Download & Print</h2>
           <p className="text-sm text-slate-500">Generate PDF reports comparing actuals vs. forecast</p>
         </div>
       </div>
 
       {/* Reports to Include */}
       <div className="card mb-6">
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">Reports to Include</h3>
+        <h3 className="text-sm font-semibold text-slate-300 mb-3">Reports to Include</h3>
         <div className="space-y-2">
           {[
             { key: 'pnl', label: 'Profit & Loss Statement' },
@@ -191,14 +191,14 @@ export default function DashboardDownloadPrint({ items, allValues, months, setti
             { key: 'cash_flow', label: 'Cash Flow Statement' },
             { key: 'monthly_review', label: 'Monthly Review' },
           ].map(r => (
-            <label key={r.key} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-50 cursor-pointer">
+            <label key={r.key} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-dark-600 cursor-pointer">
               <input
                 type="checkbox"
                 checked={selectedReports[r.key as keyof typeof selectedReports]}
                 onChange={() => toggleReport(r.key)}
-                className="rounded text-primary-600 focus:ring-primary-500"
+                className="rounded text-accent-400 focus:ring-accent-500"
               />
-              <span className="text-sm text-slate-700">{r.label}</span>
+              <span className="text-sm text-slate-300">{r.label}</span>
             </label>
           ))}
         </div>
@@ -206,15 +206,15 @@ export default function DashboardDownloadPrint({ items, allValues, months, setti
 
       {/* Detail Level */}
       <div className="card mb-6">
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">Level of Detail</h3>
+        <h3 className="text-sm font-semibold text-slate-300 mb-3">Level of Detail</h3>
         <div className="flex gap-3">
           {(['annual', 'monthly'] as const).map(level => (
             <label key={level} className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-colors ${
-              detailLevel === level ? 'border-primary-400 bg-primary-50/50' : 'border-slate-200 hover:bg-slate-50'
+              detailLevel === level ? 'border-accent-500 bg-accent-500/10' : 'border-dark-400/50 hover:bg-dark-600'
             }`}>
               <input type="radio" checked={detailLevel === level} onChange={() => setDetailLevel(level)} className="hidden" />
-              <FileText size={16} className={detailLevel === level ? 'text-primary-600' : 'text-slate-400'} />
-              <span className={`text-sm font-medium capitalize ${detailLevel === level ? 'text-primary-700' : 'text-slate-600'}`}>{level} Totals</span>
+              <FileText size={16} className={detailLevel === level ? 'text-accent-400' : 'text-slate-400'} />
+              <span className={`text-sm font-medium capitalize ${detailLevel === level ? 'text-accent-300' : 'text-slate-400'}`}>{level} Totals</span>
             </label>
           ))}
         </div>
@@ -222,7 +222,7 @@ export default function DashboardDownloadPrint({ items, allValues, months, setti
 
       {/* Paper Size */}
       <div className="card mb-6">
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">Paper Size</h3>
+        <h3 className="text-sm font-semibold text-slate-300 mb-3">Paper Size</h3>
         <select value={paperSize} onChange={e => setPaperSize(e.target.value as any)} className="input text-sm w-full">
           <option value="a4">A4</option>
           <option value="letter">US Letter</option>

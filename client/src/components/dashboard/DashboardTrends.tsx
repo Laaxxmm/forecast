@@ -159,7 +159,7 @@ export default function DashboardTrends({ items, allValues, months, settings, ac
           <div className="h-80">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={breakdownData} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" />
                 <XAxis type="number" tickFormatter={v => fmtRs(v)} tick={{ fontSize: 11 }} />
                 <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 11 }} />
                 <Tooltip formatter={(v: number) => fmtRs(v)} />
@@ -176,27 +176,27 @@ export default function DashboardTrends({ items, allValues, months, settings, ac
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50">
-                <th className="text-left py-2.5 px-4 font-semibold text-slate-600">Item</th>
-                <th className="text-right py-2.5 px-4 font-semibold text-slate-600">Actual (Rs)</th>
-                <th className="text-right py-2.5 px-4 font-semibold text-slate-600">Forecast (Rs)</th>
-                <th className="text-right py-2.5 px-4 font-semibold text-slate-600">Change (%)</th>
+              <tr className="border-b border-dark-400/50 bg-dark-600">
+                <th className="text-left py-2.5 px-4 font-semibold text-slate-400">Item</th>
+                <th className="text-right py-2.5 px-4 font-semibold text-slate-400">Actual (Rs)</th>
+                <th className="text-right py-2.5 px-4 font-semibold text-slate-400">Forecast (Rs)</th>
+                <th className="text-right py-2.5 px-4 font-semibold text-slate-400">Change (%)</th>
               </tr>
             </thead>
             <tbody>
               {breakdownData.map(d => (
-                <tr key={d.name} className="border-b border-slate-100 hover:bg-slate-50">
-                  <td className="py-2 px-4 text-primary-600 font-medium">{d.name}</td>
+                <tr key={d.name} className="border-b border-dark-400/30 hover:bg-dark-600">
+                  <td className="py-2 px-4 text-accent-400 font-medium">{d.name}</td>
                   <td className="text-right py-2 px-4 tabular-nums">{d.actual ? fmtRs(d.actual) : '--'}</td>
                   <td className="text-right py-2 px-4 tabular-nums">{fmtRs(d.forecast)}</td>
                   <td className="text-right py-2 px-4">
-                    <span className={`text-xs font-semibold ${d.change.direction === 'up' ? 'text-emerald-600' : d.change.direction === 'down' ? 'text-red-500' : 'text-slate-400'}`}>
+                    <span className={`text-xs font-semibold ${d.change.direction === 'up' ? 'text-emerald-400' : d.change.direction === 'down' ? 'text-red-500' : 'text-slate-400'}`}>
                       {d.change.direction === 'up' ? '↑' : d.change.direction === 'down' ? '↓' : ''} {fmtPct(d.change.pct)}
                     </span>
                   </td>
                 </tr>
               ))}
-              <tr className="border-t-2 border-slate-300 font-semibold">
+              <tr className="border-t-2 border-dark-400 font-semibold">
                 <td className="py-2 px-4">Total</td>
                 <td className="text-right py-2 px-4 tabular-nums">{fmtRs(breakdownData.reduce((s, d) => s + d.actual, 0))}</td>
                 <td className="text-right py-2 px-4 tabular-nums">{fmtRs(breakdownData.reduce((s, d) => s + d.forecast, 0))}</td>
@@ -214,7 +214,7 @@ export default function DashboardTrends({ items, allValues, months, settings, ac
       <div className="h-80">
         <ResponsiveContainer width="100%" height="100%">
           <ChartComp data={chartData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" />
             <XAxis dataKey="month" tick={{ fontSize: 11 }} stroke="#94a3b8" />
             <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8"
               tickFormatter={v => isPercent ? `${v.toFixed(0)}%` : fmtRs(v)} />
@@ -258,11 +258,11 @@ export default function DashboardTrends({ items, allValues, months, settings, ac
             {METRICS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
           </select>
           <div className="flex items-center gap-2 text-xs text-slate-500">
-            <button onClick={() => navigateMetric(-1)} className="flex items-center gap-1 hover:text-primary-600">
+            <button onClick={() => navigateMetric(-1)} className="flex items-center gap-1 hover:text-accent-400">
               <ChevronLeft size={14} />Previous metric
             </button>
             <span className="text-slate-300">|</span>
-            <button onClick={() => navigateMetric(1)} className="flex items-center gap-1 hover:text-primary-600">
+            <button onClick={() => navigateMetric(1)} className="flex items-center gap-1 hover:text-accent-400">
               Next metric<ChevronRight size={14} />
             </button>
           </div>
@@ -272,17 +272,17 @@ export default function DashboardTrends({ items, allValues, months, settings, ac
       {/* Summary Stats */}
       {!isBreakdown && (
         <div className="card mb-4">
-          <div className="grid grid-cols-3 divide-x divide-slate-200">
+          <div className="grid grid-cols-3 divide-x divide-dark-400/50">
             <div className="px-4 py-2">
               <p className="text-xs text-slate-500 mb-1">Actual results</p>
-              <p className="text-xl font-bold text-slate-800">
+              <p className="text-xl font-bold text-white">
                 {isPercent ? `${(totalActual / (months.length || 1)).toFixed(1)}%` : fmtRs(totalActual)}
               </p>
             </div>
             <div className="px-4 py-2">
               <p className="text-xs text-slate-500 mb-1">Vs. forecast</p>
               <p className="text-xl font-bold flex items-center gap-1">
-                <span className={vsForecast.direction === 'up' ? 'text-emerald-600' : vsForecast.direction === 'down' ? 'text-red-500' : 'text-slate-400'}>
+                <span className={vsForecast.direction === 'up' ? 'text-emerald-400' : vsForecast.direction === 'down' ? 'text-red-500' : 'text-slate-400'}>
                   {vsForecast.direction === 'up' ? '↑' : vsForecast.direction === 'down' ? '↓' : ''} {fmtPct(vsForecast.pct)}
                 </span>
               </p>
@@ -297,13 +297,13 @@ export default function DashboardTrends({ items, allValues, months, settings, ac
 
       {/* Chart Type Selector + Comparison */}
       <div className="flex items-center justify-between mb-4">
-        <div className="flex bg-slate-100 rounded-lg p-1">
+        <div className="flex bg-dark-500 rounded-lg p-1">
           {(isBreakdown ? BREAKDOWN_CHART_TYPES : AGG_CHART_TYPES).map(ct => (
             <button
               key={ct}
               onClick={() => setChartType(ct)}
               className={`px-3 py-1.5 rounded-md text-xs font-medium capitalize ${
-                chartType === ct ? 'bg-white shadow-sm text-primary-600' : 'text-slate-500 hover:text-slate-700'
+                chartType === ct ? 'bg-dark-700 shadow-sm text-accent-400' : 'text-slate-500 hover:text-slate-300'
               }`}
             >
               {ct}

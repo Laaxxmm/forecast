@@ -70,7 +70,6 @@ export default function ForecastModulePage() {
   const [showDownloadPanel, setShowDownloadPanel] = useState(false);
   const navigate = useNavigate();
 
-  // Load FYs
   useEffect(() => {
     api.get('/settings/fy').then(res => {
       setFYs(res.data);
@@ -80,7 +79,6 @@ export default function ForecastModulePage() {
     });
   }, []);
 
-  // Ensure scenario exists for selected FY
   useEffect(() => {
     if (!selectedFY) return;
     api.post('/forecast-module/scenarios/ensure', { fy_id: selectedFY.id }).then(res => {
@@ -91,7 +89,6 @@ export default function ForecastModulePage() {
     });
   }, [selectedFY]);
 
-  // Load all items and values for scenario
   const loadData = useCallback(async () => {
     if (!scenario) return;
     const [itemsRes, valuesRes, settingsRes] = await Promise.all([
@@ -100,7 +97,6 @@ export default function ForecastModulePage() {
       api.get('/forecast-module/settings', { params: { scenario_id: scenario.id } }),
     ]);
     setItems(itemsRes.data);
-    // Build lookup
     const lookup: Record<number, Record<string, number>> = {};
     valuesRes.data.forEach((v: any) => {
       if (!lookup[v.item_id]) lookup[v.item_id] = {};
@@ -116,9 +112,9 @@ export default function ForecastModulePage() {
   const currentYear = selectedFY ? parseInt(selectedFY.start_date.slice(0, 4)) : 2026;
 
   return (
-    <div className="forecast-module">
+    <div className="forecast-module animate-fade-in">
       {/* Top Navigation Tabs */}
-      <div className="bg-white border-b border-slate-200 -mx-6 -mt-6 px-6 mb-0">
+      <div className="bg-dark-800 border-b border-dark-400/30 -mx-8 -mt-8 px-8 mb-0">
         <div className="flex items-center justify-between">
           <div className="flex">
             {topTabs.map(tab => (
@@ -126,10 +122,10 @@ export default function ForecastModulePage() {
                 key={tab.path}
                 to={`/forecast/${tab.path}`}
                 className={({ isActive }) =>
-                  `flex items-center gap-2 px-5 py-4 text-sm font-medium border-b-2 transition-colors ${
+                  `flex items-center gap-2 px-5 py-4 text-[13px] font-medium border-b-2 transition-all ${
                     isActive
-                      ? 'border-primary-500 text-primary-600'
-                      : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                      ? 'border-accent-500 text-accent-400'
+                      : 'border-transparent text-slate-500 hover:text-slate-300 hover:border-dark-300'
                   }`
                 }
               >
@@ -139,17 +135,15 @@ export default function ForecastModulePage() {
             ))}
           </div>
           <div className="flex items-center gap-3">
-            {/* Download & Print button */}
             <button
               onClick={() => setShowDownloadPanel(true)}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-400 hover:text-accent-400 hover:bg-accent-500/10 rounded-xl transition-all"
               title="Download & Print Reports"
             >
               <Printer size={16} />
-              <span className="hidden lg:inline">Download & Print</span>
+              <span className="hidden lg:inline">Print</span>
             </button>
-            <div className="h-6 w-px bg-slate-200" />
-            {/* Scenario selector */}
+            <div className="h-6 w-px bg-dark-400" />
             <select
               value={scenario?.id || ''}
               onChange={e => {
@@ -160,7 +154,6 @@ export default function ForecastModulePage() {
             >
               {scenarios.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
-            {/* FY Selector */}
             <select
               value={selectedFY?.id || ''}
               onChange={e => {
@@ -176,32 +169,32 @@ export default function ForecastModulePage() {
       </div>
 
       {/* Toolbar */}
-      <div className="flex items-center justify-between py-3 border-b border-slate-200 -mx-6 px-6 bg-slate-50">
+      <div className="flex items-center justify-between py-3 border-b border-dark-400/30 -mx-8 px-8 bg-dark-800/50">
         <div className="flex items-center gap-2">
-          <div className="flex bg-white border border-slate-200 rounded-lg overflow-hidden">
+          <div className="flex bg-dark-700 border border-dark-400/50 rounded-xl overflow-hidden">
             <button
               onClick={() => setViewMode('yearly')}
-              className={`px-3 py-1.5 text-xs font-medium ${viewMode === 'yearly' ? 'bg-primary-50 text-primary-600' : 'text-slate-500 hover:bg-slate-50'}`}
+              className={`px-3 py-1.5 text-xs font-medium transition-all ${viewMode === 'yearly' ? 'bg-accent-500/15 text-accent-400' : 'text-slate-500 hover:text-slate-300'}`}
             >Yearly</button>
             <button
               onClick={() => setViewMode('monthly')}
-              className={`px-3 py-1.5 text-xs font-medium ${viewMode === 'monthly' ? 'bg-primary-50 text-primary-600' : 'text-slate-500 hover:bg-slate-50'}`}
+              className={`px-3 py-1.5 text-xs font-medium transition-all ${viewMode === 'monthly' ? 'bg-accent-500/15 text-accent-400' : 'text-slate-500 hover:text-slate-300'}`}
             >Monthly</button>
           </div>
           <div className="flex items-center gap-1 ml-3">
-            <button className="p-1.5 hover:bg-slate-200 rounded"><ChevronLeft size={14} /></button>
-            <div className="flex items-center gap-1 px-2 text-sm text-slate-600">
+            <button className="p-1.5 hover:bg-dark-600 rounded-lg text-slate-500 transition-colors"><ChevronLeft size={14} /></button>
+            <div className="flex items-center gap-1 px-2 text-sm text-slate-400">
               <Calendar size={14} />
               <span className="font-medium">{currentYear}-{String(currentYear + 1).slice(-2)}</span>
             </div>
-            <button className="p-1.5 hover:bg-slate-200 rounded"><ChevronRight size={14} /></button>
+            <button className="p-1.5 hover:bg-dark-600 rounded-lg text-slate-500 transition-colors"><ChevronRight size={14} /></button>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-700 font-medium">In Progress</span>
+          <span className="badge-warning text-[10px]">In Progress</span>
           <button
             onClick={() => exportAllItemsCSV(items, allValues, months, viewMode)}
-            className="flex items-center gap-1 px-2 py-1.5 hover:bg-slate-200 rounded text-slate-500 hover:text-slate-700 transition-colors"
+            className="flex items-center gap-1 px-2 py-1.5 hover:bg-dark-600 rounded-lg text-slate-500 hover:text-slate-300 transition-colors"
             title="Download table as CSV"
           >
             <FileDown size={14} />
@@ -211,7 +204,7 @@ export default function ForecastModulePage() {
       </div>
 
       {/* Route Content */}
-      <div className="mt-4">
+      <div className="mt-6">
         <Routes>
           <Route index element={<Navigate to="tables" replace />} />
           <Route path="overview" element={

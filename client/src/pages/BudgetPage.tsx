@@ -13,7 +13,7 @@ function getFYMonths(startDate: string): string[] {
   return months;
 }
 
-type GridData = Record<string, Record<string, number>>; // key: "dept_metric" -> month -> amount
+type GridData = Record<string, Record<string, number>>;
 
 export default function BudgetPage() {
   const [fys, setFYs] = useState<FY[]>([]);
@@ -99,11 +99,11 @@ export default function BudgetPage() {
   };
 
   return (
-    <div>
+    <div className="animate-fade-in">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">Budget</h1>
-          <p className="text-slate-500 mt-1">Create and manage annual budgets</p>
+          <h1 className="text-2xl font-bold text-white">Budget</h1>
+          <p className="text-slate-500 mt-1 text-sm">Create and manage annual budgets</p>
         </div>
         <div className="flex gap-3">
           <select
@@ -113,17 +113,17 @@ export default function BudgetPage() {
           >
             {fys.map(fy => <option key={fy.id} value={fy.id}>{fy.label}</option>)}
           </select>
-          <div className="flex bg-slate-100 rounded-lg p-1">
+          <div className="flex bg-dark-600 rounded-xl p-1 border border-dark-400/50">
             <button
               onClick={() => setUnit('CLINIC')}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                unit === 'CLINIC' ? 'bg-white shadow-sm text-primary-600' : 'text-slate-500'
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                unit === 'CLINIC' ? 'bg-accent-500/15 text-accent-400' : 'text-slate-500'
               }`}
             >Clinic</button>
             <button
               onClick={() => setUnit('PHARMACY')}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                unit === 'PHARMACY' ? 'bg-white shadow-sm text-primary-600' : 'text-slate-500'
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                unit === 'PHARMACY' ? 'bg-accent-500/15 text-accent-400' : 'text-slate-500'
               }`}
             >Pharmacy</button>
           </div>
@@ -133,18 +133,18 @@ export default function BudgetPage() {
       <div className="card overflow-x-auto">
         <table className="text-sm border-collapse" style={{ minWidth: '100%' }}>
           <thead>
-            <tr className="border-b border-slate-200">
-              <th className="text-left py-3 px-3 font-semibold text-slate-700 sticky left-0 z-10 bg-white min-w-[220px] whitespace-nowrap">Category</th>
+            <tr className="border-b border-dark-400/50">
+              <th className="text-left py-3 px-3 font-semibold text-slate-300 sticky left-0 z-10 bg-dark-700 min-w-[220px] whitespace-nowrap">Category</th>
               {months.map(m => (
-                <th key={m} className="text-right py-3 px-2 font-semibold text-slate-700 min-w-[100px] whitespace-nowrap">{getMonthLabel(m)}</th>
+                <th key={m} className="text-right py-3 px-2 font-semibold text-slate-400 min-w-[100px] whitespace-nowrap">{getMonthLabel(m)}</th>
               ))}
-              <th className="text-right py-3 px-3 font-semibold text-slate-700 bg-slate-50 min-w-[120px] whitespace-nowrap">Total</th>
+              <th className="text-right py-3 px-3 font-semibold text-slate-300 bg-dark-600 min-w-[120px] whitespace-nowrap">Total</th>
             </tr>
           </thead>
           <tbody>
             {rows.map(row => (
-              <tr key={row.key} className="border-b border-slate-100 hover:bg-slate-50">
-                <td className="py-2 px-3 font-medium text-slate-700 sticky left-0 z-10 bg-white whitespace-nowrap">{row.label}</td>
+              <tr key={row.key} className="border-b border-dark-400/30 hover:bg-dark-600/50 transition-colors">
+                <td className="py-2 px-3 font-medium text-slate-300 sticky left-0 z-10 bg-dark-700 whitespace-nowrap">{row.label}</td>
                 {months.map(m => (
                   <td key={m} className="py-1 px-1">
                     <input
@@ -152,11 +152,11 @@ export default function BudgetPage() {
                       value={grid[row.key]?.[m] || ''}
                       onChange={e => updateCell(row.key, m, e.target.value)}
                       placeholder="0"
-                      className="w-full text-right px-2 py-1.5 border border-transparent hover:border-slate-300 focus:border-primary-400 focus:ring-1 focus:ring-primary-400 rounded text-sm outline-none"
+                      className="w-full text-right px-2 py-1.5 border border-transparent hover:border-dark-300 focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 rounded-lg text-sm outline-none bg-transparent text-slate-200 placeholder-slate-600"
                     />
                   </td>
                 ))}
-                <td className="py-2 px-3 text-right font-semibold text-slate-800 bg-slate-50">
+                <td className="py-2 px-3 text-right font-semibold text-white bg-dark-600">
                   {row.metric === 'footfall' || row.metric === 'qty_sold' || row.metric === 'transactions'
                     ? getRowTotal(row.key).toLocaleString('en-IN')
                     : formatINR(getRowTotal(row.key))}
@@ -171,7 +171,7 @@ export default function BudgetPage() {
         <button onClick={save} disabled={saving} className="btn-primary">
           {saving ? 'Saving...' : 'Save Budget'}
         </button>
-        {saved && <span className="text-emerald-600 text-sm">Budget saved successfully!</span>}
+        {saved && <span className="text-emerald-400 text-sm">Budget saved successfully!</span>}
       </div>
     </div>
   );

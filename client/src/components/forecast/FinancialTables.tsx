@@ -29,7 +29,7 @@ export default function FinancialTables({ scenario, months, viewMode, items, all
   return (
     <div>
       {/* Sub-tabs */}
-      <div className="flex gap-1 overflow-x-auto pb-2 mb-4 border-b border-slate-200 -mx-6 px-6">
+      <div className="flex gap-1 overflow-x-auto pb-2 mb-4 border-b border-dark-400/50 -mx-6 px-6">
         {subTabs.map(tab => (
           <NavLink
             key={tab.path}
@@ -37,8 +37,8 @@ export default function FinancialTables({ scenario, months, viewMode, items, all
             className={({ isActive }) =>
               `px-4 py-2 text-xs font-medium rounded-t-lg whitespace-nowrap border-b-2 transition-colors ${
                 isActive
-                  ? 'border-primary-500 text-primary-600 bg-primary-50/50'
-                  : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                  ? 'border-accent-500 text-accent-400 bg-accent-500/10/50'
+                  : 'border-transparent text-slate-500 hover:text-slate-300 hover:bg-dark-600'
               }`
             }
           >

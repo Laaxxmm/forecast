@@ -32,7 +32,6 @@ export default function ForecastPage() {
 
   const loadForecast = async () => {
     if (!selectedFY) return;
-    // Try to load existing forecast first
     const fcRes = await api.get('/forecasts', { params: { fy_id: selectedFY, business_unit: unit } });
     if (fcRes.data.length > 0) {
       const newGrid: GridData = {};
@@ -43,7 +42,6 @@ export default function ForecastPage() {
       });
       setGrid(newGrid);
     } else {
-      // Auto-fill from budget
       const budgetRes = await api.get('/budgets', { params: { fy_id: selectedFY, business_unit: unit } });
       const newGrid: GridData = {};
       budgetRes.data.forEach((b: any) => {
@@ -113,49 +111,49 @@ export default function ForecastPage() {
   };
 
   return (
-    <div>
+    <div className="animate-fade-in">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">Forecast</h1>
-          <p className="text-slate-500 mt-1">Revised projections based on actuals + future estimates</p>
+          <h1 className="text-2xl font-bold text-white">Forecast</h1>
+          <p className="text-slate-500 mt-1 text-sm">Revised projections based on actuals + future estimates</p>
         </div>
         <div className="flex gap-3">
           <select value={selectedFY || ''} onChange={e => setSelectedFY(Number(e.target.value))} className="input w-48">
             {fys.map(fy => <option key={fy.id} value={fy.id}>{fy.label}</option>)}
           </select>
-          <div className="flex bg-slate-100 rounded-lg p-1">
-            <button onClick={() => setUnit('CLINIC')} className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${unit === 'CLINIC' ? 'bg-white shadow-sm text-primary-600' : 'text-slate-500'}`}>Clinic</button>
-            <button onClick={() => setUnit('PHARMACY')} className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${unit === 'PHARMACY' ? 'bg-white shadow-sm text-primary-600' : 'text-slate-500'}`}>Pharmacy</button>
+          <div className="flex bg-dark-600 rounded-xl p-1 border border-dark-400/50">
+            <button onClick={() => setUnit('CLINIC')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${unit === 'CLINIC' ? 'bg-accent-500/15 text-accent-400' : 'text-slate-500'}`}>Clinic</button>
+            <button onClick={() => setUnit('PHARMACY')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${unit === 'PHARMACY' ? 'bg-accent-500/15 text-accent-400' : 'text-slate-500'}`}>Pharmacy</button>
           </div>
         </div>
       </div>
 
       <div className="card overflow-x-auto">
         <div className="flex gap-4 mb-4 text-xs">
-          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-blue-100 border border-blue-300"></span> Budget</span>
-          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-100 border border-green-300"></span> Actual/Forecast</span>
-          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-yellow-100 border border-yellow-300"></span> Edited</span>
+          <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-blue-500/20 border border-blue-500/30"></span> <span className="text-slate-400">Budget</span></span>
+          <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-emerald-500/20 border border-emerald-500/30"></span> <span className="text-slate-400">Actual/Forecast</span></span>
+          <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-amber-500/20 border border-amber-500/30"></span> <span className="text-slate-400">Edited</span></span>
         </div>
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-slate-200">
-              <th className="text-left py-3 px-3 font-semibold text-slate-700 sticky left-0 bg-white min-w-[200px]">Category</th>
+            <tr className="border-b border-dark-400/50">
+              <th className="text-left py-3 px-3 font-semibold text-slate-300 sticky left-0 bg-dark-700 min-w-[200px]">Category</th>
               {months.map(m => (
-                <th key={m} className={`text-right py-3 px-2 font-semibold min-w-[100px] ${m <= currentMonth ? 'text-slate-700' : 'text-slate-400'}`}>
+                <th key={m} className={`text-right py-3 px-2 font-semibold min-w-[100px] ${m <= currentMonth ? 'text-slate-300' : 'text-slate-600'}`}>
                   {getMonthLabel(m)}
-                  {m <= currentMonth && <div className="text-xs font-normal text-emerald-500">actual</div>}
+                  {m <= currentMonth && <div className="text-[10px] font-normal text-accent-400">actual</div>}
                 </th>
               ))}
-              <th className="text-right py-3 px-3 font-semibold text-slate-700 bg-slate-50 min-w-[120px]">Total</th>
+              <th className="text-right py-3 px-3 font-semibold text-slate-300 bg-dark-600 min-w-[120px]">Total</th>
             </tr>
           </thead>
           <tbody>
             {rows.map(row => (
-              <tr key={row.key} className="border-b border-slate-100">
-                <td className="py-2 px-3 font-medium text-slate-700 sticky left-0 bg-white">{row.label}</td>
+              <tr key={row.key} className="border-b border-dark-400/30">
+                <td className="py-2 px-3 font-medium text-slate-300 sticky left-0 bg-dark-700">{row.label}</td>
                 {months.map(m => {
                   const cell = grid[row.key]?.[m];
-                  const bg = cell?.source === 'edited' ? 'bg-yellow-50' : cell?.source === 'forecast' || cell?.source === 'actual' ? 'bg-green-50' : 'bg-blue-50';
+                  const bg = cell?.source === 'edited' ? 'bg-amber-500/5' : cell?.source === 'forecast' || cell?.source === 'actual' ? 'bg-emerald-500/5' : 'bg-blue-500/5';
                   return (
                     <td key={m} className={`py-1 px-1 ${cell ? bg : ''}`}>
                       <input
@@ -163,12 +161,12 @@ export default function ForecastPage() {
                         value={cell?.amount || ''}
                         onChange={e => updateCell(row.key, m, e.target.value)}
                         placeholder="0"
-                        className="w-full text-right px-2 py-1.5 border border-transparent hover:border-slate-300 focus:border-primary-400 focus:ring-1 focus:ring-primary-400 rounded text-sm outline-none bg-transparent"
+                        className="w-full text-right px-2 py-1.5 border border-transparent hover:border-dark-300 focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 rounded-lg text-sm outline-none bg-transparent text-slate-200 placeholder-slate-600"
                       />
                     </td>
                   );
                 })}
-                <td className="py-2 px-3 text-right font-semibold text-slate-800 bg-slate-50">
+                <td className="py-2 px-3 text-right font-semibold text-white bg-dark-600">
                   {row.metric === 'footfall' || row.metric === 'transactions'
                     ? getRowTotal(row.key).toLocaleString('en-IN')
                     : formatINR(getRowTotal(row.key))}
@@ -183,7 +181,7 @@ export default function ForecastPage() {
         <button onClick={save} disabled={saving} className="btn-primary">
           {saving ? 'Saving...' : 'Save Forecast'}
         </button>
-        {saved && <span className="text-emerald-600 text-sm">Forecast saved!</span>}
+        {saved && <span className="text-emerald-400 text-sm">Forecast saved!</span>}
       </div>
     </div>
   );
