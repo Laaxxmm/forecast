@@ -1,7 +1,5 @@
 FROM mcr.microsoft.com/playwright:v1.52.0-noble
 
-# Playwright image comes with Node.js, Chromium, and all system deps pre-installed
-# Set working directory
 WORKDIR /app
 
 # Copy package files
@@ -13,6 +11,10 @@ COPY client/package.json client/
 RUN npm install --legacy-peer-deps
 RUN cd server && npm install --legacy-peer-deps
 RUN cd client && npm install --legacy-peer-deps
+
+# CRITICAL: Re-install Playwright Chromium + deps matching the npm package version
+# The Docker image has v1.52 browsers, but npm installs v1.59 which needs its own browser
+RUN cd server && npx playwright install --with-deps chromium
 
 # Copy source code
 COPY . .

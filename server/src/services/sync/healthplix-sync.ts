@@ -193,10 +193,10 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
   const isProd = process.env.NODE_ENV === 'production';
   const browser = await chromium.launch({
     ...(isProd ? {} : { channel: 'chrome' }),
-    headless: isProd,
+    headless: isProd ? 'new' : false,
     args: [
       '--disable-blink-features=AutomationControlled',
-      ...(isProd ? ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] : []),
+      ...(isProd ? ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] : []),
     ],
   });
   const context: BrowserContext = await browser.newContext({
