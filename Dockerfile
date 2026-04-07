@@ -1,12 +1,7 @@
-FROM node:20-slim
+FROM mcr.microsoft.com/playwright:v1.52.0-noble
 
-# Install base utilities needed by Playwright's install-deps
-RUN apt-get update && apt-get install -y \
-    wget \
-    ca-certificates \
-    procps \
-    --no-install-recommends
-
+# Playwright image comes with Node.js, Chromium, and all system deps pre-installed
+# Set working directory
 WORKDIR /app
 
 # Copy package files
@@ -18,10 +13,6 @@ COPY client/package.json client/
 RUN npm install --legacy-peer-deps
 RUN cd server && npm install --legacy-peer-deps
 RUN cd client && npm install --legacy-peer-deps
-
-# Install Playwright Chromium WITH all system dependencies
-# --with-deps automatically installs every required shared library
-RUN cd server && npx playwright install --with-deps chromium
 
 # Copy source code
 COPY . .
