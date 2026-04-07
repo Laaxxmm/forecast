@@ -26,11 +26,18 @@ const allowedOrigins = [
   process.env.FRONTEND_URL,
 ].filter(Boolean) as string[];
 
+console.log('CORS allowed origins:', allowedOrigins);
+
 app.set('trust proxy', 1);
 app.use(cors({
   origin: (origin, cb) => {
     // Allow requests with no origin (mobile apps, curl, etc.)
-    if (!origin || allowedOrigins.some(o => origin.startsWith(o))) return cb(null, true);
+    if (!origin) return cb(null, true);
+    // Check if origin matches any allowed origin (exact or startsWith for subpaths)
+    if (allowedOrigins.some(o => origin === o || origin.startsWith(o))) return cb(null, true);
+    // Also allow any vercel.app subdomain for preview deploys
+    if (origin.endsWith('.vercel.app')) return cb(null, true);
+    console.log('CORS blocked origin:', origin);
     cb(null, false);
   },
   credentials: true,
