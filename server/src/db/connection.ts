@@ -2,7 +2,7 @@ import initSqlJs, { Database } from 'sql.js';
 import path from 'path';
 import fs from 'fs';
 
-const dataDir = path.join(__dirname, '..', '..', '..', 'data');
+const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', '..', '..', 'data');
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
 const dbPath = path.join(dataDir, 'magna_tracker.db');

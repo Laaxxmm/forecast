@@ -69,8 +69,9 @@ async function start() {
   const db = await getHelper();
   initializeSchema(db);
   await seedDatabase(db);
+  console.log('Database initialized and seeded');
   app.listen(PORT, () => {
-    console.log(`Magna Tracker server running on http://localhost:${PORT}`);
+    console.log(`Magna Tracker server running on port ${PORT}`);
   });
 }
 
