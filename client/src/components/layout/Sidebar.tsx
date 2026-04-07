@@ -44,8 +44,8 @@ export default function Sidebar() {
             <BarChart3 size={18} className="text-white" />
           </div>
           <div>
-            <h1 className="text-base font-bold text-white">Magna Tracker</h1>
-            <p className="text-[10px] text-slate-500 font-medium tracking-wide uppercase">Forecast & Performance</p>
+            <h1 className="text-base font-bold text-white">Vision</h1>
+            <p className="text-[10px] text-slate-500 font-medium tracking-wide uppercase">by Indefine</p>
           </div>
         </div>
       </div>

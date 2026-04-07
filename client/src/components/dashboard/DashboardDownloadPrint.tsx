@@ -158,7 +158,7 @@ export default function DashboardDownloadPrint({ items, allValues, months, setti
         doc.setPage(p);
         doc.setFontSize(7);
         doc.setTextColor(148, 163, 184);
-        doc.text(`Magna Tracker — ${scenario?.name || 'Dashboard'} — ${selectedFY?.label || ''}`, 14, doc.internal.pageSize.getHeight() - 8);
+        doc.text(`Vision by Indefine — ${scenario?.name || 'Dashboard'} — ${selectedFY?.label || ''}`, 14, doc.internal.pageSize.getHeight() - 8);
         doc.text(`Page ${p} of ${totalPages}`, pageW - 14, doc.internal.pageSize.getHeight() - 8, { align: 'right' });
       }
 

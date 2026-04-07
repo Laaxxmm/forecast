@@ -406,7 +406,7 @@ export default function DownloadPrintPanel({ open, onClose, items, allValues, mo
         doc.setFontSize(7);
         doc.setTextColor(148, 163, 184);
         doc.text(
-          `Magna Tracker — ${scenarioName} — ${fyLabel}`,
+          `Vision by Indefine — ${scenarioName} — ${fyLabel}`,
           14,
           doc.internal.pageSize.getHeight() - 8
         );

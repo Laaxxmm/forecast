@@ -43,8 +43,8 @@ export default function LoginPage() {
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-accent-500 shadow-glow mb-4">
             <BarChart3 size={24} className="text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-white">Magna Tracker</h1>
-          <p className="text-slate-500 mt-1.5 text-sm">Budget & Performance Management</p>
+          <h1 className="text-2xl font-bold text-white">Vision</h1>
+          <p className="text-slate-500 mt-1.5 text-sm">by Indefine</p>
         </div>
 
         {/* Login Card */}
