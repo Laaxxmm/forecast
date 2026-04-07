@@ -100,7 +100,7 @@ export default function Sidebar() {
           <div className="mt-6">
             <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider px-3 mb-3">Admin</p>
             <NavLink
-              to="/select-client"
+              to="/admin"
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2.5 text-[13px] font-medium rounded-xl transition-all ${
                   isActive
@@ -110,7 +110,7 @@ export default function Sidebar() {
               }
             >
               <Building2 size={17} />
-              Manage Clients
+              Admin Panel
             </NavLink>
           </div>
         )}

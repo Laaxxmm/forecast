@@ -11,6 +11,7 @@ import ClinicDetailPage from './pages/ClinicDetailPage';
 import PharmacyDetailPage from './pages/PharmacyDetailPage';
 import SettingsPage from './pages/SettingsPage';
 import SelectClientPage from './pages/SelectClientPage';
+import AdminPage from './pages/AdminPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const [auth, setAuth] = useState<boolean | null>(null);
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="/clinic" element={<ClinicDetailPage />} />
           <Route path="/pharmacy" element={<PharmacyDetailPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/admin/*" element={<AdminPage />} />
           <Route path="/" element={<Navigate to="/actuals" replace />} />
         </Route>
       </Routes>
