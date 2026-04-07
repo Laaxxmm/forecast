@@ -1,14 +1,15 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import session from 'express-session';
 import path from 'path';
-import { getHelper } from './db/connection.js';
+import { getClientHelper } from './db/connection.js';
 import { initializeSchema } from './db/schema.js';
 import { seedDatabase } from './db/seed.js';
 import { getPlatformHelper } from './db/platform-connection.js';
 import { initializePlatformSchema } from './db/platform-schema.js';
 import { seedPlatformDatabase } from './db/platform-seed.js';
-import { requireAuth, requireSuperAdmin } from './middleware/auth.js';
+import { requireAuth, requireSuperAdmin, requireAdmin } from './middleware/auth.js';
 import { resolveTenant } from './middleware/tenant.js';
 import authRoutes from './routes/auth.js';
 import adminRoutes from './routes/admin.js';
@@ -27,21 +28,23 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const isProd = process.env.NODE_ENV === 'production';
 
+const sessionSecret = process.env.SESSION_SECRET || (isProd ? (() => { throw new Error('SESSION_SECRET must be set in production'); })() : 'dev-only-secret-change-me');
+
 const allowedOrigins = [
   'http://localhost:5173',
+  'http://localhost:5174',
   'https://vision.indefine.in',
-  process.env.FRONTEND_URL,
+  'https://api-vision.indefine.in',
 ].filter(Boolean) as string[];
 
 console.log('CORS allowed origins:', allowedOrigins);
 
 app.set('trust proxy', 1);
+app.use(helmet());
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin) return cb(null, true);
-    if (allowedOrigins.some(o => origin === o || origin.startsWith(o))) return cb(null, true);
-    if (origin.endsWith('.vercel.app')) return cb(null, true);
-    if (origin.endsWith('.indefine.in')) return cb(null, true);
+    if (!origin) return cb(null, false);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
     console.log('CORS blocked origin:', origin);
     cb(null, false);
   },
@@ -49,7 +52,7 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '50mb' }));
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'magna-tracker-secret-2025',
+  secret: sessionSecret,
   resave: false,
   saveUninitialized: false,
   cookie: {
@@ -67,7 +70,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/admin', requireAuth, requireSuperAdmin, adminRoutes);
 
 // ─── Client-scoped routes (require auth + tenant resolution) ────────────────
-app.use('/api/settings', requireAuth, resolveTenant, settingsRoutes);
+app.use('/api/settings', requireAuth, resolveTenant, requireAdmin, settingsRoutes);
 app.use('/api/import', requireAuth, resolveTenant, importRoutes);
 app.use('/api/actuals', requireAuth, resolveTenant, actualsRoutes);
 app.use('/api/budgets', requireAuth, resolveTenant, budgetRoutes);
@@ -76,7 +79,7 @@ app.use('/api/dashboard', requireAuth, resolveTenant, dashboardRoutes);
 app.use('/api/forecast-module', requireAuth, resolveTenant, forecastModuleRoutes);
 app.use('/api/dashboard-actuals', requireAuth, resolveTenant, dashboardActualsRoutes);
 app.use('/api/sync', requireAuth, resolveTenant, syncRoutes);
-app.use('/api/db', requireAuth, resolveTenant, dbViewerRoutes);
+app.use('/api/db', requireAuth, resolveTenant, requireAdmin, dbViewerRoutes);
 
 // ─── Static files ───────────────────────────────────────────────────────────
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
@@ -97,7 +100,7 @@ async function start() {
   const clients = platformDb.all('SELECT slug FROM clients WHERE is_active = 1');
   for (const client of clients) {
     try {
-      const clientDb = await getHelper();  // Legacy: loads magnacode or default
+      const clientDb = await getClientHelper(client.slug);
       initializeSchema(clientDb);
       console.log(`Client DB "${client.slug}" schema verified`);
     } catch (e) {

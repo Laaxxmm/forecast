@@ -109,3 +109,17 @@ export function requireSuperAdmin(req: Request, res: Response, next: NextFunctio
   }
   next();
 }
+
+export function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  // Super admins always have access
+  if (req.userType === 'super_admin') {
+    return next();
+  }
+
+  // Client users must have admin role
+  if (req.session?.role === 'admin') {
+    return next();
+  }
+
+  return res.status(403).json({ error: 'Admin access required' });
+}

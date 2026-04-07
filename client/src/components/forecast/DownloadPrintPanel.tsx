@@ -506,14 +506,14 @@ export default function DownloadPrintPanel({ open, onClose, items, allValues, mo
             <h3 className="text-sm font-semibold text-slate-300 mb-3">Level of Detail</h3>
             <div className="flex gap-3">
               <label className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-colors ${
-                detailLevel === 'annual' ? 'border-primary-400 bg-accent-500/10/50' : 'border-dark-400/50 hover:bg-dark-600'
+                detailLevel === 'annual' ? 'border-primary-400 bg-accent-500/10' : 'border-dark-400/50 hover:bg-dark-600'
               }`}>
                 <input type="radio" name="detail" checked={detailLevel === 'annual'} onChange={() => setDetailLevel('annual')} className="hidden" />
                 <FileText size={16} className={detailLevel === 'annual' ? 'text-accent-400' : 'text-slate-400'} />
                 <span className={`text-sm font-medium ${detailLevel === 'annual' ? 'text-accent-300' : 'text-slate-400'}`}>Annual Totals</span>
               </label>
               <label className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-colors ${
-                detailLevel === 'monthly' ? 'border-primary-400 bg-accent-500/10/50' : 'border-dark-400/50 hover:bg-dark-600'
+                detailLevel === 'monthly' ? 'border-primary-400 bg-accent-500/10' : 'border-dark-400/50 hover:bg-dark-600'
               }`}>
                 <input type="radio" name="detail" checked={detailLevel === 'monthly'} onChange={() => setDetailLevel('monthly')} className="hidden" />
                 <FileText size={16} className={detailLevel === 'monthly' ? 'text-accent-400' : 'text-slate-400'} />

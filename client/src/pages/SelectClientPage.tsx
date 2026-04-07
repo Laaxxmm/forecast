@@ -94,7 +94,7 @@ export default function SelectClientPage() {
                       )}
                     </div>
                   </div>
-                  <ChevronRight size={18} className="text-slate-600 group-hover:text-accent-400 transition-colors" />
+                  <ChevronRight size={18} className="text-slate-500 group-hover:text-accent-400 transition-colors" />
                 </div>
               </div>
             ))}

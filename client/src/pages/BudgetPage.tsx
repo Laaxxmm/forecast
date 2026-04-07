@@ -23,6 +23,7 @@ export default function BudgetPage() {
   const [grid, setGrid] = useState<GridData>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([
@@ -33,7 +34,7 @@ export default function BudgetPage() {
       setDepts(deptRes.data);
       const active = fyRes.data.find((f: FY) => f.is_active);
       if (active) setSelectedFY(active.id);
-    });
+    }).finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -81,22 +82,33 @@ export default function BudgetPage() {
   const save = async () => {
     if (!selectedFY) return;
     setSaving(true);
-    const entries: any[] = [];
-    rows.forEach(row => {
-      months.forEach(month => {
-        entries.push({
-          month,
-          department_id: row.deptId,
-          metric: row.metric,
-          amount: grid[row.key]?.[month] || 0,
+    try {
+      const entries: any[] = [];
+      rows.forEach(row => {
+        months.forEach(month => {
+          entries.push({
+            month,
+            department_id: row.deptId,
+            metric: row.metric,
+            amount: grid[row.key]?.[month] || 0,
+          });
         });
       });
-    });
-    await api.post('/budgets', { fy_id: selectedFY, business_unit: unit, entries });
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+      await api.post('/budgets', { fy_id: selectedFY, business_unit: unit, entries });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to save budget');
+    } finally {
+      setSaving(false);
+    }
   };
+
+  if (loading) return (
+    <div className="flex items-center justify-center py-20">
+      <div className="text-slate-400">Loading...</div>
+    </div>
+  );
 
   return (
     <div className="animate-fade-in">
@@ -149,7 +161,7 @@ export default function BudgetPage() {
                   <td key={m} className="py-1 px-1">
                     <input
                       type="number"
-                      value={grid[row.key]?.[m] || ''}
+                      value={grid[row.key]?.[m] ?? ''}
                       onChange={e => updateCell(row.key, m, e.target.value)}
                       placeholder="0"
                       className="w-full text-right px-2 py-1.5 border border-transparent hover:border-dark-300 focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 rounded-lg text-sm outline-none bg-transparent text-slate-200 placeholder-slate-600"

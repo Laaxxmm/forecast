@@ -70,7 +70,7 @@ export default function DashboardPage() {
 
   if (!data) return (
     <div className="text-center py-20">
-      <Activity size={40} className="mx-auto text-slate-600 mb-3" />
+      <Activity size={40} className="mx-auto text-slate-500 mb-3" />
       <span className="text-slate-500">No data available</span>
     </div>
   );
@@ -167,7 +167,7 @@ export default function DashboardPage() {
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <div className="flex items-center justify-center h-[300px] text-slate-600">
+            <div className="flex items-center justify-center h-[300px] text-slate-500">
               <div className="text-center">
                 <Activity size={32} className="mx-auto mb-2" />
                 <p className="text-sm">Import data to see trends</p>
@@ -202,7 +202,7 @@ export default function DashboardPage() {
               </PieChart>
             </ResponsiveContainer>
           ) : (
-            <div className="flex items-center justify-center h-[300px] text-slate-600">
+            <div className="flex items-center justify-center h-[300px] text-slate-500">
               <p className="text-sm">No data</p>
             </div>
           )}

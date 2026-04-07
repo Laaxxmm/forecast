@@ -17,11 +17,12 @@ export default function SettingsPage() {
   const [showOgPassword, setShowOgPassword] = useState(false);
   const [ogSaving, setOgSaving] = useState(false);
   const [ogSaved, setOgSaved] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const load = () => {
     Promise.all([api.get('/settings/fy'), api.get('/settings/doctors')]).then(([fyRes, docRes]) => {
       setFYs(fyRes.data); setDoctors(docRes.data);
-    });
+    }).finally(() => setLoading(false));
   };
 
   const loadCredentials = () => {
@@ -39,17 +40,32 @@ export default function SettingsPage() {
 
   const addFY = async () => {
     if (!newFY.label) return;
-    await api.post('/settings/fy', newFY);
-    setNewFY({ label: '', start_date: '', end_date: '' });
-    load();
+    try {
+      await api.post('/settings/fy', newFY);
+      setNewFY({ label: '', start_date: '', end_date: '' });
+      load();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to add financial year');
+    }
   };
 
-  const activateFY = async (id: number) => { await api.put(`/settings/fy/${id}/activate`); load(); };
+  const activateFY = async (id: number) => {
+    try {
+      await api.put(`/settings/fy/${id}/activate`);
+      load();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to activate financial year');
+    }
+  };
 
   const addDoctor = async () => {
     if (!newDoctor.trim()) return;
-    await api.post('/settings/doctors', { name: newDoctor.trim() });
-    setNewDoctor(''); load();
+    try {
+      await api.post('/settings/doctors', { name: newDoctor.trim() });
+      setNewDoctor(''); load();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to add doctor');
+    }
   };
 
   const generateFY = (year: string) => {
@@ -91,6 +107,12 @@ export default function SettingsPage() {
     await api.delete('/sync/credentials/oneglance');
     setOgCreds({ username: '', password: '' }); setOgHasPassword(false);
   };
+
+  if (loading) return (
+    <div className="flex items-center justify-center py-20">
+      <div className="text-slate-400">Loading...</div>
+    </div>
+  );
 
   return (
     <div className="animate-fade-in">
@@ -148,12 +170,12 @@ export default function SettingsPage() {
             {doctors.map(d => (
               <div key={d.id} className="flex items-center justify-between py-2.5 px-3 border-b border-dark-400/30">
                 <span className="text-sm text-slate-300">{d.name}</span>
-                <span className={`text-[10px] font-medium ${d.is_active ? 'text-accent-400' : 'text-slate-600'}`}>
+                <span className={`text-[10px] font-medium ${d.is_active ? 'text-accent-400' : 'text-slate-500'}`}>
                   {d.is_active ? 'Active' : 'Inactive'}
                 </span>
               </div>
             ))}
-            {doctors.length === 0 && <p className="text-slate-600 text-center py-4 text-sm">No doctors yet</p>}
+            {doctors.length === 0 && <p className="text-slate-500 text-center py-4 text-sm">No doctors yet</p>}
           </div>
           <div className="flex gap-2">
             <input type="text" value={newDoctor} onChange={e => setNewDoctor(e.target.value)}
@@ -181,7 +203,7 @@ export default function SettingsPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-1.5">
-                Password {hpHasPassword && <span className="text-xs text-slate-600">(saved)</span>}
+                Password {hpHasPassword && <span className="text-xs text-slate-500">(saved)</span>}
               </label>
               <div className="relative">
                 <input type={showHpPassword ? 'text' : 'password'} value={hpCreds.password} onChange={e => setHpCreds(c => ({ ...c, password: e.target.value }))}
@@ -228,7 +250,7 @@ export default function SettingsPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-1.5">
-                Password {ogHasPassword && <span className="text-xs text-slate-600">(saved)</span>}
+                Password {ogHasPassword && <span className="text-xs text-slate-500">(saved)</span>}
               </label>
               <div className="relative">
                 <input type={showOgPassword ? 'text' : 'password'} value={ogCreds.password} onChange={e => setOgCreds(c => ({ ...c, password: e.target.value }))}
@@ -253,7 +275,7 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      <p className="text-xs text-slate-600 mt-4">
+      <p className="text-xs text-slate-500 mt-4">
         Credentials are encrypted and stored locally. They are only used to automate report downloads.
       </p>
     </div>

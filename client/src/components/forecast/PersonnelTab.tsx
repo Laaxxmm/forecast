@@ -383,7 +383,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
                 <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={v => `Rs${(v / 1000).toFixed(0)}k`} />
                 <Tooltip
                   formatter={(value: number) => [formatRs(value), 'Total']}
-                  contentStyle={{ borderRadius: 8, borderColor: '#e2e8f0', fontSize: 12 }}
+                  contentStyle={{ borderRadius: 8, fontSize: 12, backgroundColor: '#14141f', borderColor: '#2a2a3d', color: '#e2e8f0' }}
                 />
                 <Area
                   type="monotone"
@@ -422,7 +422,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
             {/* ── Direct Labor Section ── */}
             {directLaborItems.length > 0 && (
               <>
-                <tr className="border-b border-dark-400/50 bg-blue-500/10/30">
+                <tr className="border-b border-dark-400/50 bg-blue-500/10">
                   <td colSpan={months.length + 2} className="py-2 px-4 sticky left-0 z-10">
                     <span className="text-xs font-bold text-blue-400 uppercase tracking-wider">Direct Labor</span>
                   </td>
@@ -513,14 +513,14 @@ export default function PersonnelTab({ category, label, scenario, months, items,
             )}
 
             {/* ── Totals Row ── */}
-            <tr className="border-t-2 border-primary-200 bg-dark-600 font-semibold">
+            <tr className="border-t-2 border-accent-500/30 bg-dark-600 font-semibold">
               <td className="py-3 px-4 text-slate-300 sticky left-0 bg-dark-600 z-10">Totals</td>
               {months.map(m => (
                 <td key={m} className="text-right py-3 px-3 text-white tabular-nums">
                   {formatRs(monthlyTotals[m] || 0)}
                 </td>
               ))}
-              <td className="text-right py-3 px-4 text-slate-900 bg-dark-500 tabular-nums">
+              <td className="text-right py-3 px-4 text-white bg-dark-500 tabular-nums">
                 {formatRs(grandTotal)}
               </td>
             </tr>
@@ -550,7 +550,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
             {headCountExpanded && items.filter(i => i.item_type !== 'employee_benefits').map(item => {
               const isGroup = item.item_type === 'group';
               return (
-                <tr key={`hc-${item.id}`} className="border-b border-slate-50 bg-dark-700">
+                <tr key={`hc-${item.id}`} className="border-b border-dark-400/30 bg-dark-700">
                   <td className="py-1.5 px-4 pl-10 text-slate-500 text-xs sticky left-0 bg-dark-700 z-10">
                     {item.name}
                   </td>

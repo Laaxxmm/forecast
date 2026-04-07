@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 
 const router = Router();
+const isProd = process.env.NODE_ENV === 'production';
 
 /**
  * GET /api/db/tables
@@ -32,7 +33,13 @@ router.get('/tables', async (_req: Request, res: Response) => {
  */
 router.get('/table/:name', async (req: Request, res: Response) => {
   const db = req.tenantDb!;
-  const tableName = req.params.name;
+  const tableName = req.params.name as string;
+
+  // Validate table name to prevent SQL injection
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(tableName)) {
+    return res.status(400).json({ error: 'Invalid table name' });
+  }
+
   const limit = Math.min(parseInt(req.query.limit as string) || 100, 1000);
   const offset = parseInt(req.query.offset as string) || 0;
 
@@ -84,17 +91,28 @@ router.get('/query', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Missing ?sql= parameter' });
   }
 
+  // Reject queries containing semicolons (prevent multi-statement injection)
+  if (sql.includes(';')) {
+    return res.status(400).json({ error: 'Semicolons are not allowed in queries' });
+  }
+
   // Only allow SELECT and PRAGMA queries
   const upper = sql.toUpperCase();
   if (!upper.startsWith('SELECT') && !upper.startsWith('PRAGMA') && !upper.startsWith('WITH')) {
     return res.status(403).json({ error: 'Only SELECT/PRAGMA queries allowed' });
   }
 
+  // Reject dangerous keywords that could appear in subqueries
+  const dangerous = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|ATTACH|DETACH|REPLACE)\b/i;
+  if (dangerous.test(sql)) {
+    return res.status(403).json({ error: 'Query contains disallowed keywords' });
+  }
+
   try {
     const rows = db.all(sql);
     res.json({ sql, rowCount: rows.length, rows });
   } catch (err: any) {
-    res.status(400).json({ error: err.message, sql });
+    res.status(400).json({ error: isProd ? 'Query execution failed' : err.message, sql });
   }
 });
 

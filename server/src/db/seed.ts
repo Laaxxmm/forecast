@@ -23,13 +23,13 @@ export async function seedDatabase(db: DbHelper) {
 
   const existingAdmin = db.get('SELECT id FROM users WHERE username = ?', adminUser);
   if (!existingAdmin) {
-    const hash = await bcrypt.hash(adminPass, 10);
+    const hash = await bcrypt.hash(adminPass, 12);
     db.run('INSERT INTO users (username, password_hash, display_name, role) VALUES (?, ?, ?, ?)',
       adminUser, hash, adminName, 'admin');
     console.log(`[Seed] Admin user "${adminUser}" created`);
   } else {
     // Update password in case env var changed
-    const hash = await bcrypt.hash(adminPass, 10);
+    const hash = await bcrypt.hash(adminPass, 12);
     db.run('UPDATE users SET password_hash = ? WHERE username = ?', hash, adminUser);
     console.log(`[Seed] Admin user "${adminUser}" verified`);
   }

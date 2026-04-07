@@ -19,7 +19,7 @@ export async function seedPlatformDatabase(platformDb: DbHelper) {
 
   const existingSuperAdmin = platformDb.get('SELECT id FROM team_members WHERE username = ?', superUser);
   if (!existingSuperAdmin) {
-    const hash = await bcrypt.hash(superPass, 10);
+    const hash = await bcrypt.hash(superPass, 12);
     platformDb.run(
       'INSERT INTO team_members (username, password_hash, display_name, role) VALUES (?, ?, ?, ?)',
       [superUser, hash, superName, 'super_admin']
@@ -43,7 +43,7 @@ export async function seedPlatformDatabase(platformDb: DbHelper) {
     const adminUser = process.env.ADMIN_USERNAME || 'admin';
     const adminPass = process.env.ADMIN_PASSWORD || 'admin123';
     const adminName = process.env.ADMIN_DISPLAY_NAME || 'Administrator';
-    const adminHash = await bcrypt.hash(adminPass, 10);
+    const adminHash = await bcrypt.hash(adminPass, 12);
 
     platformDb.run(
       'INSERT INTO client_users (client_id, username, password_hash, display_name, role) VALUES (?, ?, ?, ?, ?)',

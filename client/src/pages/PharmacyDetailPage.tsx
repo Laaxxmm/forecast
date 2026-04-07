@@ -9,13 +9,14 @@ export default function PharmacyDetailPage() {
   const [sales, setSales] = useState<any[]>([]);
   const [purchases, setPurchases] = useState<any[]>([]);
   const [variance, setVariance] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     api.get('/settings/fy').then(res => {
       setFYs(res.data);
       const active = res.data.find((f: any) => f.is_active);
       if (active) setSelectedFY(active.id);
-    });
+    }).finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -54,6 +55,12 @@ export default function PharmacyDetailPage() {
     { label: 'Units Sold', value: formatNumber(totalQty), color: 'text-purple-400' },
     { label: 'Transactions', value: formatNumber(totalTxns), color: 'text-pink-400' },
   ];
+
+  if (loading) return (
+    <div className="flex items-center justify-center py-20">
+      <div className="text-slate-400">Loading...</div>
+    </div>
+  );
 
   return (
     <div className="animate-fade-in">
@@ -95,7 +102,7 @@ export default function PharmacyDetailPage() {
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <p className="text-slate-600 text-center py-16 text-sm">Import Oneglance sales data to see pharmacy details</p>
+          <p className="text-slate-500 text-center py-16 text-sm">Import Oneglance sales data to see pharmacy details</p>
         )}
       </div>
 
@@ -121,7 +128,7 @@ export default function PharmacyDetailPage() {
               </AreaChart>
             </ResponsiveContainer>
           ) : (
-            <p className="text-slate-600 text-center py-8 text-sm">No data</p>
+            <p className="text-slate-500 text-center py-8 text-sm">No data</p>
           )}
         </div>
 
@@ -163,7 +170,7 @@ export default function PharmacyDetailPage() {
               </table>
             </div>
           ) : (
-            <p className="text-slate-600 text-center py-8 text-sm">Set a budget to see variance</p>
+            <p className="text-slate-500 text-center py-8 text-sm">Set a budget to see variance</p>
           )}
         </div>
       </div>

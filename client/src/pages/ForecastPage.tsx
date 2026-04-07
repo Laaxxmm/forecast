@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import api from '../api/client';
 import { formatINR, getMonthLabel } from '../utils/format';
 
@@ -21,16 +21,17 @@ export default function ForecastPage() {
   const [grid, setGrid] = useState<GridData>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     api.get('/settings/fy').then(res => {
       setFYs(res.data);
       const active = res.data.find((f: FY) => f.is_active);
       if (active) setSelectedFY(active.id);
-    });
+    }).finally(() => setLoading(false));
   }, []);
 
-  const loadForecast = async () => {
+  const loadForecast = useCallback(async () => {
     if (!selectedFY) return;
     const fcRes = await api.get('/forecasts', { params: { fy_id: selectedFY, business_unit: unit } });
     if (fcRes.data.length > 0) {
@@ -51,9 +52,9 @@ export default function ForecastPage() {
       });
       setGrid(newGrid);
     }
-  };
+  }, [selectedFY, unit]);
 
-  useEffect(() => { loadForecast(); }, [selectedFY, unit]);
+  useEffect(() => { loadForecast(); }, [loadForecast]);
 
   const activeFY = fys.find(f => f.id === selectedFY);
   const months = activeFY ? getFYMonths(activeFY.start_date) : [];
@@ -93,22 +94,33 @@ export default function ForecastPage() {
   const save = async () => {
     if (!selectedFY) return;
     setSaving(true);
-    const entries: any[] = [];
-    rows.forEach(row => {
-      months.forEach(month => {
-        entries.push({
-          month,
-          department_id: row.deptId,
-          metric: row.metric,
-          amount: grid[row.key]?.[month]?.amount || 0,
+    try {
+      const entries: any[] = [];
+      rows.forEach(row => {
+        months.forEach(month => {
+          entries.push({
+            month,
+            department_id: row.deptId,
+            metric: row.metric,
+            amount: grid[row.key]?.[month]?.amount || 0,
+          });
         });
       });
-    });
-    await api.post('/forecasts', { fy_id: selectedFY, business_unit: unit, entries });
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+      await api.post('/forecasts', { fy_id: selectedFY, business_unit: unit, entries });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to save forecast');
+    } finally {
+      setSaving(false);
+    }
   };
+
+  if (loading) return (
+    <div className="flex items-center justify-center py-20">
+      <div className="text-slate-400">Loading...</div>
+    </div>
+  );
 
   return (
     <div className="animate-fade-in">
@@ -139,7 +151,7 @@ export default function ForecastPage() {
             <tr className="border-b border-dark-400/50">
               <th className="text-left py-3 px-3 font-semibold text-slate-300 sticky left-0 bg-dark-700 min-w-[200px]">Category</th>
               {months.map(m => (
-                <th key={m} className={`text-right py-3 px-2 font-semibold min-w-[100px] ${m <= currentMonth ? 'text-slate-300' : 'text-slate-600'}`}>
+                <th key={m} className={`text-right py-3 px-2 font-semibold min-w-[100px] ${m <= currentMonth ? 'text-slate-300' : 'text-slate-500'}`}>
                   {getMonthLabel(m)}
                   {m <= currentMonth && <div className="text-[10px] font-normal text-accent-400">actual</div>}
                 </th>
@@ -158,7 +170,7 @@ export default function ForecastPage() {
                     <td key={m} className={`py-1 px-1 ${cell ? bg : ''}`}>
                       <input
                         type="number"
-                        value={cell?.amount || ''}
+                        value={cell?.amount ?? ''}
                         onChange={e => updateCell(row.key, m, e.target.value)}
                         placeholder="0"
                         className="w-full text-right px-2 py-1.5 border border-transparent hover:border-dark-300 focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 rounded-lg text-sm outline-none bg-transparent text-slate-200 placeholder-slate-600"

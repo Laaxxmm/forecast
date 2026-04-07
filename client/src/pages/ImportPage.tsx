@@ -123,7 +123,7 @@ function SyncStepTracker({ status, steps }: { status: { step: string; message: s
                 stepStatus === 'done' ? 'bg-accent-500/15 text-accent-400' :
                 stepStatus === 'active' ? 'bg-accent-500/15 text-accent-400' :
                 stepStatus === 'error' ? 'bg-red-500/15 text-red-400' :
-                'bg-dark-500 text-slate-600'
+                'bg-dark-500 text-slate-500'
               }`}>
                 {stepStatus === 'done' ? <CheckCircle size={14} /> :
                  stepStatus === 'active' ? <RefreshCw size={14} className="animate-spin" /> :
@@ -135,7 +135,7 @@ function SyncStepTracker({ status, steps }: { status: { step: string; message: s
                   stepStatus === 'done' ? 'text-accent-400' :
                   stepStatus === 'active' ? 'text-accent-300' :
                   stepStatus === 'error' ? 'text-red-400' :
-                  'text-slate-600'
+                  'text-slate-500'
                 }`}>{step.label}</p>
                 {(stepStatus === 'active' || stepStatus === 'error') && (
                   <p className={`text-xs mt-0.5 ${stepStatus === 'error' ? 'text-red-400' : 'text-accent-500/70'}`}>
@@ -203,8 +203,12 @@ export default function ImportPage() {
 
   const handleDelete = async (id: number) => {
     if (!confirm('Delete this import and all its data?')) return;
-    await api.delete(`/import/${id}`);
-    loadHistory();
+    try {
+      await api.delete(`/import/${id}`);
+      loadHistory();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to delete import');
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -510,7 +514,7 @@ export default function ImportPage() {
       <div className="card">
         <h3 className="font-semibold text-white mb-4">Import History</h3>
         {history.length === 0 ? (
-          <p className="text-slate-600 text-center py-8">No imports yet</p>
+          <p className="text-slate-500 text-center py-8">No imports yet</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

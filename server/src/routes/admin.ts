@@ -61,7 +61,7 @@ router.post('/clients', async (req: Request, res: Response) => {
   const clientId = result.lastInsertRowid;
 
   // Create default admin user for this client
-  const adminHash = await bcrypt.hash('admin123', 10);
+  const adminHash = await bcrypt.hash('admin123', 12);
   db.run(
     'INSERT INTO client_users (client_id, username, password_hash, display_name, role) VALUES (?, ?, ?, ?, ?)',
     [clientId, 'admin', adminHash, `${name} Admin`, 'admin']
@@ -137,7 +137,7 @@ router.post('/clients/:slug/users', async (req: Request, res: Response) => {
   );
   if (existing) return res.status(409).json({ error: 'Username already exists for this client' });
 
-  const hash = await bcrypt.hash(password, 10);
+  const hash = await bcrypt.hash(password, 12);
   const result = db.run(
     'INSERT INTO client_users (client_id, username, password_hash, display_name, role) VALUES (?, ?, ?, ?, ?)',
     [client.id, username, hash, display_name, role || 'user']
@@ -158,7 +158,7 @@ router.put('/clients/:slug/users/:id', async (req: Request, res: Response) => {
   if (role) db.run('UPDATE client_users SET role = ? WHERE id = ? AND client_id = ?', [role, userId, client.id]);
   if (is_active !== undefined) db.run('UPDATE client_users SET is_active = ? WHERE id = ? AND client_id = ?', [is_active ? 1 : 0, userId, client.id]);
   if (password) {
-    const hash = await bcrypt.hash(password, 10);
+    const hash = await bcrypt.hash(password, 12);
     db.run('UPDATE client_users SET password_hash = ? WHERE id = ? AND client_id = ?', [hash, userId, client.id]);
   }
 
@@ -240,7 +240,7 @@ router.post('/team', async (req: Request, res: Response) => {
   const existing = db.get('SELECT id FROM team_members WHERE username = ?', username);
   if (existing) return res.status(409).json({ error: 'Username already exists' });
 
-  const hash = await bcrypt.hash(password, 10);
+  const hash = await bcrypt.hash(password, 12);
   const result = db.run(
     'INSERT INTO team_members (username, password_hash, display_name, role) VALUES (?, ?, ?, ?)',
     [username, hash, display_name, role || 'super_admin']
@@ -258,7 +258,7 @@ router.put('/team/:id', async (req: Request, res: Response) => {
   if (role) db.run('UPDATE team_members SET role = ? WHERE id = ?', [role, id]);
   if (is_active !== undefined) db.run('UPDATE team_members SET is_active = ? WHERE id = ?', [is_active ? 1 : 0, id]);
   if (password) {
-    const hash = await bcrypt.hash(password, 10);
+    const hash = await bcrypt.hash(password, 12);
     db.run('UPDATE team_members SET password_hash = ? WHERE id = ?', [hash, id]);
   }
 

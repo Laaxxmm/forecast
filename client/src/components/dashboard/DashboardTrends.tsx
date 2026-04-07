@@ -220,7 +220,7 @@ export default function DashboardTrends({ items, allValues, months, settings, ac
               tickFormatter={v => isPercent ? `${v.toFixed(0)}%` : fmtRs(v)} />
             <Tooltip
               formatter={(v: number, name: string) => [isPercent ? `${v.toFixed(1)}%` : fmtRs(v), name]}
-              contentStyle={{ borderRadius: 8, fontSize: 12 }}
+              contentStyle={{ borderRadius: 8, fontSize: 12, backgroundColor: '#14141f', borderColor: '#2a2a3d', color: '#e2e8f0' }}
             />
             <Legend />
             {chartType === 'column' ? (

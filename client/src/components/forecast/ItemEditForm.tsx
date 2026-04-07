@@ -934,7 +934,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                 <Tooltip
                   formatter={(value: number) => [formatRs(value)]}
                   labelFormatter={(label) => label}
-                  contentStyle={{ borderRadius: 8, fontSize: 12, borderColor: '#e2e8f0', backgroundColor: '#fff' }}
+                  contentStyle={{ borderRadius: 8, fontSize: 12, backgroundColor: '#14141f', borderColor: '#2a2a3d', color: '#e2e8f0' }}
                 />
                 <Line type="monotone" dataKey="forecast" name="Forecast" stroke="#0d9488" strokeWidth={2} strokeDasharray="6 3" dot={{ r: 3, fill: '#0d9488', stroke: '#0d9488' }} />
               </LineChart>
@@ -945,7 +945,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
         {/* Monthly values scroll row */}
         <div className="flex overflow-x-auto border-t border-dark-400/30">
           {months.map(m => (
-            <div key={m} className="text-center min-w-[85px] flex-shrink-0 py-2.5 border-r border-slate-50 last:border-0">
+            <div key={m} className="text-center min-w-[85px] flex-shrink-0 py-2.5 border-r border-dark-400/30 last:border-0">
               <div className="text-[10px] text-slate-400 mb-0.5">{getMonthLabel(m)}</div>
               <div className="text-xs font-semibold text-slate-300 tabular-nums">{formatRs(computedValues[m] || 0)}</div>
             </div>

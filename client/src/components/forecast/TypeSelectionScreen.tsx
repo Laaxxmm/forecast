@@ -68,7 +68,7 @@ export default function TypeSelectionScreen({ title, question, types, onSelect, 
               <button
                 key={t.value}
                 onClick={() => onSelect(t.value)}
-                className="text-left p-5 rounded-xl border-2 border-dark-400/50 hover:border-primary-400 hover:bg-accent-500/10/30 transition-all group"
+                className="text-left p-5 rounded-xl border-2 border-dark-400/50 hover:border-primary-400 hover:bg-accent-500/10 transition-all group"
               >
                 <div className="flex items-center gap-3 mb-1.5">
                   <span className="text-xl">{TYPE_ICONS[t.value] || '📋'}</span>

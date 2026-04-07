@@ -125,7 +125,7 @@ export default function ProfitAndLoss({ items, allValues, months, viewMode, sett
               <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" />
               <XAxis dataKey="month" tick={{ fontSize: 11 }} stroke="#94a3b8" />
               <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
-              <Tooltip formatter={(value: number) => [formatRs(value)]} contentStyle={{ borderRadius: 8, fontSize: 12 }} />
+              <Tooltip formatter={(value: number) => [formatRs(value)]} contentStyle={{ borderRadius: 8, fontSize: 12, backgroundColor: '#14141f', borderColor: '#2a2a3d', color: '#e2e8f0' }} />
               <Area type="monotone" dataKey="Revenue" stroke="#0d9488" fill="#0d948820" strokeWidth={2} />
               <Area type="monotone" dataKey="Net Profit" stroke="#6366f1" fill="#6366f120" strokeWidth={2} />
             </AreaChart>

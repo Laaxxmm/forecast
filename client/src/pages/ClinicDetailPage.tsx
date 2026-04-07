@@ -10,13 +10,14 @@ export default function ClinicDetailPage() {
   const [doctors, setDoctors] = useState<any[]>([]);
   const [variance, setVariance] = useState<any[]>([]);
   const [selectedStream, setSelectedStream] = useState('all');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     api.get('/settings/fy').then(res => {
       setFYs(res.data);
       const active = res.data.find((f: any) => f.is_active);
       if (active) setSelectedFY(active.id);
-    });
+    }).finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -74,6 +75,12 @@ export default function ClinicDetailPage() {
 
   const chartTooltipStyle = { backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '12px' };
 
+  if (loading) return (
+    <div className="flex items-center justify-center py-20">
+      <div className="text-slate-400">Loading...</div>
+    </div>
+  );
+
   return (
     <div className="animate-fade-in">
       <div className="flex items-center justify-between mb-6">
@@ -104,7 +111,7 @@ export default function ClinicDetailPage() {
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <p className="text-slate-600 text-center py-16 text-sm">Import Healthplix data to see clinic details</p>
+          <p className="text-slate-500 text-center py-16 text-sm">Import Healthplix data to see clinic details</p>
         )}
       </div>
 
@@ -156,7 +163,7 @@ export default function ClinicDetailPage() {
             </ResponsiveContainer>
           </>
         ) : (
-          <p className="text-slate-600 text-center py-16 text-sm">Set a budget in Forecast to see comparison</p>
+          <p className="text-slate-500 text-center py-16 text-sm">Set a budget in Forecast to see comparison</p>
         )}
       </div>
 
@@ -181,14 +188,14 @@ export default function ClinicDetailPage() {
                     <td className="py-3 px-2 font-medium text-slate-200">{d.name}</td>
                     <td className="py-3 px-2 text-right text-slate-300">{formatINR(d.revenue)}</td>
                     <td className="py-3 px-2 text-right text-slate-400">{formatNumber(d.count)}</td>
-                    <td className="py-3 px-2 text-right text-accent-400">{formatINR(Math.round(d.revenue / d.count))}</td>
+                    <td className="py-3 px-2 text-right text-accent-400">{formatINR(d.count > 0 ? Math.round(d.revenue / d.count) : 0)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         ) : (
-          <p className="text-slate-600 text-center py-8 text-sm">No doctor data</p>
+          <p className="text-slate-500 text-center py-8 text-sm">No doctor data</p>
         )}
       </div>
     </div>

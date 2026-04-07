@@ -1,9 +1,12 @@
 import { Router } from 'express';
 import { upload } from '../middleware/upload.js';
+import { requireAdmin } from '../middleware/auth.js';
 import { parseHealthplix } from '../services/parsers/healthplix.js';
 import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
 import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.js';
 import fs from 'fs';
+
+const isProd = process.env.NODE_ENV === 'production';
 
 const router = Router();
 
@@ -66,7 +69,7 @@ router.post('/healthplix', upload.single('file'), async (req, res) => {
     res.json({ importId: importLog.lastInsertRowid, ...summary });
   } catch (err: any) {
     if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: isProd ? 'Import failed' : err.message });
   }
 });
 
@@ -99,7 +102,7 @@ router.post('/oneglance-sales', upload.single('file'), async (req, res) => {
     res.json({ importId: importLog.lastInsertRowid, ...summary });
   } catch (err: any) {
     if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: isProd ? 'Import failed' : err.message });
   }
 });
 
@@ -135,7 +138,7 @@ router.post('/oneglance-purchase', upload.single('file'), async (req, res) => {
     res.json({ importId: importLog.lastInsertRowid, ...summary });
   } catch (err: any) {
     if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: isProd ? 'Import failed' : err.message });
   }
 });
 
@@ -144,7 +147,7 @@ router.get('/history', async (_req, res) => {
   res.json(db.all('SELECT * FROM import_logs ORDER BY created_at DESC'));
 });
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireAdmin, async (req, res) => {
   const db = req.tenantDb!;
   db.run('DELETE FROM clinic_actuals WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM pharmacy_sales_actuals WHERE import_id = ?', req.params.id);

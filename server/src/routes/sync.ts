@@ -11,9 +11,30 @@ import path from 'path';
 
 const router = Router();
 
-// In-memory sync state for progress tracking
-let activeSyncId: string | null = null;
-let syncProgress: { step: string; message: string; pct: number; error?: string; result?: any } | null = null;
+const isProd = process.env.NODE_ENV === 'production';
+
+// Per-tenant sync state for progress tracking
+interface SyncState {
+  activeSyncId: string | null;
+  progress: { step: string; message: string; pct: number; error?: string; result?: any } | null;
+}
+
+const hpSyncStates = new Map<string, SyncState>();
+const ogSyncStates = new Map<string, SyncState>();
+
+function getHpState(slug: string): SyncState {
+  if (!hpSyncStates.has(slug)) {
+    hpSyncStates.set(slug, { activeSyncId: null, progress: null });
+  }
+  return hpSyncStates.get(slug)!;
+}
+
+function getOgState(slug: string): SyncState {
+  if (!ogSyncStates.has(slug)) {
+    ogSyncStates.set(slug, { activeSyncId: null, progress: null });
+  }
+  return ogSyncStates.get(slug)!;
+}
 
 // ─── Credential Management ───────────────────────────────────────────────────
 
@@ -66,7 +87,10 @@ router.post('/healthplix', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'fromDate and toDate are required (YYYY-MM-DD)' });
   }
 
-  if (activeSyncId) {
+  const tenantSlug = req.tenantSlug!;
+  const state = getHpState(tenantSlug);
+
+  if (state.activeSyncId) {
     return res.status(409).json({ error: 'A sync is already in progress' });
   }
 
@@ -86,8 +110,8 @@ router.post('/healthplix', async (req: Request, res: Response) => {
 
   // Start sync
   const syncId = Date.now().toString();
-  activeSyncId = syncId;
-  syncProgress = { step: 'starting', message: 'Initializing...', pct: 0 };
+  state.activeSyncId = syncId;
+  state.progress = { step: 'starting', message: 'Initializing...', pct: 0 };
 
   // Run sync in background, respond immediately with syncId
   res.json({ syncId, status: 'started' });
@@ -102,16 +126,16 @@ router.post('/healthplix', async (req: Request, res: Response) => {
       toDate,
       headless: true,
       onProgress: (step, message, pct) => {
-        syncProgress = { step, message, pct };
+        state.progress = { step, message, pct };
       },
     });
 
     // Parse the downloaded file through existing parser
-    syncProgress = { step: 'parsing', message: 'Parsing downloaded report...', pct: 92 };
+    state.progress = { step: 'parsing', message: 'Parsing downloaded report...', pct: 92 };
 
     const { rows, summary } = parseHealthplix(result.filePath);
 
-    syncProgress = { step: 'saving', message: `Saving ${rows.length} rows to database...`, pct: 95 };
+    state.progress = { step: 'saving', message: `Saving ${rows.length} rows to database...`, pct: 95 };
 
     // Insert into DB (same logic as import.ts)
     const importLog = db.run(
@@ -168,7 +192,7 @@ router.post('/healthplix', async (req: Request, res: Response) => {
     // Clean up downloaded file
     try { fs.unlinkSync(result.filePath); } catch {}
 
-    syncProgress = {
+    state.progress = {
       step: 'complete',
       message: 'Sync completed successfully',
       pct: 100,
@@ -178,21 +202,21 @@ router.post('/healthplix', async (req: Request, res: Response) => {
       },
     };
   } catch (err: any) {
-    syncProgress = {
+    state.progress = {
       step: 'error',
-      message: err.message || 'Sync failed',
+      message: isProd ? 'Sync failed' : (err.message || 'Sync failed'),
       pct: 0,
-      error: err.message,
+      error: isProd ? 'Sync failed' : err.message,
     };
     // Clear lock immediately on error so user can retry
-    activeSyncId = null;
+    state.activeSyncId = null;
   } finally {
     // Clear completed sync state after a delay so status can be polled
-    if (syncProgress?.step === 'complete') {
+    if (state.progress?.step === 'complete') {
       setTimeout(() => {
-        if (activeSyncId === syncId) {
-          activeSyncId = null;
-          syncProgress = null;
+        if (state.activeSyncId === syncId) {
+          state.activeSyncId = null;
+          state.progress = null;
         }
       }, 60_000);
     }
@@ -202,23 +226,25 @@ router.post('/healthplix', async (req: Request, res: Response) => {
 // ─── Progress Polling ─────────────────────────────────────────────────────────
 
 router.get('/healthplix/status', (_req: Request, res: Response) => {
-  if (!activeSyncId && !syncProgress) {
+  const state = getHpState(_req.tenantSlug!);
+  if (!state.activeSyncId && !state.progress) {
     return res.json({ status: 'idle' });
   }
   res.json({
-    syncId: activeSyncId,
-    status: syncProgress?.step === 'complete' ? 'complete'
-          : syncProgress?.step === 'error' ? 'error'
+    syncId: state.activeSyncId,
+    status: state.progress?.step === 'complete' ? 'complete'
+          : state.progress?.step === 'error' ? 'error'
           : 'running',
-    ...syncProgress,
+    ...state.progress,
   });
 });
 
 // ─── Reset stuck sync ─────────────────────────────────────────────────────────
 
 router.post('/healthplix/reset', (_req: Request, res: Response) => {
-  activeSyncId = null;
-  syncProgress = null;
+  const state = getHpState(_req.tenantSlug!);
+  state.activeSyncId = null;
+  state.progress = null;
   res.json({ ok: true });
 });
 
@@ -264,9 +290,6 @@ router.delete('/credentials/oneglance', async (_req: Request, res: Response) => 
 
 // ─── Oneglance Sync ──────────────────────────────────────────────────────────
 
-let ogActiveSyncId: string | null = null;
-let ogSyncProgress: { step: string; message: string; pct: number; error?: string; result?: any } | null = null;
-
 router.post('/oneglance', async (req: Request, res: Response) => {
   const { fromDate, toDate, reportType } = req.body;
 
@@ -274,7 +297,10 @@ router.post('/oneglance', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'fromDate and toDate are required (YYYY-MM-DD)' });
   }
 
-  if (ogActiveSyncId) {
+  const tenantSlug = req.tenantSlug!;
+  const ogState = getOgState(tenantSlug);
+
+  if (ogState.activeSyncId) {
     return res.status(409).json({ error: 'An Oneglance sync is already in progress' });
   }
 
@@ -290,8 +316,8 @@ router.post('/oneglance', async (req: Request, res: Response) => {
   const password = decrypt(passwordRow.value);
 
   const syncId = Date.now().toString();
-  ogActiveSyncId = syncId;
-  ogSyncProgress = { step: 'starting', message: 'Initializing...', pct: 0 };
+  ogState.activeSyncId = syncId;
+  ogState.progress = { step: 'starting', message: 'Initializing...', pct: 0 };
 
   res.json({ syncId, status: 'started' });
 
@@ -304,17 +330,17 @@ router.post('/oneglance', async (req: Request, res: Response) => {
       toDate,
       reportType: reportType || 'both',
       onProgress: (step, message, pct) => {
-        ogSyncProgress = { step, message, pct };
+        ogState.progress = { step, message, pct };
       },
     });
 
-    ogSyncProgress = { step: 'parsing', message: 'Parsing downloaded reports...', pct: 85 };
+    ogState.progress = { step: 'parsing', message: 'Parsing downloaded reports...', pct: 85 };
 
     let totalRows = 0;
 
     // Parse and save Sales report
     if (result.salesFile) {
-      ogSyncProgress = { step: 'parsing', message: 'Parsing sales report...', pct: 87 };
+      ogState.progress = { step: 'parsing', message: 'Parsing sales report...', pct: 87 };
       const { rows, summary } = parseOneglanceSales(result.salesFile.filePath);
 
       const importLog = db.run(
@@ -374,7 +400,7 @@ router.post('/oneglance', async (req: Request, res: Response) => {
 
     // Parse and save Purchase report
     if (result.purchaseFile) {
-      ogSyncProgress = { step: 'parsing', message: 'Parsing purchase report...', pct: 92 };
+      ogState.progress = { step: 'parsing', message: 'Parsing purchase report...', pct: 92 };
       const { rows, summary } = parseOneglancePurchase(result.purchaseFile.filePath);
 
       const importLog = db.run(
@@ -403,26 +429,26 @@ router.post('/oneglance', async (req: Request, res: Response) => {
       try { fs.unlinkSync(result.purchaseFile.filePath); } catch {}
     }
 
-    ogSyncProgress = {
+    ogState.progress = {
       step: 'complete',
       message: `Sync completed — ${totalRows} rows imported`,
       pct: 100,
       result: { totalRows },
     };
   } catch (err: any) {
-    ogSyncProgress = {
+    ogState.progress = {
       step: 'error',
-      message: err.message || 'Sync failed',
+      message: isProd ? 'Sync failed' : (err.message || 'Sync failed'),
       pct: 0,
-      error: err.message,
+      error: isProd ? 'Sync failed' : err.message,
     };
-    ogActiveSyncId = null;
+    ogState.activeSyncId = null;
   } finally {
-    if (ogSyncProgress?.step === 'complete') {
+    if (ogState.progress?.step === 'complete') {
       setTimeout(() => {
-        if (ogActiveSyncId === syncId) {
-          ogActiveSyncId = null;
-          ogSyncProgress = null;
+        if (ogState.activeSyncId === syncId) {
+          ogState.activeSyncId = null;
+          ogState.progress = null;
         }
       }, 60_000);
     }
@@ -430,28 +456,29 @@ router.post('/oneglance', async (req: Request, res: Response) => {
 });
 
 router.get('/oneglance/status', (_req: Request, res: Response) => {
-  if (!ogActiveSyncId && !ogSyncProgress) {
+  const ogState = getOgState(_req.tenantSlug!);
+  if (!ogState.activeSyncId && !ogState.progress) {
     return res.json({ status: 'idle' });
   }
   res.json({
-    syncId: ogActiveSyncId,
-    status: ogSyncProgress?.step === 'complete' ? 'complete'
-          : ogSyncProgress?.step === 'error' ? 'error'
+    syncId: ogState.activeSyncId,
+    status: ogState.progress?.step === 'complete' ? 'complete'
+          : ogState.progress?.step === 'error' ? 'error'
           : 'running',
-    ...ogSyncProgress,
+    ...ogState.progress,
   });
 });
 
 router.post('/oneglance/reset', (_req: Request, res: Response) => {
-  ogActiveSyncId = null;
-  ogSyncProgress = null;
+  const ogState = getOgState(_req.tenantSlug!);
+  ogState.activeSyncId = null;
+  ogState.progress = null;
   res.json({ ok: true });
 });
 
 // ─── Debug Screenshots ──────────────────────────────────────────────────────
 
-const isProdEnv = process.env.NODE_ENV === 'production';
-const persistentDir = process.env.DATA_DIR || (isProdEnv ? '/data' : '.');
+const persistentDir = process.env.DATA_DIR || (isProd ? '/data' : '.');
 
 router.get('/debug/screenshots', (_req: Request, res: Response) => {
   const debugDir = path.join(persistentDir, 'uploads', 'debug');
@@ -470,8 +497,12 @@ router.get('/debug/screenshots', (_req: Request, res: Response) => {
 });
 
 router.get('/debug/screenshots/:filename', (req: Request, res: Response) => {
+  const filename = req.params.filename;
+  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    return res.status(400).json({ error: 'Invalid filename' });
+  }
   const debugDir = path.join(persistentDir, 'uploads', 'debug');
-  const filePath = path.join(debugDir, req.params.filename);
+  const filePath = path.join(debugDir, filename);
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: 'Not found' });
   }

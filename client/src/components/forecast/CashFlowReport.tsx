@@ -105,7 +105,7 @@ export default function CashFlowReport({ items, allValues, months, viewMode: _vi
                 <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" />
                 <XAxis dataKey="month" tick={{ fontSize: 11 }} stroke="#94a3b8" />
                 <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
-                <Tooltip formatter={(value: number) => [formatRs(value)]} contentStyle={{ borderRadius: 8, fontSize: 12 }} />
+                <Tooltip formatter={(value: number) => [formatRs(value)]} contentStyle={{ borderRadius: 8, fontSize: 12, backgroundColor: '#14141f', borderColor: '#2a2a3d', color: '#e2e8f0' }} />
                 <Line type="monotone" dataKey="Cash Balance" stroke="#0d9488" strokeWidth={2} dot={{ r: 3 }} />
               </LineChart>
             ) : (
@@ -113,7 +113,7 @@ export default function CashFlowReport({ items, allValues, months, viewMode: _vi
                 <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" />
                 <XAxis dataKey="month" tick={{ fontSize: 11 }} stroke="#94a3b8" />
                 <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
-                <Tooltip formatter={(value: number) => [formatRs(value)]} contentStyle={{ borderRadius: 8, fontSize: 12 }} />
+                <Tooltip formatter={(value: number) => [formatRs(value)]} contentStyle={{ borderRadius: 8, fontSize: 12, backgroundColor: '#14141f', borderColor: '#2a2a3d', color: '#e2e8f0' }} />
                 <Bar dataKey="Cash Flow" fill="#0d9488" radius={[4, 4, 0, 0]} />
               </BarChart>
             )}

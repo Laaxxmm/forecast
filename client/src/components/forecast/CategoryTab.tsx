@@ -314,7 +314,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
                 <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={v => `Rs${(v / 1000).toFixed(0)}k`} />
                 <Tooltip
                   formatter={(value: number) => [formatRs(value), 'Total']}
-                  contentStyle={{ borderRadius: 8, borderColor: '#e2e8f0', fontSize: 12 }}
+                  contentStyle={{ borderRadius: 8, fontSize: 12, backgroundColor: '#14141f', borderColor: '#2a2a3d', color: '#e2e8f0' }}
                 />
                 <Area
                   type="monotone"
@@ -417,14 +417,14 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
             )}
 
             {/* Totals row */}
-            <tr className="border-t-2 border-primary-200 bg-dark-600 font-semibold">
+            <tr className="border-t-2 border-accent-500/30 bg-dark-600 font-semibold">
               <td className="py-3 px-4 text-slate-300 sticky left-0 bg-dark-600 z-10">Totals</td>
               {months.map(m => (
                 <td key={m} className="text-right py-3 px-3 text-white tabular-nums">
                   {formatRs(monthlyTotals[m] || 0)}
                 </td>
               ))}
-              <td className="text-right py-3 px-4 text-slate-900 bg-dark-500 tabular-nums">
+              <td className="text-right py-3 px-4 text-white bg-dark-500 tabular-nums">
                 {formatRs(grandTotal)}
               </td>
             </tr>

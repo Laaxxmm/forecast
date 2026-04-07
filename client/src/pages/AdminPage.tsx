@@ -132,7 +132,7 @@ function ClientsPanel() {
             <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
           </div>
         ) : clients.length === 0 ? (
-          <p className="text-slate-600 text-center py-8">No clients yet. Create your first client above.</p>
+          <p className="text-slate-500 text-center py-8">No clients yet. Create your first client above.</p>
         ) : (
           <div className="space-y-2">
             {clients.map(client => (
@@ -147,7 +147,7 @@ function ClientsPanel() {
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-white">{client.name}</span>
-                    <span className="text-xs text-slate-600">({client.slug})</span>
+                    <span className="text-xs text-slate-500">({client.slug})</span>
                     {client.is_active ? (
                       <span className="badge-success text-[10px]">Active</span>
                     ) : (
@@ -165,7 +165,7 @@ function ClientsPanel() {
                     )}
                   </div>
                 </div>
-                <ChevronRight size={16} className="text-slate-600 group-hover:text-accent-400 transition-colors" />
+                <ChevronRight size={16} className="text-slate-500 group-hover:text-accent-400 transition-colors" />
               </div>
             ))}
           </div>
@@ -356,7 +356,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
           )}
 
           {users.length === 0 ? (
-            <p className="text-slate-600 text-center py-6 text-sm">No users</p>
+            <p className="text-slate-500 text-center py-6 text-sm">No users</p>
           ) : (
             <div className="space-y-2">
               {users.map(user => (
@@ -405,7 +405,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
                   }`}
                 >
                   <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${
-                    int.enabled ? 'left-5.5 left-[22px]' : 'left-0.5'
+                    int.enabled ? 'left-[22px]' : 'left-0.5'
                   }`} />
                 </button>
               </div>
@@ -522,7 +522,7 @@ function TeamPanel() {
           <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
         </div>
       ) : team.length === 0 ? (
-        <p className="text-slate-600 text-center py-8 text-sm">No team members</p>
+        <p className="text-slate-500 text-center py-8 text-sm">No team members</p>
       ) : (
         <div className="space-y-2">
           {team.map(member => (
