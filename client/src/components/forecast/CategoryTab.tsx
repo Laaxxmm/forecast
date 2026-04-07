@@ -20,6 +20,7 @@ interface Props {
   allValues: Record<number, Record<string, number>>;
   settings: Record<string, any>;
   onReload: () => Promise<void>;
+  readOnly?: boolean;
 }
 
 const CATEGORY_CONFIG: Record<string, { addLabel: string; itemTypes: { value: string; label: string; description: string }[]; showChart: boolean }> = {
@@ -89,7 +90,7 @@ const CATEGORY_CONFIG: Record<string, { addLabel: string; itemTypes: { value: st
   },
 };
 
-export default function CategoryTab({ category, label, scenario, months, viewMode, items, allItems, allValues, settings, onReload }: Props) {
+export default function CategoryTab({ category, label, scenario, months, viewMode, items, allItems, allValues, settings, onReload, readOnly }: Props) {
   const [editingItem, setEditingItem] = useState<ForecastItem | null>(null);
   const [showTypeSelection, setShowTypeSelection] = useState(false);
   const [showAddType, setShowAddType] = useState(false);
@@ -192,6 +193,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
         allValues={allValues}
         settings={settings}
         onReload={onReload}
+        readOnly={readOnly}
       />
     );
   }
@@ -210,6 +212,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
         allValues={allValues}
         settings={settings}
         onReload={onReload}
+        readOnly={readOnly}
       />
     );
   }
@@ -236,7 +239,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
     );
   }
 
-  if (editingItem) {
+  if (editingItem && !readOnly) {
     return (
       <ItemEditForm
         item={editingItem}
@@ -281,7 +284,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
               CSV
             </button>
           )}
-        {config.addLabel && (
+        {config.addLabel && !readOnly && (
           <button
             onClick={handleAddClick}
             className="btn-primary flex items-center gap-2 text-sm"
@@ -354,30 +357,36 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
                 <tr key={item.id} className="border-b border-dark-400/30 hover:bg-dark-600 group">
                   <td className="py-2.5 px-4 sticky left-0 bg-dark-700 z-10 group-hover:bg-dark-600">
                     <div className="flex items-center gap-2">
-                      <GripVertical size={14} className="text-slate-300 cursor-grab opacity-0 group-hover:opacity-100" />
-                      <button
-                        onClick={() => setEditingItem(item)}
-                        className="text-accent-400 hover:text-accent-300 font-medium hover:underline text-left"
-                      >
-                        {item.name}
-                      </button>
-                      <div className="relative ml-auto">
+                      {!readOnly && <GripVertical size={14} className="text-slate-300 cursor-grab opacity-0 group-hover:opacity-100" />}
+                      {readOnly ? (
+                        <span className="text-slate-300 font-medium text-left">{item.name}</span>
+                      ) : (
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (menuOpenId === item.id) {
-                              setMenuOpenId(null);
-                            } else {
-                              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                              setMenuPos({ top: rect.bottom + 4, left: rect.right - 160 });
-                              setMenuOpenId(item.id);
-                            }
-                          }}
-                          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-dark-400 rounded"
+                          onClick={() => setEditingItem(item)}
+                          className="text-accent-400 hover:text-accent-300 font-medium hover:underline text-left"
                         >
-                          <MoreVertical size={14} />
+                          {item.name}
                         </button>
-                      </div>
+                      )}
+                      {!readOnly && (
+                        <div className="relative ml-auto">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (menuOpenId === item.id) {
+                                setMenuOpenId(null);
+                              } else {
+                                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                setMenuPos({ top: rect.bottom + 4, left: rect.right - 160 });
+                                setMenuOpenId(item.id);
+                              }
+                            }}
+                            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-dark-400 rounded"
+                          >
+                            <MoreVertical size={14} />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </td>
                   {months.map(m => (
@@ -393,7 +402,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
             })}
 
             {/* Add new row */}
-            {config.addLabel && (
+            {config.addLabel && !readOnly && (
               <tr className="border-b border-dark-400/30">
                 <td className="py-2.5 px-4 sticky left-0 bg-dark-700 z-10" colSpan={months.length + 2}>
                   <button

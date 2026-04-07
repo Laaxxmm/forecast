@@ -26,6 +26,9 @@ const tabs = [
 ];
 
 export default function DashboardModulePage() {
+  const userType = localStorage.getItem('user_type');
+  const userRole = localStorage.getItem('user_role');
+  const isAdmin = userType === 'super_admin' || userRole === 'admin';
   const [fys, setFYs] = useState<FY[]>([]);
   const [selectedFY, setSelectedFY] = useState<FY | null>(null);
   const [scenario, setScenario] = useState<Scenario | null>(null);
@@ -98,7 +101,7 @@ export default function DashboardModulePage() {
       <div className="bg-dark-800 border-b border-dark-400/30 -mx-8 -mt-8 px-8 mb-0 rounded-none">
         <div className="flex items-center justify-between">
           <div className="flex overflow-x-auto">
-            {tabs.map(tab => (
+            {tabs.filter(tab => isAdmin || tab.path !== 'update-actuals').map(tab => (
               <NavLink
                 key={tab.path}
                 to={`/analysis/${tab.path}`}

@@ -70,6 +70,12 @@ export default function ForecastModulePage() {
   const [showDownloadPanel, setShowDownloadPanel] = useState(false);
   const navigate = useNavigate();
 
+  // Role-based access: regular users get read-only
+  const userType = localStorage.getItem('user_type');
+  const userRole = localStorage.getItem('user_role');
+  const isAdmin = userType === 'super_admin' || userRole === 'admin';
+  const readOnly = !isAdmin;
+
   useEffect(() => {
     api.get('/settings/fy').then(res => {
       setFYs(res.data);
@@ -219,6 +225,7 @@ export default function ForecastModulePage() {
               allValues={allValues}
               settings={settings}
               onReload={loadData}
+              readOnly={readOnly}
             />
           } />
           <Route path="pnl" element={

@@ -27,6 +27,7 @@ api.interceptors.response.use(
       localStorage.setItem('auth_token', res.data.token);
       // Store tenant context from login response
       if (res.data.userType) localStorage.setItem('user_type', res.data.userType);
+      if (res.data.role) localStorage.setItem('user_role', res.data.role);
       if (res.data.clientSlug) localStorage.setItem('client_slug', res.data.clientSlug);
       if (res.data.clientName) localStorage.setItem('client_name', res.data.clientName);
     }
@@ -36,6 +37,7 @@ api.interceptors.response.use(
     if (err.response?.status === 401 && !window.location.pathname.includes('/login')) {
       localStorage.removeItem('auth_token');
       localStorage.removeItem('user_type');
+      localStorage.removeItem('user_role');
       localStorage.removeItem('client_slug');
       localStorage.removeItem('client_name');
       window.location.href = '/login';

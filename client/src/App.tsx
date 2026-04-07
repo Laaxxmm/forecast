@@ -33,6 +33,13 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return auth ? <>{children}</> : <Navigate to="/login" replace />;
 }
 
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const userType = localStorage.getItem('user_type');
+  const userRole = localStorage.getItem('user_role');
+  const isAdmin = userType === 'super_admin' || userRole === 'admin';
+  return isAdmin ? <>{children}</> : <Navigate to="/actuals" replace />;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -49,11 +56,11 @@ export default function App() {
           <Route path="/actuals" element={<DashboardPage />} />
           <Route path="/forecast/*" element={<ForecastModulePage />} />
           <Route path="/analysis/*" element={<DashboardModulePage />} />
-          <Route path="/import" element={<ImportPage />} />
+          <Route path="/import" element={<AdminRoute><ImportPage /></AdminRoute>} />
           <Route path="/clinic" element={<ClinicDetailPage />} />
           <Route path="/pharmacy" element={<PharmacyDetailPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/admin/*" element={<AdminPage />} />
+          <Route path="/settings" element={<AdminRoute><SettingsPage /></AdminRoute>} />
+          <Route path="/admin/*" element={<AdminRoute><AdminPage /></AdminRoute>} />
           <Route path="/" element={<Navigate to="/actuals" replace />} />
         </Route>
       </Routes>

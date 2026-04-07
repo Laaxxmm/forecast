@@ -17,6 +17,7 @@ interface Props {
   allValues: Record<number, Record<string, number>>;
   settings: Record<string, any>;
   onReload: () => Promise<void>;
+  readOnly?: boolean;
 }
 
 const PERSONNEL_ADD_TYPES = [
@@ -24,7 +25,7 @@ const PERSONNEL_ADD_TYPES = [
   { value: 'employee_benefits', label: 'Employee Taxes or Benefits', description: 'Add a burden rate for on-staff employees' },
 ];
 
-export default function PersonnelTab({ category, label, scenario, months, items, allItems, allValues, onReload }: Props) {
+export default function PersonnelTab({ category, label, scenario, months, items, allItems, allValues, onReload, readOnly }: Props) {
   const [editingItem, setEditingItem] = useState<ForecastItem | null>(null);
   const [showTypeSelection, setShowTypeSelection] = useState(false);
   const [showAddDropdown, setShowAddDropdown] = useState(false);
@@ -228,7 +229,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
     );
   }
 
-  if (editingItem) {
+  if (editingItem && !readOnly) {
     return (
       <ItemEditForm
         item={editingItem}
@@ -253,33 +254,39 @@ export default function PersonnelTab({ category, label, scenario, months, items,
       <tr key={item.id} className="border-b border-dark-400/30 hover:bg-dark-600 group">
         <td className="py-2.5 px-4 sticky left-0 bg-dark-700 z-10 group-hover:bg-dark-600">
           <div className="flex items-center gap-2">
-            <GripVertical size={14} className="text-slate-300 cursor-grab opacity-0 group-hover:opacity-100" />
-            <button
-              onClick={() => setEditingItem(item)}
-              className="text-accent-400 hover:text-accent-300 font-medium hover:underline text-left"
-            >
-              {item.name}
-            </button>
+            {!readOnly && <GripVertical size={14} className="text-slate-300 cursor-grab opacity-0 group-hover:opacity-100" />}
+            {readOnly ? (
+              <span className="text-slate-300 font-medium text-left">{item.name}</span>
+            ) : (
+              <button
+                onClick={() => setEditingItem(item)}
+                className="text-accent-400 hover:text-accent-300 font-medium hover:underline text-left"
+              >
+                {item.name}
+              </button>
+            )}
             {item.item_type === 'group' && (
               <span className="text-xs px-1.5 py-0.5 bg-dark-500 text-slate-500 rounded">Group</span>
             )}
-            <div className="relative ml-auto">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (menuOpenId === item.id) {
-                    setMenuOpenId(null);
-                  } else {
-                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                    setMenuPos({ top: rect.bottom + 4, left: rect.right - 160 });
-                    setMenuOpenId(item.id);
-                  }
-                }}
-                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-dark-400 rounded"
-              >
-                <MoreVertical size={14} />
-              </button>
-            </div>
+            {!readOnly && (
+              <div className="relative ml-auto">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (menuOpenId === item.id) {
+                      setMenuOpenId(null);
+                    } else {
+                      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                      setMenuPos({ top: rect.bottom + 4, left: rect.right - 160 });
+                      setMenuOpenId(item.id);
+                    }
+                  }}
+                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-dark-400 rounded"
+                >
+                  <MoreVertical size={14} />
+                </button>
+              </div>
+            )}
           </div>
         </td>
         {months.map(m => (
@@ -321,7 +328,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
           <h2 className="text-xl font-bold text-white">{label}</h2>
           <span className="text-xs px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-400 font-medium cursor-pointer">In Progress</span>
         </div>
-        <div className="relative">
+        {!readOnly && <div className="relative">
           <button
             onClick={() => setShowAddDropdown(!showAddDropdown)}
             className="btn-primary flex items-center gap-2 text-sm"
@@ -355,7 +362,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
               </div>
             </>
           )}
-        </div>
+        </div>}
       </div>
 
       {/* Chart */}
@@ -426,7 +433,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
             )}
 
             {/* Add direct labor link */}
-            {directLaborItems.length > 0 && (
+            {directLaborItems.length > 0 && !readOnly && (
               <tr className="border-b border-dark-400/30">
                 <td className="py-2 px-4 sticky left-0 bg-dark-700 z-10" colSpan={months.length + 2}>
                   <button
@@ -454,35 +461,41 @@ export default function PersonnelTab({ category, label, scenario, months, items,
             )}
 
             {/* Add personnel link */}
-            <tr className="border-b border-dark-400/30">
-              <td className="py-2 px-4 sticky left-0 bg-dark-700 z-10" colSpan={months.length + 2}>
-                <button
-                  onClick={() => {
-                    pendingLaborType.current = 'regular_labor';
-                    setShowTypeSelection(true);
-                  }}
-                  className="flex items-center gap-2 text-sm text-accent-400 hover:text-accent-300"
-                >
-                  <Plus size={14} />
-                  Add new personnel
-                </button>
-              </td>
-            </tr>
+            {!readOnly && (
+              <tr className="border-b border-dark-400/30">
+                <td className="py-2 px-4 sticky left-0 bg-dark-700 z-10" colSpan={months.length + 2}>
+                  <button
+                    onClick={() => {
+                      pendingLaborType.current = 'regular_labor';
+                      setShowTypeSelection(true);
+                    }}
+                    className="flex items-center gap-2 text-sm text-accent-400 hover:text-accent-300"
+                  >
+                    <Plus size={14} />
+                    Add new personnel
+                  </button>
+                </td>
+              </tr>
+            )}
 
             {/* ── Employee Taxes & Benefits Row ── */}
             {benefitsItems.length > 0 && (
               <tr className="border-b border-dark-400/50 bg-amber-500/10/30">
                 <td className="py-2.5 px-4 sticky left-0 bg-amber-500/10/30 z-10">
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        const bi = benefitsItems[0];
-                        if (bi) setEditingItem(bi);
-                      }}
-                      className="text-accent-400 hover:text-accent-300 font-medium hover:underline text-left"
-                    >
-                      Employee Taxes & Benefits
-                    </button>
+                    {readOnly ? (
+                      <span className="text-slate-300 font-medium text-left">Employee Taxes & Benefits</span>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          const bi = benefitsItems[0];
+                          if (bi) setEditingItem(bi);
+                        }}
+                        className="text-accent-400 hover:text-accent-300 font-medium hover:underline text-left"
+                      >
+                        Employee Taxes & Benefits
+                      </button>
+                    )}
                     <span className="text-xs px-1.5 py-0.5 bg-amber-500/10 text-amber-400 rounded">
                       {benefitsRate}%
                     </span>

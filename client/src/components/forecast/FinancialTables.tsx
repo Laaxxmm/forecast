@@ -23,9 +23,10 @@ interface Props {
   allValues: Record<number, Record<string, number>>;
   settings: Record<string, any>;
   onReload: () => Promise<void>;
+  readOnly?: boolean;
 }
 
-export default function FinancialTables({ scenario, months, viewMode, items, allValues, settings, onReload }: Props) {
+export default function FinancialTables({ scenario, months, viewMode, items, allValues, settings, onReload, readOnly }: Props) {
   return (
     <div>
       {/* Sub-tabs */}
@@ -65,6 +66,7 @@ export default function FinancialTables({ scenario, months, viewMode, items, all
                 allValues={allValues}
                 settings={settings}
                 onReload={onReload}
+                readOnly={readOnly}
               />
             }
           />

@@ -4,26 +4,32 @@ import {
 } from 'lucide-react';
 import api from '../../api/client';
 
-const links = [
-  { to: '/actuals', icon: LayoutDashboard, label: 'Actuals' },
-  { to: '/forecast', icon: TrendingUp, label: 'Forecast' },
-  { to: '/analysis', icon: BarChart3, label: 'Analysis' },
-  { to: '/import', icon: Upload, label: 'Import Data' },
-  { to: '/clinic', icon: Stethoscope, label: 'Clinic Details' },
-  { to: '/pharmacy', icon: Pill, label: 'Pharmacy Details' },
-  { to: '/settings', icon: Settings, label: 'Settings' },
+const allLinks = [
+  { to: '/actuals', icon: LayoutDashboard, label: 'Actuals', adminOnly: false },
+  { to: '/forecast', icon: TrendingUp, label: 'Forecast', adminOnly: false },
+  { to: '/analysis', icon: BarChart3, label: 'Analysis', adminOnly: false },
+  { to: '/import', icon: Upload, label: 'Import Data', adminOnly: true },
+  { to: '/clinic', icon: Stethoscope, label: 'Clinic Details', adminOnly: false },
+  { to: '/pharmacy', icon: Pill, label: 'Pharmacy Details', adminOnly: false },
+  { to: '/settings', icon: Settings, label: 'Settings', adminOnly: true },
 ];
 
 export default function Sidebar() {
   const navigate = useNavigate();
   const userType = localStorage.getItem('user_type');
+  const userRole = localStorage.getItem('user_role');
   const clientName = localStorage.getItem('client_name');
   const isSuperAdmin = userType === 'super_admin';
+  const isAdmin = isSuperAdmin || userRole === 'admin';
+
+  // Filter links: regular users don't see admin-only items
+  const links = allLinks.filter(l => isAdmin || !l.adminOnly);
 
   const handleLogout = async () => {
     await api.post('/auth/logout').catch(() => {});
     localStorage.removeItem('auth_token');
     localStorage.removeItem('user_type');
+    localStorage.removeItem('user_role');
     localStorage.removeItem('client_slug');
     localStorage.removeItem('client_name');
     window.location.href = '/login';
