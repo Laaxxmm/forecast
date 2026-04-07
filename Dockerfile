@@ -1,23 +1,28 @@
 FROM node:20-bookworm
 
-# Install Chromium directly via apt (includes ALL dependencies)
+# Install Chromium via apt (includes all shared library dependencies)
 RUN apt-get update && apt-get install -y \
     chromium \
     && rm -rf /var/lib/apt/lists/*
 
-# Skip Playwright browser download - we use system Chromium
+# Skip Playwright's own browser download — we use system Chromium
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
-# Copy everything
+# Copy everything (respects .dockerignore)
 COPY . .
 
-# Install dependencies
-RUN npm install --legacy-peer-deps
-RUN cd server && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --legacy-peer-deps
-RUN cd client && npm install --legacy-peer-deps
+# Debug: verify directory structure after COPY
+RUN echo "=== Root ===" && ls -la \
+    && echo "=== server/ ===" && ls -la server/ \
+    && echo "=== client/ ===" && ls -la client/
+
+# Install dependencies (all in one RUN to preserve cd context)
+RUN npm install --legacy-peer-deps \
+    && cd server && npm install --legacy-peer-deps \
+    && cd ../client && npm install --legacy-peer-deps
 
 # Build client
 RUN cd client && npm run build

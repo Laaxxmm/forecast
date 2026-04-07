@@ -6,7 +6,7 @@
     "dev": "npx tsx watch src/index.ts",
     "build": "echo 'Using tsx runtime'",
     "start": "npx tsx src/index.ts",
-    "postinstall": "npx playwright install --with-deps chromium || echo 'Playwright install failed, continuing...'"
+    "postinstall": "if [ -z \"$PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD\" ]; then npx playwright install --with-deps chromium || echo 'Playwright install failed, continuing...'; else echo 'Skipping Playwright browser download (PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD is set)'; fi"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
