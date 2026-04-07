@@ -14,10 +14,8 @@ WORKDIR /app
 # Copy everything (respects .dockerignore)
 COPY . .
 
-# Debug: verify directory structure after COPY
-RUN echo "=== Root ===" && ls -la \
-    && echo "=== server/ ===" && ls -la server/ \
-    && echo "=== client/ ===" && ls -la client/
+# Verify project structure
+RUN ls -la && echo "---" && ls server/ && echo "---" && ls client/
 
 # Install dependencies (all in one RUN to preserve cd context)
 RUN npm install --legacy-peer-deps \
