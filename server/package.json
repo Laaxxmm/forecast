@@ -4,8 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "npx tsx watch src/index.ts",
+    "build": "echo 'Using tsx runtime'",
     "start": "npx tsx src/index.ts"
   },
+  "type": "module",
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
