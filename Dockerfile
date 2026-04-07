@@ -1,14 +1,16 @@
 FROM node:20-bookworm
 
-# Install Chromium directly via apt (comes with ALL its dependencies)
+# Install Chromium directly via apt
 RUN apt-get update && apt-get install -y \
     chromium \
-    --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Skip Playwright browser download - we'll use system Chromium
+# Find and verify Chromium path
+RUN which chromium || which chromium-browser || find / -name "chromium*" -type f 2>/dev/null | head -5
+RUN chromium --version || chromium-browser --version || echo "checking path..."
+
+# Skip Playwright browser download - we use system Chromium
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /app
 

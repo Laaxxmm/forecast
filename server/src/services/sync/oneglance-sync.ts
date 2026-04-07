@@ -1,6 +1,7 @@
 import { chromium, type Page, type BrowserContext } from 'playwright';
 import path from 'path';
 import fs from 'fs';
+import { execSync } from 'child_process';
 
 export interface OneglanceSyncOptions {
   username: string;
@@ -144,10 +145,25 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
 
   // Use system Chrome locally, system Chromium (apt) on cloud
   const isProd = process.env.NODE_ENV === 'production';
+  let executablePath: string | undefined;
+  if (isProd) {
+    const paths = [
+      process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser',
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
+    ].filter(Boolean) as string[];
+    executablePath = paths.find(p => fs.existsSync(p));
+    if (!executablePath) {
+      try {
+        executablePath = execSync('which chromium || which chromium-browser || which google-chrome 2>/dev/null').toString().trim();
+      } catch { /* ignore */ }
+    }
+    console.log('Using Chromium at:', executablePath || 'default');
+  }
   const browser = await chromium.launch({
-    ...(isProd
-      ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium' }
-      : { channel: 'chrome' }),
+    ...(executablePath ? { executablePath } : isProd ? {} : { channel: 'chrome' }),
     headless: isProd ? true : false,
     args: [
       '--disable-blink-features=AutomationControlled',
