@@ -1,10 +1,9 @@
 import { Router } from 'express';
-import { getHelper } from '../db/connection.js';
 
 const router = Router();
 
 router.get('/', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { fy_id, business_unit } = req.query;
   if (!fy_id) return res.status(400).json({ error: 'fy_id required' });
 
@@ -22,7 +21,7 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { fy_id, business_unit, entries } = req.body;
   if (!fy_id || !business_unit || !entries?.length) {
     return res.status(400).json({ error: 'fy_id, business_unit, and entries required' });
@@ -43,7 +42,7 @@ router.post('/', async (req, res) => {
 });
 
 router.delete('/', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { fy_id, business_unit } = req.query;
   if (!fy_id) return res.status(400).json({ error: 'fy_id required' });
 

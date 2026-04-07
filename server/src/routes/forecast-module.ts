@@ -1,18 +1,17 @@
 import { Router } from 'express';
-import { getHelper } from '../db/connection.js';
 
 const router = Router();
 
 // === SCENARIOS ===
 router.get('/scenarios', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { fy_id } = req.query;
   if (!fy_id) return res.status(400).json({ error: 'fy_id required' });
   res.json(db.all('SELECT * FROM scenarios WHERE fy_id = ? ORDER BY is_default DESC, name', fy_id));
 });
 
 router.post('/scenarios', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { fy_id, name } = req.body;
   if (!fy_id || !name) return res.status(400).json({ error: 'fy_id and name required' });
   const existing = db.all('SELECT id FROM scenarios WHERE fy_id = ?', fy_id);
@@ -23,7 +22,7 @@ router.post('/scenarios', async (req, res) => {
 });
 
 router.post('/scenarios/ensure', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { fy_id } = req.body;
   if (!fy_id) return res.status(400).json({ error: 'fy_id required' });
   let scenario = db.get('SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1', fy_id);
@@ -39,7 +38,7 @@ router.post('/scenarios/ensure', async (req, res) => {
 
 // === FORECAST ITEMS ===
 router.get('/items', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { scenario_id, category } = req.query;
   if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
   let items;
@@ -57,7 +56,7 @@ router.get('/items', async (req, res) => {
 });
 
 router.post('/items', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta } = req.body;
   if (!scenario_id || !category || !name) {
     return res.status(400).json({ error: 'scenario_id, category, and name required' });
@@ -81,7 +80,7 @@ router.post('/items', async (req, res) => {
 });
 
 router.put('/items/:id', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta } = req.body;
   const fields: string[] = [];
   const values: any[] = [];
@@ -107,13 +106,13 @@ router.put('/items/:id', async (req, res) => {
 });
 
 router.delete('/items/:id', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   db.run('DELETE FROM forecast_items WHERE id = ?', req.params.id);
   res.json({ ok: true });
 });
 
 router.put('/items/reorder', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { items } = req.body; // [{id, sort_order}]
   for (const item of items) {
     db.run('UPDATE forecast_items SET sort_order = ? WHERE id = ?', item.sort_order, item.id);
@@ -123,7 +122,7 @@ router.put('/items/reorder', async (req, res) => {
 
 // === FORECAST VALUES (monthly amounts) ===
 router.get('/values', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { item_id, scenario_id } = req.query;
   if (item_id) {
     res.json(db.all('SELECT * FROM forecast_values WHERE item_id = ? ORDER BY month', item_id));
@@ -141,7 +140,7 @@ router.get('/values', async (req, res) => {
 });
 
 router.post('/values', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { item_id, values } = req.body; // values: [{month, amount}]
   if (!item_id || !values?.length) return res.status(400).json({ error: 'item_id and values required' });
 
@@ -159,7 +158,7 @@ router.post('/values', async (req, res) => {
 
 // Bulk save all values for a scenario (used by the grid)
 router.post('/values/bulk', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { entries } = req.body; // [{item_id, month, amount}]
   if (!entries?.length) return res.status(400).json({ error: 'entries required' });
 
@@ -176,7 +175,7 @@ router.post('/values/bulk', async (req, res) => {
 
 // === AUTO-GENERATE VALUES from constant settings ===
 router.post('/items/:id/generate', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { months } = req.body; // array of month strings to generate for
   const item = db.get('SELECT * FROM forecast_items WHERE id = ?', req.params.id);
   if (!item) return res.status(404).json({ error: 'Item not found' });
@@ -219,7 +218,7 @@ router.post('/items/:id/generate', async (req, res) => {
 
 // === SETTINGS (tax rates, employee benefits %, etc.) ===
 router.get('/settings', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { scenario_id } = req.query;
   if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
   const settings = db.all('SELECT * FROM forecast_settings WHERE scenario_id = ?', scenario_id);
@@ -231,7 +230,7 @@ router.get('/settings', async (req, res) => {
 });
 
 router.post('/settings', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { scenario_id, settings } = req.body; // settings: {key: value, ...}
   if (!scenario_id || !settings) return res.status(400).json({ error: 'scenario_id and settings required' });
 
@@ -249,7 +248,7 @@ router.post('/settings', async (req, res) => {
 
 // === SUMMARY / REPORTS ===
 router.get('/summary', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { scenario_id } = req.query;
   if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
 

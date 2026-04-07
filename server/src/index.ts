@@ -5,8 +5,13 @@ import path from 'path';
 import { getHelper } from './db/connection.js';
 import { initializeSchema } from './db/schema.js';
 import { seedDatabase } from './db/seed.js';
-import { requireAuth } from './middleware/auth.js';
+import { getPlatformHelper } from './db/platform-connection.js';
+import { initializePlatformSchema } from './db/platform-schema.js';
+import { seedPlatformDatabase } from './db/platform-seed.js';
+import { requireAuth, requireSuperAdmin } from './middleware/auth.js';
+import { resolveTenant } from './middleware/tenant.js';
 import authRoutes from './routes/auth.js';
+import adminRoutes from './routes/admin.js';
 import settingsRoutes from './routes/settings.js';
 import importRoutes from './routes/import.js';
 import actualsRoutes from './routes/actuals.js';
@@ -33,13 +38,9 @@ console.log('CORS allowed origins:', allowedOrigins);
 app.set('trust proxy', 1);
 app.use(cors({
   origin: (origin, cb) => {
-    // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return cb(null, true);
-    // Check if origin matches any allowed origin (exact or startsWith for subpaths)
     if (allowedOrigins.some(o => origin === o || origin.startsWith(o))) return cb(null, true);
-    // Also allow any vercel.app subdomain for preview deploys
     if (origin.endsWith('.vercel.app')) return cb(null, true);
-    // Allow indefine.in subdomains
     if (origin.endsWith('.indefine.in')) return cb(null, true);
     console.log('CORS blocked origin:', origin);
     cb(null, false);
@@ -59,28 +60,51 @@ app.use(session({
   },
 }));
 
+// ─── Auth (no tenant needed — login determines tenant) ──────────────────────
 app.use('/api/auth', authRoutes);
-app.use('/api/settings', requireAuth, settingsRoutes);
-app.use('/api/import', requireAuth, importRoutes);
-app.use('/api/actuals', requireAuth, actualsRoutes);
-app.use('/api/budgets', requireAuth, budgetRoutes);
-app.use('/api/forecasts', requireAuth, forecastRoutes);
-app.use('/api/dashboard', requireAuth, dashboardRoutes);
-app.use('/api/forecast-module', requireAuth, forecastModuleRoutes);
-app.use('/api/dashboard-actuals', requireAuth, dashboardActualsRoutes);
-app.use('/api/sync', requireAuth, syncRoutes);
-app.use('/api/db', requireAuth, dbViewerRoutes);
 
+// ─── Admin routes (super admin only, no tenant context) ─────────────────────
+app.use('/api/admin', requireAuth, requireSuperAdmin, adminRoutes);
+
+// ─── Client-scoped routes (require auth + tenant resolution) ────────────────
+app.use('/api/settings', requireAuth, resolveTenant, settingsRoutes);
+app.use('/api/import', requireAuth, resolveTenant, importRoutes);
+app.use('/api/actuals', requireAuth, resolveTenant, actualsRoutes);
+app.use('/api/budgets', requireAuth, resolveTenant, budgetRoutes);
+app.use('/api/forecasts', requireAuth, resolveTenant, forecastRoutes);
+app.use('/api/dashboard', requireAuth, resolveTenant, dashboardRoutes);
+app.use('/api/forecast-module', requireAuth, resolveTenant, forecastModuleRoutes);
+app.use('/api/dashboard-actuals', requireAuth, resolveTenant, dashboardActualsRoutes);
+app.use('/api/sync', requireAuth, resolveTenant, syncRoutes);
+app.use('/api/db', requireAuth, resolveTenant, dbViewerRoutes);
+
+// ─── Static files ───────────────────────────────────────────────────────────
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
 app.use(express.static(clientDist));
 app.get('*', (_req, res) => {
   res.sendFile(path.join(clientDist, 'index.html'));
 });
 
+// ─── Startup ────────────────────────────────────────────────────────────────
 async function start() {
-  const db = await getHelper();
-  initializeSchema(db);
-  await seedDatabase(db);
+  // 1. Initialize platform database
+  const platformDb = await getPlatformHelper();
+  initializePlatformSchema(platformDb);
+  await seedPlatformDatabase(platformDb);
+  console.log('Platform database initialized');
+
+  // 2. Initialize existing client databases (ensure schemas are up to date)
+  const clients = platformDb.all('SELECT slug FROM clients WHERE is_active = 1');
+  for (const client of clients) {
+    try {
+      const clientDb = await getHelper();  // Legacy: loads magnacode or default
+      initializeSchema(clientDb);
+      console.log(`Client DB "${client.slug}" schema verified`);
+    } catch (e) {
+      console.error(`Failed to init client DB "${client.slug}":`, e);
+    }
+  }
+
   console.log('Database initialized and seeded');
   app.listen(PORT, () => {
     console.log(`Magna Tracker server running on port ${PORT}`);

@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { getHelper, saveDb } from '../db/connection.js';
 import { upload } from '../middleware/upload.js';
 import { parseHealthplix } from '../services/parsers/healthplix.js';
 import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
@@ -11,7 +10,7 @@ const router = Router();
 router.post('/healthplix', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
-    const db = await getHelper();
+    const db = req.tenantDb!;
     const { rows, summary } = parseHealthplix(req.file.path);
 
     const importLog = db.run(
@@ -63,7 +62,6 @@ router.post('/healthplix', upload.single('file'), async (req, res) => {
       }
     }
 
-    saveDb();
     fs.unlinkSync(req.file.path);
     res.json({ importId: importLog.lastInsertRowid, ...summary });
   } catch (err: any) {
@@ -75,7 +73,7 @@ router.post('/healthplix', upload.single('file'), async (req, res) => {
 router.post('/oneglance-sales', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
-    const db = await getHelper();
+    const db = req.tenantDb!;
     const { rows, summary } = parseOneglanceSales(req.file.path);
 
     const importLog = db.run(
@@ -97,7 +95,6 @@ router.post('/oneglance-sales', upload.single('file'), async (req, res) => {
       );
     }
 
-    saveDb();
     fs.unlinkSync(req.file.path);
     res.json({ importId: importLog.lastInsertRowid, ...summary });
   } catch (err: any) {
@@ -109,7 +106,7 @@ router.post('/oneglance-sales', upload.single('file'), async (req, res) => {
 router.post('/oneglance-purchase', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
-    const db = await getHelper();
+    const db = req.tenantDb!;
     const { rows, summary } = parseOneglancePurchase(req.file.path);
 
     const importLog = db.run(
@@ -134,7 +131,6 @@ router.post('/oneglance-purchase', upload.single('file'), async (req, res) => {
       );
     }
 
-    saveDb();
     fs.unlinkSync(req.file.path);
     res.json({ importId: importLog.lastInsertRowid, ...summary });
   } catch (err: any) {
@@ -144,12 +140,12 @@ router.post('/oneglance-purchase', upload.single('file'), async (req, res) => {
 });
 
 router.get('/history', async (_req, res) => {
-  const db = await getHelper();
+  const db = _req.tenantDb!;
   res.json(db.all('SELECT * FROM import_logs ORDER BY created_at DESC'));
 });
 
 router.delete('/:id', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   db.run('DELETE FROM clinic_actuals WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM pharmacy_sales_actuals WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM pharmacy_purchase_actuals WHERE import_id = ?', req.params.id);

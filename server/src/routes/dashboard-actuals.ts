@@ -1,12 +1,11 @@
 import { Router } from 'express';
-import { getHelper, saveDb } from '../db/connection.js';
 
 const router = Router();
 
 // GET /api/dashboard-actuals?scenario_id=1&month=2026-04
 // Returns all actuals for a scenario, optionally filtered by month
 router.get('/', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { scenario_id, month, category } = req.query;
   if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
 
@@ -24,7 +23,7 @@ router.get('/', async (req, res) => {
 // POST /api/dashboard-actuals/bulk
 // Bulk upsert actuals: { scenario_id, entries: [{ category, item_name, linked_item_id?, month, amount }] }
 router.post('/bulk', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { scenario_id, entries } = req.body;
   if (!scenario_id || !entries) return res.status(400).json({ error: 'scenario_id and entries required' });
 
@@ -43,7 +42,7 @@ router.post('/bulk', async (req, res) => {
 // GET /api/dashboard-actuals/summary?scenario_id=1
 // Returns monthly category totals for actuals
 router.get('/summary', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { scenario_id } = req.query;
   if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
 
@@ -63,7 +62,7 @@ router.get('/summary', async (req, res) => {
 // into dashboard_actuals for the given scenario
 router.post('/sync-from-imports', async (req, res) => {
   try {
-    const db = await getHelper();
+    const db = req.tenantDb!;
     const { scenario_id } = req.body;
     if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
 
@@ -119,7 +118,6 @@ router.post('/sync-from-imports', async (req, res) => {
       }
     } catch { /* pharmacy tables may not have data yet */ }
 
-    saveDb();
     res.json({ success: true, count });
   } catch (err: any) {
     console.error('sync-from-imports error:', err);

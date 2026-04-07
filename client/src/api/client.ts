@@ -5,11 +5,16 @@ const api = axios.create({
   withCredentials: true,
 });
 
-// Attach token to every request if available
+// Attach token and client context to every request
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('auth_token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
+  }
+  // For super admins, attach the selected client slug
+  const clientSlug = localStorage.getItem('client_slug');
+  if (clientSlug) {
+    config.headers['X-Client-Slug'] = clientSlug;
   }
   return config;
 });
@@ -20,12 +25,19 @@ api.interceptors.response.use(
     // If login response contains a token, save it
     if (res.config.url?.includes('/auth/login') && res.data?.token) {
       localStorage.setItem('auth_token', res.data.token);
+      // Store tenant context from login response
+      if (res.data.userType) localStorage.setItem('user_type', res.data.userType);
+      if (res.data.clientSlug) localStorage.setItem('client_slug', res.data.clientSlug);
+      if (res.data.clientName) localStorage.setItem('client_name', res.data.clientName);
     }
     return res;
   },
   err => {
     if (err.response?.status === 401 && !window.location.pathname.includes('/login')) {
       localStorage.removeItem('auth_token');
+      localStorage.removeItem('user_type');
+      localStorage.removeItem('client_slug');
+      localStorage.removeItem('client_name');
       window.location.href = '/login';
     }
     return Promise.reject(err);

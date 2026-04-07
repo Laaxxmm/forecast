@@ -1,10 +1,9 @@
 import { Router } from 'express';
-import { getHelper } from '../db/connection.js';
 
 const router = Router();
 
 router.get('/clinic', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { fy_id } = req.query;
 
   if (fy_id) {
@@ -21,7 +20,7 @@ router.get('/clinic', async (req, res) => {
 });
 
 router.get('/clinic/doctors', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { fy_id, month } = req.query;
 
   if (month) {
@@ -40,7 +39,7 @@ router.get('/clinic/doctors', async (req, res) => {
 });
 
 router.get('/pharmacy', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { fy_id } = req.query;
 
   if (fy_id) {
@@ -57,7 +56,7 @@ router.get('/pharmacy', async (req, res) => {
 });
 
 router.get('/pharmacy/purchases', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { fy_id } = req.query;
 
   if (fy_id) {

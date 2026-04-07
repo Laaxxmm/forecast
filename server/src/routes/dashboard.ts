@@ -1,10 +1,9 @@
 import { Router } from 'express';
-import { getHelper } from '../db/connection.js';
 
 const router = Router();
 
 router.get('/overview', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { fy_id } = req.query;
   const fy = fy_id
     ? db.get('SELECT * FROM financial_years WHERE id = ?', fy_id)
@@ -67,7 +66,7 @@ router.get('/overview', async (req, res) => {
 });
 
 router.get('/variance', async (req, res) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const { fy_id, business_unit } = req.query;
   if (!fy_id) return res.status(400).json({ error: 'fy_id required' });
 

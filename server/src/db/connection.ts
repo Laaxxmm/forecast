@@ -3,52 +3,34 @@ import path from 'path';
 import fs from 'fs';
 
 // Use Railway Volume (/data) in production, or local data/ folder
-// IMPORTANT: Attach a Railway Volume mounted at /data to persist across deploys
 const isProd = process.env.NODE_ENV === 'production';
 const dataDir = process.env.DATA_DIR || (isProd ? '/data' : path.join(__dirname, '..', '..', '..', 'data'));
+const clientsDir = path.join(dataDir, 'clients');
+
 try {
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+  if (!fs.existsSync(clientsDir)) fs.mkdirSync(clientsDir, { recursive: true });
 } catch (e) {
-  console.error(`[DB] Failed to create data dir ${dataDir}, falling back to /tmp`);
+  console.error(`[DB] Failed to create directories`);
 }
 
-const effectiveDir = fs.existsSync(dataDir) ? dataDir : '/tmp';
-const dbPath = path.join(effectiveDir, 'magna_tracker.db');
-console.log(`[DB] Using database at: ${dbPath}`);
-if (effectiveDir === '/tmp') {
-  console.warn('[DB] WARNING: Using /tmp — database will NOT persist across deploys! Attach a Railway Volume at /data.');
+export function getClientsDir(): string {
+  return clientsDir;
 }
 
-let db: Database;
+// ── DbHelper ────────────────────────────────────────────────────────────────
 
-export async function getDb(): Promise<Database> {
-  if (db) return db;
-  const SQL = await initSqlJs();
-  if (fs.existsSync(dbPath)) {
-    const buffer = fs.readFileSync(dbPath);
-    db = new SQL.Database(buffer);
-  } else {
-    db = new SQL.Database();
-  }
-  db.run('PRAGMA foreign_keys = ON');
-  return db;
-}
-
-export function saveDb() {
-  if (!db) return;
-  const data = db.export();
-  const buffer = Buffer.from(data);
-  fs.writeFileSync(dbPath, buffer);
-}
-
-// Helper to run queries similar to better-sqlite3 API
 export class DbHelper {
-  constructor(private db: Database) {}
+  constructor(private db: Database, private saveFn?: () => void) {}
+
+  private save() {
+    this.saveFn?.();
+  }
 
   run(sql: string, ...params: any[]) {
     const flat = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
     this.db.run(sql, flat);
-    saveDb();
+    this.save();
     return {
       lastInsertRowid: (this.db.exec("SELECT last_insert_rowid() as id")[0]?.values[0]?.[0] as number) || 0,
       changes: this.db.getRowsModified(),
@@ -89,15 +71,80 @@ export class DbHelper {
 
   exec(sql: string) {
     this.db.run(sql);
-    saveDb();
+    this.save();
   }
 }
 
-let helper: DbHelper;
+// ── Client DB Connection Pool ───────────────────────────────────────────────
+
+const clientDbCache = new Map<string, { db: Database; helper: DbHelper }>();
+
+function saveClientDb(slug: string) {
+  const entry = clientDbCache.get(slug);
+  if (!entry) return;
+  const data = entry.db.export();
+  const dbPath = path.join(clientsDir, `${slug}.db`);
+  fs.writeFileSync(dbPath, Buffer.from(data));
+}
+
+export async function getClientHelper(slug: string): Promise<DbHelper> {
+  const cached = clientDbCache.get(slug);
+  if (cached) return cached.helper;
+
+  const dbPath = path.join(clientsDir, `${slug}.db`);
+  const SQL = await initSqlJs();
+
+  let db: Database;
+  if (fs.existsSync(dbPath)) {
+    const buffer = fs.readFileSync(dbPath);
+    db = new SQL.Database(buffer);
+  } else {
+    db = new SQL.Database();
+  }
+  db.run('PRAGMA foreign_keys = ON');
+
+  const helper = new DbHelper(db, () => saveClientDb(slug));
+  clientDbCache.set(slug, { db, helper });
+
+  console.log(`[DB] Loaded client DB: ${slug} (${dbPath})`);
+  return helper;
+}
+
+// ── Legacy support (backwards compatibility during migration) ───────────────
+
+// The old singleton pattern — now points to the default client (magnacode)
+// TODO: Remove once all routes use req.tenantDb
+let legacyHelper: DbHelper | null = null;
 
 export async function getHelper(): Promise<DbHelper> {
-  if (helper) return helper;
-  const database = await getDb();
-  helper = new DbHelper(database);
-  return helper;
+  if (legacyHelper) return legacyHelper;
+
+  // Try loading the old magna_tracker.db for backward compat
+  const oldDbPath = path.join(dataDir, 'magna_tracker.db');
+  if (fs.existsSync(oldDbPath)) {
+    const SQL = await initSqlJs();
+    const buffer = fs.readFileSync(oldDbPath);
+    const db = new SQL.Database(buffer);
+    db.run('PRAGMA foreign_keys = ON');
+    legacyHelper = new DbHelper(db, () => {
+      const data = db.export();
+      fs.writeFileSync(oldDbPath, Buffer.from(data));
+    });
+    return legacyHelper;
+  }
+
+  // Fall back to magnacode client DB
+  legacyHelper = await getClientHelper('magnacode');
+  return legacyHelper;
+}
+
+export function saveDb() {
+  // Legacy: save the old DB if it exists, otherwise no-op
+  // Client DBs auto-save via their DbHelper saveFn
+}
+
+export async function getDb(): Promise<Database> {
+  // Legacy wrapper
+  const helper = await getHelper();
+  return (helper as any).db;
 }

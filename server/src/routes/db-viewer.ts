@@ -1,5 +1,4 @@
 import { Router, type Request, type Response } from 'express';
-import { getHelper } from '../db/connection.js';
 
 const router = Router();
 
@@ -8,7 +7,7 @@ const router = Router();
  * List all tables and views with row counts
  */
 router.get('/tables', async (_req: Request, res: Response) => {
-  const db = await getHelper();
+  const db = _req.tenantDb!;
   const tables = db.all(`
     SELECT name, type FROM sqlite_master
     WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'
@@ -32,7 +31,7 @@ router.get('/tables', async (_req: Request, res: Response) => {
  * View contents of a specific table (with optional limit/offset)
  */
 router.get('/table/:name', async (req: Request, res: Response) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const tableName = req.params.name;
   const limit = Math.min(parseInt(req.query.limit as string) || 100, 1000);
   const offset = parseInt(req.query.offset as string) || 0;
@@ -78,7 +77,7 @@ router.get('/table/:name', async (req: Request, res: Response) => {
  * Run a read-only SQL query (SELECT only)
  */
 router.get('/query', async (req: Request, res: Response) => {
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const sql = (req.query.sql as string || '').trim();
 
   if (!sql) {

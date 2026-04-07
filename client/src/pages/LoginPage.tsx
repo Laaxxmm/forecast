@@ -14,8 +14,12 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      await api.post('/auth/login', { username, password });
-      navigate('/actuals');
+      const res = await api.post('/auth/login', { username, password });
+      if (res.data.userType === 'super_admin') {
+        navigate('/select-client');
+      } else {
+        navigate('/actuals');
+      }
     } catch {
       setError('Invalid username or password');
     } finally {

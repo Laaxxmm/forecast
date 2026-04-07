@@ -10,6 +10,7 @@ import ImportPage from './pages/ImportPage';
 import ClinicDetailPage from './pages/ClinicDetailPage';
 import PharmacyDetailPage from './pages/PharmacyDetailPage';
 import SettingsPage from './pages/SettingsPage';
+import SelectClientPage from './pages/SelectClientPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const [auth, setAuth] = useState<boolean | null>(null);
@@ -36,6 +37,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/select-client" element={<ProtectedRoute><SelectClientPage /></ProtectedRoute>} />
         <Route
           element={
             <ProtectedRoute>

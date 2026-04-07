@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import { getHelper } from '../db/connection.js';
-import { createToken, removeToken } from '../middleware/auth.js';
+import { getPlatformHelper } from '../db/platform-connection.js';
+import { createToken, removeToken, getTokenData } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -11,23 +11,73 @@ router.post('/login', async (req, res) => {
     return res.status(400).json({ error: 'Username and password required' });
   }
 
-  const db = await getHelper();
-  const user = db.get('SELECT * FROM users WHERE username = ?', username);
-  if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+  const platformDb = await getPlatformHelper();
 
-  const valid = await bcrypt.compare(password, user.password_hash);
-  if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+  // Stage 1: Check team_members (super admins)
+  const teamMember = platformDb.get(
+    'SELECT * FROM team_members WHERE username = ? AND is_active = 1',
+    username
+  );
 
-  // Set session (local dev)
-  req.session.userId = user.id;
-  req.session.username = user.username;
-  req.session.displayName = user.display_name;
-  req.session.role = user.role;
+  if (teamMember) {
+    const valid = await bcrypt.compare(password, teamMember.password_hash);
+    if (!valid) return res.status(401).json({ error: 'Invalid username or password' });
 
-  // Create token (production cross-origin)
-  const token = createToken(user);
+    const token = createToken({
+      id: teamMember.id,
+      username: teamMember.username,
+      display_name: teamMember.display_name,
+      role: teamMember.role,
+      userType: 'super_admin',
+    });
 
-  res.json({ id: user.id, username: user.username, displayName: user.display_name, role: user.role, token });
+    return res.json({
+      id: teamMember.id,
+      username: teamMember.username,
+      displayName: teamMember.display_name,
+      role: teamMember.role,
+      userType: 'super_admin',
+      token,
+    });
+  }
+
+  // Stage 2: Check client_users
+  const clientUser = platformDb.get(`
+    SELECT cu.*, c.slug as client_slug, c.name as client_name, c.id as cid
+    FROM client_users cu
+    JOIN clients c ON cu.client_id = c.id
+    WHERE cu.username = ? AND cu.is_active = 1 AND c.is_active = 1
+  `, username);
+
+  if (clientUser) {
+    const valid = await bcrypt.compare(password, clientUser.password_hash);
+    if (!valid) return res.status(401).json({ error: 'Invalid username or password' });
+
+    const token = createToken({
+      id: clientUser.id,
+      username: clientUser.username,
+      display_name: clientUser.display_name,
+      role: clientUser.role,
+      userType: 'client_user',
+      clientSlug: clientUser.client_slug,
+      clientId: clientUser.cid,
+      clientName: clientUser.client_name,
+    });
+
+    return res.json({
+      id: clientUser.id,
+      username: clientUser.username,
+      displayName: clientUser.display_name,
+      role: clientUser.role,
+      userType: 'client_user',
+      clientSlug: clientUser.client_slug,
+      clientName: clientUser.client_name,
+      token,
+    });
+  }
+
+  // No match
+  return res.status(401).json({ error: 'Invalid username or password' });
 });
 
 router.post('/logout', (req, res) => {
@@ -39,21 +89,32 @@ router.post('/logout', (req, res) => {
 });
 
 router.get('/me', (req, res) => {
-  // Check session (local dev)
-  if (req.session?.userId) {
-    return res.json({ id: req.session.userId, username: req.session.username, displayName: req.session.displayName, role: req.session.role });
-  }
-
-  // Check Bearer token (production cross-origin)
+  // Check Bearer token
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith('Bearer ')) {
     const token = authHeader.slice(7);
-    // Import tokenStore check inline
-    const { getTokenData } = require('../middleware/auth.js');
     const data = getTokenData(token);
     if (data) {
-      return res.json({ id: data.userId, username: data.username, displayName: data.displayName, role: data.role });
+      return res.json({
+        id: data.userId,
+        username: data.username,
+        displayName: data.displayName,
+        role: data.role,
+        userType: data.userType,
+        clientSlug: data.clientSlug,
+        clientName: data.clientName,
+      });
     }
+  }
+
+  // Check session (local dev)
+  if (req.session?.userId) {
+    return res.json({
+      id: req.session.userId,
+      username: req.session.username,
+      displayName: req.session.displayName,
+      role: req.session.role,
+    });
   }
 
   res.status(401).json({ error: 'Not authenticated' });

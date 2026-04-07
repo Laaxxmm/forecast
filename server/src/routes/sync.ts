@@ -1,5 +1,4 @@
 import { Router, type Request, type Response } from 'express';
-import { getHelper, saveDb } from '../db/connection.js';
 import { encrypt, decrypt } from '../utils/crypto.js';
 import { parseHealthplix } from '../services/parsers/healthplix.js';
 import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
@@ -19,7 +18,7 @@ let syncProgress: { step: string; message: string; pct: number; error?: string; 
 // ─── Credential Management ───────────────────────────────────────────────────
 
 router.get('/credentials/healthplix', async (_req: Request, res: Response) => {
-  const db = await getHelper();
+  const db = _req.tenantDb!;
   const username = db.get("SELECT value FROM app_settings WHERE key = 'healthplix_username'");
   const clinic = db.get("SELECT value FROM app_settings WHERE key = 'healthplix_clinic'");
   const hasPassword = db.get("SELECT value FROM app_settings WHERE key = 'healthplix_password'");
@@ -35,7 +34,7 @@ router.put('/credentials/healthplix', async (req: Request, res: Response) => {
   const { username, password, clinicName } = req.body;
   if (!username) return res.status(400).json({ error: 'Username is required' });
 
-  const db = await getHelper();
+  const db = req.tenantDb!;
 
   db.run(`INSERT INTO app_settings (key, value) VALUES ('healthplix_username', ?)
           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, username);
@@ -49,14 +48,12 @@ router.put('/credentials/healthplix', async (req: Request, res: Response) => {
             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, encrypted);
   }
 
-  saveDb();
   res.json({ ok: true });
 });
 
 router.delete('/credentials/healthplix', async (_req: Request, res: Response) => {
-  const db = await getHelper();
+  const db = _req.tenantDb!;
   db.run("DELETE FROM app_settings WHERE key LIKE 'healthplix_%'");
-  saveDb();
   res.json({ ok: true });
 });
 
@@ -74,7 +71,7 @@ router.post('/healthplix', async (req: Request, res: Response) => {
   }
 
   // Load credentials
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const usernameRow = db.get("SELECT value FROM app_settings WHERE key = 'healthplix_username'");
   const passwordRow = db.get("SELECT value FROM app_settings WHERE key = 'healthplix_password'");
   const clinicRow = db.get("SELECT value FROM app_settings WHERE key = 'healthplix_clinic'");
@@ -168,8 +165,6 @@ router.post('/healthplix', async (req: Request, res: Response) => {
       }
     }
 
-    saveDb();
-
     // Clean up downloaded file
     try { fs.unlinkSync(result.filePath); } catch {}
 
@@ -234,7 +229,7 @@ router.post('/healthplix/reset', (_req: Request, res: Response) => {
 // ─── Oneglance Credential Management ─────────────────────────────────────────
 
 router.get('/credentials/oneglance', async (_req: Request, res: Response) => {
-  const db = await getHelper();
+  const db = _req.tenantDb!;
   const username = db.get("SELECT value FROM app_settings WHERE key = 'oneglance_username'");
   const hasPassword = db.get("SELECT value FROM app_settings WHERE key = 'oneglance_password'");
 
@@ -248,7 +243,7 @@ router.put('/credentials/oneglance', async (req: Request, res: Response) => {
   const { username, password } = req.body;
   if (!username) return res.status(400).json({ error: 'Username is required' });
 
-  const db = await getHelper();
+  const db = req.tenantDb!;
   db.run(`INSERT INTO app_settings (key, value) VALUES ('oneglance_username', ?)
           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, username);
 
@@ -258,14 +253,12 @@ router.put('/credentials/oneglance', async (req: Request, res: Response) => {
             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, encrypted);
   }
 
-  saveDb();
   res.json({ ok: true });
 });
 
 router.delete('/credentials/oneglance', async (_req: Request, res: Response) => {
-  const db = await getHelper();
+  const db = _req.tenantDb!;
   db.run("DELETE FROM app_settings WHERE key LIKE 'oneglance_%'");
-  saveDb();
   res.json({ ok: true });
 });
 
@@ -285,7 +278,7 @@ router.post('/oneglance', async (req: Request, res: Response) => {
     return res.status(409).json({ error: 'An Oneglance sync is already in progress' });
   }
 
-  const db = await getHelper();
+  const db = req.tenantDb!;
   const usernameRow = db.get("SELECT value FROM app_settings WHERE key = 'oneglance_username'");
   const passwordRow = db.get("SELECT value FROM app_settings WHERE key = 'oneglance_password'");
 
@@ -409,8 +402,6 @@ router.post('/oneglance', async (req: Request, res: Response) => {
 
       try { fs.unlinkSync(result.purchaseFile.filePath); } catch {}
     }
-
-    saveDb();
 
     ogSyncProgress = {
       step: 'complete',
