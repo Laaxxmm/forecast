@@ -1,49 +1,14 @@
 FROM node:20-bookworm
 
-# Manually install ALL Chromium dependencies
+# Install Chromium directly via apt (comes with ALL its dependencies)
 RUN apt-get update && apt-get install -y \
-    libglib2.0-0 \
-    libnss3 \
-    libnspr4 \
-    libdbus-1-3 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxcb1 \
-    libxkbcommon0 \
-    libatspi2.0-0 \
-    libx11-6 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxext6 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libasound2 \
-    libxshmfence1 \
-    libgtk-3-0 \
-    libx11-xcb1 \
-    libxss1 \
-    libxtst6 \
-    fonts-liberation \
-    fonts-noto-color-emoji \
-    libvulkan1 \
-    libegl1 \
-    libnotify4 \
-    libenchant-2-2 \
-    libsecret-1-0 \
-    libhyphen0 \
-    libmanette-0.2-0 \
-    libflite1 \
-    libgles2 \
-    gstreamer1.0-libav \
-    gstreamer1.0-plugins-bad \
-    gstreamer1.0-plugins-base \
-    gstreamer1.0-plugins-good \
+    chromium \
+    --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
+
+# Skip Playwright browser download - we'll use system Chromium
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
@@ -56,9 +21,6 @@ COPY client/package.json client/
 RUN npm install --legacy-peer-deps
 RUN cd server && npm install --legacy-peer-deps
 RUN cd client && npm install --legacy-peer-deps
-
-# Install Playwright Chromium browser binary (deps already installed above)
-RUN cd server && npx playwright install chromium
 
 # Copy source code
 COPY . .

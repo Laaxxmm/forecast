@@ -189,10 +189,12 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
   const downloadDir = path.resolve('uploads');
   if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
 
-  // Use system Chrome locally, Playwright's Chromium on cloud
+  // Use system Chrome locally, system Chromium (apt) on cloud
   const isProd = process.env.NODE_ENV === 'production';
   const browser = await chromium.launch({
-    ...(isProd ? {} : { channel: 'chrome' }),
+    ...(isProd
+      ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium' }
+      : { channel: 'chrome' }),
     headless: isProd ? true : false,
     args: [
       '--disable-blink-features=AutomationControlled',
