@@ -2,11 +2,16 @@ import initSqlJs, { Database } from 'sql.js';
 import path from 'path';
 import fs from 'fs';
 
-// Use /tmp on Railway (ephemeral but writable), or local data/ folder
-const dataDir = process.env.DATA_DIR || (process.env.RAILWAY_ENVIRONMENT ? '/tmp' : path.join(__dirname, '..', '..', '..', 'data'));
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+// Use /tmp in production (Railway ephemeral fs), or local data/ folder
+const isProd = process.env.NODE_ENV === 'production';
+const dataDir = process.env.DATA_DIR || (isProd ? '/tmp' : path.join(__dirname, '..', '..', '..', 'data'));
+try {
+  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+} catch (e) {
+  console.error(`[DB] Failed to create data dir ${dataDir}, falling back to /tmp`);
+}
 
-const dbPath = path.join(dataDir, 'magna_tracker.db');
+const dbPath = path.join(fs.existsSync(dataDir) ? dataDir : '/tmp', 'magna_tracker.db');
 console.log(`[DB] Using database at: ${dbPath}`);
 
 let db: Database;

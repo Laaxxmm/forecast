@@ -4,8 +4,9 @@ import { encrypt, decrypt } from '../utils/crypto.js';
 import { parseHealthplix } from '../services/parsers/healthplix.js';
 import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
 import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.js';
-import { syncHealthplix } from '../services/sync/healthplix-sync.js';
-import { syncOneglance } from '../services/sync/oneglance-sync.js';
+// Lazy-import Playwright sync modules (not available on cloud hosts)
+const loadSyncHealthplix = () => import('../services/sync/healthplix-sync.js').then(m => m.syncHealthplix);
+const loadSyncOneglance = () => import('../services/sync/oneglance-sync.js').then(m => m.syncOneglance);
 import fs from 'fs';
 
 const router = Router();
@@ -94,6 +95,7 @@ router.post('/healthplix', async (req: Request, res: Response) => {
   res.json({ syncId, status: 'started' });
 
   try {
+    const syncHealthplix = await loadSyncHealthplix();
     const result = await syncHealthplix({
       username,
       password,
@@ -300,6 +302,7 @@ router.post('/oneglance', async (req: Request, res: Response) => {
   res.json({ syncId, status: 'started' });
 
   try {
+    const syncOneglance = await loadSyncOneglance();
     const result = await syncOneglance({
       username,
       password,
