@@ -33,11 +33,28 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return auth ? <>{children}</> : <Navigate to="/login" replace />;
 }
 
-function AdminRoute({ children }: { children: React.ReactNode }) {
+// Only super_admin can access the Admin Portal
+function SuperAdminRoute({ children }: { children: React.ReactNode }) {
   const userType = localStorage.getItem('user_type');
+  return userType === 'super_admin' ? <>{children}</> : <Navigate to="/actuals" replace />;
+}
+
+// Client admins (client_user with role=admin) can access import, settings, etc.
+function ClientAdminRoute({ children }: { children: React.ReactNode }) {
   const userRole = localStorage.getItem('user_role');
-  const isAdmin = userType === 'super_admin' || userRole === 'admin';
-  return isAdmin ? <>{children}</> : <Navigate to="/actuals" replace />;
+  return userRole === 'admin' ? <>{children}</> : <Navigate to="/actuals" replace />;
+}
+
+// Block super_admin from client working routes — they only use Admin Portal
+function ClientRoute({ children }: { children: React.ReactNode }) {
+  const userType = localStorage.getItem('user_type');
+  return userType === 'super_admin' ? <Navigate to="/admin" replace /> : <>{children}</>;
+}
+
+// Smart default redirect based on role
+function DefaultRedirect() {
+  const userType = localStorage.getItem('user_type');
+  return userType === 'super_admin' ? <Navigate to="/admin" replace /> : <Navigate to="/actuals" replace />;
 }
 
 export default function App() {
@@ -53,15 +70,15 @@ export default function App() {
             </ProtectedRoute>
           }
         >
-          <Route path="/actuals" element={<DashboardPage />} />
-          <Route path="/forecast/*" element={<ForecastModulePage />} />
-          <Route path="/analysis/*" element={<DashboardModulePage />} />
-          <Route path="/import" element={<AdminRoute><ImportPage /></AdminRoute>} />
-          <Route path="/clinic" element={<ClinicDetailPage />} />
-          <Route path="/pharmacy" element={<PharmacyDetailPage />} />
-          <Route path="/settings" element={<AdminRoute><SettingsPage /></AdminRoute>} />
-          <Route path="/admin/*" element={<AdminRoute><AdminPage /></AdminRoute>} />
-          <Route path="/" element={<Navigate to="/actuals" replace />} />
+          <Route path="/actuals" element={<ClientRoute><DashboardPage /></ClientRoute>} />
+          <Route path="/forecast/*" element={<ClientRoute><ForecastModulePage /></ClientRoute>} />
+          <Route path="/analysis/*" element={<ClientRoute><DashboardModulePage /></ClientRoute>} />
+          <Route path="/import" element={<ClientRoute><ClientAdminRoute><ImportPage /></ClientAdminRoute></ClientRoute>} />
+          <Route path="/clinic" element={<ClientRoute><ClinicDetailPage /></ClientRoute>} />
+          <Route path="/pharmacy" element={<ClientRoute><PharmacyDetailPage /></ClientRoute>} />
+          <Route path="/settings" element={<ClientRoute><ClientAdminRoute><SettingsPage /></ClientAdminRoute></ClientRoute>} />
+          <Route path="/admin/*" element={<SuperAdminRoute><AdminPage /></SuperAdminRoute>} />
+          <Route path="/" element={<DefaultRedirect />} />
         </Route>
       </Routes>
     </BrowserRouter>

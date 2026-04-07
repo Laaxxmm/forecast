@@ -4,14 +4,15 @@ import {
 } from 'lucide-react';
 import api from '../../api/client';
 
-const allLinks = [
-  { to: '/actuals', icon: LayoutDashboard, label: 'Actuals', adminOnly: false },
-  { to: '/forecast', icon: TrendingUp, label: 'Forecast', adminOnly: false },
-  { to: '/analysis', icon: BarChart3, label: 'Analysis', adminOnly: false },
-  { to: '/import', icon: Upload, label: 'Import Data', adminOnly: true },
-  { to: '/clinic', icon: Stethoscope, label: 'Clinic Details', adminOnly: false },
-  { to: '/pharmacy', icon: Pill, label: 'Pharmacy Details', adminOnly: false },
-  { to: '/settings', icon: Settings, label: 'Settings', adminOnly: true },
+// Client-side links — visible to client_user (admin sees all, regular user sees non-admin)
+const clientLinks = [
+  { to: '/actuals', icon: LayoutDashboard, label: 'Actuals', clientAdminOnly: false },
+  { to: '/forecast', icon: TrendingUp, label: 'Forecast', clientAdminOnly: false },
+  { to: '/analysis', icon: BarChart3, label: 'Analysis', clientAdminOnly: false },
+  { to: '/import', icon: Upload, label: 'Import Data', clientAdminOnly: true },
+  { to: '/clinic', icon: Stethoscope, label: 'Clinic Details', clientAdminOnly: false },
+  { to: '/pharmacy', icon: Pill, label: 'Pharmacy Details', clientAdminOnly: false },
+  { to: '/settings', icon: Settings, label: 'Settings', clientAdminOnly: true },
 ];
 
 export default function Sidebar() {
@@ -20,10 +21,10 @@ export default function Sidebar() {
   const userRole = localStorage.getItem('user_role');
   const clientName = localStorage.getItem('client_name');
   const isSuperAdmin = userType === 'super_admin';
-  const isAdmin = isSuperAdmin || userRole === 'admin';
+  const isClientAdmin = userRole === 'admin';
 
-  // Filter links: regular users don't see admin-only items
-  const links = allLinks.filter(l => isAdmin || !l.adminOnly);
+  // Super admin only sees Admin Panel — client users see client links
+  const links = isSuperAdmin ? [] : clientLinks.filter(l => isClientAdmin || !l.clientAdminOnly);
 
   const handleLogout = async () => {
     await api.post('/auth/logout').catch(() => {});
