@@ -189,11 +189,15 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
   const downloadDir = path.resolve('uploads');
   if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
 
-  // Use system-installed Chrome for reliability on Windows
+  // Use system Chrome locally, Playwright's Chromium on cloud
+  const isProd = process.env.NODE_ENV === 'production';
   const browser = await chromium.launch({
-    channel: 'chrome',
-    headless: false,
-    args: ['--disable-blink-features=AutomationControlled'],
+    ...(isProd ? {} : { channel: 'chrome' }),
+    headless: isProd,
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      ...(isProd ? ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] : []),
+    ],
   });
   const context: BrowserContext = await browser.newContext({
     acceptDownloads: true,
