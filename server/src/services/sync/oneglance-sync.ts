@@ -205,38 +205,80 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
     // ── Step 4: Click on PHARMACY section, then Purchase/Sales Report ──
     progress(opts, 'navigate', 'Opening Purchase/Sales Report...', 28);
 
-    // Click PHARMACY section in sidebar to expand it
-    const pharmacyClicked = await page.evaluate(() => {
-      const allEls = document.querySelectorAll('div, span, a, li, h3, h4, p');
-      for (const el of allEls) {
-        const text = el.textContent?.trim();
-        if (text === 'PHARMACY') {
-          (el as HTMLElement).click();
-          return true;
-        }
-      }
-      return false;
-    });
-    if (!pharmacyClicked) {
-      await page.locator('text=PHARMACY').first().click({ timeout: 10_000 }).catch(() => {});
-    }
-    await page.waitForTimeout(1000);
+    // Try multiple strategies to reach Purchase/Sales Report
+    let psrFound = false;
 
-    // Click "Purchase/Sales Report" link
-    const psrClicked = await page.evaluate(() => {
-      const links = document.querySelectorAll('a, div, span, li');
-      for (const el of links) {
-        const text = el.textContent?.trim();
-        if (text === 'Purchase/Sales Report') {
-          (el as HTMLElement).click();
-          return true;
+    // Strategy 1: Click PHARMACY to expand, then click Purchase/Sales Report
+    for (let attempt = 0; attempt < 3 && !psrFound; attempt++) {
+      // Click PHARMACY section in sidebar to expand it
+      const pharmacyClicked = await page.evaluate(() => {
+        const allEls = document.querySelectorAll('*');
+        for (const el of allEls) {
+          const ownText = el.childNodes.length <= 2 ? el.textContent?.trim() : '';
+          if (ownText && (ownText === 'PHARMACY' || ownText === 'Pharmacy')) {
+            (el as HTMLElement).click();
+            return true;
+          }
+        }
+        return false;
+      });
+      if (!pharmacyClicked) {
+        await page.locator('text=/pharmacy/i').first().click({ timeout: 5_000 }).catch(() => {});
+      }
+      await page.waitForTimeout(2000);
+
+      // Now look for Purchase/Sales Report with partial matching
+      psrFound = await page.evaluate(() => {
+        const allEls = document.querySelectorAll('a, div, span, li, button');
+        for (const el of allEls) {
+          const text = el.textContent?.trim() || '';
+          // Match various forms: "Purchase/Sales Report", "Purchase / Sales Report", etc.
+          if (text.match(/purchase\s*\/?\s*sales\s*report/i) && text.length < 60) {
+            (el as HTMLElement).click();
+            return true;
+          }
+        }
+        return false;
+      });
+
+      if (!psrFound) {
+        // Try Playwright locator with regex
+        const loc = page.locator('text=/Purchase.*Sales.*Report/i').first();
+        psrFound = await loc.isVisible({ timeout: 2000 }).catch(() => false);
+        if (psrFound) {
+          await loc.click({ timeout: 5_000 });
         }
       }
-      return false;
-    });
-    if (!psrClicked) {
-      await page.locator('text=Purchase/Sales Report').first().click({ timeout: 10_000 });
+
+      if (!psrFound && attempt < 2) {
+        progress(opts, 'navigate', `Retrying sidebar navigation (attempt ${attempt + 2})...`, 28);
+        // Scroll sidebar or reload
+        await page.evaluate(() => {
+          const sidebar = document.querySelector('nav, [class*="sidebar"], [class*="menu"], [class*="panel"]');
+          if (sidebar) (sidebar as HTMLElement).scrollTop += 300;
+        });
+        await page.waitForTimeout(1000);
+      }
     }
+
+    if (!psrFound) {
+      // Strategy 2: Try navigating via URL hash or direct link
+      const links = await page.evaluate(() => {
+        const anchors = document.querySelectorAll('a[href]');
+        return Array.from(anchors)
+          .map(a => ({ href: (a as HTMLAnchorElement).href, text: a.textContent?.trim() || '' }))
+          .filter(l => l.text.match(/purchase|sales.*report/i) || l.href.match(/purchase|sales/i));
+      });
+      if (links.length > 0) {
+        await page.goto(links[0].href, { waitUntil: 'networkidle', timeout: TIMEOUT });
+        psrFound = true;
+      }
+    }
+
+    if (!psrFound) {
+      throw new Error('Could not find "Purchase/Sales Report" link in sidebar. The page layout may have changed.');
+    }
+
     await page.waitForTimeout(2000);
     await page.waitForLoadState('networkidle', { timeout: TIMEOUT });
     progress(opts, 'navigate', 'Purchase/Sales Report page ready', 30);
@@ -261,18 +303,24 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
           // Re-navigate
           await page.goto('https://emr7.oneglancehealth.com/Utility#', { waitUntil: 'networkidle', timeout: TIMEOUT });
           await page.waitForTimeout(1000);
-          // Re-click Purchase/Sales Report
+          // Re-click PHARMACY then Purchase/Sales Report
           await page.evaluate(() => {
-            const links = document.querySelectorAll('a, div, span, li');
-            for (const el of links) {
-              if (el.textContent?.trim() === 'PHARMACY') { (el as HTMLElement).click(); break; }
+            const allEls = document.querySelectorAll('*');
+            for (const el of allEls) {
+              const ownText = el.childNodes.length <= 2 ? el.textContent?.trim() : '';
+              if (ownText && (ownText === 'PHARMACY' || ownText === 'Pharmacy')) {
+                (el as HTMLElement).click(); break;
+              }
             }
           });
-          await page.waitForTimeout(500);
+          await page.waitForTimeout(2000);
           await page.evaluate(() => {
-            const links = document.querySelectorAll('a, div, span, li');
-            for (const el of links) {
-              if (el.textContent?.trim() === 'Purchase/Sales Report') { (el as HTMLElement).click(); break; }
+            const allEls = document.querySelectorAll('a, div, span, li, button');
+            for (const el of allEls) {
+              const text = el.textContent?.trim() || '';
+              if (text.match(/purchase\s*\/?\s*sales\s*report/i) && text.length < 60) {
+                (el as HTMLElement).click(); break;
+              }
             }
           });
           await page.waitForTimeout(2000);
