@@ -16,6 +16,7 @@ import dashboardRoutes from './routes/dashboard.js';
 import forecastModuleRoutes from './routes/forecast-module.js';
 import dashboardActualsRoutes from './routes/dashboard-actuals.js';
 import syncRoutes from './routes/sync.js';
+import dbViewerRoutes from './routes/db-viewer.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -65,6 +66,7 @@ app.use('/api/dashboard', requireAuth, dashboardRoutes);
 app.use('/api/forecast-module', requireAuth, forecastModuleRoutes);
 app.use('/api/dashboard-actuals', requireAuth, dashboardActualsRoutes);
 app.use('/api/sync', requireAuth, syncRoutes);
+app.use('/api/db', requireAuth, dbViewerRoutes);
 
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
 app.use(express.static(clientDist));
