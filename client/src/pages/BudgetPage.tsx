@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import api from '../api/client';
 import { formatINR, getMonthLabel } from '../utils/format';
 
-interface FY { id: number; label: string; start_date: string; }
+interface FY { id: number; label: string; start_date: string; is_active?: number; }
 interface Dept { id: number; name: string; display_name: string; business_unit: string; }
 
 function getFYMonths(startDate: string): string[] {
