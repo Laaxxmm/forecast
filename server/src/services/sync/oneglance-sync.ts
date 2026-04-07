@@ -146,7 +146,7 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
   const isProd = process.env.NODE_ENV === 'production';
   const browser = await chromium.launch({
     ...(isProd ? {} : { channel: 'chrome' }),
-    headless: isProd ? 'new' : false,
+    headless: isProd ? true : false,
     args: [
       '--disable-blink-features=AutomationControlled',
       ...(isProd ? ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] : []),
