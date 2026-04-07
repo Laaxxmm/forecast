@@ -1,4 +1,7 @@
-FROM mcr.microsoft.com/playwright:v1.52.0-noble
+FROM node:20-bookworm
+
+# node:20-bookworm is Debian full image with proper apt sources
+# --with-deps works reliably on Debian Bookworm
 
 WORKDIR /app
 
@@ -12,8 +15,7 @@ RUN npm install --legacy-peer-deps
 RUN cd server && npm install --legacy-peer-deps
 RUN cd client && npm install --legacy-peer-deps
 
-# CRITICAL: Re-install Playwright Chromium + deps matching the npm package version
-# The Docker image has v1.52 browsers, but npm installs v1.59 which needs its own browser
+# Install Playwright Chromium + ALL system dependencies
 RUN cd server && npx playwright install --with-deps chromium
 
 # Copy source code
