@@ -24,6 +24,7 @@ const isProd = process.env.NODE_ENV === 'production';
 
 const allowedOrigins = [
   'http://localhost:5173',
+  'https://vision.indefine.in',
   process.env.FRONTEND_URL,
 ].filter(Boolean) as string[];
 
@@ -38,6 +39,8 @@ app.use(cors({
     if (allowedOrigins.some(o => origin === o || origin.startsWith(o))) return cb(null, true);
     // Also allow any vercel.app subdomain for preview deploys
     if (origin.endsWith('.vercel.app')) return cb(null, true);
+    // Allow indefine.in subdomains
+    if (origin.endsWith('.indefine.in')) return cb(null, true);
     console.log('CORS blocked origin:', origin);
     cb(null, false);
   },
