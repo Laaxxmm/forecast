@@ -54,7 +54,8 @@
       "Bash(curl -s -X POST http://localhost:3000/api/auth/login -H \"Content-Type: application/json\" -d '{\"\"\"\"username\"\"\"\":\"\"\"\"admin\"\"\"\",\"\"\"\"password\"\"\"\":\"\"\"\"admin123\"\"\"\"}' -c /tmp/cookiesF.txt)",
       "Bash(curl -s \"http://localhost:3000/api/dashboard/variance?fy_id=2&business_unit=CLINIC\" -b /tmp/cookiesF.txt)",
       "Bash(npx --prefix client tsc --noEmit)",
-      "Bash(grep -r \"ForecastPage\\\\|ForecastModulePage\" C:UsersLENOVODesktopMagna_Trackerclientsrc --include=*.tsx --include=*.ts)"
+      "Bash(grep -r \"ForecastPage\\\\|ForecastModulePage\" C:UsersLENOVODesktopMagna_Trackerclientsrc --include=*.tsx --include=*.ts)",
+      "WebFetch(domain:forecast-production-5f93.up.railway.app)"
     ]
   }
 }

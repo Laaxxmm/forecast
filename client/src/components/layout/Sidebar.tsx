@@ -16,7 +16,8 @@ const links = [
 
 export default function Sidebar() {
   const handleLogout = async () => {
-    await api.post('/auth/logout');
+    await api.post('/auth/logout').catch(() => {});
+    localStorage.removeItem('auth_token');
     window.location.href = '/login';
   };
 
