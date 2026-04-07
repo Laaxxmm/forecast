@@ -8,6 +8,7 @@ import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.j
 const loadSyncHealthplix = () => import('../services/sync/healthplix-sync.js').then(m => m.syncHealthplix);
 const loadSyncOneglance = () => import('../services/sync/oneglance-sync.js').then(m => m.syncOneglance);
 import fs from 'fs';
+import path from 'path';
 
 const router = Router();
 
@@ -454,6 +455,33 @@ router.post('/oneglance/reset', (_req: Request, res: Response) => {
   ogActiveSyncId = null;
   ogSyncProgress = null;
   res.json({ ok: true });
+});
+
+// ─── Debug Screenshots ──────────────────────────────────────────────────────
+
+router.get('/debug/screenshots', (_req: Request, res: Response) => {
+  const debugDir = path.resolve('uploads', 'debug');
+  if (!fs.existsSync(debugDir)) {
+    return res.json({ screenshots: [] });
+  }
+  const files = fs.readdirSync(debugDir)
+    .filter(f => f.endsWith('.png'))
+    .sort();
+  res.json({
+    screenshots: files.map(f => ({
+      name: f,
+      url: `/api/sync/debug/screenshots/${f}`,
+    })),
+  });
+});
+
+router.get('/debug/screenshots/:filename', (req: Request, res: Response) => {
+  const debugDir = path.resolve('uploads', 'debug');
+  const filePath = path.join(debugDir, req.params.filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  res.sendFile(filePath);
 });
 
 export default router;

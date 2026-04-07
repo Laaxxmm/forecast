@@ -18,8 +18,47 @@ export interface OneglanceSyncResult {
 
 const TIMEOUT = 120_000;
 
+// Debug screenshots directory
+const DEBUG_DIR = path.resolve('uploads', 'debug');
+
 function progress(opts: OneglanceSyncOptions, step: string, msg: string, pct: number) {
   opts.onProgress?.(step, msg, pct);
+}
+
+/** Save a debug screenshot with a numbered step name */
+async function debugScreenshot(page: Page, stepName: string) {
+  try {
+    if (!fs.existsSync(DEBUG_DIR)) fs.mkdirSync(DEBUG_DIR, { recursive: true });
+    const filename = `${Date.now()}-${stepName.replace(/[^a-z0-9]/gi, '_')}.png`;
+    await page.screenshot({ path: path.join(DEBUG_DIR, filename), fullPage: true });
+    console.log(`[debug-screenshot] ${stepName} → ${filename}`);
+  } catch (e) {
+    console.log(`[debug-screenshot] Failed for ${stepName}:`, e);
+  }
+}
+
+/** Get visible text content from the page for debugging */
+async function getPageDebugInfo(page: Page): Promise<string> {
+  try {
+    const info = await page.evaluate(() => {
+      const url = window.location.href;
+      const title = document.title;
+      // Get all visible text elements that might be menu items
+      const menuItems: string[] = [];
+      document.querySelectorAll('a, li, span, div, button, h3, h4').forEach(el => {
+        const text = el.textContent?.trim() || '';
+        if (text.length > 1 && text.length < 80 && el.children.length <= 2) {
+          menuItems.push(text);
+        }
+      });
+      // Deduplicate and take first 50
+      const unique = [...new Set(menuItems)].slice(0, 50);
+      return { url, title, menuItems: unique };
+    });
+    return `URL: ${info.url}\nTitle: ${info.title}\nVisible items: ${info.menuItems.join(' | ')}`;
+  } catch {
+    return 'Could not get page info';
+  }
 }
 
 /**
@@ -162,10 +201,16 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
   const page = await context.newPage();
 
   try {
+    // Clean old debug screenshots
+    if (fs.existsSync(DEBUG_DIR)) {
+      fs.readdirSync(DEBUG_DIR).forEach(f => fs.unlinkSync(path.join(DEBUG_DIR, f)));
+    }
+
     // ── Step 1: Navigate to Oneglance ──
     progress(opts, 'login', 'Opening Oneglance...', 5);
     await page.goto('https://emr7.oneglancehealth.com', { waitUntil: 'networkidle', timeout: TIMEOUT });
     await page.waitForTimeout(2000);
+    await debugScreenshot(page, '01-homepage');
 
     // ── Step 2: Login if needed ──
     // Check if we're on a login page (look for password input)
@@ -186,10 +231,12 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
 
       await page.waitForTimeout(3000);
       await page.waitForLoadState('networkidle', { timeout: TIMEOUT });
+      await debugScreenshot(page, '02-after-login');
       progress(opts, 'login', 'Logged in successfully', 15);
     } else {
       progress(opts, 'login', 'Already authenticated', 15);
     }
+    await debugScreenshot(page, '03-post-auth');
 
     // ── Step 3: Navigate to Reports / Utility page ──
     progress(opts, 'navigate', 'Navigating to Reports...', 20);
@@ -200,6 +247,7 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
       await page.goto('https://emr7.oneglancehealth.com/Utility', { waitUntil: 'networkidle', timeout: TIMEOUT });
       await page.waitForTimeout(2000);
     }
+    await debugScreenshot(page, '04-utility-page');
     progress(opts, 'navigate', 'Reports page loaded', 25);
 
     // ── Step 4: Click on PHARMACY section, then Purchase/Sales Report ──
@@ -226,6 +274,7 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
         await page.locator('text=/pharmacy/i').first().click({ timeout: 5_000 }).catch(() => {});
       }
       await page.waitForTimeout(2000);
+      await debugScreenshot(page, `05-after-pharmacy-click-attempt-${attempt + 1}`);
 
       // Now look for Purchase/Sales Report with partial matching
       psrFound = await page.evaluate(() => {
@@ -276,7 +325,10 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
     }
 
     if (!psrFound) {
-      throw new Error('Could not find "Purchase/Sales Report" link in sidebar. The page layout may have changed.');
+      await debugScreenshot(page, '06-FAILED-psr-not-found');
+      const debugInfo = await getPageDebugInfo(page);
+      console.log('[oneglance-sync] PSR not found. Page debug info:\n', debugInfo);
+      throw new Error(`Could not find "Purchase/Sales Report" link. Debug screenshots saved. Page: ${page.url()}`);
     }
 
     await page.waitForTimeout(2000);
@@ -341,6 +393,7 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
     await browser.close();
     return result;
   } catch (err: any) {
+    await debugScreenshot(page, '99-ERROR').catch(() => {});
     await browser.close();
     throw new Error(`Oneglance sync failed: ${err.message}`);
   }
