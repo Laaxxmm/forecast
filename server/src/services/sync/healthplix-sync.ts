@@ -189,29 +189,10 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
   const downloadDir = path.resolve('uploads');
   if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
 
-  // Use system Chrome locally, system Chromium (apt) on cloud
+  // Use system Chrome locally, Playwright's Chromium on cloud
   const isProd = process.env.NODE_ENV === 'production';
-  let executablePath: string | undefined;
-  if (isProd) {
-    // Try multiple common Chromium paths
-    const paths = [
-      process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-      '/usr/bin/chromium',
-      '/usr/bin/chromium-browser',
-      '/usr/bin/google-chrome',
-      '/usr/bin/google-chrome-stable',
-    ].filter(Boolean) as string[];
-    executablePath = paths.find(p => fs.existsSync(p));
-    if (!executablePath) {
-      // Try to find it dynamically
-      try {
-        executablePath = execSync('which chromium || which chromium-browser || which google-chrome 2>/dev/null').toString().trim();
-      } catch { /* ignore */ }
-    }
-    console.log('Using Chromium at:', executablePath || 'default');
-  }
   const browser = await chromium.launch({
-    ...(executablePath ? { executablePath } : isProd ? {} : { channel: 'chrome' }),
+    ...(isProd ? {} : { channel: 'chrome' }),
     headless: isProd ? true : false,
     args: [
       '--disable-blink-features=AutomationControlled',

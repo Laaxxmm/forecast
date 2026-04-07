@@ -6,7 +6,7 @@
     "dev": "npx tsx watch src/index.ts",
     "build": "echo 'Using tsx runtime'",
     "start": "npx tsx src/index.ts",
-    "postinstall": "npx playwright install chromium 2>/dev/null || true"
+    "postinstall": "npx playwright install --with-deps chromium || echo 'Playwright install failed, continuing...'"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
