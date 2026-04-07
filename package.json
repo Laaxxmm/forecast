@@ -1,0 +1,16 @@
+{
+  "name": "magna-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "cd server && npx tsx watch src/index.ts",
+    "dev:client": "cd client && npx vite",
+    "build": "cd client && npm run build",
+    "start": "cd server && npx tsx src/index.ts",
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
