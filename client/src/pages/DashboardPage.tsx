@@ -22,39 +22,62 @@ interface OverviewData {
   combined: any;
 }
 
-const COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899'];
+const COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#06b6d4', '#ec4899', '#6366f1'];
 
 function KPICard({ title, value, subtitle, icon: Icon, trend, color = 'accent', onClick }: {
   title: string; value: string; subtitle?: string; icon: any; trend?: number; color?: string; onClick?: () => void;
 }) {
-  const colorMap: Record<string, { bg: string; icon: string; glow: string }> = {
-    accent: { bg: 'bg-accent-500/10', icon: 'text-accent-400', glow: 'border-accent-500/20' },
-    blue: { bg: 'bg-blue-500/10', icon: 'text-blue-400', glow: 'border-blue-500/20' },
-    purple: { bg: 'bg-purple-500/10', icon: 'text-purple-400', glow: 'border-purple-500/20' },
-    amber: { bg: 'bg-amber-500/10', icon: 'text-amber-400', glow: 'border-amber-500/20' },
+  const colorMap: Record<string, { bg: string; icon: string; border: string; hover: string }> = {
+    accent: { 
+      bg: 'bg-emerald-500/12', 
+      icon: 'text-emerald-400', 
+      border: 'border-emerald-500/25',
+      hover: 'hover:border-emerald-500/40'
+    },
+    blue: { 
+      bg: 'bg-blue-500/12', 
+      icon: 'text-blue-400', 
+      border: 'border-blue-500/25',
+      hover: 'hover:border-blue-500/40'
+    },
+    purple: { 
+      bg: 'bg-purple-500/12', 
+      icon: 'text-purple-400', 
+      border: 'border-purple-500/25',
+      hover: 'hover:border-purple-500/40'
+    },
+    amber: { 
+      bg: 'bg-amber-500/12', 
+      icon: 'text-amber-400', 
+      border: 'border-amber-500/25',
+      hover: 'hover:border-amber-500/40'
+    },
   };
   const c = colorMap[color] || colorMap.accent;
 
   return (
-    <div className={`card border ${c.glow}${onClick ? ' cursor-pointer hover:scale-[1.02] transition-transform' : ''}`} onClick={onClick}>
+    <div 
+      className={`card border ${c.border} ${c.hover}${onClick ? ' cursor-pointer hover:shadow-lg transition-all duration-200' : ''}`} 
+      onClick={onClick}
+    >
       <div className="flex items-start justify-between mb-4">
-        <div className={`p-2.5 rounded-xl ${c.bg}`}>
+        <div className={`p-3 rounded-lg ${c.bg}`}>
           <Icon size={20} className={c.icon} />
         </div>
         {trend !== undefined && (
-          <div className={`flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-lg ${
+          <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md ${
             trend >= 0
-              ? 'text-emerald-400 bg-emerald-500/10'
-              : 'text-red-400 bg-red-500/10'
+              ? 'text-emerald-400 bg-emerald-500/15 border border-emerald-500/20'
+              : 'text-red-400 bg-red-500/15 border border-red-500/20'
           }`}>
             {trend >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
             {trend >= 0 ? '+' : ''}{trend.toFixed(1)}%
           </div>
         )}
       </div>
-      <p className="text-xs text-theme-faint font-medium uppercase tracking-wide">{title}</p>
-      <p className="text-2xl font-bold text-theme-heading mt-1">{value}</p>
-      {subtitle && <p className="text-xs text-theme-faint mt-2">{subtitle}</p>}
+      <p className="text-xs text-theme-faint font-semibold uppercase tracking-widest">{title}</p>
+      <p className="text-3xl font-bold text-theme-heading mt-2">{value}</p>
+      {subtitle && <p className="text-xs text-theme-muted mt-3">{subtitle}</p>}
     </div>
   );
 }
@@ -148,8 +171,8 @@ export default function DashboardPage() {
   return (
     <div className="animate-fade-in">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-theme-heading">Actuals</h1>
-        <p className="text-theme-faint mt-1 text-sm">{data.fy?.label || 'All Time'} Overview</p>
+        <h1 className="text-3xl font-bold text-theme-heading">Actuals</h1>
+        <p className="text-theme-muted mt-2 text-sm">{data.fy?.label || 'All Time'} Overview</p>
       </div>
 
       {/* KPI Cards */}
@@ -192,25 +215,26 @@ export default function DashboardPage() {
       </div>
 
       {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
         {/* Monthly Revenue Trend */}
         <div className="card lg:col-span-2">
-          <h3 className="text-sm font-semibold text-theme-heading mb-1">Monthly Revenue Trend</h3>
-          <p className="text-xs text-theme-faint mb-6">Clinic vs Pharmacy revenue breakdown</p>
+          <h3 className="text-base font-bold text-theme-heading mb-1">Monthly Revenue Trend</h3>
+          <p className="text-sm text-theme-muted mb-6">Clinic vs Pharmacy revenue breakdown</p>
           {trendData.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={trendData} barGap={2}>
+              <BarChart data={trendData} barGap={3} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" vertical={false} />
-                <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
+                <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 12, fill: '#94a3b8' }} axisLine={false} tickLine={false} width={50} />
                 <Tooltip
                   formatter={(v: number) => formatINR(v)}
-                  contentStyle={{ backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '12px' }}
-                  labelStyle={{ color: '#94a3b8' }}
+                  contentStyle={{ backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '10px', padding: '12px' }}
+                  labelStyle={{ color: '#f1f5f9', fontWeight: 600 }}
+                  cursor={{ fill: 'rgba(16, 185, 129, 0.05)' }}
                 />
-                <Legend />
-                <Bar dataKey="clinic" name="Clinic" fill="#3b82f6" radius={[6, 6, 0, 0]} />
-                <Bar dataKey="pharmacy" name="Pharmacy" fill="#8b5cf6" radius={[6, 6, 0, 0]} />
+                <Legend wrapperStyle={{ paddingTop: '16px' }} />
+                <Bar dataKey="clinic" name="Clinic" fill="#3b82f6" radius={[8, 8, 0, 0]} />
+                <Bar dataKey="pharmacy" name="Pharmacy" fill="#8b5cf6" radius={[8, 8, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           ) : (
@@ -225,8 +249,8 @@ export default function DashboardPage() {
 
         {/* Clinic Revenue Split */}
         <div className="card">
-          <h3 className="text-sm font-semibold text-theme-heading mb-1">Revenue Split</h3>
-          <p className="text-xs text-theme-faint mb-6">By department</p>
+          <h3 className="text-base font-bold text-theme-heading mb-1">Revenue Split</h3>
+          <p className="text-sm text-theme-muted mb-6">By department</p>
           {pieData.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
               <PieChart>
@@ -244,7 +268,7 @@ export default function DashboardPage() {
                 </Pie>
                 <Tooltip
                   formatter={(v: number) => formatINR(v)}
-                  contentStyle={{ backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '12px' }}
+                  contentStyle={{ backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '10px', padding: '12px' }}
                 />
               </PieChart>
             </ResponsiveContainer>
@@ -259,8 +283,8 @@ export default function DashboardPage() {
       {/* Pharmacy Profit Trend */}
       {data.pharmacy.monthly?.length > 0 && (
         <div className="card">
-          <h3 className="text-sm font-semibold text-theme-heading mb-1">Pharmacy Profit Trend</h3>
-          <p className="text-xs text-theme-faint mb-6">Sales, COGS & Profit over time</p>
+          <h3 className="text-base font-bold text-theme-heading mb-1">Pharmacy Profit Trend</h3>
+          <p className="text-sm text-theme-muted mb-6">Sales, COGS & Profit over time</p>
           <ResponsiveContainer width="100%" height={300}>
             <AreaChart data={data.pharmacy.monthly.map((r: any) => ({
               ...r,
@@ -277,14 +301,15 @@ export default function DashboardPage() {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" vertical={false} />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-              <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
+              <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 12, fill: '#94a3b8' }} axisLine={false} tickLine={false} width={50} />
               <Tooltip
                 formatter={(v: number) => formatINR(v)}
-                contentStyle={{ backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '12px' }}
-                labelStyle={{ color: '#94a3b8' }}
+                contentStyle={{ backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '10px', padding: '12px' }}
+                labelStyle={{ color: '#f1f5f9', fontWeight: 600 }}
+                cursor={{ fill: 'rgba(16, 185, 129, 0.05)' }}
               />
-              <Legend />
+              <Legend wrapperStyle={{ paddingTop: '16px' }} />
               <Area type="monotone" dataKey="total_sales" name="Sales" stroke="#3b82f6" strokeWidth={2} fill="url(#salesGrad)" />
               <Area type="monotone" dataKey="total_profit" name="Profit" stroke="#10b981" strokeWidth={2} fill="url(#profitGrad)" />
               <Line type="monotone" dataKey="total_purchase_cost" name="COGS" stroke="#f59e0b" strokeWidth={2} dot={false} strokeDasharray="5 5" />

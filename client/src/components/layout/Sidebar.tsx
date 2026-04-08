@@ -154,12 +154,12 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
       end={to === '/actuals'}
       title={!expanded ? label : undefined}
       className={({ isActive }) =>
-        `flex items-center gap-3 px-3 py-2.5 text-[13px] font-medium rounded-xl transition-all ${
+        `flex items-center gap-3 px-3 py-2.5 text-[13px] font-medium rounded-lg transition-all duration-200 ${
           expanded ? '' : 'justify-center'
         } ${
           isActive
-            ? 'bg-accent-500/15 text-accent-400 shadow-sm'
-            : 'text-theme-muted hover:bg-dark-600 hover:text-theme-primary'
+            ? 'bg-accent-500/20 text-accent-400 shadow-sm border border-accent-500/30'
+            : 'text-theme-muted hover:bg-dark-700 hover:text-theme-primary hover:border hover:border-dark-400/50'
         }`
       }
     >
@@ -170,20 +170,20 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
 
   return (
     <aside
-      className={`${w} bg-dark-800 flex flex-col min-h-screen fixed left-0 top-0 z-40 border-r border-dark-400/30 transition-all duration-200 ease-in-out overflow-hidden`}
+      className={`${w} bg-dark-800 flex flex-col min-h-screen fixed left-0 top-0 z-40 border-r border-dark-400/20 transition-all duration-200 ease-in-out overflow-hidden backdrop-blur-sm`}
       onMouseEnter={() => onExpandedChange(true)}
       onMouseLeave={() => { if (!showBranchDropdown) onExpandedChange(false); }}
     >
       {/* Logo */}
-      <div className="px-4 py-5 border-b border-dark-400/30">
+      <div className="px-4 py-5 border-b border-dark-400/20">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-accent-500 flex items-center justify-center flex-shrink-0">
+          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-accent-400 to-accent-600 flex items-center justify-center flex-shrink-0 shadow-sm">
             <BarChart3 size={18} className="text-white" />
           </div>
           {expanded && (
             <div className="min-w-0">
-              <h1 className="text-base font-bold text-theme-heading leading-tight">Vision</h1>
-              <p className="text-[10px] text-theme-faint font-medium tracking-wide uppercase">by Indefine</p>
+              <h1 className="text-base font-bold text-theme-heading leading-tight">Forecast</h1>
+              <p className="text-[9px] text-theme-faint font-semibold tracking-widest uppercase">Finance</p>
             </div>
           )}
           {expanded && (
@@ -194,8 +194,8 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
 
       {/* Client context */}
       {clientName && expanded && (
-        <div className="px-3 py-3 border-b border-dark-400/30">
-          <div className="flex items-center gap-2.5 bg-dark-600 rounded-xl px-3 py-2.5">
+        <div className="px-3 py-3 border-b border-dark-400/20">
+          <div className="flex items-center gap-2.5 bg-dark-700 border border-dark-400/30 rounded-lg px-3 py-2.5 hover:border-dark-400/50 transition-colors">
             <div className="w-7 h-7 rounded-lg bg-accent-500/15 flex items-center justify-center flex-shrink-0">
               <Building2 size={13} className="text-accent-400" />
             </div>
@@ -217,8 +217,8 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
 
       {/* Collapsed client icon */}
       {clientName && !expanded && (
-        <div className="px-3 py-3 border-b border-dark-400/30 flex justify-center">
-          <div className="w-9 h-9 rounded-lg bg-dark-600 flex items-center justify-center" title={clientName}>
+        <div className="px-3 py-3 border-b border-dark-400/20 flex justify-center">
+          <div className="w-9 h-9 rounded-lg bg-dark-700 hover:bg-dark-600 border border-dark-400/20 flex items-center justify-center transition-colors" title={clientName}>
             <Building2 size={15} className="text-accent-400" />
           </div>
         </div>
@@ -226,18 +226,18 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
 
       {/* Branch selector — multi-branch clients only */}
       {isMultiBranch && !isSuperAdmin && branches.length > 0 && expanded && (
-        <div className="px-3 py-2 border-b border-dark-400/30">
+        <div className="px-3 py-2 border-b border-dark-400/20">
           <div className="relative" ref={branchDropdownRef}>
             <button
               onClick={() => setShowBranchDropdown(!showBranchDropdown)}
-              className="w-full flex items-center gap-2 bg-dark-600 rounded-xl px-3 py-2 hover:bg-dark-500 transition-colors"
+              className="w-full flex items-center gap-2 bg-dark-700 border border-dark-400/30 rounded-lg px-3 py-2 hover:border-dark-400/50 transition-colors"
             >
               <MapPin size={13} className="text-accent-400 flex-shrink-0" />
               <span className="text-xs font-medium text-theme-primary truncate flex-1 text-left">{selectedBranchName}</span>
               <ChevronDown size={12} className={`text-theme-faint transition-transform ${showBranchDropdown ? 'rotate-180' : ''}`} />
             </button>
             {showBranchDropdown && (
-              <div className="absolute left-0 right-0 top-full mt-1 bg-dark-700 border border-dark-400/30 rounded-xl shadow-xl z-50 max-h-60 overflow-y-auto">
+              <div className="absolute left-0 right-0 top-full mt-1 bg-dark-700 border border-dark-400/30 rounded-lg shadow-lg z-50 max-h-60 overflow-y-auto">
                 {canViewConsolidated && (
                   <button
                     onClick={() => selectBranch('all', 'All Branches')}
@@ -268,8 +268,8 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
 
       {/* Collapsed branch icon */}
       {isMultiBranch && !isSuperAdmin && branches.length > 0 && !expanded && (
-        <div className="px-3 py-2 border-b border-dark-400/30 flex justify-center">
-          <div className="w-9 h-9 rounded-lg bg-dark-600 flex items-center justify-center" title={selectedBranchName}>
+        <div className="px-3 py-2 border-b border-dark-400/20 flex justify-center">
+          <div className="w-9 h-9 rounded-lg bg-dark-700 hover:bg-dark-600 border border-dark-400/20 flex items-center justify-center transition-colors" title={selectedBranchName}>
             <MapPin size={13} className="text-accent-400" />
           </div>
         </div>
@@ -277,10 +277,10 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
 
       {/* Switch Module link */}
       {!isSuperAdmin && expanded && (
-        <div className="px-3 py-2 border-b border-dark-400/30">
+        <div className="px-3 py-2 border-b border-dark-400/20">
           <button
             onClick={() => navigate('/modules')}
-            className="w-full flex items-center gap-2 text-xs font-medium text-theme-muted hover:text-accent-400 transition-colors px-2 py-1.5"
+            className="w-full flex items-center gap-2 text-xs font-medium text-theme-muted hover:text-accent-400 hover:bg-dark-700 px-2 py-1.5 rounded transition-colors"
           >
             <ArrowRight size={12} />
             <span>Switch Module</span>
@@ -318,7 +318,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
       </nav>
 
       {/* Bottom utility links + theme toggle + logout */}
-      <div className="px-2 pb-2 border-t border-dark-400/30 pt-3 space-y-1">
+      <div className="px-2 pb-2 border-t border-dark-400/20 pt-3 space-y-1">
         {visibleUtility.map(renderLink)}
 
         {/* Sync Data button — VCFO module only, matches TallyVision */}
@@ -326,7 +326,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
           <button
             onClick={() => navigate('/vcfo/sync')}
             title={!expanded ? 'Sync Data' : undefined}
-            className={`flex items-center gap-3 px-3 py-2.5 text-[13px] font-semibold bg-accent-500 hover:bg-accent-600 text-white rounded-xl w-full transition-all ${
+            className={`flex items-center gap-3 px-3 py-2.5 text-[13px] font-semibold bg-accent-500 hover:bg-accent-600 text-white rounded-lg w-full transition-all duration-200 shadow-sm hover:shadow-md ${
               expanded ? '' : 'justify-center'
             }`}
           >
