@@ -178,67 +178,86 @@ export async function syncTuria(opts: TuriaSyncOptions): Promise<TuriaSyncResult
     await page.waitForTimeout(2000);
     await screenshot('otp-entered');
 
-    // Click Verify OTP button
+    // Turia auto-submits OTP via useEffect when all 4 digits are entered.
+    // Wait for either: (a) navigation away from /login, or (b) Verify button to appear.
     progress(opts, 'login', 'Verifying OTP...', 35);
 
-    // Try clicking the Verify OTP button - use text matching and also try by role
-    let verifyClicked = false;
-    const verifySelectors = [
-      'button:has-text("Verify OTP")',
-      'button:has-text("Verify")',
-      'button:has-text("Submit")',
-      'button:has-text("Login")',
-      '[role="button"]:has-text("Verify")',
-      'a:has-text("Verify")',
-    ];
+    // First, wait a moment for auto-submit to fire
+    await page.waitForTimeout(3000);
 
-    for (const sel of verifySelectors) {
-      try {
-        const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 3000 })) {
-          const isDisabled = await btn.isDisabled();
-          console.log(`Turia: Found verify button with "${sel}", disabled=${isDisabled}`);
-          if (!isDisabled) {
-            await btn.click({ timeout: 5000 });
-            verifyClicked = true;
-            break;
-          } else {
-            console.log('Turia: Button is disabled, trying force click');
-            await btn.click({ force: true, timeout: 5000 });
+    // Check if auto-submit already navigated away from login
+    let loginComplete = !page.url().includes('/login');
+    console.log(`Turia: After OTP entry, URL=${page.url()}, loginComplete=${loginComplete}`);
+
+    if (!loginComplete) {
+      // Auto-submit may not have worked — try clicking Verify OTP button manually
+      console.log('Turia: Auto-submit did not navigate. Trying manual verify button click...');
+
+      const verifySelectors = [
+        'button:has-text("Verify OTP")',
+        'button:has-text("Verify")',
+        'button:has-text("Submit")',
+        'button:has-text("Login")',
+        '[role="button"]:has-text("Verify")',
+        'a:has-text("Verify")',
+      ];
+
+      let verifyClicked = false;
+      for (const sel of verifySelectors) {
+        try {
+          const btn = page.locator(sel).first();
+          if (await btn.isVisible({ timeout: 2000 })) {
+            const isDisabled = await btn.isDisabled();
+            console.log(`Turia: Found verify button with "${sel}", disabled=${isDisabled}`);
+            if (!isDisabled) {
+              await btn.click({ timeout: 5000 });
+              verifyClicked = true;
+              break;
+            } else {
+              // Button disabled = auto-submit may be in progress, just wait
+              console.log('Turia: Button is disabled (auto-submit in progress), waiting...');
+              break;
+            }
+          }
+        } catch { /* try next selector */ }
+      }
+
+      if (!verifyClicked) {
+        // Last resort: click any visible button that isn't "Resend OTP" or "Get OTP"
+        const allBtns = page.locator('button:visible');
+        const btnCount = await allBtns.count();
+        console.log(`Turia: No verify button found. ${btnCount} visible buttons:`);
+        for (let i = 0; i < btnCount; i++) {
+          const text = await allBtns.nth(i).textContent();
+          console.log(`  Button ${i}: "${text}"`);
+          if (text && /verify|submit|login|continue/i.test(text) && !/resend|get otp/i.test(text)) {
+            await allBtns.nth(i).click({ force: true });
             verifyClicked = true;
             break;
           }
         }
-      } catch { /* try next selector */ }
-    }
+      }
 
-    if (!verifyClicked) {
-      // Last resort: click any visible button that isn't "Resend OTP" or "Get OTP"
-      const allBtns = page.locator('button:visible');
-      const btnCount = await allBtns.count();
-      console.log(`Turia: No verify button found. ${btnCount} visible buttons:`);
-      for (let i = 0; i < btnCount; i++) {
-        const text = await allBtns.nth(i).textContent();
-        console.log(`  Button ${i}: "${text}"`);
-        if (text && /verify|submit|login|continue/i.test(text) && !/resend|get otp/i.test(text)) {
-          await allBtns.nth(i).click({ force: true });
-          verifyClicked = true;
-          break;
-        }
+      // Even if no button was clicked, wait for possible auto-submit navigation
+      // (the useEffect auto-submit may just need more time)
+      if (!verifyClicked) {
+        console.log('Turia: No verify button found. Waiting for auto-submit navigation...');
+      }
+
+      // Wait for navigation away from login page (auto-submit or button click)
+      try {
+        await page.waitForURL((url) => !url.toString().includes('/login'), { timeout: 15000 });
+        loginComplete = true;
+        console.log('Turia: Navigation detected, login successful');
+      } catch {
+        await screenshot('verify-timeout');
+        loginComplete = !page.url().includes('/login');
       }
     }
 
-    if (!verifyClicked) {
-      await screenshot('verify-button-not-found');
-      throw new Error('Could not find or click the Verify OTP button');
-    }
-
-    await page.waitForTimeout(5000);
     await screenshot('post-verify');
 
-    // Check if login was successful
-    const postLoginUrl = page.url();
-    if (postLoginUrl.includes('/login')) {
+    if (!loginComplete) {
       await screenshot('login-failed');
       throw new Error('OTP verification failed. Please check the code and try again.');
     }
