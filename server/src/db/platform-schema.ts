@@ -60,12 +60,38 @@ export function initializePlatformSchema(db: DbHelper) {
       created_at TEXT DEFAULT (datetime('now')),
       UNIQUE(client_id, name)
     );
+
+    -- Branches (locations/units) per client
+    CREATE TABLE IF NOT EXISTS branches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id INTEGER NOT NULL REFERENCES clients(id),
+      name TEXT NOT NULL,
+      code TEXT NOT NULL,
+      city TEXT,
+      manager_name TEXT,
+      is_active INTEGER DEFAULT 1,
+      sort_order INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(client_id, code)
+    );
+
+    -- User-branch access mapping
+    CREATE TABLE IF NOT EXISTS user_branch_access (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES client_users(id),
+      branch_id INTEGER NOT NULL REFERENCES branches(id),
+      can_view_consolidated INTEGER DEFAULT 0,
+      UNIQUE(user_id, branch_id)
+    );
   `);
 
-  // Add industry column to clients (safe migration for existing DBs)
-  try {
-    db.exec("ALTER TABLE clients ADD COLUMN industry TEXT DEFAULT 'custom'");
-  } catch (e) {
-    // Column already exists
+  // Safe migrations for existing DBs
+  const migrations = [
+    "ALTER TABLE clients ADD COLUMN industry TEXT DEFAULT 'custom'",
+    "ALTER TABLE clients ADD COLUMN is_multi_branch INTEGER DEFAULT 0",
+    "ALTER TABLE client_integrations ADD COLUMN branch_id INTEGER REFERENCES branches(id)",
+  ];
+  for (const sql of migrations) {
+    try { db.exec(sql); } catch { /* column already exists */ }
   }
 }

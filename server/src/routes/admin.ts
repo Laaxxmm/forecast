@@ -38,8 +38,9 @@ router.get('/clients/:slug', async (req: Request, res: Response) => {
   const users = db.all('SELECT id, username, display_name, role, is_active, created_at FROM client_users WHERE client_id = ?', client.id);
   const integrations = db.all('SELECT * FROM client_integrations WHERE client_id = ?', client.id);
   const streams = db.all('SELECT * FROM business_streams WHERE client_id = ? ORDER BY sort_order, id', client.id);
+  const branches = db.all('SELECT * FROM branches WHERE client_id = ? ORDER BY sort_order, name', client.id);
 
-  res.json({ ...client, users, integrations, streams });
+  res.json({ ...client, users, integrations, streams, branches });
 });
 
 router.post('/clients', async (req: Request, res: Response) => {
@@ -301,6 +302,175 @@ router.delete('/clients/:slug/streams/:id', async (req: Request, res: Response) 
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
   db.run('DELETE FROM business_streams WHERE id = ? AND client_id = ?', [streamId, client.id]);
+  res.json({ ok: true });
+});
+
+// ─── Branch Management ────────────────────────────────────────────────────────
+
+router.get('/clients/:slug/branches', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+  const branches = db.all('SELECT * FROM branches WHERE client_id = ? ORDER BY sort_order, name', client.id);
+  res.json(branches);
+});
+
+router.post('/clients/:slug/branches', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const { name, code, city, manager_name } = req.body;
+  if (!name || !code) return res.status(400).json({ error: 'name and code are required' });
+
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  // Validate code format
+  if (!/^[a-z0-9-]+$/.test(code)) {
+    return res.status(400).json({ error: 'Branch code must be lowercase letters, numbers, and hyphens' });
+  }
+
+  const existing = db.get('SELECT id FROM branches WHERE client_id = ? AND code = ?', [client.id, code]);
+  if (existing) return res.status(409).json({ error: 'Branch code already exists for this client' });
+
+  const maxOrder = db.get('SELECT MAX(sort_order) as max_order FROM branches WHERE client_id = ?', client.id);
+  const sortOrder = (maxOrder?.max_order || 0) + 1;
+
+  const result = db.run(
+    'INSERT INTO branches (client_id, name, code, city, manager_name, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+    [client.id, name, code, city || null, manager_name || null, sortOrder]
+  );
+
+  res.status(201).json({ id: result.lastInsertRowid, name, code, city, manager_name, sort_order: sortOrder });
+});
+
+router.put('/clients/:slug/branches/:id', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const { name, code, city, manager_name, sort_order, is_active } = req.body;
+  const branchId = parseInt(req.params.id as string);
+
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  if (name !== undefined) db.run('UPDATE branches SET name = ? WHERE id = ? AND client_id = ?', [name, branchId, client.id]);
+  if (code !== undefined) db.run('UPDATE branches SET code = ? WHERE id = ? AND client_id = ?', [code, branchId, client.id]);
+  if (city !== undefined) db.run('UPDATE branches SET city = ? WHERE id = ? AND client_id = ?', [city, branchId, client.id]);
+  if (manager_name !== undefined) db.run('UPDATE branches SET manager_name = ? WHERE id = ? AND client_id = ?', [manager_name, branchId, client.id]);
+  if (sort_order !== undefined) db.run('UPDATE branches SET sort_order = ? WHERE id = ? AND client_id = ?', [sort_order, branchId, client.id]);
+  if (is_active !== undefined) db.run('UPDATE branches SET is_active = ? WHERE id = ? AND client_id = ?', [is_active ? 1 : 0, branchId, client.id]);
+
+  res.json({ ok: true });
+});
+
+router.delete('/clients/:slug/branches/:id', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const branchId = parseInt(req.params.id as string);
+
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  // Soft delete — deactivate instead of removing
+  db.run('UPDATE branches SET is_active = 0 WHERE id = ? AND client_id = ?', [branchId, client.id]);
+  res.json({ ok: true });
+});
+
+// Enable multi-branch for a client (migrates existing data to a default branch)
+router.post('/clients/:slug/enable-multi-branch', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id, is_multi_branch FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  if (client.is_multi_branch) {
+    return res.status(400).json({ error: 'Client is already multi-branch' });
+  }
+
+  const { default_branch_name, default_branch_code } = req.body;
+  if (!default_branch_name || !default_branch_code) {
+    return res.status(400).json({ error: 'default_branch_name and default_branch_code required' });
+  }
+
+  // Create the default branch
+  const result = db.run(
+    'INSERT INTO branches (client_id, name, code, sort_order) VALUES (?, ?, ?, 1)',
+    [client.id, default_branch_name, default_branch_code]
+  );
+  const defaultBranchId = result.lastInsertRowid;
+
+  // Enable multi-branch flag
+  db.run("UPDATE clients SET is_multi_branch = 1, updated_at = datetime('now') WHERE id = ?", [client.id]);
+
+  // Migrate existing data in the client DB to the default branch
+  try {
+    const { getClientHelper } = await import('../db/connection.js');
+    const clientDb = await getClientHelper(req.params.slug as string);
+    const tables = ['clinic_actuals', 'pharmacy_sales_actuals', 'pharmacy_purchase_actuals', 'import_logs', 'scenarios', 'dashboard_actuals', 'budgets'];
+    for (const table of tables) {
+      try {
+        clientDb.run(`UPDATE ${table} SET branch_id = ? WHERE branch_id IS NULL`, [defaultBranchId]);
+      } catch { /* table might not have data */ }
+    }
+    console.log(`[Admin] Migrated existing data for "${req.params.slug}" to default branch ${defaultBranchId}`);
+  } catch (err) {
+    console.error('[Admin] Data migration error:', err);
+  }
+
+  // Assign all existing users to the default branch with consolidated access
+  const users = db.all('SELECT id FROM client_users WHERE client_id = ?', client.id);
+  for (const user of users) {
+    db.run(
+      'INSERT OR IGNORE INTO user_branch_access (user_id, branch_id, can_view_consolidated) VALUES (?, ?, 1)',
+      [user.id, defaultBranchId]
+    );
+  }
+
+  res.json({ ok: true, defaultBranchId, message: 'Multi-branch enabled. Existing data migrated to default branch.' });
+});
+
+// ─── User-Branch Access Management ──────────────────────────────────────────
+
+router.get('/clients/:slug/users/:id/branches', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const userId = parseInt(req.params.id as string);
+
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  const access = db.all(
+    `SELECT uba.branch_id, uba.can_view_consolidated, b.name, b.code
+     FROM user_branch_access uba
+     JOIN branches b ON uba.branch_id = b.id
+     WHERE uba.user_id = ? AND b.client_id = ?`,
+    [userId, client.id]
+  );
+  res.json(access);
+});
+
+router.put('/clients/:slug/users/:id/branches', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const userId = parseInt(req.params.id as string);
+  const { branch_ids, can_view_consolidated } = req.body;
+
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  if (!Array.isArray(branch_ids)) {
+    return res.status(400).json({ error: 'branch_ids must be an array' });
+  }
+
+  // Clear existing assignments for this client's branches
+  db.run(
+    `DELETE FROM user_branch_access WHERE user_id = ? AND branch_id IN (
+      SELECT id FROM branches WHERE client_id = ?
+    )`,
+    [userId, client.id]
+  );
+
+  // Insert new assignments
+  for (const branchId of branch_ids) {
+    db.run(
+      'INSERT INTO user_branch_access (user_id, branch_id, can_view_consolidated) VALUES (?, ?, ?)',
+      [userId, branchId, can_view_consolidated ? 1 : 0]
+    );
+  }
+
   res.json({ ok: true });
 });
 

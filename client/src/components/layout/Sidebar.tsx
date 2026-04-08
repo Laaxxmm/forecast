@@ -1,7 +1,8 @@
+import { useState, useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, TrendingUp, Upload, Settings, LogOut, BarChart3, Building2, ArrowLeftRight,
-  ChevronLeft
+  ChevronLeft, MapPin, ChevronDown
 } from 'lucide-react';
 import api from '../../api/client';
 
@@ -28,11 +29,46 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
   const userType = localStorage.getItem('user_type');
   const userRole = localStorage.getItem('user_role');
   const clientName = localStorage.getItem('client_name');
+  const isMultiBranch = localStorage.getItem('is_multi_branch') === '1';
   const isSuperAdmin = userType === 'super_admin';
   const isClientAdmin = userRole === 'admin';
 
+  const [branches, setBranches] = useState<any[]>([]);
+  const [canViewConsolidated, setCanViewConsolidated] = useState(false);
+  const [selectedBranchId, setSelectedBranchId] = useState<string>(localStorage.getItem('branch_id') || 'all');
+  const [showBranchDropdown, setShowBranchDropdown] = useState(false);
+
+  useEffect(() => {
+    if (!isMultiBranch || isSuperAdmin) return;
+    api.get('/branches').then(res => {
+      if (res.data.isMultiBranch) {
+        setBranches(res.data.branches || []);
+        setCanViewConsolidated(res.data.canViewConsolidated);
+        // Auto-select first branch if none selected
+        if (!localStorage.getItem('branch_id') && res.data.branches?.length > 0) {
+          const defaultId = String(res.data.branches[0].id);
+          setSelectedBranchId(defaultId);
+          localStorage.setItem('branch_id', defaultId);
+          localStorage.setItem('branch_name', res.data.branches[0].name);
+        }
+      }
+    }).catch(() => {});
+  }, [isMultiBranch, isSuperAdmin]);
+
+  const selectBranch = (id: string, name: string) => {
+    setSelectedBranchId(id);
+    localStorage.setItem('branch_id', id);
+    localStorage.setItem('branch_name', name);
+    setShowBranchDropdown(false);
+    window.location.reload(); // Reload to re-fetch data with new branch context
+  };
+
   const visibleMain = isSuperAdmin ? [] : mainLinks;
   const visibleUtility = isSuperAdmin ? [] : utilityLinks.filter(l => isClientAdmin || !l.clientAdminOnly);
+
+  const selectedBranchName = selectedBranchId === 'all'
+    ? 'All Branches'
+    : branches.find(b => String(b.id) === selectedBranchId)?.name || localStorage.getItem('branch_name') || 'Branch';
 
   const handleLogout = async () => {
     await api.post('/auth/logout').catch(() => {});
@@ -41,6 +77,9 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
     localStorage.removeItem('user_role');
     localStorage.removeItem('client_slug');
     localStorage.removeItem('client_name');
+    localStorage.removeItem('is_multi_branch');
+    localStorage.removeItem('branch_id');
+    localStorage.removeItem('branch_name');
     window.location.href = '/login';
   };
 
@@ -125,6 +164,57 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
         <div className="px-3 py-3 border-b border-dark-400/30 flex justify-center">
           <div className="w-9 h-9 rounded-lg bg-dark-600 flex items-center justify-center" title={clientName}>
             <Building2 size={15} className="text-accent-400" />
+          </div>
+        </div>
+      )}
+
+      {/* Branch selector — multi-branch clients only */}
+      {isMultiBranch && !isSuperAdmin && branches.length > 0 && expanded && (
+        <div className="px-3 py-2 border-b border-dark-400/30">
+          <div className="relative">
+            <button
+              onClick={() => setShowBranchDropdown(!showBranchDropdown)}
+              className="w-full flex items-center gap-2 bg-dark-600 rounded-xl px-3 py-2 hover:bg-dark-500 transition-colors"
+            >
+              <MapPin size={13} className="text-accent-400 flex-shrink-0" />
+              <span className="text-xs font-medium text-slate-200 truncate flex-1 text-left">{selectedBranchName}</span>
+              <ChevronDown size={12} className={`text-slate-500 transition-transform ${showBranchDropdown ? 'rotate-180' : ''}`} />
+            </button>
+            {showBranchDropdown && (
+              <div className="absolute left-0 right-0 top-full mt-1 bg-dark-700 border border-dark-400/30 rounded-xl shadow-xl z-50 max-h-60 overflow-y-auto">
+                {canViewConsolidated && (
+                  <button
+                    onClick={() => selectBranch('all', 'All Branches')}
+                    className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors ${
+                      selectedBranchId === 'all' ? 'text-accent-400 bg-accent-500/10' : 'text-slate-300 hover:bg-dark-600'
+                    }`}
+                  >
+                    All Branches
+                  </button>
+                )}
+                {branches.map((branch: any) => (
+                  <button
+                    key={branch.id}
+                    onClick={() => selectBranch(String(branch.id), branch.name)}
+                    className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors ${
+                      selectedBranchId === String(branch.id) ? 'text-accent-400 bg-accent-500/10' : 'text-slate-300 hover:bg-dark-600'
+                    }`}
+                  >
+                    <span>{branch.name}</span>
+                    {branch.city && <span className="text-slate-500 ml-1">· {branch.city}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Collapsed branch icon */}
+      {isMultiBranch && !isSuperAdmin && branches.length > 0 && !expanded && (
+        <div className="px-3 py-2 border-b border-dark-400/30 flex justify-center">
+          <div className="w-9 h-9 rounded-lg bg-dark-600 flex items-center justify-center" title={selectedBranchName}>
+            <MapPin size={13} className="text-accent-400" />
           </div>
         </div>
       )}

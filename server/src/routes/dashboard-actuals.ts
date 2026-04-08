@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { branchFilter, getBranchIdForInsert } from '../utils/branch.js';
 
 const router = Router();
 
@@ -66,25 +67,28 @@ router.post('/sync-from-imports', async (req, res) => {
     const { scenario_id } = req.body;
     if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
 
+    const bf = branchFilter(req);
+    const branchId = getBranchIdForInsert(req);
     let count = 0;
 
     // Aggregate clinic revenue by month (sum of item_price)
     const clinicMonthly = db.all(
       `SELECT bill_month as month, COALESCE(SUM(item_price), 0) as total
        FROM clinic_actuals
-       WHERE bill_month IS NOT NULL AND bill_month != ''
+       WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where}
        GROUP BY bill_month
-       ORDER BY bill_month`
+       ORDER BY bill_month`,
+      ...bf.params
     );
 
     for (const row of clinicMonthly) {
       if (!row.month) continue;
       db.run(
-        `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, updated_at)
-         VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, datetime('now'))
+        `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
+         VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, datetime('now'))
          ON CONFLICT(scenario_id, category, item_name, month)
          DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-        scenario_id, row.month, row.total
+        scenario_id, row.month, row.total, branchId
       );
       count++;
     }
@@ -94,25 +98,26 @@ router.post('/sync-from-imports', async (req, res) => {
       const pharmacyMonthly = db.all(
         `SELECT bill_month as month, COALESCE(SUM(sales_amount), 0) as revenue, COALESCE(SUM(purchase_amount), 0) as cogs
          FROM pharmacy_sales_actuals
-         WHERE bill_month IS NOT NULL AND bill_month != ''
+         WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where}
          GROUP BY bill_month
-         ORDER BY bill_month`
+         ORDER BY bill_month`,
+        ...bf.params
       );
       for (const row of pharmacyMonthly) {
         if (!row.month) continue;
         db.run(
-          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, updated_at)
-           VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, datetime('now'))
+          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
+           VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?, datetime('now'))
            ON CONFLICT(scenario_id, category, item_name, month)
            DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-          scenario_id, row.month, row.revenue
+          scenario_id, row.month, row.revenue, branchId
         );
         db.run(
-          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, updated_at)
-           VALUES (?, 'direct_costs', 'Pharmacy COGS', ?, ?, datetime('now'))
+          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
+           VALUES (?, 'direct_costs', 'Pharmacy COGS', ?, ?, ?, datetime('now'))
            ON CONFLICT(scenario_id, category, item_name, month)
            DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-          scenario_id, row.month, row.cogs
+          scenario_id, row.month, row.cogs, branchId
         );
         count += 2;
       }

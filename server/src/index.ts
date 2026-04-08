@@ -11,6 +11,7 @@ import { initializePlatformSchema } from './db/platform-schema.js';
 import { seedPlatformDatabase } from './db/platform-seed.js';
 import { requireAuth, requireSuperAdmin, requireAdmin } from './middleware/auth.js';
 import { resolveTenant } from './middleware/tenant.js';
+import { resolveBranch } from './middleware/branch.js';
 import authRoutes from './routes/auth.js';
 import adminRoutes from './routes/admin.js';
 import settingsRoutes from './routes/settings.js';
@@ -69,17 +70,17 @@ app.use('/api/auth', authRoutes);
 // ─── Admin routes (super admin only, no tenant context) ─────────────────────
 app.use('/api/admin', requireAuth, requireSuperAdmin, adminRoutes);
 
-// ─── Client-scoped routes (require auth + tenant resolution) ────────────────
-app.use('/api/settings', requireAuth, resolveTenant, requireAdmin, settingsRoutes);
-app.use('/api/import', requireAuth, resolveTenant, importRoutes);
-app.use('/api/actuals', requireAuth, resolveTenant, actualsRoutes);
-app.use('/api/budgets', requireAuth, resolveTenant, budgetRoutes);
-app.use('/api/forecasts', requireAuth, resolveTenant, forecastRoutes);
-app.use('/api/dashboard', requireAuth, resolveTenant, dashboardRoutes);
-app.use('/api/forecast-module', requireAuth, resolveTenant, forecastModuleRoutes);
-app.use('/api/dashboard-actuals', requireAuth, resolveTenant, dashboardActualsRoutes);
-app.use('/api/sync', requireAuth, resolveTenant, syncRoutes);
-app.use('/api/db', requireAuth, resolveTenant, requireAdmin, dbViewerRoutes);
+// ─── Client-scoped routes (require auth + tenant + branch resolution) ──────
+app.use('/api/settings', requireAuth, resolveTenant, resolveBranch, requireAdmin, settingsRoutes);
+app.use('/api/import', requireAuth, resolveTenant, resolveBranch, importRoutes);
+app.use('/api/actuals', requireAuth, resolveTenant, resolveBranch, actualsRoutes);
+app.use('/api/budgets', requireAuth, resolveTenant, resolveBranch, budgetRoutes);
+app.use('/api/forecasts', requireAuth, resolveTenant, resolveBranch, forecastRoutes);
+app.use('/api/dashboard', requireAuth, resolveTenant, resolveBranch, dashboardRoutes);
+app.use('/api/forecast-module', requireAuth, resolveTenant, resolveBranch, forecastModuleRoutes);
+app.use('/api/dashboard-actuals', requireAuth, resolveTenant, resolveBranch, dashboardActualsRoutes);
+app.use('/api/sync', requireAuth, resolveTenant, resolveBranch, syncRoutes);
+app.use('/api/db', requireAuth, resolveTenant, resolveBranch, requireAdmin, dbViewerRoutes);
 
 // ─── Client streams (accessible to all authenticated users for their tenant) ─
 app.get('/api/streams', requireAuth, resolveTenant, async (req, res) => {
@@ -89,6 +90,40 @@ app.get('/api/streams', requireAuth, resolveTenant, async (req, res) => {
     (req as any).clientId
   );
   res.json(streams);
+});
+
+// ─── Client branches (returns branches the current user can access) ─────────
+app.get('/api/branches', requireAuth, resolveTenant, resolveBranch, async (req, res) => {
+  const platformDb = await getPlatformHelper();
+  const client = platformDb.get('SELECT is_multi_branch FROM clients WHERE id = ?', req.clientId);
+
+  if (!client?.is_multi_branch) {
+    return res.json({ isMultiBranch: false, branches: [] });
+  }
+
+  // For super admins and client admins, return all branches
+  // For regular users, return only their assigned branches
+  let branches;
+  if (req.userType === 'super_admin' || req.session?.role === 'admin') {
+    branches = platformDb.all(
+      'SELECT id, name, code, city, manager_name, sort_order FROM branches WHERE client_id = ? AND is_active = 1 ORDER BY sort_order, name',
+      req.clientId
+    );
+  } else {
+    branches = platformDb.all(
+      `SELECT b.id, b.name, b.code, b.city, b.manager_name, b.sort_order, uba.can_view_consolidated
+       FROM branches b
+       JOIN user_branch_access uba ON uba.branch_id = b.id
+       WHERE b.client_id = ? AND b.is_active = 1 AND uba.user_id = ?
+       ORDER BY b.sort_order, b.name`,
+      req.clientId, req.session?.userId
+    );
+  }
+
+  const canViewConsolidated = req.userType === 'super_admin' || req.session?.role === 'admin'
+    || branches.some((b: any) => b.can_view_consolidated);
+
+  res.json({ isMultiBranch: true, branches, canViewConsolidated });
 });
 
 // ─── Static files ───────────────────────────────────────────────────────────

@@ -16,6 +16,11 @@ api.interceptors.request.use(config => {
   if (clientSlug) {
     config.headers['X-Client-Slug'] = clientSlug;
   }
+  // Attach branch context for multi-branch clients
+  const branchId = localStorage.getItem('branch_id');
+  if (branchId) {
+    config.headers['X-Branch-Id'] = branchId;
+  }
   return config;
 });
 
@@ -30,6 +35,8 @@ api.interceptors.response.use(
       if (res.data.role) localStorage.setItem('user_role', res.data.role);
       if (res.data.clientSlug) localStorage.setItem('client_slug', res.data.clientSlug);
       if (res.data.clientName) localStorage.setItem('client_name', res.data.clientName);
+      if (res.data.isMultiBranch) localStorage.setItem('is_multi_branch', '1');
+      else localStorage.removeItem('is_multi_branch');
     }
     return res;
   },
@@ -40,6 +47,9 @@ api.interceptors.response.use(
       localStorage.removeItem('user_role');
       localStorage.removeItem('client_slug');
       localStorage.removeItem('client_name');
+      localStorage.removeItem('is_multi_branch');
+      localStorage.removeItem('branch_id');
+      localStorage.removeItem('branch_name');
       window.location.href = '/login';
     }
     return Promise.reject(err);

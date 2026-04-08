@@ -52,7 +52,7 @@ router.post('/login', loginLimiter, async (req, res) => {
 
   // Stage 2: Check client_users
   const clientUser = platformDb.get(`
-    SELECT cu.*, c.slug as client_slug, c.name as client_name, c.id as cid
+    SELECT cu.*, c.slug as client_slug, c.name as client_name, c.id as cid, c.is_multi_branch
     FROM client_users cu
     JOIN clients c ON cu.client_id = c.id
     WHERE cu.username = ? AND cu.is_active = 1 AND c.is_active = 1
@@ -73,6 +73,32 @@ router.post('/login', loginLimiter, async (req, res) => {
       clientName: clientUser.client_name,
     });
 
+    // Get branch info for multi-branch clients
+    let branches: any[] = [];
+    let defaultBranchId: number | null = null;
+    const isMultiBranch = !!clientUser.is_multi_branch;
+
+    if (isMultiBranch) {
+      if (clientUser.role === 'admin') {
+        branches = platformDb.all(
+          'SELECT id, name, code, city FROM branches WHERE client_id = ? AND is_active = 1 ORDER BY sort_order, name',
+          clientUser.cid
+        );
+      } else {
+        branches = platformDb.all(
+          `SELECT b.id, b.name, b.code, b.city, uba.can_view_consolidated
+           FROM branches b
+           JOIN user_branch_access uba ON uba.branch_id = b.id
+           WHERE b.client_id = ? AND b.is_active = 1 AND uba.user_id = ?
+           ORDER BY b.sort_order, b.name`,
+          clientUser.cid, clientUser.id
+        );
+      }
+      if (branches.length > 0) {
+        defaultBranchId = branches[0].id;
+      }
+    }
+
     return res.json({
       id: clientUser.id,
       username: clientUser.username,
@@ -81,6 +107,9 @@ router.post('/login', loginLimiter, async (req, res) => {
       userType: 'client_user',
       clientSlug: clientUser.client_slug,
       clientName: clientUser.client_name,
+      isMultiBranch,
+      branches,
+      defaultBranchId,
       token,
     });
   }

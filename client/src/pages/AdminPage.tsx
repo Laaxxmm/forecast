@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import {
   Building2, Users, UserPlus, Plus, Edit3, Power, ChevronRight, ArrowLeft,
-  Eye, EyeOff, CheckCircle, XCircle, Plug, Shield, Trash2, Copy, KeyRound, BarChart3
+  Eye, EyeOff, CheckCircle, XCircle, Plug, Shield, Trash2, Copy, KeyRound, BarChart3,
+  MapPin, GitBranch
 } from 'lucide-react';
 
 interface Client {
@@ -290,17 +291,26 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
   const [newStreamColor, setNewStreamColor] = useState('accent');
   const [resetResult, setResetResult] = useState<{username: string; password: string} | null>(null);
   const [industries, setIndustries] = useState<any[]>([]);
+  const [clientBranches, setClientBranches] = useState<any[]>([]);
+  const [showAddBranch, setShowAddBranch] = useState(false);
+  const [newBranchName, setNewBranchName] = useState('');
+  const [newBranchCode, setNewBranchCode] = useState('');
+  const [newBranchCity, setNewBranchCity] = useState('');
+  const [newBranchManager, setNewBranchManager] = useState('');
+  const [enablingMultiBranch, setEnablingMultiBranch] = useState(false);
 
   const loadDetail = useCallback(() => {
     Promise.all([
       api.get(`/admin/clients/${slug}`),
       api.get(`/admin/clients/${slug}/integrations`),
       api.get(`/admin/clients/${slug}/streams`),
-    ]).then(([clientRes, intRes, streamsRes]) => {
+      api.get(`/admin/clients/${slug}/branches`),
+    ]).then(([clientRes, intRes, streamsRes, branchesRes]) => {
       setClient(clientRes.data);
       setUsers(clientRes.data.users || []);
       setIntegrations(intRes.data.catalog || []);
       setStreams(streamsRes.data);
+      setClientBranches(branchesRes.data);
       setLoading(false);
     });
   }, [slug]);
@@ -563,6 +573,138 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Branches Management */}
+      <div className="card mt-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="font-semibold text-white flex items-center gap-2">
+              <GitBranch size={16} /> Branches / Locations
+            </h3>
+            <p className="text-xs text-slate-500 mt-1">
+              {client?.is_multi_branch
+                ? 'Multi-branch enabled — data is separated by branch'
+                : 'Single-branch mode — enable multi-branch to manage locations'}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {!client?.is_multi_branch ? (
+              <button
+                onClick={async () => {
+                  const name = prompt('Default branch name (e.g. "Head Office"):');
+                  if (!name) return;
+                  const code = prompt('Branch code (lowercase, e.g. "head-office"):');
+                  if (!code) return;
+                  setEnablingMultiBranch(true);
+                  try {
+                    await api.post(`/admin/clients/${slug}/enable-multi-branch`, {
+                      default_branch_name: name,
+                      default_branch_code: code,
+                    });
+                    loadDetail();
+                  } catch (err: any) {
+                    alert(err.response?.data?.error || 'Failed');
+                  }
+                  setEnablingMultiBranch(false);
+                }}
+                disabled={enablingMultiBranch}
+                className="flex items-center gap-1.5 text-sm text-amber-400 hover:text-amber-300 font-medium transition-colors border border-amber-500/20 px-3 py-1.5 rounded-xl hover:bg-amber-500/10"
+              >
+                <MapPin size={14} /> {enablingMultiBranch ? 'Enabling...' : 'Enable Multi-Branch'}
+              </button>
+            ) : (
+              <button onClick={() => setShowAddBranch(true)} className="flex items-center gap-1.5 text-sm text-accent-400 hover:text-accent-300 font-medium transition-colors">
+                <Plus size={14} /> Add Branch
+              </button>
+            )}
+          </div>
+        </div>
+
+        {showAddBranch && (
+          <div className="bg-dark-600 rounded-xl p-4 mb-4 border border-dark-400/50">
+            <h4 className="text-sm font-semibold text-white mb-3">Add Branch</h4>
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Branch Name</label>
+                <input type="text" value={newBranchName} onChange={e => setNewBranchName(e.target.value)}
+                  placeholder="e.g. Bangalore" className="input text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Code</label>
+                <input type="text" value={newBranchCode} onChange={e => setNewBranchCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                  placeholder="e.g. blr" className="input text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">City</label>
+                <input type="text" value={newBranchCity} onChange={e => setNewBranchCity(e.target.value)}
+                  placeholder="optional" className="input text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Manager</label>
+                <input type="text" value={newBranchManager} onChange={e => setNewBranchManager(e.target.value)}
+                  placeholder="optional" className="input text-sm" />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={async () => {
+                  if (!newBranchName || !newBranchCode) return;
+                  await api.post(`/admin/clients/${slug}/branches`, {
+                    name: newBranchName, code: newBranchCode,
+                    city: newBranchCity || undefined, manager_name: newBranchManager || undefined,
+                  });
+                  setNewBranchName(''); setNewBranchCode(''); setNewBranchCity(''); setNewBranchManager('');
+                  setShowAddBranch(false); loadDetail();
+                }}
+                disabled={!newBranchName || !newBranchCode}
+                className="btn-primary text-xs px-3 py-2"
+              >Add Branch</button>
+              <button onClick={() => setShowAddBranch(false)} className="btn-secondary text-xs px-3 py-2">Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {clientBranches.length === 0 ? (
+          <p className="text-slate-500 text-center py-6 text-sm">
+            {client?.is_multi_branch ? 'No branches configured' : 'Enable multi-branch to add locations'}
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {clientBranches.map((branch: any) => (
+              <div key={branch.id} className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-dark-600 border border-dark-400/30">
+                <div className="flex items-center gap-3">
+                  <MapPin size={14} className={branch.is_active ? 'text-accent-400' : 'text-slate-600'} />
+                  <div>
+                    <span className="text-sm font-medium text-slate-200">{branch.name}</span>
+                    <span className="text-[10px] text-slate-500 ml-2 font-mono">{branch.code}</span>
+                    {branch.city && <span className="text-[10px] text-slate-500 ml-2">{branch.city}</span>}
+                    {branch.manager_name && <span className="text-[10px] text-slate-400 ml-2">· {branch.manager_name}</span>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                    branch.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
+                  }`}>
+                    {branch.is_active ? 'Active' : 'Inactive'}
+                  </span>
+                  {branch.is_active && (
+                    <button
+                      onClick={async () => {
+                        if (!confirm(`Deactivate branch "${branch.name}"?`)) return;
+                        await api.delete(`/admin/clients/${slug}/branches/${branch.id}`);
+                        loadDetail();
+                      }}
+                      className="text-xs text-red-400 hover:text-red-300 px-2 py-1 hover:bg-red-500/10 rounded-lg transition-all"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {resetResult && (

@@ -218,6 +218,20 @@ export function initializeSchema(db: DbHelper) {
     )
   `);
 
+  // Branch-related migrations (add branch_id to data tables)
+  const branchMigrations = [
+    'ALTER TABLE clinic_actuals ADD COLUMN branch_id INTEGER',
+    'ALTER TABLE pharmacy_sales_actuals ADD COLUMN branch_id INTEGER',
+    'ALTER TABLE pharmacy_purchase_actuals ADD COLUMN branch_id INTEGER',
+    'ALTER TABLE import_logs ADD COLUMN branch_id INTEGER',
+    'ALTER TABLE scenarios ADD COLUMN branch_id INTEGER',
+    'ALTER TABLE dashboard_actuals ADD COLUMN branch_id INTEGER',
+    'ALTER TABLE budgets ADD COLUMN branch_id INTEGER',
+  ];
+  for (const sql of branchMigrations) {
+    try { db.exec(sql); } catch { /* column already exists */ }
+  }
+
   // Create indexes separately (sql.js doesn't support multiple statements well with CREATE INDEX)
   const indexes = [
     'CREATE INDEX IF NOT EXISTS idx_clinic_month ON clinic_actuals(bill_month)',
@@ -229,6 +243,9 @@ export function initializeSchema(db: DbHelper) {
     'CREATE INDEX IF NOT EXISTS idx_forecast_items_category ON forecast_items(category)',
     'CREATE INDEX IF NOT EXISTS idx_forecast_values_item ON forecast_values(item_id)',
     'CREATE INDEX IF NOT EXISTS idx_forecast_values_month ON forecast_values(month)',
+    'CREATE INDEX IF NOT EXISTS idx_clinic_branch ON clinic_actuals(branch_id)',
+    'CREATE INDEX IF NOT EXISTS idx_pharma_sales_branch ON pharmacy_sales_actuals(branch_id)',
+    'CREATE INDEX IF NOT EXISTS idx_scenarios_branch ON scenarios(branch_id)',
   ];
   for (const idx of indexes) {
     try { db.exec(idx); } catch { /* index may already exist */ }
@@ -239,6 +256,7 @@ export function initializeSchema(db: DbHelper) {
     `DROP VIEW IF EXISTS clinic_monthly_summary`,
     `CREATE VIEW clinic_monthly_summary AS
     SELECT
+      branch_id,
       bill_month,
       department,
       COUNT(*) as transaction_count,
@@ -247,11 +265,12 @@ export function initializeSchema(db: DbHelper) {
       COALESCE(SUM(discount), 0) as total_discount,
       COALESCE(SUM(tax), 0) as total_tax
     FROM clinic_actuals
-    GROUP BY bill_month, department`,
+    GROUP BY branch_id, bill_month, department`,
 
     `DROP VIEW IF EXISTS clinic_doctor_summary`,
     `CREATE VIEW clinic_doctor_summary AS
     SELECT
+      branch_id,
       bill_month,
       billed_doctor,
       department,
@@ -259,11 +278,12 @@ export function initializeSchema(db: DbHelper) {
       COALESCE(SUM(item_price), 0) as total_revenue
     FROM clinic_actuals
     WHERE billed_doctor IS NOT NULL AND billed_doctor != '-'
-    GROUP BY bill_month, billed_doctor, department`,
+    GROUP BY branch_id, bill_month, billed_doctor, department`,
 
     `DROP VIEW IF EXISTS pharmacy_monthly_summary`,
     `CREATE VIEW pharmacy_monthly_summary AS
     SELECT
+      branch_id,
       bill_month,
       COUNT(DISTINCT bill_no) as transactions,
       COALESCE(SUM(qty), 0) as total_qty,
@@ -276,11 +296,12 @@ export function initializeSchema(db: DbHelper) {
       END as profit_margin_pct,
       COALESCE(SUM(sales_tax), 0) as total_sales_tax
     FROM pharmacy_sales_actuals
-    GROUP BY bill_month`,
+    GROUP BY branch_id, bill_month`,
 
     `DROP VIEW IF EXISTS pharmacy_purchase_monthly_summary`,
     `CREATE VIEW pharmacy_purchase_monthly_summary AS
     SELECT
+      branch_id,
       invoice_month,
       COUNT(DISTINCT invoice_no) as invoice_count,
       COALESCE(SUM(purchase_qty), 0) as total_qty,
@@ -290,7 +311,7 @@ export function initializeSchema(db: DbHelper) {
       COALESCE(SUM(sales_value), 0) as expected_sales_value,
       COALESCE(SUM(profit), 0) as expected_profit
     FROM pharmacy_purchase_actuals
-    GROUP BY invoice_month`,
+    GROUP BY branch_id, invoice_month`,
   ];
 
   for (const v of views) {

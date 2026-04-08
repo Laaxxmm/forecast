@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { branchFilter, getBranchIdForInsert } from '../utils/branch.js';
 
 const router = Router();
 
@@ -6,17 +7,20 @@ const router = Router();
 router.get('/scenarios', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id } = req.query;
+  const bf = branchFilter(req);
   if (!fy_id) return res.status(400).json({ error: 'fy_id required' });
-  res.json(db.all('SELECT * FROM scenarios WHERE fy_id = ? ORDER BY is_default DESC, name', fy_id));
+  res.json(db.all(`SELECT * FROM scenarios WHERE fy_id = ?${bf.where} ORDER BY is_default DESC, name`, fy_id, ...bf.params));
 });
 
 router.post('/scenarios', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id, name } = req.body;
+  const bf = branchFilter(req);
+  const branchId = getBranchIdForInsert(req);
   if (!fy_id || !name) return res.status(400).json({ error: 'fy_id and name required' });
-  const existing = db.all('SELECT id FROM scenarios WHERE fy_id = ?', fy_id);
+  const existing = db.all(`SELECT id FROM scenarios WHERE fy_id = ?${bf.where}`, fy_id, ...bf.params);
   const isDefault = existing.length === 0 ? 1 : 0;
-  db.run('INSERT INTO scenarios (fy_id, name, is_default) VALUES (?, ?, ?)', fy_id, name, isDefault);
+  db.run('INSERT INTO scenarios (fy_id, name, is_default, branch_id) VALUES (?, ?, ?, ?)', fy_id, name, isDefault, branchId);
   const created = db.get('SELECT * FROM scenarios WHERE fy_id = ? AND name = ? ORDER BY id DESC LIMIT 1', fy_id, name);
   res.json(created);
 });
@@ -24,14 +28,16 @@ router.post('/scenarios', async (req, res) => {
 router.post('/scenarios/ensure', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id } = req.body;
+  const bf = branchFilter(req);
+  const branchId = getBranchIdForInsert(req);
   if (!fy_id) return res.status(400).json({ error: 'fy_id required' });
-  let scenario = db.get('SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1', fy_id);
+  let scenario = db.get(`SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}`, fy_id, ...bf.params);
   if (!scenario) {
-    scenario = db.get('SELECT * FROM scenarios WHERE fy_id = ?', fy_id);
+    scenario = db.get(`SELECT * FROM scenarios WHERE fy_id = ?${bf.where}`, fy_id, ...bf.params);
   }
   if (!scenario) {
-    db.run('INSERT INTO scenarios (fy_id, name, is_default) VALUES (?, ?, 1)', fy_id, 'Original Scenario');
-    scenario = db.get('SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1', fy_id);
+    db.run('INSERT INTO scenarios (fy_id, name, is_default, branch_id) VALUES (?, ?, 1, ?)', fy_id, 'Original Scenario', branchId);
+    scenario = db.get(`SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}`, fy_id, ...bf.params);
   }
   res.json(scenario);
 });
