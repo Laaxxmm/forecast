@@ -249,19 +249,24 @@ router.put('/clients/:slug/users/:id', async (req: Request, res: Response) => {
 
 router.get('/clients/:slug/integrations', async (req: Request, res: Response) => {
   const db = await getPlatformHelper();
-  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  const client = db.get('SELECT id, industry FROM clients WHERE slug = ?', req.params.slug);
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
   const integrations = db.all('SELECT * FROM client_integrations WHERE client_id = ?', client.id);
 
-  // Available integrations catalog
-  const catalog = [
-    { key: 'healthplix', name: 'HealthPlix Sync', description: 'Auto-sync clinic data from HealthPlix EMR' },
-    { key: 'oneglance', name: 'OneGlance Sync', description: 'Auto-sync pharmacy data from OneGlance' },
-    { key: 'manual_upload', name: 'Manual Upload', description: 'Upload Excel/CSV files manually' },
-    { key: 'tally', name: 'Tally Sync', description: 'Sync from Tally accounting software (coming soon)' },
-    { key: 'zoho_books', name: 'Zoho Books', description: 'Sync from Zoho Books (coming soon)' },
+  // Available integrations catalog — filtered by client industry
+  // industries: null = common (all industries)
+  const fullCatalog = [
+    { key: 'manual_upload', name: 'Manual Upload', description: 'Upload Excel/CSV files manually', industries: null },
+    { key: 'tally', name: 'Tally Sync', description: 'Sync from Tally accounting software (coming soon)', industries: null },
+    { key: 'zoho_books', name: 'Zoho Books', description: 'Sync from Zoho Books (coming soon)', industries: null },
+    { key: 'healthplix', name: 'HealthPlix Sync', description: 'Auto-sync clinic data from HealthPlix EMR', industries: ['healthcare'] },
+    { key: 'oneglance', name: 'OneGlance Sync', description: 'Auto-sync pharmacy data from OneGlance', industries: ['healthcare'] },
+    { key: 'turia', name: 'Turia', description: 'Sync data from Turia platform', industries: ['consultancy'] },
   ];
+
+  const clientIndustry = client.industry || 'custom';
+  const catalog = fullCatalog.filter(c => !c.industries || c.industries.includes(clientIndustry));
 
   res.json({
     enabled: integrations,
