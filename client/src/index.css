@@ -231,3 +231,75 @@ body {
 .dark .card-hover:hover {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
+
+/* ═══════════════════════════════════════════════════════════
+   TallyVision component classes — VCFO portal styling
+   ═══════════════════════════════════════════════════════════ */
+@layer components {
+  .card-tv {
+    @apply rounded-xl;
+    background-color: rgb(var(--c-dark-700));
+    border: 1px solid rgb(var(--c-dark-400) / 0.5);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .tv-input {
+    @apply text-xs rounded-lg px-3 py-1.5 outline-none;
+    color: rgb(var(--c-text-primary));
+    background-color: rgb(var(--c-dark-800));
+    border: 1px solid rgb(var(--c-dark-400) / 0.5);
+  }
+  .tv-input:focus {
+    border-color: #4f46e5;
+    box-shadow: 0 0 0 2px rgba(79,70,229,0.15);
+  }
+  .tv-tab {
+    @apply px-4 py-2 text-xs font-semibold rounded-lg cursor-pointer transition-all;
+    border: 1px solid rgb(var(--c-dark-400) / 0.5);
+    color: rgb(var(--c-text-secondary));
+    background-color: transparent;
+  }
+  .tv-tab:hover {
+    background-color: rgb(var(--c-dark-600));
+  }
+  .tv-tab.active {
+    background-color: #4f46e5;
+    color: #ffffff;
+    border-color: #4f46e5;
+  }
+  .tv-status-badge {
+    @apply inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-semibold;
+  }
+  .tv-status-badge.pending { background: #fef3c7; color: #92400e; }
+  .tv-status-badge.in_progress { background: #dbeafe; color: #1e40af; }
+  .tv-status-badge.completed { background: #d1fae5; color: #065f46; }
+  .tv-status-badge.overdue { background: #fee2e2; color: #991b1b; }
+  .tv-status-badge.not_applicable { background: rgb(var(--c-dark-600)); color: rgb(var(--c-text-faint)); }
+  .tv-severity.high { background: #fee2e2; color: #dc2626; }
+  .tv-severity.medium { background: #fef3c7; color: #d97706; }
+  .tv-severity.low { background: #dbeafe; color: #2563eb; }
+  .tv-table {
+    @apply w-full text-xs;
+  }
+  .tv-table thead { background-color: rgb(var(--c-dark-600)); }
+  .tv-table th {
+    @apply text-left px-4 py-3 font-semibold uppercase tracking-wider;
+    color: rgb(var(--c-text-muted));
+    font-size: 10px;
+  }
+  .tv-table td {
+    @apply px-4 py-3;
+    color: rgb(var(--c-text-primary));
+    border-bottom: 1px solid rgb(var(--c-dark-400) / 0.3);
+  }
+  .tv-table tbody tr:hover {
+    background-color: rgb(var(--c-dark-600) / 0.5);
+  }
+  .tv-progress-bar {
+    @apply h-2 rounded-full overflow-hidden;
+    background-color: rgb(var(--c-dark-600));
+  }
+  .tv-progress-fill {
+    @apply h-full rounded-full transition-all duration-500;
+    background: linear-gradient(90deg, #059669, #10b981);
+  }
+}
