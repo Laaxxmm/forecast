@@ -2,8 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, TrendingUp, Upload, Settings, LogOut, BarChart3, Building2, ArrowLeftRight,
-  ChevronLeft, MapPin, ChevronDown, Sun, Moon, ShieldCheck, Table2, RefreshCw, ArrowRight,
-  FileText, Scale, Receipt, ClipboardCheck, Shield
+  ChevronLeft, MapPin, ChevronDown, Sun, Moon, ArrowRight,
 } from 'lucide-react';
 import api from '../../api/client';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -15,17 +14,8 @@ const forecastLinks = [
   { to: '/analysis', icon: BarChart3, label: 'Analysis', clientAdminOnly: false },
 ];
 
-// VCFO Portal navigation
-const vcfoLinks = [
-  { to: '/vcfo', icon: LayoutDashboard, label: 'Dashboard', clientAdminOnly: false },
-  { to: '/vcfo/profit-loss', icon: FileText, label: 'Profit & Loss', clientAdminOnly: false },
-  { to: '/vcfo/balance-sheet', icon: Scale, label: 'Balance Sheet', clientAdminOnly: false },
-  { to: '/vcfo/bills', icon: Receipt, label: 'Bills Outstanding', clientAdminOnly: false },
-  { to: '/vcfo/trial-balance', icon: Table2, label: 'Trial Balance', clientAdminOnly: false },
-  { to: '/vcfo/tracker', icon: ClipboardCheck, label: 'Tracker', clientAdminOnly: false },
-  { to: '/vcfo/audit', icon: Shield, label: 'Audit', clientAdminOnly: false },
-  { to: '/vcfo/sync', icon: RefreshCw, label: 'Tally Sync', clientAdminOnly: true },
-];
+// VCFO Portal is served externally via TallyVision (port 3456)
+// No internal sidebar links needed — TallyVision has its own navigation
 
 // Utility links — bottom section above logout
 const utilityLinks = [
@@ -92,7 +82,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
   };
 
   const activeModule = localStorage.getItem('active_module') || 'forecast_ops';
-  const visibleMain = isSuperAdmin ? [] : (activeModule === 'vcfo_portal' ? vcfoLinks : forecastLinks);
+  const visibleMain = isSuperAdmin ? [] : forecastLinks;
   const visibleUtility = isSuperAdmin ? [] : utilityLinks.filter(l => {
     if (!isClientAdmin && l.clientAdminOnly) return false;
     if ((l as any).module && (l as any).module !== activeModule) return false;

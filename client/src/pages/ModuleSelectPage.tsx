@@ -1,9 +1,19 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
-import { BarChart3, TrendingUp, ShieldCheck, ClipboardCheck, Scale, ArrowLeft, Lock } from 'lucide-react';
+import { BarChart3, TrendingUp, ShieldCheck, ClipboardCheck, Scale, ArrowLeft, Lock, ExternalLink } from 'lucide-react';
 
-const MODULE_CATALOG = [
+interface ModuleInfo {
+  key: string;
+  name: string;
+  description: string;
+  icon: typeof TrendingUp;
+  color: string;
+  path: string | null;
+  external?: boolean;
+}
+
+const MODULE_CATALOG: ModuleInfo[] = [
   {
     key: 'forecast_ops',
     name: 'Forecast & Operations',
@@ -18,7 +28,8 @@ const MODULE_CATALOG = [
     description: 'Comprehensive Virtual CFO portal with advisory dashboards, KPIs, and strategic insights.',
     icon: ShieldCheck,
     color: 'blue',
-    path: '/vcfo',
+    path: 'http://localhost:3456',
+    external: true,
   },
   {
     key: 'audit_view',
@@ -26,7 +37,7 @@ const MODULE_CATALOG = [
     description: 'Audit support tools including compliance tracking, document management, and audit trails.',
     icon: ClipboardCheck,
     color: 'purple',
-    path: null, // Coming soon
+    path: null,
   },
   {
     key: 'litigation_tool',
@@ -34,7 +45,7 @@ const MODULE_CATALOG = [
     description: 'Track all legal notices, manage case timelines, and prepare responses with your team.',
     icon: Scale,
     color: 'amber',
-    path: null, // Coming soon
+    path: null,
   },
 ];
 
@@ -62,11 +73,15 @@ export default function ModuleSelectPage() {
     });
   }, []);
 
-  const handleSelect = (mod: typeof MODULE_CATALOG[0]) => {
+  const handleSelect = (mod: ModuleInfo) => {
     if (!enabledModules.includes(mod.key)) return;
     if (!mod.path) return;
     localStorage.setItem('active_module', mod.key);
-    navigate(mod.path);
+    if (mod.external) {
+      window.open(mod.path, '_blank');
+    } else {
+      navigate(mod.path);
+    }
   };
 
   const colorMap: Record<string, { bg: string; border: string; icon: string; glow: string }> = {
@@ -133,6 +148,10 @@ export default function ModuleSelectPage() {
                 ) : comingSoon ? (
                   <span className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-400">
                     Coming soon
+                  </span>
+                ) : mod.external ? (
+                  <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${colors.icon}`}>
+                    <ExternalLink size={11} /> Open TallyVision
                   </span>
                 ) : (
                   <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${colors.icon}`}>
