@@ -73,6 +73,12 @@ router.post('/login', loginLimiter, async (req, res) => {
       clientName: clientUser.client_name,
     });
 
+    // Get enabled modules for this client
+    const enabledModules = platformDb.all(
+      'SELECT module_key FROM client_modules WHERE client_id = ? AND is_enabled = 1',
+      clientUser.cid
+    ).map((m: any) => m.module_key);
+
     // Get branch info for multi-branch clients
     let branches: any[] = [];
     let defaultBranchId: number | null = null;
@@ -110,6 +116,7 @@ router.post('/login', loginLimiter, async (req, res) => {
       isMultiBranch,
       branches,
       defaultBranchId,
+      enabledModules,
       token,
     });
   }

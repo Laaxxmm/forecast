@@ -39,8 +39,9 @@ router.get('/clients/:slug', async (req: Request, res: Response) => {
   const integrations = db.all('SELECT * FROM client_integrations WHERE client_id = ?', client.id);
   const streams = db.all('SELECT * FROM business_streams WHERE client_id = ? ORDER BY sort_order, id', client.id);
   const branches = db.all('SELECT * FROM branches WHERE client_id = ? ORDER BY sort_order, name', client.id);
+  const modules = db.all('SELECT module_key, is_enabled FROM client_modules WHERE client_id = ?', client.id);
 
-  res.json({ ...client, users, integrations, streams, branches });
+  res.json({ ...client, users, integrations, streams, branches, modules });
 });
 
 router.post('/clients', async (req: Request, res: Response) => {
@@ -97,6 +98,11 @@ router.post('/clients', async (req: Request, res: Response) => {
     [clientId, 'manual_upload', 1]
   );
 
+  // Create default modules (forecast_ops enabled by default)
+  db.run('INSERT INTO client_modules (client_id, module_key, is_enabled) VALUES (?, ?, ?)', [clientId, 'forecast_ops', 1]);
+  db.run('INSERT INTO client_modules (client_id, module_key, is_enabled) VALUES (?, ?, ?)', [clientId, 'vcfo_portal', 0]);
+  db.run('INSERT INTO client_modules (client_id, module_key, is_enabled) VALUES (?, ?, ?)', [clientId, 'audit_view', 0]);
+
   // Initialize client database
   const clientDb = await getClientHelper(slug);
   initializeSchema(clientDb);
@@ -130,6 +136,50 @@ router.put('/clients/:slug', async (req: Request, res: Response) => {
   if (industry !== undefined) {
     db.run('UPDATE clients SET industry = ?, updated_at = datetime(\'now\') WHERE id = ?', [industry, client.id]);
   }
+
+  res.json({ ok: true });
+});
+
+// ─── Client Modules ─────────────────────────────────────────────────────────
+
+router.get('/clients/:slug/modules', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  // Ensure all 3 module rows exist (for existing clients created before this feature)
+  const defaultModules = [
+    { key: 'forecast_ops', enabled: 1 },
+    { key: 'vcfo_portal', enabled: 0 },
+    { key: 'audit_view', enabled: 0 },
+  ];
+  for (const m of defaultModules) {
+    db.run(
+      'INSERT OR IGNORE INTO client_modules (client_id, module_key, is_enabled) VALUES (?, ?, ?)',
+      [client.id, m.key, m.enabled]
+    );
+  }
+
+  const modules = db.all('SELECT module_key, is_enabled FROM client_modules WHERE client_id = ?', client.id);
+  res.json(modules);
+});
+
+router.put('/clients/:slug/modules/:moduleKey', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  const { is_enabled } = req.body;
+  const moduleKey = req.params.moduleKey as string;
+  const validModules = ['forecast_ops', 'vcfo_portal', 'audit_view'];
+  if (!validModules.includes(moduleKey)) {
+    return res.status(400).json({ error: 'Invalid module key' });
+  }
+
+  db.run(
+    'INSERT INTO client_modules (client_id, module_key, is_enabled) VALUES (?, ?, ?) ON CONFLICT(client_id, module_key) DO UPDATE SET is_enabled = ?',
+    [client.id, moduleKey, is_enabled ? 1 : 0, is_enabled ? 1 : 0]
+  );
 
   res.json({ ok: true });
 });

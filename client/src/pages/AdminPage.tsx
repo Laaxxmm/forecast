@@ -4,7 +4,7 @@ import api from '../api/client';
 import {
   Building2, Users, UserPlus, Plus, Edit3, Power, ChevronRight, ArrowLeft,
   Eye, EyeOff, CheckCircle, XCircle, Plug, Shield, Trash2, Copy, KeyRound, BarChart3,
-  MapPin, GitBranch
+  MapPin, GitBranch, Layers
 } from 'lucide-react';
 
 interface Client {
@@ -298,6 +298,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
   const [newBranchCity, setNewBranchCity] = useState('');
   const [newBranchManager, setNewBranchManager] = useState('');
   const [enablingMultiBranch, setEnablingMultiBranch] = useState(false);
+  const [modules, setModules] = useState<{module_key: string; is_enabled: number}[]>([]);
 
   const loadDetail = useCallback(() => {
     Promise.all([
@@ -305,12 +306,14 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
       api.get(`/admin/clients/${slug}/integrations`),
       api.get(`/admin/clients/${slug}/streams`),
       api.get(`/admin/clients/${slug}/branches`),
-    ]).then(([clientRes, intRes, streamsRes, branchesRes]) => {
+      api.get(`/admin/clients/${slug}/modules`),
+    ]).then(([clientRes, intRes, streamsRes, branchesRes, modulesRes]) => {
       setClient(clientRes.data);
       setUsers(clientRes.data.users || []);
       setIntegrations(intRes.data.catalog || []);
       setStreams(streamsRes.data);
       setClientBranches(branchesRes.data);
+      setModules(modulesRes.data);
       setLoading(false);
     });
   }, [slug]);
@@ -493,6 +496,45 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
                 </button>
               </div>
             ))}
+          </div>
+        </div>
+
+        {/* Modules */}
+        <div className="card">
+          <h3 className="font-semibold text-theme-heading flex items-center gap-2 mb-4">
+            <Layers size={16} /> Modules
+          </h3>
+          <p className="text-xs text-theme-faint mb-3">Enable or disable portal modules for this client</p>
+          <div className="space-y-2">
+            {[
+              { key: 'forecast_ops', name: 'Forecast & Operations', desc: 'Build forecasts, link actuals, integrated reports' },
+              { key: 'vcfo_portal', name: 'VCFO Portal', desc: 'Comprehensive Virtual CFO portal' },
+              { key: 'audit_view', name: 'Audit View', desc: 'Audit support and compliance tools' },
+            ].map(mod => {
+              const m = modules.find(x => x.module_key === mod.key);
+              const enabled = !!m?.is_enabled;
+              return (
+                <div key={mod.key} className="flex items-center justify-between px-3 py-3 rounded-xl bg-dark-600 border border-dark-400/30">
+                  <div>
+                    <span className="text-sm font-medium text-theme-primary">{mod.name}</span>
+                    <p className="text-xs text-theme-faint mt-0.5">{mod.desc}</p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      await api.put(`/admin/clients/${slug}/modules/${mod.key}`, { is_enabled: !enabled });
+                      loadDetail();
+                    }}
+                    className={`relative w-10 h-5 rounded-full transition-all ${
+                      enabled ? 'bg-accent-500' : 'bg-dark-400'
+                    }`}
+                  >
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${
+                      enabled ? 'left-[22px]' : 'left-0.5'
+                    }`} />
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
 

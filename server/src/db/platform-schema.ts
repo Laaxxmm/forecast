@@ -83,6 +83,15 @@ export function initializePlatformSchema(db: DbHelper) {
       can_view_consolidated INTEGER DEFAULT 0,
       UNIQUE(user_id, branch_id)
     );
+
+    -- Modules enabled per client (super admin controls)
+    CREATE TABLE IF NOT EXISTS client_modules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id INTEGER NOT NULL REFERENCES clients(id),
+      module_key TEXT NOT NULL,
+      is_enabled INTEGER DEFAULT 0,
+      UNIQUE(client_id, module_key)
+    );
   `);
 
   // Safe migrations for existing DBs

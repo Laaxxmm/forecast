@@ -19,6 +19,8 @@ export default function LoginPage() {
       const res = await api.post('/auth/login', { username, password });
       if (res.data.userType === 'super_admin') {
         navigate('/select-client');
+      } else if (res.data.role === 'admin') {
+        navigate('/modules');
       } else {
         navigate('/actuals');
       }

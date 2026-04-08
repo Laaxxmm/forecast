@@ -25,10 +25,18 @@ export default function SelectClientPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const selectClient = (client: Client) => {
+  const selectClient = async (client: Client) => {
     localStorage.setItem('client_slug', client.slug);
     localStorage.setItem('client_name', client.name);
-    navigate('/actuals');
+    // Fetch enabled modules for this client
+    try {
+      const res = await api.get(`/admin/clients/${client.slug}/modules`);
+      const enabled = res.data.filter((m: any) => m.is_enabled).map((m: any) => m.module_key);
+      localStorage.setItem('enabled_modules', JSON.stringify(enabled));
+    } catch {
+      localStorage.setItem('enabled_modules', JSON.stringify(['forecast_ops']));
+    }
+    navigate('/modules');
   };
 
   const userType = localStorage.getItem('user_type');

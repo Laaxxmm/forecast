@@ -48,6 +48,10 @@ api.interceptors.response.use(
         localStorage.removeItem('branch_id');
         localStorage.removeItem('branch_name');
       }
+      // Store enabled modules
+      if (res.data.enabledModules) {
+        localStorage.setItem('enabled_modules', JSON.stringify(res.data.enabledModules));
+      }
     }
     return res;
   },
@@ -61,6 +65,8 @@ api.interceptors.response.use(
       localStorage.removeItem('is_multi_branch');
       localStorage.removeItem('branch_id');
       localStorage.removeItem('branch_name');
+      localStorage.removeItem('enabled_modules');
+      localStorage.removeItem('active_module');
       window.location.href = '/login';
     }
     return Promise.reject(err);

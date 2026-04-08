@@ -95,6 +95,8 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
     localStorage.removeItem('is_multi_branch');
     localStorage.removeItem('branch_id');
     localStorage.removeItem('branch_name');
+    localStorage.removeItem('enabled_modules');
+    localStorage.removeItem('active_module');
     window.location.href = '/login';
   };
 
@@ -104,6 +106,8 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
     localStorage.removeItem('is_multi_branch');
     localStorage.removeItem('branch_id');
     localStorage.removeItem('branch_name');
+    localStorage.removeItem('enabled_modules');
+    localStorage.removeItem('active_module');
     navigate('/select-client');
   };
 
