@@ -24,6 +24,12 @@ import forecastModuleRoutes from './routes/forecast-module.js';
 import dashboardActualsRoutes from './routes/dashboard-actuals.js';
 import syncRoutes from './routes/sync.js';
 import dbViewerRoutes from './routes/db-viewer.js';
+import vcfoTallySyncRoutes from './routes/vcfo/tally-sync.js';
+import vcfoDashboardRoutes from './routes/vcfo/dashboard.js';
+import vcfoCompanyRoutes from './routes/vcfo/companies.js';
+import vcfoReportsRoutes from './routes/vcfo/reports.js';
+import vcfoTrackerRoutes from './routes/vcfo/tracker.js';
+import vcfoAuditRoutes from './routes/vcfo/audit.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -79,6 +85,15 @@ app.use('/api/forecast-module', ...forecastOps, forecastModuleRoutes);
 app.use('/api/dashboard-actuals', ...forecastOps, dashboardActualsRoutes);
 app.use('/api/sync', ...forecastOps, requireAdmin, syncRoutes);
 app.use('/api/db', requireAuth, resolveTenant, resolveBranch, requireAdmin, dbViewerRoutes);
+
+// ─── VCFO Portal routes ───────────────────────────────────────────────────────
+const vcfoModule = [requireAuth, resolveTenant, resolveBranch, requireModule('vcfo_portal')];
+app.use('/api/vcfo/tally', ...vcfoModule, requireAdmin, vcfoTallySyncRoutes);
+app.use('/api/vcfo/dashboard', ...vcfoModule, vcfoDashboardRoutes);
+app.use('/api/vcfo/companies', ...vcfoModule, vcfoCompanyRoutes);
+app.use('/api/vcfo/reports', ...vcfoModule, vcfoReportsRoutes);
+app.use('/api/vcfo/tracker', ...vcfoModule, vcfoTrackerRoutes);
+app.use('/api/vcfo/audit', ...vcfoModule, vcfoAuditRoutes);
 
 // ─── Client modules & integrations (for module selection page) ──────────────
 app.get('/api/client-modules', requireAuth, resolveTenant, async (req, res) => {

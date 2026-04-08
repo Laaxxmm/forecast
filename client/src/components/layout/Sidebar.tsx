@@ -2,21 +2,34 @@ import { useState, useEffect, useRef } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, TrendingUp, Upload, Settings, LogOut, BarChart3, Building2, ArrowLeftRight,
-  ChevronLeft, MapPin, ChevronDown, Sun, Moon
+  ChevronLeft, MapPin, ChevronDown, Sun, Moon, ShieldCheck, Table2, RefreshCw, ArrowRight,
+  FileText, Scale, Receipt, ClipboardCheck, Shield
 } from 'lucide-react';
 import api from '../../api/client';
 import { useTheme } from '../../contexts/ThemeContext';
 
-// Main navigation — top section
-const mainLinks = [
+// Forecast & Operations navigation
+const forecastLinks = [
   { to: '/actuals', icon: LayoutDashboard, label: 'Actuals', clientAdminOnly: false },
   { to: '/forecast', icon: TrendingUp, label: 'Forecast', clientAdminOnly: false },
   { to: '/analysis', icon: BarChart3, label: 'Analysis', clientAdminOnly: false },
 ];
 
+// VCFO Portal navigation
+const vcfoLinks = [
+  { to: '/vcfo', icon: LayoutDashboard, label: 'Dashboard', clientAdminOnly: false },
+  { to: '/vcfo/profit-loss', icon: FileText, label: 'Profit & Loss', clientAdminOnly: false },
+  { to: '/vcfo/balance-sheet', icon: Scale, label: 'Balance Sheet', clientAdminOnly: false },
+  { to: '/vcfo/bills', icon: Receipt, label: 'Bills Outstanding', clientAdminOnly: false },
+  { to: '/vcfo/trial-balance', icon: Table2, label: 'Trial Balance', clientAdminOnly: false },
+  { to: '/vcfo/tracker', icon: ClipboardCheck, label: 'Tracker', clientAdminOnly: false },
+  { to: '/vcfo/audit', icon: Shield, label: 'Audit', clientAdminOnly: false },
+  { to: '/vcfo/sync', icon: RefreshCw, label: 'Tally Sync', clientAdminOnly: true },
+];
+
 // Utility links — bottom section above logout
 const utilityLinks = [
-  { to: '/import', icon: Upload, label: 'Import Data', clientAdminOnly: true },
+  { to: '/import', icon: Upload, label: 'Import Data', clientAdminOnly: true, module: 'forecast_ops' },
   { to: '/settings', icon: Settings, label: 'Settings', clientAdminOnly: true },
 ];
 
@@ -78,8 +91,13 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
     window.location.reload();
   };
 
-  const visibleMain = isSuperAdmin ? [] : mainLinks;
-  const visibleUtility = isSuperAdmin ? [] : utilityLinks.filter(l => isClientAdmin || !l.clientAdminOnly);
+  const activeModule = localStorage.getItem('active_module') || 'forecast_ops';
+  const visibleMain = isSuperAdmin ? [] : (activeModule === 'vcfo_portal' ? vcfoLinks : forecastLinks);
+  const visibleUtility = isSuperAdmin ? [] : utilityLinks.filter(l => {
+    if (!isClientAdmin && l.clientAdminOnly) return false;
+    if ((l as any).module && (l as any).module !== activeModule) return false;
+    return true;
+  });
 
   const selectedBranchName = selectedBranchId === 'all'
     ? 'All Branches'
@@ -240,6 +258,19 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
           <div className="w-9 h-9 rounded-lg bg-dark-600 flex items-center justify-center" title={selectedBranchName}>
             <MapPin size={13} className="text-accent-400" />
           </div>
+        </div>
+      )}
+
+      {/* Switch Module link */}
+      {!isSuperAdmin && expanded && (
+        <div className="px-3 py-2 border-b border-dark-400/30">
+          <button
+            onClick={() => navigate('/modules')}
+            className="w-full flex items-center gap-2 text-xs font-medium text-theme-muted hover:text-accent-400 transition-colors px-2 py-1.5"
+          >
+            <ArrowRight size={12} />
+            <span>Switch Module</span>
+          </button>
         </div>
       )}
 

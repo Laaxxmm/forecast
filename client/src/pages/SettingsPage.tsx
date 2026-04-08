@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../api/client';
-import { Eye, EyeOff, CheckCircle, Stethoscope, Pill, Trash2, Briefcase, Phone } from 'lucide-react';
+import { Eye, EyeOff, CheckCircle, Stethoscope, Pill, Trash2, Briefcase, Phone, Server } from 'lucide-react';
 
 export default function SettingsPage() {
   const [fys, setFYs] = useState<any[]>([]);
@@ -21,6 +21,9 @@ export default function SettingsPage() {
   const [turiaHasCreds, setTuriaHasCreds] = useState(false);
   const [turiaSaving, setTuriaSaving] = useState(false);
   const [turiaSaved, setTuriaSaved] = useState(false);
+  const [tallyCreds, setTallyCreds] = useState({ host: 'localhost', port: '9000' });
+  const [tallySaving, setTallySaving] = useState(false);
+  const [tallySaved, setTallySaved] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const enabledIntegrations: string[] = (() => {
@@ -29,6 +32,10 @@ export default function SettingsPage() {
   const showHp = enabledIntegrations.includes('healthplix');
   const showOg = enabledIntegrations.includes('oneglance');
   const showTuria = enabledIntegrations.includes('turia');
+  const enabledModules: string[] = (() => {
+    try { return JSON.parse(localStorage.getItem('enabled_modules') || '[]'); } catch { return []; }
+  })();
+  const showTally = enabledModules.includes('vcfo_portal');
 
   const load = () => {
     Promise.all([api.get('/settings/fy'), api.get('/settings/doctors')]).then(([fyRes, docRes]) => {
@@ -53,6 +60,11 @@ export default function SettingsPage() {
       api.get('/sync/credentials/turia').then(res => {
         setTuriaCreds(c => ({ ...c, phoneNumber: res.data.phoneNumber || '', financialYear: res.data.financialYear || '2025-26' }));
         setTuriaHasCreds(res.data.hasCredentials);
+      }).catch(() => {});
+    }
+    if (showTally) {
+      api.get('/vcfo/tally/credentials').then(res => {
+        setTallyCreds({ host: res.data.host || 'localhost', port: String(res.data.port || '9000') });
       }).catch(() => {});
     }
   };
@@ -144,6 +156,16 @@ export default function SettingsPage() {
     if (!confirm('Remove saved Turia credentials?')) return;
     await api.delete('/sync/credentials/turia');
     setTuriaCreds({ phoneNumber: '', financialYear: '2025-26' }); setTuriaHasCreds(false);
+  };
+
+  const saveTallyCredentials = async () => {
+    setTallySaving(true); setTallySaved(false);
+    try {
+      await api.put('/vcfo/tally/credentials', { host: tallyCreds.host, port: parseInt(tallyCreds.port) || 9000 });
+      setTallySaved(true);
+      setTimeout(() => setTallySaved(false), 3000);
+    } catch {}
+    setTallySaving(false);
   };
 
   if (loading) return (
@@ -352,6 +374,44 @@ export default function SettingsPage() {
               </button>
             )}
           </div>
+        </div>}
+
+        {/* Tally Connection */}
+        {showTally && <div className="card">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
+              <Server size={18} className="text-blue-400" />
+            </div>
+            <div className="flex-1">
+              <h3 className="font-semibold text-theme-heading">Tally Connection</h3>
+              <p className="text-sm text-theme-faint">Configure Tally host and port for VCFO data sync</p>
+            </div>
+          </div>
+          <div className="space-y-3 mb-4">
+            <div>
+              <label className="block text-xs text-theme-faint mb-1">Tally Host</label>
+              <input
+                type="text"
+                value={tallyCreds.host}
+                onChange={e => setTallyCreds(c => ({ ...c, host: e.target.value }))}
+                placeholder="localhost"
+                className="input-primary w-full"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-theme-faint mb-1">Tally Port</label>
+              <input
+                type="text"
+                value={tallyCreds.port}
+                onChange={e => setTallyCreds(c => ({ ...c, port: e.target.value }))}
+                placeholder="9000"
+                className="input-primary w-full"
+              />
+            </div>
+          </div>
+          <button onClick={saveTallyCredentials} disabled={tallySaving} className="btn-primary text-sm">
+            {tallySaving ? 'Saving...' : tallySaved ? 'Saved!' : 'Save'}
+          </button>
         </div>}
       </div>
 

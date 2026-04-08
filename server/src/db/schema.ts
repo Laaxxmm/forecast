@@ -238,6 +238,281 @@ export function initializeSchema(db: DbHelper) {
     )
   `);
 
+  // ── VCFO Portal tables ──────────────────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vcfo_companies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      guid TEXT,
+      fy_from TEXT,
+      fy_to TEXT,
+      tally_version TEXT,
+      last_sync_at TEXT,
+      sync_modules TEXT DEFAULT '{}',
+      state TEXT DEFAULT '',
+      city TEXT DEFAULT '',
+      location TEXT DEFAULT '',
+      entity_type TEXT DEFAULT '',
+      branch_id INTEGER,
+      is_active INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(name, branch_id)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vcfo_account_groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL,
+      group_name TEXT NOT NULL,
+      parent_group TEXT,
+      bs_pl TEXT,
+      dr_cr TEXT,
+      affects_gross_profit TEXT,
+      branch_id INTEGER,
+      UNIQUE(company_id, group_name)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vcfo_ledgers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      group_name TEXT,
+      parent_group TEXT,
+      branch_id INTEGER,
+      UNIQUE(company_id, name)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vcfo_trial_balance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL,
+      period_from TEXT NOT NULL,
+      period_to TEXT NOT NULL,
+      ledger_name TEXT NOT NULL,
+      group_name TEXT,
+      opening_balance REAL DEFAULT 0,
+      net_debit REAL DEFAULT 0,
+      net_credit REAL DEFAULT 0,
+      closing_balance REAL DEFAULT 0,
+      branch_id INTEGER,
+      synced_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(company_id, period_from, period_to, ledger_name)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vcfo_profit_loss (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL,
+      period_from TEXT NOT NULL,
+      period_to TEXT NOT NULL,
+      ledger_name TEXT NOT NULL,
+      group_name TEXT,
+      amount REAL DEFAULT 0,
+      branch_id INTEGER,
+      synced_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(company_id, period_from, period_to, ledger_name)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vcfo_balance_sheet (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL,
+      as_on_date TEXT NOT NULL,
+      ledger_name TEXT NOT NULL,
+      group_name TEXT,
+      closing_balance REAL DEFAULT 0,
+      branch_id INTEGER,
+      synced_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(company_id, as_on_date, ledger_name)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vcfo_vouchers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      voucher_type TEXT NOT NULL,
+      voucher_number TEXT,
+      ledger_name TEXT,
+      amount REAL NOT NULL,
+      party_name TEXT,
+      narration TEXT,
+      sync_month TEXT,
+      branch_id INTEGER,
+      synced_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vcfo_stock_summary (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL,
+      period_from TEXT NOT NULL,
+      period_to TEXT NOT NULL,
+      item_name TEXT NOT NULL,
+      stock_group TEXT,
+      opening_qty REAL DEFAULT 0, opening_value REAL DEFAULT 0,
+      inward_qty REAL DEFAULT 0, inward_value REAL DEFAULT 0,
+      outward_qty REAL DEFAULT 0, outward_value REAL DEFAULT 0,
+      closing_qty REAL DEFAULT 0, closing_value REAL DEFAULT 0,
+      branch_id INTEGER,
+      synced_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(company_id, period_from, period_to, item_name)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vcfo_bills_outstanding (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL,
+      as_on_date TEXT NOT NULL,
+      nature TEXT,
+      bill_date TEXT,
+      reference_number TEXT,
+      outstanding_amount REAL DEFAULT 0,
+      party_name TEXT,
+      overdue_days INTEGER DEFAULT 0,
+      branch_id INTEGER,
+      synced_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vcfo_sync_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL,
+      report_type TEXT NOT NULL,
+      period_from TEXT,
+      period_to TEXT,
+      row_count INTEGER DEFAULT 0,
+      status TEXT,
+      error_message TEXT,
+      started_at TEXT DEFAULT (datetime('now')),
+      completed_at TEXT,
+      duration_ms INTEGER,
+      branch_id INTEGER
+    )
+  `);
+
+  // VCFO indexes
+  const vcfoIndexes = [
+    'CREATE INDEX IF NOT EXISTS idx_vcfo_tb_company ON vcfo_trial_balance(company_id, period_from, period_to)',
+    'CREATE INDEX IF NOT EXISTS idx_vcfo_pl_company ON vcfo_profit_loss(company_id, period_from, period_to)',
+    'CREATE INDEX IF NOT EXISTS idx_vcfo_bs_company ON vcfo_balance_sheet(company_id, as_on_date)',
+    'CREATE INDEX IF NOT EXISTS idx_vcfo_vch_company ON vcfo_vouchers(company_id, date)',
+    'CREATE INDEX IF NOT EXISTS idx_vcfo_vch_type ON vcfo_vouchers(voucher_type)',
+    'CREATE INDEX IF NOT EXISTS idx_vcfo_vch_ledger ON vcfo_vouchers(ledger_name)',
+    'CREATE INDEX IF NOT EXISTS idx_vcfo_vch_month ON vcfo_vouchers(sync_month)',
+    'CREATE INDEX IF NOT EXISTS idx_vcfo_bills_company ON vcfo_bills_outstanding(company_id, as_on_date, nature)',
+    'CREATE INDEX IF NOT EXISTS idx_vcfo_sync_log ON vcfo_sync_log(company_id, report_type)',
+  ];
+  for (const idx of vcfoIndexes) {
+    try { db.exec(idx); } catch { /* index may already exist */ }
+  }
+
+  // ── VCFO Phase 3: Tracker + Audit tables ────────────────────────────────────
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vcfo_tracker_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tracker_type TEXT NOT NULL CHECK (tracker_type IN ('compliance','accounting','internal_control')),
+      name TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT '',
+      frequency TEXT NOT NULL DEFAULT 'monthly' CHECK (frequency IN ('monthly','quarterly','half_yearly','annual','one_time')),
+      default_due_day INTEGER DEFAULT 0,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      config TEXT NOT NULL DEFAULT '{}',
+      branch_id INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(tracker_type, name, branch_id)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vcfo_tracker_status (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL REFERENCES vcfo_tracker_items(id) ON DELETE CASCADE,
+      company_id INTEGER NOT NULL,
+      period_key TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','in_progress','completed','overdue','not_applicable')),
+      due_date TEXT,
+      completion_date TEXT,
+      assigned_to TEXT DEFAULT '',
+      notes TEXT DEFAULT '',
+      branch_id INTEGER,
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(item_id, company_id, period_key)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vcfo_audit_milestones (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      branch_id INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(name, branch_id)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vcfo_audit_milestone_status (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      milestone_id INTEGER NOT NULL REFERENCES vcfo_audit_milestones(id) ON DELETE CASCADE,
+      company_id INTEGER NOT NULL,
+      fy_year INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','in_progress','completed')),
+      due_date TEXT,
+      completion_date TEXT,
+      assigned_to TEXT DEFAULT '',
+      notes TEXT DEFAULT '',
+      branch_id INTEGER,
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(milestone_id, company_id, fy_year)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vcfo_audit_observations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER,
+      fy_year INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      severity TEXT NOT NULL DEFAULT 'medium' CHECK (severity IN ('high','medium','low')),
+      category TEXT DEFAULT '',
+      recommendation TEXT DEFAULT '',
+      mgmt_response TEXT DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','in_progress','resolved','closed')),
+      assigned_to TEXT DEFAULT '',
+      due_date TEXT,
+      resolution_date TEXT,
+      branch_id INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
+  // Phase 3 indexes
+  const phase3Indexes = [
+    'CREATE INDEX IF NOT EXISTS idx_vcfo_tracker_type ON vcfo_tracker_items(tracker_type, is_active)',
+    'CREATE INDEX IF NOT EXISTS idx_vcfo_tracker_status_item ON vcfo_tracker_status(item_id, company_id, period_key)',
+    'CREATE INDEX IF NOT EXISTS idx_vcfo_audit_ms ON vcfo_audit_milestone_status(milestone_id, company_id, fy_year)',
+    'CREATE INDEX IF NOT EXISTS idx_vcfo_observations ON vcfo_audit_observations(company_id, fy_year, status)',
+  ];
+  for (const idx of phase3Indexes) {
+    try { db.exec(idx); } catch { /* index may already exist */ }
+  }
+
   // Branch-related migrations (add branch_id to data tables)
   const branchMigrations = [
     'ALTER TABLE clinic_actuals ADD COLUMN branch_id INTEGER',

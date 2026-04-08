@@ -18,7 +18,7 @@ const MODULE_CATALOG = [
     description: 'Comprehensive Virtual CFO portal with advisory dashboards, KPIs, and strategic insights.',
     icon: ShieldCheck,
     color: 'blue',
-    path: null, // Coming soon
+    path: '/vcfo',
   },
   {
     key: 'audit_view',
