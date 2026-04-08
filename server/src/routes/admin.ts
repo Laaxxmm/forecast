@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import bcrypt from 'bcryptjs';
+import { validatePassword } from '../middleware/auth.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
 import { getClientHelper, getClientsDir } from '../db/connection.js';
 import { initializeSchema } from '../db/schema.js';
@@ -208,6 +209,9 @@ router.post('/clients/:slug/users', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'username, password, and display_name required' });
   }
 
+  const pwError = validatePassword(password);
+  if (pwError) return res.status(400).json({ error: pwError });
+
   const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
@@ -238,6 +242,8 @@ router.put('/clients/:slug/users/:id', async (req: Request, res: Response) => {
   if (role) db.run('UPDATE client_users SET role = ? WHERE id = ? AND client_id = ?', [role, userId, client.id]);
   if (is_active !== undefined) db.run('UPDATE client_users SET is_active = ? WHERE id = ? AND client_id = ?', [is_active ? 1 : 0, userId, client.id]);
   if (password) {
+    const pwError = validatePassword(password);
+    if (pwError) return res.status(400).json({ error: pwError });
     const hash = await bcrypt.hash(password, 12);
     db.run('UPDATE client_users SET password_hash = ? WHERE id = ? AND client_id = ?', [hash, userId, client.id]);
   }
@@ -555,6 +561,9 @@ router.post('/team', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'username, password, and display_name required' });
   }
 
+  const pwError = validatePassword(password);
+  if (pwError) return res.status(400).json({ error: pwError });
+
   const existing = db.get('SELECT id FROM team_members WHERE username = ?', username);
   if (existing) return res.status(409).json({ error: 'Username already exists' });
 
@@ -576,6 +585,8 @@ router.put('/team/:id', async (req: Request, res: Response) => {
   if (role) db.run('UPDATE team_members SET role = ? WHERE id = ?', [role, id]);
   if (is_active !== undefined) db.run('UPDATE team_members SET is_active = ? WHERE id = ?', [is_active ? 1 : 0, id]);
   if (password) {
+    const pwError = validatePassword(password);
+    if (pwError) return res.status(400).json({ error: pwError });
     const hash = await bcrypt.hash(password, 12);
     db.run('UPDATE team_members SET password_hash = ? WHERE id = ?', [hash, id]);
   }

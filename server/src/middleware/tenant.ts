@@ -28,6 +28,11 @@ export async function resolveTenant(req: Request, res: Response, next: NextFunct
       });
     }
 
+    // Validate slug format to prevent path traversal
+    if (!/^[a-z0-9-]+$/.test(slug)) {
+      return res.status(400).json({ error: 'Invalid client slug format' });
+    }
+
     // Validate client exists and is active
     const platformDb = await getPlatformHelper();
     const client = platformDb.get(

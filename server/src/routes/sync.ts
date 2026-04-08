@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express';
+import { requireAdmin, requireIntegration } from '../middleware/auth.js';
 import { encrypt, decrypt } from '../utils/crypto.js';
 import { branchFilter, getBranchIdForInsert, branchSettingsKey } from '../utils/branch.js';
 import { parseHealthplix } from '../services/parsers/healthplix.js';
@@ -39,7 +40,7 @@ function getOgState(slug: string): SyncState {
 
 // ─── Credential Management ───────────────────────────────────────────────────
 
-router.get('/credentials/healthplix', async (_req: Request, res: Response) => {
+router.get('/credentials/healthplix', requireIntegration('healthplix'), async (_req: Request, res: Response) => {
   const db = _req.tenantDb!;
   const username = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('healthplix_username', _req));
   const clinic = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('healthplix_clinic', _req));
@@ -52,7 +53,7 @@ router.get('/credentials/healthplix', async (_req: Request, res: Response) => {
   });
 });
 
-router.put('/credentials/healthplix', async (req: Request, res: Response) => {
+router.put('/credentials/healthplix', requireAdmin, requireIntegration('healthplix'), async (req: Request, res: Response) => {
   const { username, password, clinicName } = req.body;
   if (!username) return res.status(400).json({ error: 'Username is required' });
 
@@ -76,7 +77,7 @@ router.put('/credentials/healthplix', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-router.delete('/credentials/healthplix', async (_req: Request, res: Response) => {
+router.delete('/credentials/healthplix', requireAdmin, requireIntegration('healthplix'), async (_req: Request, res: Response) => {
   const db = _req.tenantDb!;
   const prefix = branchSettingsKey('healthplix_', _req);
   db.run("DELETE FROM app_settings WHERE key LIKE ?", prefix + '%');
@@ -85,7 +86,7 @@ router.delete('/credentials/healthplix', async (_req: Request, res: Response) =>
 
 // ─── Sync Trigger ─────────────────────────────────────────────────────────────
 
-router.post('/healthplix', async (req: Request, res: Response) => {
+router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async (req: Request, res: Response) => {
   const { fromDate, toDate } = req.body;
 
   if (!fromDate || !toDate) {
@@ -262,7 +263,7 @@ router.post('/healthplix/reset', (_req: Request, res: Response) => {
 
 // ─── Oneglance Credential Management ─────────────────────────────────────────
 
-router.get('/credentials/oneglance', async (_req: Request, res: Response) => {
+router.get('/credentials/oneglance', requireIntegration('oneglance'), async (_req: Request, res: Response) => {
   const db = _req.tenantDb!;
   const username = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('oneglance_username', _req));
   const hasPassword = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('oneglance_password', _req));
@@ -273,7 +274,7 @@ router.get('/credentials/oneglance', async (_req: Request, res: Response) => {
   });
 });
 
-router.put('/credentials/oneglance', async (req: Request, res: Response) => {
+router.put('/credentials/oneglance', requireAdmin, requireIntegration('oneglance'), async (req: Request, res: Response) => {
   const { username, password } = req.body;
   if (!username) return res.status(400).json({ error: 'Username is required' });
 
@@ -293,7 +294,7 @@ router.put('/credentials/oneglance', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-router.delete('/credentials/oneglance', async (_req: Request, res: Response) => {
+router.delete('/credentials/oneglance', requireAdmin, requireIntegration('oneglance'), async (_req: Request, res: Response) => {
   const db = _req.tenantDb!;
   const prefix = branchSettingsKey('oneglance_', _req);
   db.run("DELETE FROM app_settings WHERE key LIKE ?", prefix + '%');
@@ -302,7 +303,7 @@ router.delete('/credentials/oneglance', async (_req: Request, res: Response) => 
 
 // ─── Oneglance Sync ──────────────────────────────────────────────────────────
 
-router.post('/oneglance', async (req: Request, res: Response) => {
+router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (req: Request, res: Response) => {
   const { fromDate, toDate, reportType } = req.body;
 
   if (!fromDate || !toDate) {

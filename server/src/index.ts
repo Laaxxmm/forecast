@@ -9,7 +9,7 @@ import { seedDatabase } from './db/seed.js';
 import { getPlatformHelper } from './db/platform-connection.js';
 import { initializePlatformSchema } from './db/platform-schema.js';
 import { seedPlatformDatabase } from './db/platform-seed.js';
-import { requireAuth, requireSuperAdmin, requireAdmin } from './middleware/auth.js';
+import { requireAuth, requireSuperAdmin, requireAdmin, requireModule } from './middleware/auth.js';
 import { resolveTenant } from './middleware/tenant.js';
 import { resolveBranch } from './middleware/branch.js';
 import authRoutes from './routes/auth.js';
@@ -31,12 +31,9 @@ const isProd = process.env.NODE_ENV === 'production';
 
 const sessionSecret = process.env.SESSION_SECRET || (isProd ? (() => { throw new Error('SESSION_SECRET must be set in production'); })() : 'dev-only-secret-change-me');
 
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://localhost:5174',
-  'https://vision.indefine.in',
-  'https://api-vision.indefine.in',
-].filter(Boolean) as string[];
+const allowedOrigins = isProd
+  ? ['https://vision.indefine.in', 'https://api-vision.indefine.in']
+  : ['http://localhost:5173', 'http://localhost:5174'];
 
 console.log('CORS allowed origins:', allowedOrigins);
 
@@ -51,7 +48,7 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '5mb' }));
 app.use(session({
   secret: sessionSecret,
   resave: false,
@@ -70,17 +67,35 @@ app.use('/api/auth', authRoutes);
 // ─── Admin routes (super admin only, no tenant context) ─────────────────────
 app.use('/api/admin', requireAuth, requireSuperAdmin, adminRoutes);
 
-// ─── Client-scoped routes (require auth + tenant + branch resolution) ──────
+// ─── Client-scoped routes (require auth + tenant + branch + module) ────────
+const forecastOps = [requireAuth, resolveTenant, resolveBranch, requireModule('forecast_ops')];
 app.use('/api/settings', requireAuth, resolveTenant, resolveBranch, requireAdmin, settingsRoutes);
-app.use('/api/import', requireAuth, resolveTenant, resolveBranch, importRoutes);
-app.use('/api/actuals', requireAuth, resolveTenant, resolveBranch, actualsRoutes);
-app.use('/api/budgets', requireAuth, resolveTenant, resolveBranch, budgetRoutes);
-app.use('/api/forecasts', requireAuth, resolveTenant, resolveBranch, forecastRoutes);
-app.use('/api/dashboard', requireAuth, resolveTenant, resolveBranch, dashboardRoutes);
-app.use('/api/forecast-module', requireAuth, resolveTenant, resolveBranch, forecastModuleRoutes);
-app.use('/api/dashboard-actuals', requireAuth, resolveTenant, resolveBranch, dashboardActualsRoutes);
-app.use('/api/sync', requireAuth, resolveTenant, resolveBranch, syncRoutes);
+app.use('/api/import', ...forecastOps, requireAdmin, importRoutes);
+app.use('/api/actuals', ...forecastOps, actualsRoutes);
+app.use('/api/budgets', ...forecastOps, budgetRoutes);
+app.use('/api/forecasts', ...forecastOps, forecastRoutes);
+app.use('/api/dashboard', ...forecastOps, dashboardRoutes);
+app.use('/api/forecast-module', ...forecastOps, forecastModuleRoutes);
+app.use('/api/dashboard-actuals', ...forecastOps, dashboardActualsRoutes);
+app.use('/api/sync', ...forecastOps, requireAdmin, syncRoutes);
 app.use('/api/db', requireAuth, resolveTenant, resolveBranch, requireAdmin, dbViewerRoutes);
+
+// ─── Client modules & integrations (for module selection page) ──────────────
+app.get('/api/client-modules', requireAuth, resolveTenant, async (req, res) => {
+  const platformDb = await getPlatformHelper();
+  const modules = platformDb.all(
+    'SELECT module_key, is_enabled FROM client_modules WHERE client_id = ?',
+    req.clientId
+  );
+  const integrations = platformDb.all(
+    'SELECT integration_key FROM client_integrations WHERE client_id = ? AND is_enabled = 1',
+    req.clientId
+  );
+  res.json({
+    enabledModules: modules.filter((m: any) => m.is_enabled).map((m: any) => m.module_key),
+    enabledIntegrations: integrations.map((i: any) => i.integration_key),
+  });
+});
 
 // ─── Client streams (accessible to all authenticated users for their tenant) ─
 app.get('/api/streams', requireAuth, resolveTenant, async (req, res) => {

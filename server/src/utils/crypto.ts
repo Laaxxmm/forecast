@@ -4,8 +4,11 @@ const ALGORITHM = 'aes-256-gcm';
 const isProd = process.env.NODE_ENV === 'production';
 const SECRET = process.env.SESSION_SECRET || (isProd ? (() => { throw new Error('SESSION_SECRET must be set in production'); })() : 'dev-only-secret-change-me');
 
+// Derive a unique salt from the secret to avoid using a hardcoded static salt
+const SALT = process.env.ENCRYPTION_SALT || crypto.createHash('sha256').update(SECRET + '-encryption-salt').digest('hex').slice(0, 32);
+
 function deriveKey(): Buffer {
-  return crypto.scryptSync(SECRET, 'magna-tracker-salt', 32);
+  return crypto.scryptSync(SECRET, SALT, 32);
 }
 
 export function encrypt(plaintext: string): string {

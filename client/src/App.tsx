@@ -53,6 +53,14 @@ function ClientRoute({ children }: { children: React.ReactNode }) {
   return userType === 'super_admin' ? <Navigate to="/admin" replace /> : <>{children}</>;
 }
 
+// Require a specific module to be enabled for the client
+function ModuleRoute({ moduleKey, children }: { moduleKey: string; children: React.ReactNode }) {
+  const enabledModules: string[] = (() => {
+    try { return JSON.parse(localStorage.getItem('enabled_modules') || '[]'); } catch { return []; }
+  })();
+  return enabledModules.includes(moduleKey) ? <>{children}</> : <Navigate to="/modules" replace />;
+}
+
 // Smart default redirect based on role
 function DefaultRedirect() {
   const userType = localStorage.getItem('user_type');
@@ -74,12 +82,12 @@ export default function App() {
             </ProtectedRoute>
           }
         >
-          <Route path="/actuals" element={<ClientRoute><DashboardPage /></ClientRoute>} />
-          <Route path="/forecast/*" element={<ClientRoute><ForecastModulePage /></ClientRoute>} />
-          <Route path="/analysis/*" element={<ClientRoute><DashboardModulePage /></ClientRoute>} />
-          <Route path="/import" element={<ClientRoute><ClientAdminRoute><ImportPage /></ClientAdminRoute></ClientRoute>} />
-          <Route path="/clinic" element={<ClientRoute><ClinicDetailPage /></ClientRoute>} />
-          <Route path="/pharmacy" element={<ClientRoute><PharmacyDetailPage /></ClientRoute>} />
+          <Route path="/actuals" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><DashboardPage /></ModuleRoute></ClientRoute>} />
+          <Route path="/forecast/*" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><ForecastModulePage /></ModuleRoute></ClientRoute>} />
+          <Route path="/analysis/*" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><DashboardModulePage /></ModuleRoute></ClientRoute>} />
+          <Route path="/import" element={<ClientRoute><ClientAdminRoute><ModuleRoute moduleKey="forecast_ops"><ImportPage /></ModuleRoute></ClientAdminRoute></ClientRoute>} />
+          <Route path="/clinic" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><ClinicDetailPage /></ModuleRoute></ClientRoute>} />
+          <Route path="/pharmacy" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><PharmacyDetailPage /></ModuleRoute></ClientRoute>} />
           <Route path="/settings" element={<ClientRoute><ClientAdminRoute><SettingsPage /></ClientAdminRoute></ClientRoute>} />
           <Route path="/admin/*" element={<SuperAdminRoute><AdminPage /></SuperAdminRoute>} />
           <Route path="/" element={<DefaultRedirect />} />

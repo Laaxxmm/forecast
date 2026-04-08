@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { upload } from '../middleware/upload.js';
-import { requireAdmin } from '../middleware/auth.js';
+import { requireAdmin, requireIntegration } from '../middleware/auth.js';
 import { parseHealthplix } from '../services/parsers/healthplix.js';
 import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
 import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.js';
@@ -11,7 +11,7 @@ const isProd = process.env.NODE_ENV === 'production';
 
 const router = Router();
 
-router.post('/healthplix', upload.single('file'), async (req, res) => {
+router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
     const db = req.tenantDb!;
@@ -78,7 +78,7 @@ router.post('/healthplix', upload.single('file'), async (req, res) => {
   }
 });
 
-router.post('/oneglance-sales', upload.single('file'), async (req, res) => {
+router.post('/oneglance-sales', requireAdmin, requireIntegration('oneglance'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
     const db = req.tenantDb!;
@@ -112,7 +112,7 @@ router.post('/oneglance-sales', upload.single('file'), async (req, res) => {
   }
 });
 
-router.post('/oneglance-purchase', upload.single('file'), async (req, res) => {
+router.post('/oneglance-purchase', requireAdmin, requireIntegration('oneglance'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
     const db = req.tenantDb!;

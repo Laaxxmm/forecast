@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import api from '../api/client';
 import { BarChart3, TrendingUp, ShieldCheck, ClipboardCheck, Scale, ArrowLeft, Lock } from 'lucide-react';
 
 const MODULE_CATALOG = [
@@ -43,12 +44,22 @@ export default function ModuleSelectPage() {
   const clientName = localStorage.getItem('client_name');
 
   useEffect(() => {
-    const stored = localStorage.getItem('enabled_modules');
-    if (stored) {
-      try { setEnabledModules(JSON.parse(stored)); } catch { setEnabledModules(['forecast_ops']); }
-    } else {
-      setEnabledModules(['forecast_ops']);
-    }
+    // Fetch fresh module/integration data from server
+    api.get('/client-modules').then(res => {
+      const mods = res.data.enabledModules || [];
+      const ints = res.data.enabledIntegrations || [];
+      setEnabledModules(mods);
+      localStorage.setItem('enabled_modules', JSON.stringify(mods));
+      localStorage.setItem('enabled_integrations', JSON.stringify(ints));
+    }).catch(() => {
+      // Fallback to localStorage
+      const stored = localStorage.getItem('enabled_modules');
+      if (stored) {
+        try { setEnabledModules(JSON.parse(stored)); } catch { setEnabledModules(['forecast_ops']); }
+      } else {
+        setEnabledModules(['forecast_ops']);
+      }
+    });
   }, []);
 
   const handleSelect = (mod: typeof MODULE_CATALOG[0]) => {

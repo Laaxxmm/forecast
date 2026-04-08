@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { DbHelper } from '../db/connection.js';
+import { getPlatformHelper } from '../db/platform-connection.js';
 
 declare module 'express-session' {
   interface SessionData {
@@ -75,13 +76,29 @@ export function getTokenData(token: string): TokenData | null {
   return null;
 }
 
-export function requireAuth(req: Request, res: Response, next: NextFunction) {
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   // Try Bearer token first (production cross-origin)
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith('Bearer ')) {
     const token = authHeader.slice(7);
     const data = getTokenData(token);
     if (data) {
+      // Re-validate that the user is still active
+      const platformDb = await getPlatformHelper();
+      if (data.userType === 'super_admin') {
+        const user = platformDb.get('SELECT is_active FROM team_members WHERE id = ?', data.userId);
+        if (!user?.is_active) {
+          tokenStore.delete(token);
+          return res.status(401).json({ error: 'Account has been deactivated' });
+        }
+      } else {
+        const user = platformDb.get('SELECT is_active FROM client_users WHERE id = ?', data.userId);
+        if (!user?.is_active) {
+          tokenStore.delete(token);
+          return res.status(401).json({ error: 'Account has been deactivated' });
+        }
+      }
+
       // Attach user + tenant info to request
       req.session.userId = data.userId;
       req.session.username = data.username;
@@ -122,4 +139,74 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   }
 
   return res.status(403).json({ error: 'Admin access required' });
+}
+
+/**
+ * Middleware factory: require a specific module to be enabled for the client.
+ * Super admins bypass module checks.
+ */
+export function requireModule(moduleKey: string) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    if (req.userType === 'super_admin') return next();
+
+    const clientId = req.clientId;
+    if (!clientId) return res.status(400).json({ error: 'Client context required' });
+
+    const platformDb = await getPlatformHelper();
+    const mod = platformDb.get(
+      'SELECT is_enabled FROM client_modules WHERE client_id = ? AND module_key = ?',
+      [clientId, moduleKey]
+    );
+
+    if (!mod?.is_enabled) {
+      return res.status(403).json({ error: `Module "${moduleKey}" is not enabled for this client` });
+    }
+
+    next();
+  };
+}
+
+/**
+ * Middleware factory: require a specific integration to be enabled for the client.
+ * Super admins bypass integration checks.
+ */
+export function requireIntegration(integrationKey: string) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    if (req.userType === 'super_admin') return next();
+
+    const clientId = req.clientId;
+    if (!clientId) return res.status(400).json({ error: 'Client context required' });
+
+    const platformDb = await getPlatformHelper();
+    const integration = platformDb.get(
+      'SELECT is_enabled FROM client_integrations WHERE client_id = ? AND integration_key = ?',
+      [clientId, integrationKey]
+    );
+
+    if (!integration?.is_enabled) {
+      return res.status(403).json({ error: `Integration "${integrationKey}" is not enabled for this client` });
+    }
+
+    next();
+  };
+}
+
+/**
+ * Validate password meets minimum complexity requirements.
+ * Returns null if valid, or an error message string if invalid.
+ */
+export function validatePassword(password: string): string | null {
+  if (!password || password.length < 8) {
+    return 'Password must be at least 8 characters long';
+  }
+  if (password.length > 128) {
+    return 'Password must not exceed 128 characters';
+  }
+  if (!/[a-zA-Z]/.test(password)) {
+    return 'Password must contain at least one letter';
+  }
+  if (!/[0-9]/.test(password)) {
+    return 'Password must contain at least one number';
+  }
+  return null;
 }

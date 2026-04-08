@@ -205,6 +205,12 @@ router.get('/', async (_req: Request, res: Response) => {
 
     const headers = { 'Authorization': 'Bearer ' + TOKEN };
 
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = String(s ?? '');
+      return d.innerHTML;
+    }
+
     function showTab(name) {
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
       document.querySelectorAll('[id^="tab-"]').forEach(t => t.style.display = 'none');
@@ -218,9 +224,9 @@ router.get('/', async (_req: Request, res: Response) => {
       const data = await res.json();
       const grid = document.getElementById('tables-list');
       grid.innerHTML = data.map(t =>
-        '<div class="table-card ' + t.type + '" onclick="loadTable(\\'' + t.name + '\\')">' +
-        '<div class="name">' + t.name + ' <span class="badge badge-' + t.type + '">' + t.type + '</span></div>' +
-        '<div class="info">' + t.rowCount + ' rows</div></div>'
+        '<div class="table-card ' + esc(t.type) + '" onclick="loadTable(\\'' + esc(t.name) + '\\')">' +
+        '<div class="name">' + esc(t.name) + ' <span class="badge badge-' + esc(t.type) + '">' + esc(t.type) + '</span></div>' +
+        '<div class="info">' + esc(t.rowCount) + ' rows</div></div>'
       ).join('');
     }
 
@@ -239,8 +245,8 @@ router.get('/', async (_req: Request, res: Response) => {
 
       const thead = document.querySelector('#data-table thead');
       const tbody = document.querySelector('#data-table tbody');
-      thead.innerHTML = '<tr>' + data.columns.map(c => '<th>' + c + '</th>').join('') + '</tr>';
-      tbody.innerHTML = data.rows.map(r => '<tr>' + data.columns.map(c => '<td title="' + String(r[c] ?? '').replace(/"/g, '&quot;') + '">' + (r[c] ?? '<em style=color:#94a3b8>null</em>') + '</td>').join('') + '</tr>').join('');
+      thead.innerHTML = '<tr>' + data.columns.map(c => '<th>' + esc(c) + '</th>').join('') + '</tr>';
+      tbody.innerHTML = data.rows.map(r => '<tr>' + data.columns.map(c => '<td title="' + esc(r[c]) + '">' + (r[c] != null ? esc(r[c]) : '<em style=color:#94a3b8>null</em>') + '</td>').join('') + '</tr>').join('');
 
       const pag = document.getElementById('pagination');
       let pagHtml = '';
@@ -268,8 +274,8 @@ router.get('/', async (_req: Request, res: Response) => {
         const cols = data.rows.length > 0 ? Object.keys(data.rows[0]) : [];
         const thead = document.querySelector('#query-table thead');
         const tbody = document.querySelector('#query-table tbody');
-        thead.innerHTML = '<tr>' + cols.map(c => '<th>' + c + '</th>').join('') + '</tr>';
-        tbody.innerHTML = data.rows.map(r => '<tr>' + cols.map(c => '<td>' + (r[c] ?? '') + '</td>').join('') + '</tr>').join('');
+        thead.innerHTML = '<tr>' + cols.map(c => '<th>' + esc(c) + '</th>').join('') + '</tr>';
+        tbody.innerHTML = data.rows.map(r => '<tr>' + cols.map(c => '<td>' + (r[c] != null ? esc(r[c]) : '') + '</td>').join('') + '</tr>').join('');
       } catch (e) {
         document.getElementById('query-status').textContent = 'Error: ' + e.message;
       }
