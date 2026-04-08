@@ -19,6 +19,7 @@ declare global {
       tenantSlug?: string;
       tenantDb?: DbHelper;
       userType?: 'super_admin' | 'client_user';
+      isOwner?: boolean;
       clientId?: number;
       clientName?: string;
     }
@@ -31,6 +32,7 @@ export interface TokenData {
   displayName: string;
   role: string;
   userType: 'super_admin' | 'client_user';
+  isOwner?: boolean;
   clientSlug?: string;
   clientId?: number;
   clientName?: string;
@@ -46,6 +48,7 @@ export function createToken(user: {
   display_name: string;
   role: string;
   userType: 'super_admin' | 'client_user';
+  isOwner?: boolean;
   clientSlug?: string;
   clientId?: number;
   clientName?: string;
@@ -57,6 +60,7 @@ export function createToken(user: {
     displayName: user.display_name,
     role: user.role,
     userType: user.userType,
+    isOwner: user.isOwner,
     clientSlug: user.clientSlug,
     clientId: user.clientId,
     clientName: user.clientName,
@@ -105,6 +109,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       req.session.displayName = data.displayName;
       req.session.role = data.role;
       req.userType = data.userType;
+      req.isOwner = data.isOwner;
       req.clientId = data.clientId;
       req.tenantSlug = data.clientSlug;
       req.clientName = data.clientName;

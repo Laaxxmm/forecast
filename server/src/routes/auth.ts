@@ -32,12 +32,20 @@ router.post('/login', loginLimiter, async (req, res) => {
     const valid = await bcrypt.compare(password, teamMember.password_hash);
     if (!valid) return res.status(401).json({ error: 'Invalid username or password' });
 
+    const isOwner = !!teamMember.is_owner;
+
+    // Count assigned clients for non-owner team members
+    const assignedClientCount = isOwner
+      ? platformDb.all('SELECT id FROM clients WHERE is_active = 1').length
+      : platformDb.all('SELECT id FROM team_member_clients WHERE team_member_id = ?', teamMember.id).length;
+
     const token = createToken({
       id: teamMember.id,
       username: teamMember.username,
       display_name: teamMember.display_name,
       role: teamMember.role,
       userType: 'super_admin',
+      isOwner,
     });
 
     return res.json({
@@ -46,6 +54,8 @@ router.post('/login', loginLimiter, async (req, res) => {
       displayName: teamMember.display_name,
       role: teamMember.role,
       userType: 'super_admin',
+      isOwner,
+      assignedClientCount,
       token,
     });
   }
@@ -167,6 +177,7 @@ router.get('/me', (req, res) => {
         displayName: data.displayName,
         role: data.role,
         userType: data.userType,
+        isOwner: data.isOwner,
         clientSlug: data.clientSlug,
         clientName: data.clientName,
       });

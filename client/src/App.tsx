@@ -66,10 +66,13 @@ function ClientAdminRoute({ children }: { children: React.ReactNode }) {
   return userRole === 'admin' ? <>{children}</> : <Navigate to="/actuals" replace />;
 }
 
-// Block super_admin from client working routes — they only use Admin Portal
+// Block owner super_admin from client working routes — non-owner admins can work in client context
 function ClientRoute({ children }: { children: React.ReactNode }) {
   const userType = localStorage.getItem('user_type');
-  return userType === 'super_admin' ? <Navigate to="/admin" replace /> : <>{children}</>;
+  const isOwner = localStorage.getItem('is_owner') === '1';
+  // Owner super_admin goes to admin panel; non-owner super_admin can work in client context
+  if (userType === 'super_admin' && isOwner) return <Navigate to="/admin" replace />;
+  return <>{children}</>;
 }
 
 // Require a specific module to be enabled for the client
@@ -83,7 +86,11 @@ function ModuleRoute({ moduleKey, children }: { moduleKey: string; children: Rea
 // Smart default redirect based on role
 function DefaultRedirect() {
   const userType = localStorage.getItem('user_type');
-  return userType === 'super_admin' ? <Navigate to="/admin" replace /> : <Navigate to="/actuals" replace />;
+  const isOwner = localStorage.getItem('is_owner') === '1';
+  if (userType === 'super_admin') {
+    return isOwner ? <Navigate to="/admin" replace /> : <Navigate to="/select-client" replace />;
+  }
+  return <Navigate to="/actuals" replace />;
 }
 
 export default function App() {

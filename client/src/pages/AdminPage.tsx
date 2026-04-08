@@ -19,7 +19,8 @@ interface ClientUser {
 }
 interface TeamMember {
   id: number; username: string; display_name: string;
-  role: string; is_active: number; created_at: string;
+  role: string; is_active: number; is_owner: number;
+  assigned_client_count: number; created_at: string;
 }
 interface Integration {
   key: string; name: string; description: string; enabled: boolean;
@@ -32,6 +33,13 @@ type ClientDetailTab = 'users' | 'modules' | 'integrations' | 'streams' | 'branc
 
 export default function AdminPage() {
   const [tab, setTab] = useState<Tab>('clients');
+  const isOwner = localStorage.getItem('is_owner') === '1';
+
+  // Build tab list — only owner sees Team tab
+  const tabs = [
+    { key: 'clients' as Tab, label: 'Clients', icon: Building2 },
+    ...(isOwner ? [{ key: 'team' as Tab, label: 'Team', icon: Shield }] : []),
+  ];
 
   return (
     <div className="animate-fade-in max-w-7xl mx-auto">
@@ -51,10 +59,7 @@ export default function AdminPage() {
       {/* Tabs */}
       <div className="border-b border-dark-400/30 mb-6">
         <div className="flex gap-0">
-          {[
-            { key: 'clients' as Tab, label: 'Clients', icon: Building2 },
-            { key: 'team' as Tab, label: 'Team', icon: Shield },
-          ].map(t => (
+          {tabs.map(t => (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
@@ -72,7 +77,7 @@ export default function AdminPage() {
       </div>
 
       {tab === 'clients' && <ClientsPanel />}
-      {tab === 'team' && <TeamPanel />}
+      {tab === 'team' && isOwner && <TeamPanel />}
     </div>
   );
 }
@@ -87,6 +92,7 @@ function ClientsPanel() {
   const [showCreate, setShowCreate] = useState(false);
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const isOwner = localStorage.getItem('is_owner') === '1';
 
   const loadClients = useCallback(() => {
     api.get('/admin/clients').then(res => { setClients(res.data); setLoading(false); });
@@ -142,7 +148,7 @@ function ClientsPanel() {
       </div>
 
       {/* Create Client */}
-      {showCreate && (
+      {showCreate && isOwner && (
         <CreateClientForm
           onCreated={() => { setShowCreate(false); loadClients(); }}
           onCancel={() => setShowCreate(false)}
@@ -161,9 +167,11 @@ function ClientsPanel() {
             className="input pl-9 text-sm py-2"
           />
         </div>
-        <button onClick={() => setShowCreate(true)} className="btn-primary flex items-center gap-2 text-sm">
-          <Plus size={15} /> New Client
-        </button>
+        {isOwner && (
+          <button onClick={() => setShowCreate(true)} className="btn-primary flex items-center gap-2 text-sm">
+            <Plus size={15} /> New Client
+          </button>
+        )}
       </div>
 
       {/* Client List */}
@@ -1010,6 +1018,7 @@ function TeamPanel() {
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [resetResult, setResetResult] = useState<{username: string; password: string} | null>(null);
+  const [assignMember, setAssignMember] = useState<TeamMember | null>(null);
 
   const loadTeam = useCallback(() => {
     api.get('/admin/team').then(res => { setTeam(res.data); setLoading(false); });
@@ -1029,7 +1038,7 @@ function TeamPanel() {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <p className="text-sm text-theme-faint">Super admins with access to all clients</p>
+        <p className="text-sm text-theme-faint">Manage your team and assign clients to each member</p>
         <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2 text-sm">
           <UserPlus size={14} /> Add Member
         </button>
@@ -1053,18 +1062,38 @@ function TeamPanel() {
           {team.map((member, i) => (
             <div key={member.id} className={`flex items-center justify-between px-5 py-4 ${i < team.length - 1 ? 'border-b border-dark-400/15' : ''}`}>
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
-                  <Shield size={17} className="text-purple-400" />
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                  member.is_owner ? 'bg-amber-500/10' : 'bg-purple-500/10'
+                }`}>
+                  <Shield size={17} className={member.is_owner ? 'text-amber-400' : 'text-purple-400'} />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-theme-heading">{member.display_name}</span>
                     <span className="text-[11px] font-mono text-theme-faint">@{member.username}</span>
+                    {member.is_owner ? (
+                      <span className="text-[10px] font-semibold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full uppercase tracking-wider">Owner</span>
+                    ) : null}
                   </div>
-                  <span className="text-[10px] font-semibold text-purple-400 uppercase tracking-wider">{member.role}</span>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-[11px] text-theme-faint">
+                      {member.is_owner
+                        ? 'All clients'
+                        : `${member.assigned_client_count} client${member.assigned_client_count !== 1 ? 's' : ''} assigned`
+                      }
+                    </span>
+                  </div>
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                {!member.is_owner && (
+                  <button
+                    onClick={() => setAssignMember(member)}
+                    className="text-xs px-2.5 py-1.5 rounded-lg text-accent-400 hover:text-accent-300 bg-accent-500/10 hover:bg-accent-500/15 transition-all flex items-center gap-1"
+                  >
+                    <Building2 size={11} /> Assign Clients
+                  </button>
+                )}
                 <button
                   onClick={() => resetPassword(member.id, member.username)}
                   className="text-xs px-2.5 py-1.5 rounded-lg text-theme-muted hover:text-theme-secondary bg-dark-600 hover:bg-dark-500 transition-all flex items-center gap-1"
@@ -1082,6 +1111,14 @@ function TeamPanel() {
         </div>
       )}
 
+      {/* Assign Clients Modal */}
+      {assignMember && (
+        <AssignClientsModal
+          member={assignMember}
+          onClose={() => { setAssignMember(null); loadTeam(); }}
+        />
+      )}
+
       {resetResult && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setResetResult(null)}>
           <div className="bg-dark-700 rounded-2xl p-6 max-w-sm w-full mx-4 border border-dark-400/30 shadow-2xl" onClick={e => e.stopPropagation()}>
@@ -1096,6 +1133,101 @@ function TeamPanel() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ─── Assign Clients Modal ──────────────────────────────── */
+
+function AssignClientsModal({ member, onClose }: { member: TeamMember; onClose: () => void }) {
+  const [allClients, setAllClients] = useState<Client[]>([]);
+  const [assignedIds, setAssignedIds] = useState<Set<number>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    Promise.all([
+      api.get('/admin/clients'),
+      api.get(`/admin/team/${member.id}/clients`),
+    ]).then(([clientsRes, assignedRes]) => {
+      setAllClients(clientsRes.data);
+      setAssignedIds(new Set(assignedRes.data.map((c: any) => c.id)));
+      setLoading(false);
+    });
+  }, [member.id]);
+
+  const toggle = (clientId: number) => {
+    setAssignedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(clientId)) next.delete(clientId);
+      else next.add(clientId);
+      return next;
+    });
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.put(`/admin/team/${member.id}/clients`, { client_ids: Array.from(assignedIds) });
+      onClose();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to save');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-dark-700 rounded-2xl p-6 max-w-md w-full mx-4 border border-dark-400/30 shadow-2xl max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <h3 className="font-semibold text-theme-heading mb-1">Assign Clients</h3>
+        <p className="text-sm text-theme-faint mb-4">
+          Select which clients <span className="text-accent-400 font-medium">{member.display_name}</span> can access
+        </p>
+
+        {loading ? (
+          <div className="text-center py-8">
+            <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto space-y-1 mb-4 pr-1">
+            {allClients.filter(c => c.is_active).map(client => (
+              <label
+                key={client.id}
+                className={`flex items-center gap-3 px-4 py-3 rounded-xl cursor-pointer transition-all ${
+                  assignedIds.has(client.id)
+                    ? 'bg-accent-500/10 border border-accent-500/20'
+                    : 'bg-dark-600/50 border border-transparent hover:bg-dark-600'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={assignedIds.has(client.id)}
+                  onChange={() => toggle(client.id)}
+                  className="w-4 h-4 rounded border-dark-300 text-accent-500 focus:ring-accent-500 bg-dark-800"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-theme-heading">{client.name}</div>
+                  <div className="text-[11px] text-theme-faint font-mono">{client.slug}</div>
+                </div>
+                <span className="text-[10px] text-theme-faint">{client.user_count} users</span>
+              </label>
+            ))}
+            {allClients.filter(c => c.is_active).length === 0 && (
+              <p className="text-center text-theme-faint text-sm py-4">No active clients</p>
+            )}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between pt-3 border-t border-dark-400/30">
+          <span className="text-xs text-theme-faint">{assignedIds.size} selected</span>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="btn-secondary text-sm">Cancel</button>
+            <button onClick={save} disabled={saving} className="btn-primary text-sm">
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1143,7 +1275,7 @@ function AddTeamMemberForm({ onAdded, onCancel }: { onAdded: () => void; onCance
   return (
     <div className="bg-dark-700/60 rounded-2xl p-5 mb-4 border border-dark-400/20">
       <h4 className="text-sm font-semibold text-theme-heading mb-3">Add Team Member</h4>
-      <p className="text-xs text-theme-faint mb-3">Team members are super admins with access to all clients</p>
+      <p className="text-xs text-theme-faint mb-3">New team members need client assignments to access client data</p>
       <div className="grid grid-cols-3 gap-3 mb-3">
         <div>
           <label className="block text-xs font-medium text-theme-muted mb-1">Display Name</label>

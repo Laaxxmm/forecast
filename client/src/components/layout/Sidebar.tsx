@@ -52,6 +52,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
   const isMultiBranch = localStorage.getItem('is_multi_branch') === '1';
   const isSuperAdmin = userType === 'super_admin';
   const isClientAdmin = userRole === 'admin';
+  const isOwner = localStorage.getItem('is_owner') === '1';
 
   const [branches, setBranches] = useState<any[]>([]);
   const [canViewConsolidated, setCanViewConsolidated] = useState(false);
@@ -98,12 +99,15 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
 
   const activeModule = localStorage.getItem('active_module') || 'forecast_ops';
   const mainLinks = activeModule === 'vcfo_portal' ? vcfoLinks : forecastLinks;
-  const visibleMain = isSuperAdmin ? [] : mainLinks.filter(l => {
-    if (!isClientAdmin && l.clientAdminOnly) return false;
+  // Owner super_admin sees nothing (they use Admin Panel only).
+  // Non-owner super_admin in client context sees module links like a client admin.
+  const isOwnerAdmin = isSuperAdmin && isOwner;
+  const visibleMain = isOwnerAdmin ? [] : mainLinks.filter(l => {
+    if (!isClientAdmin && !isSuperAdmin && l.clientAdminOnly) return false;
     return true;
   });
-  const visibleUtility = isSuperAdmin ? [] : utilityLinks.filter(l => {
-    if (!isClientAdmin && l.clientAdminOnly) return false;
+  const visibleUtility = isOwnerAdmin ? [] : utilityLinks.filter(l => {
+    if (!isClientAdmin && !isSuperAdmin && l.clientAdminOnly) return false;
     if ((l as any).module && (l as any).module !== activeModule) return false;
     return true;
   });
@@ -117,6 +121,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
     localStorage.removeItem('auth_token');
     localStorage.removeItem('user_type');
     localStorage.removeItem('user_role');
+    localStorage.removeItem('is_owner');
     localStorage.removeItem('client_slug');
     localStorage.removeItem('client_name');
     localStorage.removeItem('is_multi_branch');
@@ -196,7 +201,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
             </div>
             <div className="flex-1 min-w-0">
               <span className="text-xs font-semibold text-theme-primary truncate block">{clientName}</span>
-              {isSuperAdmin && (
+              {isSuperAdmin && !isOwner && (
                 <button
                   onClick={switchClient}
                   className="flex items-center gap-1 text-[10px] text-accent-400 hover:text-accent-300 mt-0.5 transition-colors"

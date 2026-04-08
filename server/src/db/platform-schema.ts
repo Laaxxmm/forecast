@@ -92,6 +92,15 @@ export function initializePlatformSchema(db: DbHelper) {
       is_enabled INTEGER DEFAULT 0,
       UNIQUE(client_id, module_key)
     );
+
+    -- Team member → client assignments (scoped access for non-owner admins)
+    CREATE TABLE IF NOT EXISTS team_member_clients (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      team_member_id INTEGER NOT NULL REFERENCES team_members(id),
+      client_id INTEGER NOT NULL REFERENCES clients(id),
+      assigned_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(team_member_id, client_id)
+    );
   `);
 
   // Safe migrations for existing DBs
@@ -99,8 +108,18 @@ export function initializePlatformSchema(db: DbHelper) {
     "ALTER TABLE clients ADD COLUMN industry TEXT DEFAULT 'custom'",
     "ALTER TABLE clients ADD COLUMN is_multi_branch INTEGER DEFAULT 0",
     "ALTER TABLE client_integrations ADD COLUMN branch_id INTEGER REFERENCES branches(id)",
+    "ALTER TABLE team_members ADD COLUMN is_owner INTEGER DEFAULT 0",
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch { /* column already exists */ }
+  }
+
+  // Auto-promote the first team member to owner if none exist
+  const ownerExists = db.get('SELECT id FROM team_members WHERE is_owner = 1');
+  if (!ownerExists) {
+    const first = db.get('SELECT id FROM team_members ORDER BY id LIMIT 1');
+    if (first) {
+      db.run('UPDATE team_members SET is_owner = 1 WHERE id = ?', first.id);
+    }
   }
 }

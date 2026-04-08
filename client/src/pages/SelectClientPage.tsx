@@ -46,6 +46,7 @@ export default function SelectClientPage() {
   };
 
   const userType = localStorage.getItem('user_type');
+  const isOwner = localStorage.getItem('is_owner') === '1';
 
   return (
     <div className="min-h-screen bg-dark-900 flex items-center justify-center p-4 relative overflow-hidden">
@@ -71,9 +72,14 @@ export default function SelectClientPage() {
           </div>
         ) : clients.length === 0 ? (
           <div className="card text-center">
-            <p className="text-theme-muted mb-4">No clients found.</p>
-            {userType === 'super_admin' && (
-              <button onClick={() => navigate('/admin/clients')} className="btn-primary">
+            <p className="text-theme-muted mb-4">
+              {isOwner ? 'No clients found.' : 'No clients have been assigned to you yet.'}
+            </p>
+            <p className="text-theme-faint text-sm">
+              {isOwner ? '' : 'Contact the platform owner to get client access.'}
+            </p>
+            {isOwner && (
+              <button onClick={() => navigate('/admin')} className="btn-primary mt-3">
                 Create First Client
               </button>
             )}
@@ -113,9 +119,9 @@ export default function SelectClientPage() {
               </div>
             ))}
 
-            {userType === 'super_admin' && (
+            {isOwner && (
               <div className="text-center mt-8">
-                <button onClick={() => navigate('/admin/clients')} className="text-sm text-accent-500 hover:text-accent-400 font-medium transition-colors">
+                <button onClick={() => navigate('/admin')} className="text-sm text-accent-500 hover:text-accent-400 font-medium transition-colors">
                   Manage Clients
                 </button>
               </div>

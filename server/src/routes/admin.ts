@@ -11,6 +11,20 @@ import fs from 'fs';
 
 const router = Router();
 
+// Helper: check if a non-owner admin is assigned to a client
+async function requireClientAssignment(req: Request, res: Response, clientSlug: string): Promise<boolean> {
+  if (req.isOwner) return true;
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', clientSlug);
+  if (!client) { res.status(404).json({ error: 'Client not found' }); return false; }
+  const assignment = db.get(
+    'SELECT id FROM team_member_clients WHERE team_member_id = ? AND client_id = ?',
+    [req.session.userId, client.id]
+  );
+  if (!assignment) { res.status(403).json({ error: 'Not assigned to this client' }); return false; }
+  return true;
+}
+
 // ─── Industry Templates ────────────────────────────────────────────────────
 
 router.get('/industries', (_req: Request, res: Response) => {
@@ -19,8 +33,23 @@ router.get('/industries', (_req: Request, res: Response) => {
 
 // ─── Client Management ──────────────────────────────────────────────────────
 
-router.get('/clients', async (_req: Request, res: Response) => {
+router.get('/clients', async (req: Request, res: Response) => {
   const db = await getPlatformHelper();
+
+  // Non-owner admins only see assigned clients
+  if (!req.isOwner) {
+    const clients = db.all(`
+      SELECT c.*,
+        (SELECT COUNT(*) FROM client_users WHERE client_id = c.id) as user_count,
+        (SELECT GROUP_CONCAT(integration_key) FROM client_integrations WHERE client_id = c.id AND is_enabled = 1) as integrations
+      FROM clients c
+      JOIN team_member_clients tmc ON tmc.client_id = c.id
+      WHERE tmc.team_member_id = ?
+      ORDER BY c.name
+    `, req.session.userId);
+    return res.json(clients);
+  }
+
   const clients = db.all(`
     SELECT c.*,
       (SELECT COUNT(*) FROM client_users WHERE client_id = c.id) as user_count,
@@ -32,6 +61,7 @@ router.get('/clients', async (_req: Request, res: Response) => {
 });
 
 router.get('/clients/:slug', async (req: Request, res: Response) => {
+  if (!(await requireClientAssignment(req, res, req.params.slug))) return;
   const db = await getPlatformHelper();
   const client = db.get('SELECT * FROM clients WHERE slug = ?', req.params.slug);
   if (!client) return res.status(404).json({ error: 'Client not found' });
@@ -46,6 +76,7 @@ router.get('/clients/:slug', async (req: Request, res: Response) => {
 });
 
 router.post('/clients', async (req: Request, res: Response) => {
+  if (!req.isOwner) return res.status(403).json({ error: 'Only the owner can create clients' });
   const db = await getPlatformHelper();
   const { slug, name } = req.body;
 
@@ -547,13 +578,22 @@ router.put('/clients/:slug/users/:id/branches', async (req: Request, res: Respon
 
 // ─── Team Member Management ─────────────────────────────────────────────────
 
-router.get('/team', async (_req: Request, res: Response) => {
+router.get('/team', async (req: Request, res: Response) => {
+  if (!req.isOwner) return res.status(403).json({ error: 'Only the owner can manage team members' });
   const db = await getPlatformHelper();
-  const team = db.all('SELECT id, username, display_name, role, is_active, created_at FROM team_members ORDER BY display_name');
-  res.json(team);
+  const team = db.all('SELECT id, username, display_name, role, is_active, is_owner, created_at FROM team_members ORDER BY display_name');
+  // Attach assigned client count to each member
+  const result = team.map((m: any) => ({
+    ...m,
+    assigned_client_count: m.is_owner
+      ? db.all('SELECT id FROM clients WHERE is_active = 1').length
+      : db.all('SELECT id FROM team_member_clients WHERE team_member_id = ?', m.id).length,
+  }));
+  res.json(result);
 });
 
 router.post('/team', async (req: Request, res: Response) => {
+  if (!req.isOwner) return res.status(403).json({ error: 'Only the owner can add team members' });
   const db = await getPlatformHelper();
   const { username, password, display_name, role } = req.body;
 
@@ -592,6 +632,51 @@ router.put('/team/:id', async (req: Request, res: Response) => {
   }
 
   res.json({ ok: true });
+});
+
+// ─── Team Member Client Assignments ────────────────────────────────────────
+
+router.get('/team/:id/clients', async (req: Request, res: Response) => {
+  if (!req.isOwner) return res.status(403).json({ error: 'Only the owner can view assignments' });
+  const db = await getPlatformHelper();
+  const teamId = parseInt(req.params.id);
+  const assigned = db.all(
+    `SELECT c.id, c.slug, c.name, c.is_active, tmc.assigned_at
+     FROM team_member_clients tmc
+     JOIN clients c ON tmc.client_id = c.id
+     WHERE tmc.team_member_id = ?
+     ORDER BY c.name`,
+    teamId
+  );
+  res.json(assigned);
+});
+
+router.put('/team/:id/clients', async (req: Request, res: Response) => {
+  if (!req.isOwner) return res.status(403).json({ error: 'Only the owner can assign clients' });
+  const db = await getPlatformHelper();
+  const teamId = parseInt(req.params.id);
+  const { client_ids } = req.body;
+
+  if (!Array.isArray(client_ids)) {
+    return res.status(400).json({ error: 'client_ids must be an array' });
+  }
+
+  // Don't allow assigning clients to the owner
+  const member = db.get('SELECT is_owner FROM team_members WHERE id = ?', teamId);
+  if (member?.is_owner) {
+    return res.status(400).json({ error: 'Owner has access to all clients automatically' });
+  }
+
+  // Clear existing assignments and set new ones
+  db.run('DELETE FROM team_member_clients WHERE team_member_id = ?', teamId);
+  for (const clientId of client_ids) {
+    db.run(
+      'INSERT INTO team_member_clients (team_member_id, client_id) VALUES (?, ?)',
+      [teamId, clientId]
+    );
+  }
+
+  res.json({ ok: true, count: client_ids.length });
 });
 
 export default router;
