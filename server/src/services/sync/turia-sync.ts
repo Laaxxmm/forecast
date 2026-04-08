@@ -273,59 +273,135 @@ export async function syncTuria(opts: TuriaSyncOptions): Promise<TuriaSyncResult
     // ── Step 6: Select financial year ──
     progress(opts, 'navigate', `Selecting financial year ${opts.financialYear}...`, 55);
 
-    // Look for the FY dropdown/select
-    const fyDropdown = page.locator('select, button:has-text("Financial Year"), button:has-text("All Financial Year"), [class*="select"], [role="combobox"]').first();
+    // Look for the FY dropdown — Turia shows it as a MUI Select with "2026-2027" text
+    // From screenshot: it's a dropdown with year range text and a chevron, near Search and + Add
     try {
-      await fyDropdown.waitFor({ timeout: 5000 });
-      // Try select element first
-      const tagName = await fyDropdown.evaluate(el => el.tagName.toLowerCase());
-      if (tagName === 'select') {
-        await fyDropdown.selectOption({ label: opts.financialYear });
-      } else {
-        // Click dropdown then select option
-        await fyDropdown.click();
-        await page.waitForTimeout(1000);
-        const option = page.locator(`text="${opts.financialYear}"`).first();
-        await option.click();
+      // Try multiple approaches to find the FY dropdown
+      const fySelectors = [
+        'select',                                    // Native select
+        '[role="combobox"]',                          // MUI Select role
+        `text="${opts.financialYear}"`,               // Direct text match
+        'button:has-text("202")',                     // Button with year text
+        'div:has-text("202") >> nth=-1',              // Div containing year text
+      ];
+
+      let fyFound = false;
+      for (const sel of fySelectors) {
+        try {
+          const dropdown = page.locator(sel).first();
+          if (await dropdown.isVisible({ timeout: 2000 })) {
+            const tagName = await dropdown.evaluate(el => el.tagName.toLowerCase());
+            if (tagName === 'select') {
+              // Native select — try both label and value matching
+              await dropdown.selectOption({ label: opts.financialYear }).catch(() =>
+                dropdown.selectOption({ value: opts.financialYear })
+              );
+            } else {
+              // MUI Select or custom dropdown — click to open, then select
+              await dropdown.click();
+              await page.waitForTimeout(1000);
+              const option = page.locator(`[role="option"]:has-text("${opts.financialYear}"), li:has-text("${opts.financialYear}"), text="${opts.financialYear}"`).first();
+              if (await option.isVisible({ timeout: 3000 })) {
+                await option.click();
+              } else {
+                await page.keyboard.press('Escape');
+              }
+            }
+            fyFound = true;
+            await page.waitForTimeout(2000);
+            break;
+          }
+        } catch { /* try next */ }
       }
-      await page.waitForTimeout(2000);
+      if (!fyFound) {
+        progress(opts, 'navigate', 'Using default financial year', 58);
+      }
     } catch {
-      // If no FY selector found, continue with default
       progress(opts, 'navigate', 'Using default financial year', 58);
     }
     await screenshot('fy-selected');
 
-    // ── Step 7: Export data ──
+    // ── Step 7: Select all invoices and export ──
+    progress(opts, 'download', 'Selecting all invoices...', 60);
+
+    // First, select all invoices using the header checkbox
+    try {
+      const headerCheckbox = page.locator('thead input[type="checkbox"], th input[type="checkbox"], .MuiCheckbox-root').first();
+      if (await headerCheckbox.isVisible({ timeout: 3000 })) {
+        await headerCheckbox.click();
+        await page.waitForTimeout(1000);
+        console.log('Turia: Selected all invoices via header checkbox');
+      }
+    } catch {
+      console.log('Turia: Could not find header checkbox, continuing without selection');
+    }
+    await screenshot('invoices-selected');
+
+    // Now find and click the kebab menu (⋮) button
+    // Turia uses MUI — the kebab is an IconButton with MoreVert SVG, right next to "+ Add" button
     progress(opts, 'download', 'Looking for export option...', 65);
 
-    // Click the 3-dots menu button (next to Add button)
-    const menuBtn = page.locator('button:has(svg), [class*="dots"], [class*="menu"], [class*="more"]').filter({ hasText: /^$/ });
-    // Try various selectors for the 3-dot/kebab menu
     let exportClicked = false;
 
-    // Strategy 1: Look for a kebab/more menu near the Add button
-    const kebabSelectors = [
-      'button[aria-label*="more" i]',
-      'button[aria-label*="menu" i]',
-      'button[title*="more" i]',
-      '[class*="kebab"]',
-      '[class*="dots"]',
-      '[class*="more-vert"]',
-    ];
+    // Strategy 1: Find the kebab button by locating it relative to the Add button
+    // The ⋮ button is the icon-only button immediately after the "+ Add" button
+    try {
+      // Find all icon-only buttons (buttons that contain SVG but minimal/no text)
+      const iconButtons = await page.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+        const results: { index: number; text: string; hasIcon: boolean; x: number; y: number; width: number }[] = [];
+        buttons.forEach((btn, i) => {
+          const rect = btn.getBoundingClientRect();
+          const text = (btn.textContent || '').trim();
+          const hasSvg = btn.querySelector('svg') !== null;
+          if (rect.width > 0 && rect.height > 0) {
+            results.push({ index: i, text: text.slice(0, 30), hasIcon: hasSvg, x: rect.x, y: rect.y, width: rect.width });
+          }
+        });
+        return results;
+      });
 
-    for (const sel of kebabSelectors) {
-      try {
-        const btn = page.locator(sel).last();
-        if (await btn.isVisible({ timeout: 1000 })) {
+      console.log('Turia: Found buttons:', JSON.stringify(iconButtons.filter(b => b.x > 800).slice(-8)));
+
+      // Find the ⋮ button: it's an icon-only button (has SVG, very short/no text)
+      // positioned to the right of the Add button, near the top of the page
+      const addBtnInfo = iconButtons.find(b => b.text.includes('Add'));
+      const kebabCandidates = iconButtons.filter(b => {
+        const isIconOnly = b.hasIcon && b.text.length <= 2; // Icon button with no/minimal text
+        const isRightSide = b.x > 800; // Right side of page
+        const isSmall = b.width < 60; // Kebab buttons are small
+        const isNearTop = b.y < 500; // Near the top toolbar area
+        // If we found the Add button, the kebab should be near it (within 100px)
+        const isNearAdd = addBtnInfo ? Math.abs(b.x - addBtnInfo.x) < 150 && Math.abs(b.y - addBtnInfo.y) < 50 : true;
+        return isIconOnly && isRightSide && isSmall && isNearTop && isNearAdd;
+      });
+
+      console.log(`Turia: Kebab candidates: ${kebabCandidates.length}`, JSON.stringify(kebabCandidates));
+
+      // Try each candidate — click it and look for Export in the dropdown
+      const allButtons = page.locator('button, [role="button"]');
+      for (const candidate of kebabCandidates) {
+        try {
+          const btn = allButtons.nth(candidate.index);
           await btn.click();
           await page.waitForTimeout(1000);
-          await screenshot('menu-opened');
+          await screenshot('kebab-clicked');
 
-          // Look for export option in the dropdown
-          const exportOption = page.locator('text=/export/i, a:has-text("Export"), button:has-text("Export"), [role="menuitem"]:has-text("Export")').first();
-          if (await exportOption.isVisible({ timeout: 2000 })) {
-            // Wait for download
+          // Look for "Export" in any popover/menu/dropdown that appeared
+          const exportOption = page.locator(
+            '[role="menuitem"]:has-text("Export"), ' +
+            '[role="menu"] >> text=Export, ' +
+            '.MuiMenuItem-root:has-text("Export"), ' +
+            '.MuiMenu-list >> text=Export, ' +
+            'li:has-text("Export"), ' +
+            'div[role="presentation"] >> text=Export, ' +
+            'text=Export'
+          ).first();
+
+          if (await exportOption.isVisible({ timeout: 3000 })) {
+            console.log('Turia: Found Export option!');
             progress(opts, 'download', 'Downloading invoice data...', 75);
+
             const [download] = await Promise.all([
               page.waitForEvent('download', { timeout: TIMEOUT }),
               exportOption.click(),
@@ -339,62 +415,82 @@ export async function syncTuria(opts: TuriaSyncOptions): Promise<TuriaSyncResult
             progress(opts, 'download', 'Invoice data downloaded', 90);
             return { filePath: savePath, filename };
           }
-          // Close menu if export not found
+          // Close the menu and try next candidate
           await page.keyboard.press('Escape');
+          await page.waitForTimeout(500);
+        } catch {
+          await page.keyboard.press('Escape').catch(() => {});
         }
-      } catch { /* try next selector */ }
+      }
+    } catch (err) {
+      console.log('Turia: Strategy 1 (relative positioning) failed:', (err as Error).message);
     }
 
-    // Strategy 2: Try clicking any element with 3 vertical dots icon (⋮)
+    // Strategy 2: Brute force — click every icon-only button on the right side
+    if (!exportClicked) {
+      console.log('Turia: Trying brute force button scan...');
+      const allButtons = page.locator('button, [role="button"]');
+      const count = await allButtons.count();
+
+      for (let i = count - 1; i >= Math.max(0, count - 15); i--) {
+        try {
+          const btn = allButtons.nth(i);
+          const box = await btn.boundingBox();
+          if (!box || box.x < 800 || box.y > 500) continue; // Skip non-toolbar buttons
+
+          const text = (await btn.textContent().catch(() => '')) || '';
+          if (text.includes('Add') || text.includes('Search') || text.length > 15) continue;
+
+          await btn.click();
+          await page.waitForTimeout(1000);
+
+          // Check if Export appeared
+          const exportOpt = page.locator('text=Export').first();
+          if (await exportOpt.isVisible({ timeout: 2000 })) {
+            console.log(`Turia: Found Export via button ${i}`);
+            progress(opts, 'download', 'Downloading invoice data...', 75);
+
+            const [download] = await Promise.all([
+              page.waitForEvent('download', { timeout: TIMEOUT }),
+              exportOpt.click(),
+            ]);
+
+            const filename = `turia-invoices-${new Date().toISOString().slice(0, 10)}.xlsx`;
+            const savePath = path.join(downloadDir, filename);
+            await download.saveAs(savePath);
+            exportClicked = true;
+
+            progress(opts, 'download', 'Invoice data downloaded', 90);
+            return { filePath: savePath, filename };
+          }
+          await page.keyboard.press('Escape');
+          await page.waitForTimeout(300);
+        } catch {
+          await page.keyboard.press('Escape').catch(() => {});
+        }
+      }
+    }
+
+    // Strategy 3: Try direct text click on "Export" if it's already visible
     if (!exportClicked) {
       try {
-        // Look for SVG icons that might be the 3-dot menu
-        const allButtons = page.locator('button, [role="button"]');
-        const buttonCount = await allButtons.count();
-
-        for (let i = buttonCount - 1; i >= Math.max(0, buttonCount - 10); i--) {
-          const btn = allButtons.nth(i);
-          const text = await btn.textContent().catch(() => '');
-          const ariaLabel = await btn.getAttribute('aria-label').catch(() => '');
-
-          // Skip if it's the Add button
-          if (text?.includes('Add')) continue;
-
-          // Try buttons near the top-right area (likely menu buttons)
-          const box = await btn.boundingBox().catch(() => null);
-          if (box && box.x > 800) { // Right side of page
-            await btn.click();
-            await page.waitForTimeout(1000);
-            await screenshot(`button-${i}-clicked`);
-
-            const exportLink = page.locator('text=/export/i').first();
-            if (await exportLink.isVisible({ timeout: 2000 })) {
-              progress(opts, 'download', 'Downloading invoice data...', 75);
-              const [download] = await Promise.all([
-                page.waitForEvent('download', { timeout: TIMEOUT }),
-                exportLink.click(),
-              ]);
-
-              const filename = `turia-invoices-${new Date().toISOString().slice(0, 10)}.xlsx`;
-              const savePath = path.join(downloadDir, filename);
-              await download.saveAs(savePath);
-              exportClicked = true;
-
-              progress(opts, 'download', 'Invoice data downloaded', 90);
-              return { filePath: savePath, filename };
-            }
-            await page.keyboard.press('Escape');
-          }
+        const directExport = page.locator('text=Export').first();
+        if (await directExport.isVisible({ timeout: 2000 })) {
+          progress(opts, 'download', 'Downloading invoice data...', 75);
+          const [download] = await Promise.all([
+            page.waitForEvent('download', { timeout: TIMEOUT }),
+            directExport.click(),
+          ]);
+          const filename = `turia-invoices-${new Date().toISOString().slice(0, 10)}.xlsx`;
+          const savePath = path.join(downloadDir, filename);
+          await download.saveAs(savePath);
+          return { filePath: savePath, filename };
         }
       } catch {}
     }
 
-    if (!exportClicked) {
-      await screenshot('export-not-found');
-      throw new Error('Could not find the export option. Please try manual upload instead.');
-    }
-
-    throw new Error('Export failed unexpectedly');
+    await screenshot('export-not-found');
+    throw new Error('Could not find the export option. Please try manual upload instead.');
   } catch (err: any) {
     await screenshot('error');
     throw err;
