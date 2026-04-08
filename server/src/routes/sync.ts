@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { encrypt, decrypt } from '../utils/crypto.js';
+import { branchFilter, getBranchIdForInsert, branchSettingsKey } from '../utils/branch.js';
 import { parseHealthplix } from '../services/parsers/healthplix.js';
 import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
 import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.js';
@@ -40,9 +41,9 @@ function getOgState(slug: string): SyncState {
 
 router.get('/credentials/healthplix', async (_req: Request, res: Response) => {
   const db = _req.tenantDb!;
-  const username = db.get("SELECT value FROM app_settings WHERE key = 'healthplix_username'");
-  const clinic = db.get("SELECT value FROM app_settings WHERE key = 'healthplix_clinic'");
-  const hasPassword = db.get("SELECT value FROM app_settings WHERE key = 'healthplix_password'");
+  const username = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('healthplix_username', _req));
+  const clinic = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('healthplix_clinic', _req));
+  const hasPassword = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('healthplix_password', _req));
 
   res.json({
     username: username?.value || '',
@@ -56,17 +57,20 @@ router.put('/credentials/healthplix', async (req: Request, res: Response) => {
   if (!username) return res.status(400).json({ error: 'Username is required' });
 
   const db = req.tenantDb!;
+  const uKey = branchSettingsKey('healthplix_username', req);
+  const cKey = branchSettingsKey('healthplix_clinic', req);
+  const pKey = branchSettingsKey('healthplix_password', req);
 
-  db.run(`INSERT INTO app_settings (key, value) VALUES ('healthplix_username', ?)
-          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, username);
+  db.run(`INSERT INTO app_settings (key, value) VALUES (?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, uKey, username);
 
-  db.run(`INSERT INTO app_settings (key, value) VALUES ('healthplix_clinic', ?)
-          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, clinicName || '');
+  db.run(`INSERT INTO app_settings (key, value) VALUES (?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, cKey, clinicName || '');
 
   if (password) {
     const encrypted = encrypt(password);
-    db.run(`INSERT INTO app_settings (key, value) VALUES ('healthplix_password', ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, encrypted);
+    db.run(`INSERT INTO app_settings (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, pKey, encrypted);
   }
 
   res.json({ ok: true });
@@ -74,7 +78,8 @@ router.put('/credentials/healthplix', async (req: Request, res: Response) => {
 
 router.delete('/credentials/healthplix', async (_req: Request, res: Response) => {
   const db = _req.tenantDb!;
-  db.run("DELETE FROM app_settings WHERE key LIKE 'healthplix_%'");
+  const prefix = branchSettingsKey('healthplix_', _req);
+  db.run("DELETE FROM app_settings WHERE key LIKE ?", prefix + '%');
   res.json({ ok: true });
 });
 
@@ -94,11 +99,12 @@ router.post('/healthplix', async (req: Request, res: Response) => {
     return res.status(409).json({ error: 'A sync is already in progress' });
   }
 
-  // Load credentials
+  // Load credentials (branch-scoped)
   const db = req.tenantDb!;
-  const usernameRow = db.get("SELECT value FROM app_settings WHERE key = 'healthplix_username'");
-  const passwordRow = db.get("SELECT value FROM app_settings WHERE key = 'healthplix_password'");
-  const clinicRow = db.get("SELECT value FROM app_settings WHERE key = 'healthplix_clinic'");
+  const branchId = getBranchIdForInsert(req);
+  const usernameRow = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('healthplix_username', req));
+  const passwordRow = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('healthplix_password', req));
+  const clinicRow = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('healthplix_clinic', req));
 
   if (!usernameRow?.value || !passwordRow?.value) {
     return res.status(400).json({ error: 'Healthplix credentials not configured. Go to Settings to set them up.' });
@@ -139,22 +145,22 @@ router.post('/healthplix', async (req: Request, res: Response) => {
 
     // Insert into DB (same logic as import.ts)
     const importLog = db.run(
-      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       'HEALTHPLIX_SYNC', result.filename, rows.length,
-      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed'
+      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
     );
 
     for (const r of rows) {
       db.run(
         `INSERT INTO clinic_actuals (import_id, bill_date, bill_month, patient_id, patient_name, order_number,
           billed, paid, discount, tax, refund, due, addl_disc, item_price, item_disc,
-          department, service_name, billed_doctor, service_owner)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          department, service_name, billed_doctor, service_owner, branch_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         importLog.lastInsertRowid, r.bill_date, r.bill_month, r.patient_id, r.patient_name,
         r.order_number, r.billed, r.paid, r.discount, r.tax, r.refund, r.due,
         r.addl_disc, r.item_price, r.item_disc, r.department, r.service_name,
-        r.billed_doctor, r.service_owner
+        r.billed_doctor, r.service_owner, branchId
       );
     }
 
@@ -172,19 +178,21 @@ router.post('/healthplix', async (req: Request, res: Response) => {
        LIMIT 1`
     );
     if (activeScenario) {
-      // Aggregate clinic revenue into dashboard_actuals
+      // Aggregate clinic revenue into dashboard_actuals (branch-scoped)
+      const bf = branchFilter(req);
       const clinicMonthly = db.all(
         `SELECT bill_month as month, COALESCE(SUM(item_price), 0) as total
-         FROM clinic_actuals WHERE bill_month IS NOT NULL AND bill_month != '' GROUP BY bill_month`
+         FROM clinic_actuals WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where} GROUP BY bill_month`,
+        ...bf.params
       );
       for (const row of clinicMonthly) {
         if (!row.month) continue;
         db.run(
-          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, updated_at)
-           VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, datetime('now'))
+          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
+           VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, datetime('now'))
            ON CONFLICT(scenario_id, category, item_name, month)
            DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-          activeScenario.id, row.month, row.total
+          activeScenario.id, row.month, row.total, branchId
         );
       }
     }
@@ -256,8 +264,8 @@ router.post('/healthplix/reset', (_req: Request, res: Response) => {
 
 router.get('/credentials/oneglance', async (_req: Request, res: Response) => {
   const db = _req.tenantDb!;
-  const username = db.get("SELECT value FROM app_settings WHERE key = 'oneglance_username'");
-  const hasPassword = db.get("SELECT value FROM app_settings WHERE key = 'oneglance_password'");
+  const username = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('oneglance_username', _req));
+  const hasPassword = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('oneglance_password', _req));
 
   res.json({
     username: username?.value || '',
@@ -270,13 +278,16 @@ router.put('/credentials/oneglance', async (req: Request, res: Response) => {
   if (!username) return res.status(400).json({ error: 'Username is required' });
 
   const db = req.tenantDb!;
-  db.run(`INSERT INTO app_settings (key, value) VALUES ('oneglance_username', ?)
-          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, username);
+  const uKey = branchSettingsKey('oneglance_username', req);
+  const pKey = branchSettingsKey('oneglance_password', req);
+
+  db.run(`INSERT INTO app_settings (key, value) VALUES (?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, uKey, username);
 
   if (password) {
     const encrypted = encrypt(password);
-    db.run(`INSERT INTO app_settings (key, value) VALUES ('oneglance_password', ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, encrypted);
+    db.run(`INSERT INTO app_settings (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, pKey, encrypted);
   }
 
   res.json({ ok: true });
@@ -284,7 +295,8 @@ router.put('/credentials/oneglance', async (req: Request, res: Response) => {
 
 router.delete('/credentials/oneglance', async (_req: Request, res: Response) => {
   const db = _req.tenantDb!;
-  db.run("DELETE FROM app_settings WHERE key LIKE 'oneglance_%'");
+  const prefix = branchSettingsKey('oneglance_', _req);
+  db.run("DELETE FROM app_settings WHERE key LIKE ?", prefix + '%');
   res.json({ ok: true });
 });
 
@@ -305,8 +317,9 @@ router.post('/oneglance', async (req: Request, res: Response) => {
   }
 
   const db = req.tenantDb!;
-  const usernameRow = db.get("SELECT value FROM app_settings WHERE key = 'oneglance_username'");
-  const passwordRow = db.get("SELECT value FROM app_settings WHERE key = 'oneglance_password'");
+  const branchId = getBranchIdForInsert(req);
+  const usernameRow = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('oneglance_username', req));
+  const passwordRow = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('oneglance_password', req));
 
   if (!usernameRow?.value || !passwordRow?.value) {
     return res.status(400).json({ error: 'Oneglance credentials not configured. Go to Settings to set them up.' });
@@ -344,26 +357,27 @@ router.post('/oneglance', async (req: Request, res: Response) => {
       const { rows, summary } = parseOneglanceSales(result.salesFile.filePath);
 
       const importLog = db.run(
-        `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         'ONEGLANCE_SALES_SYNC', result.salesFile.filename, rows.length,
-        summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed'
+        summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
       );
 
       for (const r of rows) {
         db.run(
           `INSERT INTO pharmacy_sales_actuals (import_id, bill_no, bill_date, bill_month, drug_name, batch_no,
             hsn_code, tax_pct, patient_id, patient_name, referred_by, qty, sales_amount,
-            purchase_amount, purchase_tax, sales_tax, profit)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            purchase_amount, purchase_tax, sales_tax, profit, branch_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           importLog.lastInsertRowid, r.bill_no, r.bill_date, r.bill_month, r.drug_name, r.batch_no,
           r.hsn_code, r.tax_pct, r.patient_id, r.patient_name, r.referred_by, r.qty,
-          r.sales_amount, r.purchase_amount, r.purchase_tax, r.sales_tax, r.profit
+          r.sales_amount, r.purchase_amount, r.purchase_tax, r.sales_tax, r.profit, branchId
         );
       }
       totalRows += rows.length;
 
-      // Auto-sync pharmacy revenue to dashboard_actuals
+      // Auto-sync pharmacy revenue to dashboard_actuals (branch-scoped)
+      const bf = branchFilter(req);
       const activeScenario = db.get(
         `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
          WHERE fy.is_active = 1 AND s.is_default = 1 LIMIT 1`
@@ -373,24 +387,25 @@ router.post('/oneglance', async (req: Request, res: Response) => {
           `SELECT bill_month as month, COALESCE(SUM(sales_amount), 0) as revenue,
                   COALESCE(SUM(purchase_amount), 0) as cogs
            FROM pharmacy_sales_actuals
-           WHERE bill_month IS NOT NULL AND bill_month != ''
-           GROUP BY bill_month`
+           WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where}
+           GROUP BY bill_month`,
+          ...bf.params
         );
         for (const row of pharmaMonthly) {
           if (!row.month) continue;
           db.run(
-            `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, updated_at)
-             VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, datetime('now'))
+            `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
+             VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?, datetime('now'))
              ON CONFLICT(scenario_id, category, item_name, month)
              DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-            activeScenario.id, row.month, row.revenue
+            activeScenario.id, row.month, row.revenue, branchId
           );
           db.run(
-            `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, updated_at)
-             VALUES (?, 'direct_costs', 'Pharmacy COGS', ?, ?, datetime('now'))
+            `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
+             VALUES (?, 'direct_costs', 'Pharmacy COGS', ?, ?, ?, datetime('now'))
              ON CONFLICT(scenario_id, category, item_name, month)
              DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-            activeScenario.id, row.month, row.cogs
+            activeScenario.id, row.month, row.cogs, branchId
           );
         }
       }
@@ -404,10 +419,10 @@ router.post('/oneglance', async (req: Request, res: Response) => {
       const { rows, summary } = parseOneglancePurchase(result.purchaseFile.filePath);
 
       const importLog = db.run(
-        `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         'ONEGLANCE_PURCHASE_SYNC', result.purchaseFile.filename, rows.length,
-        summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed'
+        summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
       );
 
       for (const r of rows) {
@@ -415,13 +430,13 @@ router.post('/oneglance', async (req: Request, res: Response) => {
           `INSERT INTO pharmacy_purchase_actuals (import_id, invoice_no, invoice_date, invoice_month,
             stockiest_name, mfg_name, drug_name, batch_no, hsn_code, batch_qty, free_qty, mrp, rate,
             discount_amount, net_purchase_value, net_sales_value, tax_pct, tax_amount,
-            purchase_qty, purchase_value, sales_value, profit, profit_pct)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            purchase_qty, purchase_value, sales_value, profit, profit_pct, branch_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           importLog.lastInsertRowid, r.invoice_no, r.invoice_date, r.invoice_month,
           r.stockiest_name, r.mfg_name, r.drug_name, r.batch_no, r.hsn_code,
           r.batch_qty, r.free_qty, r.mrp, r.rate, r.discount_amount,
           r.net_purchase_value, r.net_sales_value, r.tax_pct, r.tax_amount,
-          r.purchase_qty, r.purchase_value, r.sales_value, r.profit, r.profit_pct
+          r.purchase_qty, r.purchase_value, r.sales_value, r.profit, r.profit_pct, branchId
         );
       }
       totalRows += rows.length;

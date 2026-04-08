@@ -455,6 +455,14 @@ router.put('/clients/:slug/users/:id/branches', async (req: Request, res: Respon
     return res.status(400).json({ error: 'branch_ids must be an array' });
   }
 
+  // Validate all branch_ids belong to this client
+  for (const branchId of branch_ids) {
+    const branch = db.get('SELECT id FROM branches WHERE id = ? AND client_id = ?', [branchId, client.id]);
+    if (!branch) {
+      return res.status(400).json({ error: `Branch ${branchId} does not belong to this client` });
+    }
+  }
+
   // Clear existing assignments for this client's branches
   db.run(
     `DELETE FROM user_branch_access WHERE user_id = ? AND branch_id IN (

@@ -332,9 +332,10 @@ export function initializeSchema(db: DbHelper) {
           date_range_end TEXT,
           status TEXT DEFAULT 'completed',
           error_message TEXT,
-          created_at TEXT DEFAULT (datetime('now'))
+          created_at TEXT DEFAULT (datetime('now')),
+          branch_id INTEGER
         );
-        INSERT OR IGNORE INTO import_logs_new SELECT * FROM import_logs;
+        INSERT OR IGNORE INTO import_logs_new SELECT *, NULL FROM import_logs;
         DROP TABLE import_logs;
         ALTER TABLE import_logs_new RENAME TO import_logs;
       `);

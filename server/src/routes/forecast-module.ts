@@ -85,6 +85,16 @@ router.post('/items', async (req, res) => {
   res.json({ ...item, meta: item?.meta ? JSON.parse(item.meta) : {} });
 });
 
+// Reorder must come BEFORE :id to avoid 'reorder' matching as a param
+router.put('/items/reorder', async (req, res) => {
+  const db = req.tenantDb!;
+  const { items } = req.body; // [{id, sort_order}]
+  for (const item of items) {
+    db.run('UPDATE forecast_items SET sort_order = ? WHERE id = ?', item.sort_order, item.id);
+  }
+  res.json({ ok: true });
+});
+
 router.put('/items/:id', async (req, res) => {
   const db = req.tenantDb!;
   const { name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta } = req.body;
@@ -114,15 +124,6 @@ router.put('/items/:id', async (req, res) => {
 router.delete('/items/:id', async (req, res) => {
   const db = req.tenantDb!;
   db.run('DELETE FROM forecast_items WHERE id = ?', req.params.id);
-  res.json({ ok: true });
-});
-
-router.put('/items/reorder', async (req, res) => {
-  const db = req.tenantDb!;
-  const { items } = req.body; // [{id, sort_order}]
-  for (const item of items) {
-    db.run('UPDATE forecast_items SET sort_order = ? WHERE id = ?', item.sort_order, item.id);
-  }
   res.json({ ok: true });
 });
 

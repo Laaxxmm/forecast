@@ -154,13 +154,13 @@ router.get('/variance', async (req, res) => {
     const oldBudgets = business_unit
       ? db.all(
           `SELECT b.*, d.name as dept_name FROM budgets b LEFT JOIN departments d ON b.department_id = d.id
-           WHERE b.fy_id = ? AND b.business_unit = ? ORDER BY b.month`,
-          fy_id, business_unit
+           WHERE b.fy_id = ? AND b.business_unit = ?${bf.where} ORDER BY b.month`,
+          fy_id, business_unit, ...bf.params
         )
       : db.all(
           `SELECT b.*, d.name as dept_name FROM budgets b LEFT JOIN departments d ON b.department_id = d.id
-           WHERE b.fy_id = ? ORDER BY b.month`,
-          fy_id
+           WHERE b.fy_id = ?${bf.where} ORDER BY b.month`,
+          fy_id, ...bf.params
         );
     budgetRows = oldBudgets;
   }

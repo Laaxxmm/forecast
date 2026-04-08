@@ -79,8 +79,8 @@ export async function resolveBranch(req: Request, res: Response, next: NextFunct
 
     if (!branchHeader || branchHeader === 'all') {
       // Consolidated view
-      if (canViewAllConsolidated) {
-        // User with consolidated access sees all active branches
+      if (canViewAllConsolidated && (req.userType === 'super_admin' || req.session?.role === 'admin')) {
+        // Only admins/super_admins get all branches — regular users keep their assigned branches
         const allBranches = platformDb.all(
           'SELECT id FROM branches WHERE client_id = ? AND is_active = 1',
           req.clientId

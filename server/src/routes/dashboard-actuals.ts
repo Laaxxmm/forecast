@@ -8,6 +8,7 @@ const router = Router();
 router.get('/', async (req, res) => {
   const db = req.tenantDb!;
   const { scenario_id, month, category } = req.query;
+  const bf = branchFilter(req);
   if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
 
   let sql = 'SELECT * FROM dashboard_actuals WHERE scenario_id = ?';
@@ -15,6 +16,8 @@ router.get('/', async (req, res) => {
 
   if (month) { sql += ' AND month = ?'; params.push(month); }
   if (category) { sql += ' AND category = ?'; params.push(category); }
+  sql += bf.where;
+  params.push(...bf.params);
 
   sql += ' ORDER BY category, item_name, month';
   const rows = db.all(sql, ...params);
@@ -45,15 +48,16 @@ router.post('/bulk', async (req, res) => {
 router.get('/summary', async (req, res) => {
   const db = req.tenantDb!;
   const { scenario_id } = req.query;
+  const bf = branchFilter(req);
   if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
 
   const rows = db.all(
     `SELECT category, month, SUM(amount) as total
      FROM dashboard_actuals
-     WHERE scenario_id = ?
+     WHERE scenario_id = ?${bf.where}
      GROUP BY category, month
      ORDER BY category, month`,
-    scenario_id
+    scenario_id, ...bf.params
   );
   res.json(rows);
 });

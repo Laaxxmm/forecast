@@ -38,7 +38,7 @@ router.get('/clinic/doctors', async (req, res) => {
   const bf = branchFilter(req);
 
   if (month) {
-    res.json(db.all(
+    return res.json(db.all(
       `SELECT bill_month, billed_doctor, department, SUM(transaction_count) as transaction_count,
         SUM(total_revenue) as total_revenue
       FROM clinic_doctor_summary WHERE bill_month = ?${bf.where}

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, TrendingUp, Upload, Settings, LogOut, BarChart3, Building2, ArrowLeftRight,
@@ -37,6 +37,19 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
   const [canViewConsolidated, setCanViewConsolidated] = useState(false);
   const [selectedBranchId, setSelectedBranchId] = useState<string>(localStorage.getItem('branch_id') || 'all');
   const [showBranchDropdown, setShowBranchDropdown] = useState(false);
+  const branchDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Click-outside handler for branch dropdown
+  useEffect(() => {
+    if (!showBranchDropdown) return;
+    const handleClick = (e: MouseEvent) => {
+      if (branchDropdownRef.current && !branchDropdownRef.current.contains(e.target as Node)) {
+        setShowBranchDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showBranchDropdown]);
 
   useEffect(() => {
     if (!isMultiBranch || isSuperAdmin) return;
@@ -86,6 +99,9 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
   const switchClient = () => {
     localStorage.removeItem('client_slug');
     localStorage.removeItem('client_name');
+    localStorage.removeItem('is_multi_branch');
+    localStorage.removeItem('branch_id');
+    localStorage.removeItem('branch_name');
     navigate('/select-client');
   };
 
@@ -116,7 +132,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
     <aside
       className={`${w} bg-dark-800 text-white flex flex-col min-h-screen fixed left-0 top-0 z-40 border-r border-dark-400/30 transition-all duration-200 ease-in-out overflow-hidden`}
       onMouseEnter={() => onExpandedChange(true)}
-      onMouseLeave={() => onExpandedChange(false)}
+      onMouseLeave={() => { if (!showBranchDropdown) onExpandedChange(false); }}
     >
       {/* Logo */}
       <div className="px-4 py-5 border-b border-dark-400/30">
@@ -171,7 +187,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
       {/* Branch selector — multi-branch clients only */}
       {isMultiBranch && !isSuperAdmin && branches.length > 0 && expanded && (
         <div className="px-3 py-2 border-b border-dark-400/30">
-          <div className="relative">
+          <div className="relative" ref={branchDropdownRef}>
             <button
               onClick={() => setShowBranchDropdown(!showBranchDropdown)}
               className="w-full flex items-center gap-2 bg-dark-600 rounded-xl px-3 py-2 hover:bg-dark-500 transition-colors"

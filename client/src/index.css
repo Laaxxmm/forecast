@@ -31,25 +31,37 @@ body {
     @apply text-white px-4 py-2.5 rounded-xl transition-all font-medium shadow-sm;
     background-color: #10b981;
   }
-  .btn-primary:hover {
+  .btn-primary:hover:not(:disabled) {
     background-color: #059669;
     box-shadow: 0 0 20px rgba(16, 185, 129, 0.15);
+  }
+  .btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   .btn-secondary {
     @apply text-slate-300 px-4 py-2.5 rounded-xl transition-all font-medium;
     background-color: #212133;
     border: 1px solid #353548;
   }
-  .btn-secondary:hover {
+  .btn-secondary:hover:not(:disabled) {
     background-color: #2a2a3d;
+  }
+  .btn-secondary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   .btn-danger {
     @apply text-red-400 px-4 py-2.5 rounded-xl transition-all font-medium;
     background-color: rgba(239, 68, 68, 0.2);
     border: 1px solid rgba(239, 68, 68, 0.3);
   }
-  .btn-danger:hover {
+  .btn-danger:hover:not(:disabled) {
     background-color: rgba(239, 68, 68, 0.3);
+  }
+  .btn-danger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   .card {
     @apply rounded-2xl p-6;
@@ -74,6 +86,10 @@ body {
     outline: none;
     box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.5);
     border-color: rgba(16, 185, 129, 0.5);
+  }
+  select.input option {
+    background-color: #14141f;
+    color: #e2e8f0;
   }
   .badge {
     @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium;

@@ -27,6 +27,11 @@ export function branchFilter(
     return { where: ` AND ${col} IN (${placeholders})`, params: [...req.allowedBranchIds] };
   }
 
+  // Multi-branch client but no allowed branches — deny all data
+  if (req.isMultiBranch) {
+    return { where: ' AND 1=0', params: [] };
+  }
+
   return { where: '', params: [] };
 }
 

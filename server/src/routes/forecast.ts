@@ -1,31 +1,34 @@
 import { Router } from 'express';
+import { branchFilter } from '../utils/branch.js';
 
 const router = Router();
 
 router.get('/', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id, business_unit } = req.query;
+  const bf = branchFilter(req);
   if (!fy_id) return res.status(400).json({ error: 'fy_id required' });
 
   if (business_unit) {
     res.json(db.all(
-      'SELECT * FROM forecasts WHERE fy_id = ? AND business_unit = ? ORDER BY month, department_id, metric',
-      fy_id, business_unit
+      `SELECT * FROM forecasts WHERE fy_id = ? AND business_unit = ?${bf.where} ORDER BY month, department_id, metric`,
+      fy_id, business_unit, ...bf.params
     ));
   } else {
-    res.json(db.all('SELECT * FROM forecasts WHERE fy_id = ? ORDER BY month, department_id, metric', fy_id));
+    res.json(db.all(`SELECT * FROM forecasts WHERE fy_id = ?${bf.where} ORDER BY month, department_id, metric`, fy_id, ...bf.params));
   }
 });
 
 router.post('/', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id, business_unit, entries, forecast_date } = req.body;
+  const bf = branchFilter(req);
   if (!fy_id || !business_unit || !entries?.length) {
     return res.status(400).json({ error: 'fy_id, business_unit, and entries required' });
   }
 
   const fDate = forecast_date || new Date().toISOString().slice(0, 10);
-  db.run('DELETE FROM forecasts WHERE fy_id = ? AND business_unit = ? AND forecast_date = ?', fy_id, business_unit, fDate);
+  db.run(`DELETE FROM forecasts WHERE fy_id = ? AND business_unit = ? AND forecast_date = ?${bf.where}`, fy_id, business_unit, fDate, ...bf.params);
 
   for (const e of entries) {
     db.run(
@@ -41,10 +44,11 @@ router.post('/', async (req, res) => {
 router.get('/auto-fill', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id, business_unit } = req.query;
+  const bf = branchFilter(req);
   if (!fy_id || !business_unit) return res.status(400).json({ error: 'fy_id and business_unit required' });
 
   const budgets = db.all(
-    'SELECT * FROM budgets WHERE fy_id = ? AND business_unit = ? ORDER BY month', fy_id, business_unit
+    `SELECT * FROM budgets WHERE fy_id = ? AND business_unit = ?${bf.where} ORDER BY month`, fy_id, business_unit, ...bf.params
   );
   res.json(budgets);
 });
