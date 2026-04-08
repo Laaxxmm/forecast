@@ -78,10 +78,13 @@ export async function syncTuria(opts: TuriaSyncOptions): Promise<TuriaSyncResult
 
     // ── Step 2: Enter phone number ──
     progress(opts, 'login', 'Entering phone number...', 10);
-    const phoneInput = page.locator('input[type="tel"], input[placeholder*="mobile" i], input[placeholder*="number" i], input[placeholder*="phone" i]').first();
+    // Turia uses MUI FilledInput with type="text" and placeholder="Mobile Number"
+    const phoneInput = page.locator('input[placeholder*="Mobile" i], input[placeholder*="mobile" i], input[placeholder*="phone" i], input[placeholder*="number" i], input[type="tel"]').first();
     await phoneInput.waitFor({ timeout: 10000 });
+    await phoneInput.click();
     await phoneInput.fill(opts.phoneNumber);
     await page.waitForTimeout(500);
+    await screenshot('phone-entered');
 
     // Click "Get OTP" button
     progress(opts, 'login', 'Requesting OTP...', 15);
@@ -105,34 +108,131 @@ export async function syncTuria(opts: TuriaSyncOptions): Promise<TuriaSyncResult
     // ── Step 4: Enter OTP ──
     progress(opts, 'login', 'Entering OTP...', 30);
 
-    // Try individual OTP input boxes first (common pattern: 4 separate inputs)
-    const otpInputs = page.locator('input[maxlength="1"], input[type="tel"][maxlength="1"]');
-    const otpInputCount = await otpInputs.count();
+    // Turia uses MUI OTP inputs — find all visible text/tel/number inputs in the OTP area
+    // Try multiple selector strategies
+    const otpSelectors = [
+      'input[maxlength="1"]',                    // Standard OTP pattern
+      'input[type="tel"][maxlength="1"]',         // Tel type with maxlength
+      'input[type="number"][maxlength="1"]',      // Number type
+      'input[inputmode="numeric"]',               // Numeric inputmode (MUI pattern)
+    ];
 
-    if (otpInputCount >= 4) {
-      // Fill individual digit inputs — use keyboard type to trigger React state updates
-      for (let i = 0; i < otp.length && i < otpInputCount; i++) {
-        await otpInputs.nth(i).click();
-        await otpInputs.nth(i).fill('');
-        await otpInputs.nth(i).pressSequentially(otp[i], { delay: 50 });
-        await page.waitForTimeout(200);
+    let otpFilled = false;
+    for (const sel of otpSelectors) {
+      const otpInputs = page.locator(sel);
+      const count = await otpInputs.count();
+      if (count >= 4) {
+        console.log(`Turia: Found ${count} OTP inputs with selector: ${sel}`);
+        for (let i = 0; i < otp.length && i < count; i++) {
+          await otpInputs.nth(i).click();
+          await page.waitForTimeout(100);
+          await page.keyboard.press('Backspace');
+          await page.keyboard.type(otp[i], { delay: 50 });
+          await page.waitForTimeout(300);
+        }
+        otpFilled = true;
+        break;
       }
-    } else {
-      // Try a single OTP input field
-      const singleOtpInput = page.locator('input[type="tel"], input[placeholder*="otp" i], input[placeholder*="code" i], input[placeholder*="verification" i]').first();
-      await singleOtpInput.fill(otp);
     }
 
-    await page.waitForTimeout(1500);
+    if (!otpFilled) {
+      // Fallback: look for ANY visible inputs that appeared after OTP was requested
+      // (exclude the phone input which we already filled)
+      console.log('Turia: No individual OTP inputs found, trying fallback strategies');
+      const allInputs = page.locator('input:visible');
+      const inputCount = await allInputs.count();
+      console.log(`Turia: Found ${inputCount} visible inputs total`);
+
+      // Log all input attributes for debugging
+      for (let i = 0; i < inputCount; i++) {
+        const attrs = await allInputs.nth(i).evaluate(el => {
+          const inp = el as HTMLInputElement;
+          return {
+            type: inp.type, maxlength: inp.maxLength, placeholder: inp.placeholder,
+            inputmode: inp.inputMode, className: inp.className.slice(0, 80),
+            value: inp.value, id: inp.id
+          };
+        });
+        console.log(`Turia: Input ${i}:`, JSON.stringify(attrs));
+      }
+
+      // Try to find inputs that look like OTP (small, empty, after the phone input)
+      if (inputCount > 1) {
+        // Skip the first input (phone), try remaining
+        const otpArea = inputCount >= 5 ? inputCount - 4 : 1; // Last 4 inputs
+        for (let i = otpArea; i < inputCount && (i - otpArea) < otp.length; i++) {
+          await allInputs.nth(i).click();
+          await page.waitForTimeout(100);
+          await page.keyboard.type(otp[i - otpArea], { delay: 50 });
+          await page.waitForTimeout(200);
+        }
+        otpFilled = true;
+      }
+
+      if (!otpFilled) {
+        await screenshot('otp-inputs-not-found');
+        throw new Error('Could not find OTP input fields on the page');
+      }
+    }
+
+    await page.waitForTimeout(2000);
     await screenshot('otp-entered');
 
     // Click Verify OTP button
     progress(opts, 'login', 'Verifying OTP...', 35);
-    const verifyBtn = page.locator('button:has-text("Verify OTP"), button:has-text("Verify"), button:has-text("verify"), button:has-text("Submit"), button:has-text("submit"), button:has-text("Login"), button:has-text("login")').first();
-    // Wait for button to be enabled (it enables after OTP is fully entered)
-    await verifyBtn.waitFor({ state: 'visible', timeout: 10000 });
-    await page.waitForTimeout(500);
-    await verifyBtn.click({ force: true });
+
+    // Try clicking the Verify OTP button - use text matching and also try by role
+    let verifyClicked = false;
+    const verifySelectors = [
+      'button:has-text("Verify OTP")',
+      'button:has-text("Verify")',
+      'button:has-text("Submit")',
+      'button:has-text("Login")',
+      '[role="button"]:has-text("Verify")',
+      'a:has-text("Verify")',
+    ];
+
+    for (const sel of verifySelectors) {
+      try {
+        const btn = page.locator(sel).first();
+        if (await btn.isVisible({ timeout: 3000 })) {
+          const isDisabled = await btn.isDisabled();
+          console.log(`Turia: Found verify button with "${sel}", disabled=${isDisabled}`);
+          if (!isDisabled) {
+            await btn.click({ timeout: 5000 });
+            verifyClicked = true;
+            break;
+          } else {
+            console.log('Turia: Button is disabled, trying force click');
+            await btn.click({ force: true, timeout: 5000 });
+            verifyClicked = true;
+            break;
+          }
+        }
+      } catch { /* try next selector */ }
+    }
+
+    if (!verifyClicked) {
+      // Last resort: click any visible button that isn't "Resend OTP" or "Get OTP"
+      const allBtns = page.locator('button:visible');
+      const btnCount = await allBtns.count();
+      console.log(`Turia: No verify button found. ${btnCount} visible buttons:`);
+      for (let i = 0; i < btnCount; i++) {
+        const text = await allBtns.nth(i).textContent();
+        console.log(`  Button ${i}: "${text}"`);
+        if (text && /verify|submit|login|continue/i.test(text) && !/resend|get otp/i.test(text)) {
+          await allBtns.nth(i).click({ force: true });
+          verifyClicked = true;
+          break;
+        }
+      }
+    }
+
+    if (!verifyClicked) {
+      await screenshot('verify-button-not-found');
+      throw new Error('Could not find or click the Verify OTP button');
+    }
+
     await page.waitForTimeout(5000);
     await screenshot('post-verify');
 
