@@ -40,15 +40,21 @@ export async function syncTuria(opts: TuriaSyncOptions): Promise<TuriaSyncResult
   const debugDir = path.join(dataDir, 'uploads', 'debug');
   if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true });
 
-  const chromiumPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium';
-  const browser = await chromium.launch({
-    ...(isProd ? { executablePath: chromiumPath } : { channel: 'chrome' }),
-    headless: isProd ? true : false,
-    args: [
-      '--disable-blink-features=AutomationControlled',
-      ...(isProd ? ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] : []),
-    ],
-  });
+  const chromiumPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || (isProd ? '/usr/bin/chromium' : undefined);
+  let browser;
+  try {
+    browser = await chromium.launch({
+      ...(chromiumPath ? { executablePath: chromiumPath } : { channel: 'chrome' }),
+      headless: true,
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
+      ],
+    });
+  } catch (launchErr: any) {
+    console.error('Turia: Browser launch failed:', launchErr.message);
+    throw new Error(`Browser launch failed: ${launchErr.message}`);
+  }
 
   const context: BrowserContext = await browser.newContext({
     acceptDownloads: true,

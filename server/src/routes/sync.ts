@@ -664,11 +664,12 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Req
       },
     };
   } catch (err: any) {
+    console.error('Turia sync error:', err.message, err.stack);
     state.progress = {
       step: 'error',
-      message: isProd ? 'Sync failed' : (err.message || 'Sync failed'),
+      message: err.message || 'Sync failed',
       pct: 0,
-      error: isProd ? 'Sync failed' : err.message,
+      error: err.message || 'Sync failed',
     };
     state.activeSyncId = null;
     state.otpResolver = null;
