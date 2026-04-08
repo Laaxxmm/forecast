@@ -16,17 +16,13 @@ export default function AdjustmentsPage() {
 
   return (
     <div className="space-y-4">
-      {/* Tab bar */}
+      {/* Tab bar — uses tv-tab class for TallyVision consistency */}
       <div className="flex gap-1 px-1">
         {TABS.map(tab => (
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
-            className={`px-4 py-2 text-xs font-semibold rounded-lg transition-colors ${
-              activeTab === tab.key
-                ? 'bg-indigo-600 text-white'
-                : 'bg-dark-700 text-theme-muted hover:text-theme-primary hover:bg-dark-600'
-            }`}
+            className={`tv-tab ${activeTab === tab.key ? 'active' : ''}`}
           >
             {tab.label}
           </button>

@@ -1,6 +1,10 @@
+/**
+ * Trial Balance — Matches TallyVision card/table styling
+ * Grouped ledger view with opening, debit, credit, closing columns
+ */
 import { useState, useEffect, useMemo } from 'react';
+import { ChevronDown, ChevronRight, Search } from 'lucide-react';
 import api from '../../api/client';
-import { Table2, Search, ChevronDown, ChevronRight } from 'lucide-react';
 
 interface TBRow {
   ledger_name: string;
@@ -11,18 +15,15 @@ interface TBRow {
   closing_balance: number;
 }
 
-interface Company {
-  id: number;
-  name: string;
-}
+interface Company { id: number; name: string; }
 
 function fmt(val: number): string {
   if (!val) return '-';
   const abs = Math.abs(val);
   const sign = val < 0 ? '-' : '';
-  if (abs >= 10000000) return `${sign}₹${(abs / 10000000).toFixed(2)} Cr`;
-  if (abs >= 100000) return `${sign}₹${(abs / 100000).toFixed(2)} L`;
-  return `${sign}₹${abs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+  if (abs >= 10000000) return `${sign}${(abs / 10000000).toFixed(2)} Cr`;
+  if (abs >= 100000) return `${sign}${(abs / 100000).toFixed(2)} L`;
+  return `${sign}${abs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 }
 
 function getFYDates(): { from: string; to: string } {
@@ -33,9 +34,9 @@ function getFYDates(): { from: string; to: string } {
 
 export default function TrialBalancePage() {
   const [companies, setCompanies] = useState<Company[]>([]);
-  const [selectedCompanyId, setSelectedCompanyId] = useState<number | null>(null);
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
   const [rows, setRows] = useState<TBRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
@@ -43,30 +44,32 @@ export default function TrialBalancePage() {
 
   useEffect(() => {
     api.get('/vcfo/companies').then(res => {
-      setCompanies(res.data);
-      if (res.data.length > 0) setSelectedCompanyId(res.data[0].id);
+      const list = res.data || [];
+      setCompanies(list);
+      if (list.length > 0) setSelectedCompanyId(String(list[0].id));
     }).catch(() => {});
   }, []);
 
   useEffect(() => {
-    if (!selectedCompanyId) { setLoading(false); return; }
+    if (!from || !to) return;
     setLoading(true);
-    api.get('/vcfo/dashboard/trial-balance', { params: { from, to, companyId: selectedCompanyId } })
+    const params: any = { from, to };
+    if (selectedCompanyId) params.companyId = selectedCompanyId;
+    api.get('/vcfo/dashboard/trial-balance', { params })
       .then(res => {
-        setRows(res.data);
-        // Expand all groups by default
-        const groups = new Set(res.data.map((r: TBRow) => r.group_name).filter(Boolean));
+        const data = res.data || [];
+        setRows(data);
+        const groups = new Set(data.map((r: TBRow) => r.group_name).filter(Boolean));
         setExpandedGroups(groups as Set<string>);
       })
+      .catch(() => setRows([]))
       .finally(() => setLoading(false));
   }, [selectedCompanyId, from, to]);
 
-  // Group rows by group_name
   const grouped = useMemo(() => {
     const filtered = search
-      ? rows.filter(r => r.ledger_name.toLowerCase().includes(search.toLowerCase()) || r.group_name?.toLowerCase().includes(search.toLowerCase()))
+      ? rows.filter(r => r.ledger_name?.toLowerCase().includes(search.toLowerCase()) || r.group_name?.toLowerCase().includes(search.toLowerCase()))
       : rows;
-
     const map = new Map<string, TBRow[]>();
     for (const r of filtered) {
       const grp = r.group_name || 'Ungrouped';
@@ -84,7 +87,6 @@ export default function TrialBalancePage() {
     });
   };
 
-  // Totals
   const totals = useMemo(() => {
     return rows.reduce((acc, r) => ({
       opening: acc.opening + (r.opening_balance || 0),
@@ -95,57 +97,45 @@ export default function TrialBalancePage() {
   }, [rows]);
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-theme-heading">Trial Balance</h1>
-          <p className="text-sm text-theme-muted mt-1">Period: {from} to {to}</p>
-        </div>
-        <div className="flex items-center gap-3">
-          {companies.length > 1 && (
-            <select
-              value={selectedCompanyId || ''}
-              onChange={e => setSelectedCompanyId(Number(e.target.value))}
-              className="bg-dark-700 border border-dark-400/30 rounded-lg px-3 py-2 text-sm text-theme-primary"
-            >
-              {companies.map(c => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          )}
-          <div className="relative">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-faint" />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search ledger..."
-              className="bg-dark-700 border border-dark-400/30 rounded-lg pl-9 pr-3 py-2 text-sm text-theme-primary w-48"
-            />
-          </div>
-        </div>
+    <div className="space-y-5">
+      {/* Toolbar */}
+      <div className="card-tv p-5">
+        <h1 className="text-lg font-bold text-theme-heading">Trial Balance</h1>
+        <p className="text-xs text-theme-faint mt-0.5">Opening, debit, credit & closing balances for all ledgers</p>
       </div>
 
-      {loading ? (
-        <div className="flex items-center justify-center h-64">
-          <div className="text-theme-muted">Loading trial balance...</div>
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-theme-faint">Filters</span>
+        <select value={selectedCompanyId} onChange={e => setSelectedCompanyId(e.target.value)} className="tv-input min-w-[160px]">
+          <option value="">All Companies</option>
+          {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <div className="relative">
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-faint" />
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search ledger..."
+            className="tv-input pl-8 w-48"
+          />
         </div>
-      ) : rows.length === 0 ? (
-        <div className="bg-dark-700 rounded-2xl p-12 text-center border border-dark-400/30">
-          <Table2 size={48} className="text-theme-faint mx-auto mb-4" />
-          <h2 className="text-lg font-semibold text-theme-heading mb-2">No Trial Balance Data</h2>
-          <p className="text-theme-muted text-sm">Sync your Tally data first to view the trial balance.</p>
-        </div>
-      ) : (
-        <div className="bg-dark-700 rounded-2xl border border-dark-400/20 overflow-hidden">
-          <table className="w-full text-sm">
+        <span className="text-xs text-theme-faint">{from} to {to}</span>
+      </div>
+
+      {loading && <div className="flex justify-center py-16"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-500" /></div>}
+
+      {!loading && rows.length > 0 && (
+        <div className="card-tv overflow-hidden">
+          <table className="tv-table">
             <thead>
-              <tr className="border-b border-dark-400/30">
-                <th className="text-left px-4 py-3 text-xs font-semibold text-theme-muted">Ledger Name</th>
-                <th className="text-right px-4 py-3 text-xs font-semibold text-theme-muted">Opening</th>
-                <th className="text-right px-4 py-3 text-xs font-semibold text-theme-muted">Debit</th>
-                <th className="text-right px-4 py-3 text-xs font-semibold text-theme-muted">Credit</th>
-                <th className="text-right px-4 py-3 text-xs font-semibold text-theme-muted">Closing</th>
+              <tr>
+                <th>Ledger Name</th>
+                <th className="text-right">Opening</th>
+                <th className="text-right">Debit</th>
+                <th className="text-right">Credit</th>
+                <th className="text-right">Closing</th>
               </tr>
             </thead>
             <tbody>
@@ -162,40 +152,49 @@ export default function TrialBalancePage() {
                   <tr
                     key={`grp-${grp}`}
                     onClick={() => toggleGroup(grp)}
-                    className="border-b border-dark-400/10 bg-dark-600/50 cursor-pointer hover:bg-dark-600"
+                    className="cursor-pointer"
+                    style={{ backgroundColor: 'rgb(var(--c-dark-600) / 0.5)' }}
                   >
-                    <td className="px-4 py-2.5 font-semibold text-theme-primary flex items-center gap-2">
-                      {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      {grp}
-                      <span className="text-xs text-theme-faint font-normal">({ledgers.length})</span>
+                    <td className="font-semibold text-theme-primary">
+                      <span className="inline-flex items-center gap-2">
+                        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        {grp}
+                        <span className="text-[10px] text-theme-faint font-normal">({ledgers.length})</span>
+                      </span>
                     </td>
-                    <td className="text-right px-4 py-2.5 text-theme-secondary font-medium">{fmt(grpTotals.opening)}</td>
-                    <td className="text-right px-4 py-2.5 text-theme-secondary font-medium">{fmt(grpTotals.debit)}</td>
-                    <td className="text-right px-4 py-2.5 text-theme-secondary font-medium">{fmt(grpTotals.credit)}</td>
-                    <td className="text-right px-4 py-2.5 text-theme-secondary font-medium">{fmt(grpTotals.closing)}</td>
+                    <td className="text-right font-medium text-theme-secondary">{fmt(grpTotals.opening)}</td>
+                    <td className="text-right font-medium text-theme-secondary">{fmt(grpTotals.debit)}</td>
+                    <td className="text-right font-medium text-theme-secondary">{fmt(grpTotals.credit)}</td>
+                    <td className="text-right font-medium text-theme-secondary">{fmt(grpTotals.closing)}</td>
                   </tr>,
                   ...(isExpanded ? ledgers.map((r, i) => (
-                    <tr key={`${grp}-${i}`} className="border-b border-dark-400/5 hover:bg-dark-600/30">
-                      <td className="px-4 py-2 pl-10 text-theme-secondary">{r.ledger_name}</td>
-                      <td className="text-right px-4 py-2 text-theme-secondary tabular-nums">{fmt(r.opening_balance)}</td>
-                      <td className="text-right px-4 py-2 text-theme-secondary tabular-nums">{fmt(r.net_debit)}</td>
-                      <td className="text-right px-4 py-2 text-theme-secondary tabular-nums">{fmt(r.net_credit)}</td>
-                      <td className="text-right px-4 py-2 text-theme-secondary tabular-nums">{fmt(r.closing_balance)}</td>
+                    <tr key={`${grp}-${i}`}>
+                      <td className="pl-10 text-theme-secondary">{r.ledger_name}</td>
+                      <td className="text-right tabular-nums">{fmt(r.opening_balance)}</td>
+                      <td className="text-right tabular-nums">{fmt(r.net_debit)}</td>
+                      <td className="text-right tabular-nums">{fmt(r.net_credit)}</td>
+                      <td className="text-right tabular-nums">{fmt(r.closing_balance)}</td>
                     </tr>
                   )) : []),
                 ];
               }).flat()}
             </tbody>
             <tfoot>
-              <tr className="border-t-2 border-dark-400/30 bg-dark-600">
-                <td className="px-4 py-3 font-bold text-theme-heading">Total</td>
-                <td className="text-right px-4 py-3 font-bold text-theme-heading tabular-nums">{fmt(totals.opening)}</td>
-                <td className="text-right px-4 py-3 font-bold text-theme-heading tabular-nums">{fmt(totals.debit)}</td>
-                <td className="text-right px-4 py-3 font-bold text-theme-heading tabular-nums">{fmt(totals.credit)}</td>
-                <td className="text-right px-4 py-3 font-bold text-theme-heading tabular-nums">{fmt(totals.closing)}</td>
+              <tr style={{ backgroundColor: 'rgb(var(--c-dark-600) / 0.5)' }}>
+                <td className="font-bold text-theme-heading">Total</td>
+                <td className="text-right font-bold text-theme-heading tabular-nums">{fmt(totals.opening)}</td>
+                <td className="text-right font-bold text-theme-heading tabular-nums">{fmt(totals.debit)}</td>
+                <td className="text-right font-bold text-theme-heading tabular-nums">{fmt(totals.credit)}</td>
+                <td className="text-right font-bold text-theme-heading tabular-nums">{fmt(totals.closing)}</td>
               </tr>
             </tfoot>
           </table>
+        </div>
+      )}
+
+      {!loading && rows.length === 0 && (
+        <div className="card-tv p-12 text-center text-theme-faint text-sm">
+          No trial balance data found. Sync from Tally first.
         </div>
       )}
     </div>
