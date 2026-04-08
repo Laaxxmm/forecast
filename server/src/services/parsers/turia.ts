@@ -16,6 +16,7 @@ export interface TuriaInvoiceRow {
 }
 
 const COLUMN_MAP: Record<string, string> = {
+  'id': 'invoice_id',
   'invoice id': 'invoice_id',
   'invoice no': 'invoice_id',
   'invoice number': 'invoice_id',
@@ -49,6 +50,8 @@ const COLUMN_MAP: Record<string, string> = {
   'invoice amount': 'total_amount',
   'grand total': 'total_amount',
   'net amount': 'total_amount',
+  'sub total': 'total_amount',
+  'subtotal': 'total_amount',
   'status': 'status',
   'payment status': 'status',
 };

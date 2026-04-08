@@ -628,11 +628,32 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Req
     }
 
     // Auto-sync consultancy revenue to dashboard_actuals
-    const activeScenario = db.get(
-      `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
+    // First try: active scenario in active FY
+    let activeScenario = db.get(
+      `SELECT s.id, s.name, fy.label as fy_label FROM scenarios s
+       JOIN financial_years fy ON s.fy_id = fy.id
        WHERE fy.is_active = 1 AND s.is_default = 1 LIMIT 1`
     );
+
+    // Fallback: any default scenario if no active FY found
+    if (!activeScenario) {
+      activeScenario = db.get(
+        `SELECT s.id, s.name FROM scenarios s WHERE s.is_default = 1 LIMIT 1`
+      );
+      console.log('Turia: No active FY found, using fallback scenario:', activeScenario?.id || 'NONE');
+    }
+
+    // Last resort: any scenario at all
+    if (!activeScenario) {
+      activeScenario = db.get('SELECT id, name FROM scenarios LIMIT 1');
+      console.log('Turia: No default scenario, using any scenario:', activeScenario?.id || 'NONE');
+    }
+
     if (activeScenario) {
+      console.log(`Turia: Using scenario ${activeScenario.id} (${activeScenario.name}) for dashboard_actuals`);
+
+      // Aggregate ALL turia_invoices (not just current import) by month
+      // Use branch filter only if multi-branch mode is active
       const bf = branchFilter(req);
       const turiaMonthly = db.all(
         `SELECT invoice_month as month, COALESCE(SUM(total_amount), 0) as total
@@ -640,8 +661,13 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Req
          GROUP BY invoice_month`,
         ...bf.params
       );
+
+      console.log(`Turia: Found ${turiaMonthly.length} monthly totals to sync to dashboard_actuals`);
+
+      let syncedCount = 0;
       for (const row of turiaMonthly) {
         if (!row.month) continue;
+        console.log(`Turia:   month=${row.month}, total=${row.total}`);
         db.run(
           `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
            VALUES (?, 'revenue', 'Consultancy Revenue', ?, ?, ?, datetime('now'))
@@ -649,14 +675,32 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Req
            DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
           activeScenario.id, row.month, row.total, branchId
         );
+        syncedCount++;
       }
+      console.log(`Turia: Synced ${syncedCount} months to dashboard_actuals`);
+
+      // Verify the data was actually saved
+      const verifyCount = db.get(
+        `SELECT COUNT(*) as cnt FROM dashboard_actuals WHERE scenario_id = ? AND item_name = 'Consultancy Revenue'`,
+        activeScenario.id
+      );
+      console.log(`Turia: Verification — ${verifyCount?.cnt || 0} Consultancy Revenue rows in dashboard_actuals`);
+    } else {
+      console.error('Turia: WARNING — No scenario found at all! Data saved to turia_invoices but NOT synced to dashboard_actuals.');
+      console.error('Turia: Create a scenario in the Forecast module to enable automatic actuals sync.');
     }
 
     try { fs.unlinkSync(result.filePath); } catch {}
 
+    // Count how many rows are in turia_invoices and dashboard_actuals for reporting
+    const totalTuriaRows = db.get('SELECT COUNT(*) as cnt FROM turia_invoices')?.cnt || 0;
+    const totalActualRows = db.get(
+      `SELECT COUNT(*) as cnt FROM dashboard_actuals WHERE item_name = 'Consultancy Revenue'`
+    )?.cnt || 0;
+
     state.progress = {
       step: 'complete',
-      message: 'Turia sync completed successfully',
+      message: `Turia sync completed — ${rows.length} invoices imported, ${totalActualRows} monthly actuals synced`,
       pct: 100,
       result: {
         importId: importLog.lastInsertRowid,
