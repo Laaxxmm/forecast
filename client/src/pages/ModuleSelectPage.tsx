@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
-import { BarChart3, TrendingUp, ShieldCheck, ClipboardCheck, Scale, ArrowLeft, Lock, ExternalLink } from 'lucide-react';
+import { BarChart3, TrendingUp, ShieldCheck, ClipboardCheck, Scale, ArrowLeft, Lock } from 'lucide-react';
 
 interface ModuleInfo {
   key: string;
@@ -28,8 +28,7 @@ const MODULE_CATALOG: ModuleInfo[] = [
     description: 'Comprehensive Virtual CFO portal with advisory dashboards, KPIs, and strategic insights.',
     icon: ShieldCheck,
     color: 'blue',
-    path: 'http://localhost:3456',
-    external: true,
+    path: '/vcfo',
   },
   {
     key: 'audit_view',
@@ -77,11 +76,7 @@ export default function ModuleSelectPage() {
     if (!enabledModules.includes(mod.key)) return;
     if (!mod.path) return;
     localStorage.setItem('active_module', mod.key);
-    if (mod.external) {
-      window.open(mod.path, '_blank');
-    } else {
-      navigate(mod.path);
-    }
+    navigate(mod.path);
   };
 
   const colorMap: Record<string, { bg: string; border: string; icon: string; glow: string }> = {
@@ -148,10 +143,6 @@ export default function ModuleSelectPage() {
                 ) : comingSoon ? (
                   <span className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-400">
                     Coming soon
-                  </span>
-                ) : mod.external ? (
-                  <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${colors.icon}`}>
-                    <ExternalLink size={11} /> Open TallyVision
                   </span>
                 ) : (
                   <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${colors.icon}`}>

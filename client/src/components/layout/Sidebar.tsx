@@ -2,7 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, TrendingUp, Upload, Settings, LogOut, BarChart3, Building2, ArrowLeftRight,
-  ChevronLeft, MapPin, ChevronDown, Sun, Moon, ArrowRight,
+  ChevronLeft, MapPin, ChevronDown, Sun, Moon, ArrowRight, ShieldCheck, RefreshCw,
+  FileText, Scale, Receipt, ClipboardCheck, Landmark, FolderOpen, BookOpen, FileSpreadsheet,
+  Calculator, FileSearch, Cog,
 } from 'lucide-react';
 import api from '../../api/client';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -14,12 +16,28 @@ const forecastLinks = [
   { to: '/analysis', icon: BarChart3, label: 'Analysis', clientAdminOnly: false },
 ];
 
-// VCFO Portal is served externally via TallyVision (port 3456)
-// No internal sidebar links needed — TallyVision has its own navigation
+// VCFO Portal navigation
+const vcfoLinks = [
+  { to: '/vcfo', icon: LayoutDashboard, label: 'Dashboard', clientAdminOnly: false },
+  { to: '/vcfo/sync', icon: RefreshCw, label: 'Tally Sync', clientAdminOnly: true },
+  { to: '/vcfo/trial-balance', icon: FileText, label: 'Trial Balance', clientAdminOnly: false },
+  { to: '/vcfo/profit-loss', icon: TrendingUp, label: 'Profit & Loss', clientAdminOnly: false },
+  { to: '/vcfo/balance-sheet', icon: Scale, label: 'Balance Sheet', clientAdminOnly: false },
+  { to: '/vcfo/bills', icon: Receipt, label: 'Bills Outstanding', clientAdminOnly: false },
+  { to: '/vcfo/tracker', icon: ClipboardCheck, label: 'Tracker', clientAdminOnly: false },
+  { to: '/vcfo/audit', icon: FileSearch, label: 'Audit', clientAdminOnly: false },
+  { to: '/vcfo/groups', icon: Building2, label: 'Company Groups', clientAdminOnly: true },
+  { to: '/vcfo/budgets', icon: Calculator, label: 'Budgets', clientAdminOnly: false },
+  { to: '/vcfo/uploads', icon: FileSpreadsheet, label: 'Excel Uploads', clientAdminOnly: false },
+  { to: '/vcfo/cfo-review', icon: BookOpen, label: 'CFO Review', clientAdminOnly: false },
+];
 
 // Utility links — bottom section above logout
 const utilityLinks = [
   { to: '/import', icon: Upload, label: 'Import Data', clientAdminOnly: true, module: 'forecast_ops' },
+  { to: '/vcfo/allocation-rules', icon: ArrowLeftRight, label: 'Allocation Rules', clientAdminOnly: true, module: 'vcfo_portal' },
+  { to: '/vcfo/writeoff-rules', icon: Landmark, label: 'Writeoff Rules', clientAdminOnly: true, module: 'vcfo_portal' },
+  { to: '/vcfo/settings', icon: Cog, label: 'VCFO Settings', clientAdminOnly: true, module: 'vcfo_portal' },
   { to: '/settings', icon: Settings, label: 'Settings', clientAdminOnly: true },
 ];
 
@@ -82,7 +100,11 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
   };
 
   const activeModule = localStorage.getItem('active_module') || 'forecast_ops';
-  const visibleMain = isSuperAdmin ? [] : forecastLinks;
+  const mainLinks = activeModule === 'vcfo_portal' ? vcfoLinks : forecastLinks;
+  const visibleMain = isSuperAdmin ? [] : mainLinks.filter(l => {
+    if (!isClientAdmin && l.clientAdminOnly) return false;
+    return true;
+  });
   const visibleUtility = isSuperAdmin ? [] : utilityLinks.filter(l => {
     if (!isClientAdmin && l.clientAdminOnly) return false;
     if ((l as any).module && (l as any).module !== activeModule) return false;

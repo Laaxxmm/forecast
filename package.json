@@ -3,15 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\" \"npm run dev:vcfo\"",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "cd server && npx tsx watch src/index.ts",
     "dev:client": "cd client && npx vite",
-    "dev:vcfo": "cd vcfo && node server.js",
     "build": "cd client && npm run build",
-    "start": "node start-all.js",
-    "start:vision": "cd server && npx tsx src/index.ts",
-    "start:vcfo": "cd vcfo && node server.js",
-    "install:all": "npm install && cd server && npm install && cd ../client && npm install && cd ../vcfo && npm install --ignore-scripts"
+    "start": "cd server && npx tsx src/index.ts",
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

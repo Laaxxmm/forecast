@@ -4,136 +4,22 @@
  */
 import { Router, Request, Response } from 'express';
 import type { DbHelper } from '../../db/connection.js';
+import {
+  idPh, resolveIds, resolveGroupMemberIds
+} from '../../services/vcfo/company-resolver.js';
+import {
+  getGroupTree, buildLedgerGroupMap, buildPLGroupSets,
+  computePLFlow, getTopLedgers, getTotalsByGroup,
+  getVouchersByLedger, getTBSupplement, getPLFallback,
+  getLedgerFlowsTB, getMonthlyFlowsTB, computeKPIData, computeBSClosing
+} from '../../services/vcfo/kpi-engine.js';
+import {
+  getDashboardAllocRules, getEffectiveOverlap
+} from '../../services/vcfo/allocation-engine.js';
 
 const router = Router();
 
-// ── Helper functions ──────────────────────────────────────────────────────────
-
-function idPh(ids: number[]): string {
-  return ids.map(() => '?').join(',');
-}
-
-function getGroupTree(db: DbHelper, ids: number[], parentName: string): string[] {
-  const allGroups = db.all(
-    `SELECT DISTINCT group_name, parent_group FROM vcfo_account_groups WHERE company_id IN (${idPh(ids)})`,
-    ...ids
-  );
-  const result = new Set([parentName]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const g of allGroups) {
-      if (result.has(g.parent_group) && !result.has(g.group_name)) {
-        result.add(g.group_name);
-        changed = true;
-      }
-    }
-  }
-  return [...result];
-}
-
-function buildLedgerGroupMap(db: DbHelper, ids: number[]): Record<string, string> {
-  const rows = db.all(
-    `SELECT DISTINCT company_id, ledger_name, group_name FROM vcfo_trial_balance WHERE company_id IN (${idPh(ids)})`,
-    ...ids
-  );
-  const map: Record<string, string> = {};
-  rows.forEach((r: any) => { map[`${r.company_id}|${r.ledger_name}`] = r.group_name; });
-  return map;
-}
-
-function buildPLGroupSets(db: DbHelper, ids: number[]) {
-  const groups = db.all(
-    `SELECT group_name, dr_cr, affects_gross_profit, COUNT(*) as cnt
-     FROM vcfo_account_groups WHERE company_id IN (${idPh(ids)}) AND bs_pl = 'PL'
-     GROUP BY group_name, dr_cr, affects_gross_profit`,
-    ...ids
-  );
-  const best: Record<string, any> = {};
-  for (const g of groups) {
-    if (!best[g.group_name] || g.cnt > best[g.group_name].cnt) best[g.group_name] = g;
-  }
-  const sets = {
-    directCredit: new Set<string>(), indirectCredit: new Set<string>(),
-    directDebit: new Set<string>(), indirectDebit: new Set<string>(),
-  };
-  for (const g of Object.values(best)) {
-    if (g.dr_cr === 'C' && g.affects_gross_profit === 'Y') sets.directCredit.add(g.group_name);
-    else if (g.dr_cr === 'C' && g.affects_gross_profit === 'N') sets.indirectCredit.add(g.group_name);
-    else if (g.dr_cr === 'D' && g.affects_gross_profit === 'Y') sets.directDebit.add(g.group_name);
-    else if (g.dr_cr === 'D' && g.affects_gross_profit === 'N') sets.indirectDebit.add(g.group_name);
-  }
-  return sets;
-}
-
-function getVouchersByLedger(db: DbHelper, ids: number[], fromDate: string, toDate: string) {
-  return db.all(
-    `SELECT company_id, ledger_name, SUM(amount) as total
-     FROM vcfo_vouchers WHERE company_id IN (${idPh(ids)}) AND date >= ? AND date <= ? AND ledger_name != ''
-     GROUP BY company_id, ledger_name`,
-    ...ids, fromDate, toDate
-  );
-}
-
-function getTBSupplement(db: DbHelper, ids: number[], from: string, to: string) {
-  return db.all(
-    `SELECT company_id, ledger_name, group_name,
-            SUM(net_debit) AS net_debit, SUM(net_credit) AS net_credit
-     FROM vcfo_trial_balance
-     WHERE company_id IN (${idPh(ids)}) AND period_from >= ? AND period_to <= ? AND group_name IS NOT NULL
-     GROUP BY company_id, ledger_name, group_name`,
-    ...ids, from, to
-  );
-}
-
-function getPLFallback(db: DbHelper, ids: number[], from: string, to: string) {
-  return db.all(
-    `SELECT company_id, ledger_name, group_name, SUM(amount) as amount
-     FROM vcfo_profit_loss
-     WHERE company_id IN (${idPh(ids)}) AND period_from >= ? AND period_to <= ? AND group_name IS NOT NULL
-     GROUP BY company_id, ledger_name, group_name`,
-    ...ids, from, to
-  );
-}
-
-function computePLFlow(vouchersByLedger: any[], lgMap: Record<string, string>, groupSet: Set<string>): number {
-  let total = 0;
-  for (const row of vouchersByLedger) {
-    const grp = lgMap[`${row.company_id}|${row.ledger_name}`];
-    if (grp && groupSet.has(grp)) total += row.total;
-  }
-  return total;
-}
-
-function getTopLedgers(vouchersByLedger: any[], lgMap: Record<string, string>, groupSet: Set<string>, limit: number, negate: boolean) {
-  const merged: Record<string, { ledger_name: string; group_name: string; total: number }> = {};
-  for (const row of vouchersByLedger) {
-    const grp = lgMap[`${row.company_id}|${row.ledger_name}`];
-    if (grp && groupSet.has(grp)) {
-      const val = negate ? -row.total : row.total;
-      if (val > 0) {
-        const key = `${grp}||${row.ledger_name}`;
-        if (!merged[key]) merged[key] = { ledger_name: row.ledger_name, group_name: grp, total: 0 };
-        merged[key].total += val;
-      }
-    }
-  }
-  return Object.values(merged).sort((a, b) => b.total - a.total).slice(0, limit);
-}
-
-function getTotalsByGroup(vouchersByLedger: any[], lgMap: Record<string, string>, groupSet: Set<string>, negate: boolean) {
-  const groupTotals: Record<string, number> = {};
-  for (const row of vouchersByLedger) {
-    const grp = lgMap[`${row.company_id}|${row.ledger_name}`];
-    if (grp && groupSet.has(grp)) groupTotals[grp] = (groupTotals[grp] || 0) + row.total;
-  }
-  const results: { category: string; total: number }[] = [];
-  for (const [category, total] of Object.entries(groupTotals)) {
-    const val = negate ? -total : total;
-    if (val > 0) results.push({ category, total: val });
-  }
-  return results.sort((a, b) => b.total - a.total);
-}
+// ── Helper ────────────────────────────────────────────────────────────────────
 
 function resolveCompanyIds(db: DbHelper, req: Request): number[] | null {
   const companyId = req.query.companyId ? parseInt(req.query.companyId as string) : null;
@@ -456,6 +342,328 @@ router.get('/bills-outstanding', (req: Request, res: Response) => {
   );
 
   res.json(rows);
+});
+
+// ── Receivable Ageing ───────────────────────────────────────────────────────
+
+router.get('/receivable-ageing', (req: Request, res: Response) => {
+  const db = req.tenantDb!;
+  const ids = resolveCompanyIds(db, req);
+  if (!ids || ids.length === 0) return res.json([]);
+
+  const rows = db.all(
+    `SELECT party_name,
+        SUM(CASE WHEN overdue_days <= 30 THEN ABS(outstanding_amount) ELSE 0 END) as "0_30",
+        SUM(CASE WHEN overdue_days > 30 AND overdue_days <= 60 THEN ABS(outstanding_amount) ELSE 0 END) as "31_60",
+        SUM(CASE WHEN overdue_days > 60 AND overdue_days <= 90 THEN ABS(outstanding_amount) ELSE 0 END) as "61_90",
+        SUM(CASE WHEN overdue_days > 90 THEN ABS(outstanding_amount) ELSE 0 END) as "90_plus",
+        SUM(ABS(outstanding_amount)) as total
+    FROM vcfo_bills_outstanding WHERE company_id IN (${idPh(ids)}) AND nature = 'receivable'
+    GROUP BY party_name ORDER BY total DESC LIMIT 15`,
+    ...ids
+  );
+  res.json(rows);
+});
+
+// ── Payable Ageing ──────────────────────────────────────────────────────────
+
+router.get('/payable-ageing', (req: Request, res: Response) => {
+  const db = req.tenantDb!;
+  const ids = resolveCompanyIds(db, req);
+  if (!ids || ids.length === 0) return res.json([]);
+
+  const rows = db.all(
+    `SELECT party_name,
+        SUM(CASE WHEN overdue_days <= 30 THEN ABS(outstanding_amount) ELSE 0 END) as "0_30",
+        SUM(CASE WHEN overdue_days > 30 AND overdue_days <= 60 THEN ABS(outstanding_amount) ELSE 0 END) as "31_60",
+        SUM(CASE WHEN overdue_days > 60 AND overdue_days <= 90 THEN ABS(outstanding_amount) ELSE 0 END) as "61_90",
+        SUM(CASE WHEN overdue_days > 90 THEN ABS(outstanding_amount) ELSE 0 END) as "90_plus",
+        SUM(ABS(outstanding_amount)) as total
+    FROM vcfo_bills_outstanding WHERE company_id IN (${idPh(ids)}) AND nature = 'payable'
+    GROUP BY party_name ORDER BY total DESC LIMIT 15`,
+    ...ids
+  );
+  res.json(rows);
+});
+
+// ── Stock Summary ───────────────────────────────────────────────────────────
+
+router.get('/stock-summary', (req: Request, res: Response) => {
+  const db = req.tenantDb!;
+  const ids = resolveCompanyIds(db, req);
+  if (!ids || ids.length === 0) return res.json([]);
+
+  const rows = db.all(
+    `SELECT item_name, stock_group, SUM(closing_qty) as closing_qty, SUM(closing_value) as closing_value
+     FROM vcfo_stock_summary WHERE company_id IN (${idPh(ids)})
+       AND period_to = (SELECT MAX(period_to) FROM vcfo_stock_summary WHERE company_id IN (${idPh(ids)}))
+     GROUP BY item_name, stock_group ORDER BY closing_value DESC LIMIT 20`,
+    ...ids, ...ids
+  );
+  res.json(rows);
+});
+
+// ── GST Summary ─────────────────────────────────────────────────────────────
+
+router.get('/gst-summary', (req: Request, res: Response) => {
+  const db = req.tenantDb!;
+  const companyId = req.query.companyId ? Number(req.query.companyId) : null;
+  if (!companyId) return res.status(400).json({ error: 'companyId required' });
+  const from = (req.query.fromDate as string) || '2024-04-01';
+  const to = (req.query.toDate as string) || '2025-03-31';
+
+  const byType = db.all(
+    `SELECT voucher_type, COUNT(*) as count, SUM(taxable_value) as taxable,
+            SUM(igst) as igst, SUM(cgst) as cgst, SUM(sgst) as sgst, SUM(cess) as cess
+     FROM vcfo_gst_entries WHERE company_id = ? AND date >= ? AND date <= ?
+     GROUP BY voucher_type ORDER BY taxable DESC`,
+    companyId, from, to
+  );
+
+  const monthly = db.all(
+    `SELECT substr(date,1,7) as month, SUM(taxable_value) as taxable,
+            SUM(igst+cgst+sgst+cess) as total_tax, COUNT(*) as count
+     FROM vcfo_gst_entries WHERE company_id = ? AND date >= ? AND date <= ?
+     GROUP BY month ORDER BY month`,
+    companyId, from, to
+  );
+
+  res.json({ byType, monthly });
+});
+
+// ── Cost Centre Analysis ────────────────────────────────────────────────────
+
+router.get('/cost-centre-analysis', (req: Request, res: Response) => {
+  const db = req.tenantDb!;
+  const companyId = req.query.companyId ? Number(req.query.companyId) : null;
+  if (!companyId) return res.status(400).json({ error: 'companyId required' });
+  const from = (req.query.fromDate as string) || '2024-04-01';
+  const to = (req.query.toDate as string) || '2025-03-31';
+
+  const byCentre = db.all(
+    `SELECT cost_centre, SUM(ABS(amount)) as total_amount, COUNT(DISTINCT ledger_name) as ledger_count
+     FROM vcfo_cost_allocations WHERE company_id = ? AND date >= ? AND date <= ?
+     GROUP BY cost_centre ORDER BY total_amount DESC`,
+    companyId, from, to
+  );
+  const centres = db.all(
+    'SELECT name, parent, category FROM vcfo_cost_centres WHERE company_id = ?', companyId
+  );
+  res.json({ byCentre, centres });
+});
+
+// ── Payroll Summary ─────────────────────────────────────────────────────────
+
+router.get('/payroll-summary', (req: Request, res: Response) => {
+  const db = req.tenantDb!;
+  const companyId = req.query.companyId ? Number(req.query.companyId) : null;
+  if (!companyId) return res.status(400).json({ error: 'companyId required' });
+  const from = (req.query.fromDate as string) || '2024-04-01';
+  const to = (req.query.toDate as string) || '2025-03-31';
+
+  const byEmployee = db.all(
+    `SELECT employee_name, SUM(ABS(amount)) as total, COUNT(DISTINCT date) as payslips
+     FROM vcfo_payroll_entries WHERE company_id = ? AND date >= ? AND date <= ? AND employee_name != ''
+     GROUP BY employee_name ORDER BY total DESC LIMIT 50`,
+    companyId, from, to
+  );
+  const byPayHead = db.all(
+    `SELECT pay_head, SUM(ABS(amount)) as total
+     FROM vcfo_payroll_entries WHERE company_id = ? AND date >= ? AND date <= ? AND pay_head != ''
+     GROUP BY pay_head ORDER BY total DESC`,
+    companyId, from, to
+  );
+  const monthly = db.all(
+    `SELECT substr(date,1,7) as month, SUM(ABS(amount)) as total
+     FROM vcfo_payroll_entries WHERE company_id = ? AND date >= ? AND date <= ?
+     GROUP BY month ORDER BY month`,
+    companyId, from, to
+  );
+  res.json({ byEmployee, byPayHead, monthly });
+});
+
+// ── Top Direct Expenses ─────────────────────────────────────────────────────
+
+router.get('/top-direct-expenses', (req: Request, res: Response) => {
+  const db = req.tenantDb!;
+  const ids = resolveCompanyIds(db, req);
+  if (!ids || ids.length === 0) return res.json([]);
+  const from = (req.query.fromDate as string) || '2024-04-01';
+  const to = (req.query.toDate as string) || '2025-03-31';
+
+  const lgMap = buildLedgerGroupMap(db, ids);
+  const tbLedgers = getLedgerFlowsTB(db, ids, from, to);
+  const { directDebit } = buildPLGroupSets(db, ids);
+
+  res.json(getTotalsByGroup(tbLedgers, lgMap, directDebit, true).slice(0, 10));
+});
+
+// ── Top Indirect Expenses ───────────────────────────────────────────────────
+
+router.get('/top-indirect-expenses', (req: Request, res: Response) => {
+  const db = req.tenantDb!;
+  const ids = resolveCompanyIds(db, req);
+  if (!ids || ids.length === 0) return res.json([]);
+  const from = (req.query.fromDate as string) || '2024-04-01';
+  const to = (req.query.toDate as string) || '2025-03-31';
+
+  const lgMap = buildLedgerGroupMap(db, ids);
+  const tbLedgers = getLedgerFlowsTB(db, ids, from, to);
+  const { indirectDebit } = buildPLGroupSets(db, ids);
+
+  const results: any[] = getTotalsByGroup(tbLedgers, lgMap, indirectDebit, true);
+
+  // Inject allocation synthetic entries if group context available
+  const groupId = req.query.groupId ? Number(req.query.groupId) : 0;
+  if (groupId && ids.length > 1) {
+    const rules = getDashboardAllocRules(db, groupId);
+    if (rules && rules.length) {
+      const units = ids.map(cid => {
+        const kpi = computeKPIData(db, [cid], from, to);
+        return { companyId: cid, ...kpi };
+      });
+      for (const rule of rules) {
+        const config = JSON.parse(rule.config || '{}');
+        if (rule.rule_type === 'percent_income') {
+          const pct = (Number(config.percentage) || 0) / 100;
+          const sourceIds: number[] = config.source_company_ids || [];
+          let totalCharge = 0;
+          for (const sid of sourceIds) {
+            const src = units.find((u: any) => u.companyId === sid);
+            if (src) totalCharge += ((src as any).directIncome || (src as any).revenue || 0) * pct;
+          }
+          if (totalCharge > 0) {
+            results.push({ category: config.expense_label || 'HO Charges', total: totalCharge, _allocation: true });
+          }
+        } else if (rule.rule_type === 'fixed') {
+          const overlap = getEffectiveOverlap(config, from, to);
+          if (overlap.overlaps) {
+            results.push({ category: `Alloc: ${rule.rule_name}`, total: 0, _allocation: true, _note: 'Internal transfer (net zero)' });
+          }
+        }
+      }
+    }
+  }
+
+  res.json(results.sort((a: any, b: any) => b.total - a.total).slice(0, 10));
+});
+
+// ── Expense Categories ──────────────────────────────────────────────────────
+
+router.get('/expense-categories', (req: Request, res: Response) => {
+  const db = req.tenantDb!;
+  const ids = resolveCompanyIds(db, req);
+  if (!ids || ids.length === 0) return res.json([]);
+  const from = (req.query.fromDate as string) || '2024-04-01';
+  const to = (req.query.toDate as string) || '2025-03-31';
+
+  const lgMap = buildLedgerGroupMap(db, ids);
+  const tbLedgers = getLedgerFlowsTB(db, ids, from, to);
+  const expSet = new Set([
+    ...getGroupTree(db, ids, 'Purchase Accounts'),
+    ...getGroupTree(db, ids, 'Direct Expenses'),
+    ...getGroupTree(db, ids, 'Indirect Expenses')
+  ]);
+
+  res.json(getTotalsByGroup(tbLedgers, lgMap, expSet, true));
+});
+
+// ── Revenue Categories ──────────────────────────────────────────────────────
+
+router.get('/revenue-categories', (req: Request, res: Response) => {
+  const db = req.tenantDb!;
+  const ids = resolveCompanyIds(db, req);
+  if (!ids || ids.length === 0) return res.json([]);
+  const from = (req.query.fromDate as string) || '2024-04-01';
+  const to = (req.query.toDate as string) || '2025-03-31';
+
+  const lgMap = buildLedgerGroupMap(db, ids);
+  const tbLedgers = getLedgerFlowsTB(db, ids, from, to);
+  const { directCredit } = buildPLGroupSets(db, ids);
+
+  res.json(getTotalsByGroup(tbLedgers, lgMap, directCredit, false));
+});
+
+// ── Item Monthly Trend ──────────────────────────────────────────────────────
+
+router.get('/item-monthly-trend', (req: Request, res: Response) => {
+  const db = req.tenantDb!;
+  const ids = resolveCompanyIds(db, req);
+  const { fromDate, toDate, groupRoot, mode, classType, parentGroup, ledgerName } = req.query;
+  if (!ids || (!groupRoot && !classType)) {
+    return res.status(400).json({ error: 'companyId/filters and groupRoot or classType required' });
+  }
+
+  const from = (fromDate as string) || '2024-04-01';
+  const to = (toDate as string) || '2025-03-31';
+
+  // Resolve groupSet
+  let groupSet: Set<string>;
+  if (classType) {
+    const { directCredit, indirectCredit, directDebit, indirectDebit } = buildPLGroupSets(db, ids);
+    const salesGroupSet = new Set(getGroupTree(db, ids, 'Sales Accounts'));
+    const purchaseGroupSet = new Set(getGroupTree(db, ids, 'Purchase Accounts'));
+    const directExpOnly = new Set(directDebit); purchaseGroupSet.forEach(g => directExpOnly.delete(g));
+    const directIncOnly = new Set(directCredit); salesGroupSet.forEach(g => directIncOnly.delete(g));
+    const classMap: Record<string, Set<string>> = {
+      revenue: salesGroupSet, purchase: purchaseGroupSet,
+      directexp: directExpOnly, indirectexp: indirectDebit,
+      directinc: directIncOnly, indirectinc: indirectCredit,
+    };
+    groupSet = classMap[classType as string] || new Set();
+  } else {
+    const roots = (groupRoot as string).split(',');
+    groupSet = new Set(roots.flatMap(r => getGroupTree(db, ids, r.trim())));
+  }
+
+  // If parentGroup specified, narrow groupSet
+  if (parentGroup) {
+    const descendants = new Set(getGroupTree(db, ids, parentGroup as string));
+    const narrowed = new Set<string>();
+    descendants.forEach(g => { if (groupSet.has(g)) narrowed.add(g); });
+    groupSet = narrowed;
+  }
+
+  const lgMap = buildLedgerGroupMap(db, ids);
+
+  if (mode === 'balance') {
+    const tbRows = db.all(
+      `SELECT period_from as month, ledger_name, group_name, SUM(closing_balance) as closing_balance
+       FROM vcfo_trial_balance WHERE company_id IN (${idPh(ids)}) AND period_from >= ? AND period_from <= ?
+       GROUP BY period_from, ledger_name, group_name ORDER BY period_from`,
+      ...ids, from, to
+    );
+    const months: Record<string, number> = {};
+    for (const r of tbRows) {
+      if (!r.group_name || !groupSet.has(r.group_name)) continue;
+      if (ledgerName && r.ledger_name !== ledgerName) continue;
+      if (!months[r.month]) months[r.month] = 0;
+      months[r.month] += Math.abs(r.closing_balance || 0);
+    }
+    return res.json(
+      Object.entries(months).sort(([a], [b]) => a.localeCompare(b)).map(([month, amount]) => ({ month, amount }))
+    );
+  }
+
+  // P&L items: TB-based monthly flows
+  const monthlyRows = getMonthlyFlowsTB(db, ids, from, to);
+  const months: Record<string, number> = {};
+  for (const row of monthlyRows) {
+    if (ledgerName) {
+      if (row.ledger_name !== ledgerName) continue;
+      const grp = lgMap[`${row.company_id}|${row.ledger_name}`];
+      if (!grp || !groupSet.has(grp)) continue;
+    } else {
+      const grp = lgMap[`${row.company_id}|${row.ledger_name}`];
+      if (!grp || !groupSet.has(grp)) continue;
+    }
+    if (!months[row.month]) months[row.month] = 0;
+    months[row.month] += Math.abs(row.total);
+  }
+
+  res.json(
+    Object.entries(months).sort(([a], [b]) => a.localeCompare(b)).map(([month, amount]) => ({ month, amount }))
+  );
 });
 
 export default router;

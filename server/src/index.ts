@@ -30,6 +30,14 @@ import vcfoCompanyRoutes from './routes/vcfo/companies.js';
 import vcfoReportsRoutes from './routes/vcfo/reports.js';
 import vcfoTrackerRoutes from './routes/vcfo/tracker.js';
 import vcfoAuditRoutes from './routes/vcfo/audit.js';
+import vcfoCompanyGroupRoutes from './routes/vcfo/company-groups.js';
+import vcfoFilterRoutes from './routes/vcfo/filters.js';
+import vcfoSettingsRoutes from './routes/vcfo/vcfo-settings.js';
+import vcfoAllocationRuleRoutes from './routes/vcfo/allocation-rules.js';
+import vcfoWriteoffRuleRoutes from './routes/vcfo/writeoff-rules.js';
+import vcfoLedgerRoutes from './routes/vcfo/ledgers.js';
+import vcfoBudgetRoutes from './routes/vcfo/budgets.js';
+import vcfoUploadRoutes from './routes/vcfo/uploads.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -94,6 +102,14 @@ app.use('/api/vcfo/companies', ...vcfoModule, vcfoCompanyRoutes);
 app.use('/api/vcfo/reports', ...vcfoModule, vcfoReportsRoutes);
 app.use('/api/vcfo/tracker', ...vcfoModule, vcfoTrackerRoutes);
 app.use('/api/vcfo/audit', ...vcfoModule, vcfoAuditRoutes);
+app.use('/api/vcfo/groups', ...vcfoModule, vcfoCompanyGroupRoutes);
+app.use('/api/vcfo/filters', ...vcfoModule, vcfoFilterRoutes);
+app.use('/api/vcfo/settings', ...vcfoModule, requireAdmin, vcfoSettingsRoutes);
+app.use('/api/vcfo/allocation-rules', ...vcfoModule, requireAdmin, vcfoAllocationRuleRoutes);
+app.use('/api/vcfo/writeoff-rules', ...vcfoModule, requireAdmin, vcfoWriteoffRuleRoutes);
+app.use('/api/vcfo/ledgers', ...vcfoModule, vcfoLedgerRoutes);
+app.use('/api/vcfo/budgets', ...vcfoModule, vcfoBudgetRoutes);
+app.use('/api/vcfo/uploads', ...vcfoModule, vcfoUploadRoutes);
 
 // ─── Client modules & integrations (for module selection page) ──────────────
 app.get('/api/client-modules', requireAuth, resolveTenant, async (req, res) => {
