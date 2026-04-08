@@ -38,6 +38,7 @@ import vcfoWriteoffRuleRoutes from './routes/vcfo/writeoff-rules.js';
 import vcfoLedgerRoutes from './routes/vcfo/ledgers.js';
 import vcfoBudgetRoutes from './routes/vcfo/budgets.js';
 import vcfoUploadRoutes from './routes/vcfo/uploads.js';
+import vcfoForecastViewRoutes from './routes/vcfo/forecast-view.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -110,6 +111,7 @@ app.use('/api/vcfo/writeoff-rules', ...vcfoModule, requireAdmin, vcfoWriteoffRul
 app.use('/api/vcfo/ledgers', ...vcfoModule, vcfoLedgerRoutes);
 app.use('/api/vcfo/budgets', ...vcfoModule, vcfoBudgetRoutes);
 app.use('/api/vcfo/uploads', ...vcfoModule, vcfoUploadRoutes);
+app.use('/api/vcfo/forecast-view', ...vcfoModule, vcfoForecastViewRoutes);
 
 // ─── Client modules & integrations (for module selection page) ──────────────
 app.get('/api/client-modules', requireAuth, resolveTenant, async (req, res) => {

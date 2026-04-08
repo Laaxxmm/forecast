@@ -21,6 +21,7 @@ const forecastLinks = [
 const vcfoLinks = [
   { to: '/vcfo', icon: LayoutDashboard, label: 'Business Overview', clientAdminOnly: false },
   { to: '/vcfo/table-view', icon: Table2, label: 'Table View', clientAdminOnly: false },
+  { to: '/vcfo/forecast', icon: TrendingUp, label: 'Forecast', clientAdminOnly: false },
   { to: '/vcfo/tracker', icon: ClipboardCheck, label: 'VCFO', clientAdminOnly: false },
   { to: '/vcfo/audit', icon: ShieldCheck, label: 'Audit', clientAdminOnly: false },
 ];
