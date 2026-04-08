@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import api from './api/client';
+import { ThemeProvider } from './contexts/ThemeContext';
 import Layout from './components/layout/Layout';
 import LoginPage from './pages/LoginPage';
 import DashboardModulePage from './pages/DashboardModulePage';
@@ -25,7 +26,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (auth === null) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="text-slate-400">Loading...</div>
+        <div className="text-theme-muted">Loading...</div>
       </div>
     );
   }
@@ -59,6 +60,7 @@ function DefaultRedirect() {
 
 export default function App() {
   return (
+    <ThemeProvider>
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
@@ -82,5 +84,6 @@ export default function App() {
         </Route>
       </Routes>
     </BrowserRouter>
+    </ThemeProvider>
   );
 }

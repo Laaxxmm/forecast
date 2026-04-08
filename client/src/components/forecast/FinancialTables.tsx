@@ -39,7 +39,7 @@ export default function FinancialTables({ scenario, months, viewMode, items, all
               `px-4 py-2 text-xs font-medium rounded-t-lg whitespace-nowrap border-b-2 transition-colors ${
                 isActive
                   ? 'border-accent-500 text-accent-400 bg-accent-500/10'
-                  : 'border-transparent text-slate-500 hover:text-slate-300 hover:bg-dark-600'
+                  : 'border-transparent text-theme-faint hover:text-theme-secondary hover:bg-dark-600'
               }`
             }
           >

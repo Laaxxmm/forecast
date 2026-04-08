@@ -77,7 +77,7 @@ export default function ClinicDetailPage() {
 
   if (loading) return (
     <div className="flex items-center justify-center py-20">
-      <div className="text-slate-400">Loading...</div>
+      <div className="text-theme-muted">Loading...</div>
     </div>
   );
 
@@ -85,8 +85,8 @@ export default function ClinicDetailPage() {
     <div className="animate-fade-in">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">Clinic Details</h1>
-          <p className="text-slate-500 mt-1 text-sm">Department-wise performance & doctor analytics</p>
+          <h1 className="text-2xl font-bold text-theme-heading">Clinic Details</h1>
+          <p className="text-theme-faint mt-1 text-sm">Department-wise performance & doctor analytics</p>
         </div>
         <select value={selectedFY || ''} onChange={e => setSelectedFY(Number(e.target.value))} className="input w-48">
           {fys.map(fy => <option key={fy.id} value={fy.id}>{fy.label}</option>)}
@@ -95,8 +95,8 @@ export default function ClinicDetailPage() {
 
       {/* Revenue Chart */}
       <div className="card mb-6">
-        <h3 className="text-sm font-semibold text-white mb-1">Monthly Revenue by Department</h3>
-        <p className="text-xs text-slate-500 mb-6">Stacked breakdown across departments</p>
+        <h3 className="text-sm font-semibold text-theme-heading mb-1">Monthly Revenue by Department</h3>
+        <p className="text-xs text-theme-faint mb-6">Stacked breakdown across departments</p>
         {monthlyData.length > 0 ? (
           <ResponsiveContainer width="100%" height={350}>
             <BarChart data={monthlyData}>
@@ -111,7 +111,7 @@ export default function ClinicDetailPage() {
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <p className="text-slate-500 text-center py-16 text-sm">Import Healthplix data to see clinic details</p>
+          <p className="text-theme-faint text-center py-16 text-sm">Import Healthplix data to see clinic details</p>
         )}
       </div>
 
@@ -119,8 +119,8 @@ export default function ClinicDetailPage() {
       <div className="card mb-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h3 className="text-sm font-semibold text-white mb-1">Budget vs Actual</h3>
-            <p className="text-xs text-slate-500">Performance against forecast</p>
+            <h3 className="text-sm font-semibold text-theme-heading mb-1">Budget vs Actual</h3>
+            <p className="text-xs text-theme-faint">Performance against forecast</p>
           </div>
           {streamNames.length > 0 && (
             <select value={selectedStream} onChange={e => setSelectedStream(e.target.value)} className="input w-56 text-sm">
@@ -134,17 +134,17 @@ export default function ClinicDetailPage() {
           <>
             <div className="grid grid-cols-3 gap-4 mb-6">
               <div className="bg-dark-600 rounded-xl p-3.5 text-center">
-                <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Budget</p>
-                <p className="text-lg font-bold text-slate-200">{formatINR(bvaSummary.totalBudget)}</p>
+                <p className="text-[10px] text-theme-faint uppercase tracking-wider mb-1">Budget</p>
+                <p className="text-lg font-bold text-theme-primary">{formatINR(bvaSummary.totalBudget)}</p>
               </div>
               <div className="bg-dark-600 rounded-xl p-3.5 text-center">
-                <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Actual</p>
+                <p className="text-[10px] text-theme-faint uppercase tracking-wider mb-1">Actual</p>
                 <p className="text-lg font-bold text-accent-400">{formatINR(bvaSummary.totalActual)}</p>
               </div>
               <div className={`rounded-xl p-3.5 text-center ${
                 bvaSummary.variancePct >= -5 ? 'bg-emerald-500/10' : bvaSummary.variancePct >= -15 ? 'bg-amber-500/10' : 'bg-red-500/10'
               }`}>
-                <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Variance</p>
+                <p className="text-[10px] text-theme-faint uppercase tracking-wider mb-1">Variance</p>
                 <p className={`text-lg font-bold ${
                   bvaSummary.variancePct >= -5 ? 'text-emerald-400' : bvaSummary.variancePct >= -15 ? 'text-amber-400' : 'text-red-400'
                 }`}>{bvaSummary.variancePct.toFixed(1)}%</p>
@@ -163,31 +163,31 @@ export default function ClinicDetailPage() {
             </ResponsiveContainer>
           </>
         ) : (
-          <p className="text-slate-500 text-center py-16 text-sm">Set a budget in Forecast to see comparison</p>
+          <p className="text-theme-faint text-center py-16 text-sm">Set a budget in Forecast to see comparison</p>
         )}
       </div>
 
       {/* Doctor Performance */}
       <div className="card">
-        <h3 className="text-sm font-semibold text-white mb-1">Doctor Performance</h3>
-        <p className="text-xs text-slate-500 mb-4">Revenue and transactions by doctor</p>
+        <h3 className="text-sm font-semibold text-theme-heading mb-1">Doctor Performance</h3>
+        <p className="text-xs text-theme-faint mb-4">Revenue and transactions by doctor</p>
         {doctorList.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-dark-400/50">
-                  <th className="text-left py-3 px-2 text-slate-500 font-medium text-xs uppercase tracking-wider">Doctor</th>
-                  <th className="text-right py-3 px-2 text-slate-500 font-medium text-xs uppercase tracking-wider">Revenue</th>
-                  <th className="text-right py-3 px-2 text-slate-500 font-medium text-xs uppercase tracking-wider">Transactions</th>
-                  <th className="text-right py-3 px-2 text-slate-500 font-medium text-xs uppercase tracking-wider">Avg/Txn</th>
+                  <th className="text-left py-3 px-2 text-theme-faint font-medium text-xs uppercase tracking-wider">Doctor</th>
+                  <th className="text-right py-3 px-2 text-theme-faint font-medium text-xs uppercase tracking-wider">Revenue</th>
+                  <th className="text-right py-3 px-2 text-theme-faint font-medium text-xs uppercase tracking-wider">Transactions</th>
+                  <th className="text-right py-3 px-2 text-theme-faint font-medium text-xs uppercase tracking-wider">Avg/Txn</th>
                 </tr>
               </thead>
               <tbody>
                 {doctorList.map(d => (
                   <tr key={d.name} className="border-b border-dark-400/30 hover:bg-dark-600/50 transition-colors">
-                    <td className="py-3 px-2 font-medium text-slate-200">{d.name}</td>
-                    <td className="py-3 px-2 text-right text-slate-300">{formatINR(d.revenue)}</td>
-                    <td className="py-3 px-2 text-right text-slate-400">{formatNumber(d.count)}</td>
+                    <td className="py-3 px-2 font-medium text-theme-primary">{d.name}</td>
+                    <td className="py-3 px-2 text-right text-theme-secondary">{formatINR(d.revenue)}</td>
+                    <td className="py-3 px-2 text-right text-theme-muted">{formatNumber(d.count)}</td>
                     <td className="py-3 px-2 text-right text-accent-400">{formatINR(d.count > 0 ? Math.round(d.revenue / d.count) : 0)}</td>
                   </tr>
                 ))}
@@ -195,7 +195,7 @@ export default function ClinicDetailPage() {
             </table>
           </div>
         ) : (
-          <p className="text-slate-500 text-center py-8 text-sm">No doctor data</p>
+          <p className="text-theme-faint text-center py-8 text-sm">No doctor data</p>
         )}
       </div>
     </div>

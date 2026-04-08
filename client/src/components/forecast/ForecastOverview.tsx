@@ -81,15 +81,15 @@ export default function ForecastOverview({ items, allValues, months, settings: _
   return (
     <div className="bg-slate-900 -mx-6 -mb-6 px-6 py-6 rounded-b-lg min-h-[80vh]">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-white">Forecast Overview</h2>
-        <span className="text-sm text-slate-400">Forecast Only</span>
+        <h2 className="text-xl font-bold text-theme-heading">Forecast Overview</h2>
+        <span className="text-sm text-theme-muted">Forecast Only</span>
       </div>
 
       <div className="grid grid-cols-12 gap-6">
         {/* Left sidebar - checklist */}
         <div className="col-span-3">
           <div className="bg-slate-800 rounded-lg p-4">
-            <h3 className="text-sm font-semibold text-slate-300 mb-3">Forecast Checklist</h3>
+            <h3 className="text-sm font-semibold text-theme-secondary mb-3">Forecast Checklist</h3>
             <div className="space-y-2">
               {categoryStatus.map(c => (
                 <div key={c.key} className="flex items-center gap-2 text-sm">
@@ -98,12 +98,12 @@ export default function ForecastOverview({ items, allValues, months, settings: _
                   ) : c.status === 'in_progress' ? (
                     <AlertCircle size={16} className="text-amber-400" />
                   ) : (
-                    <Circle size={16} className="text-slate-500" />
+                    <Circle size={16} className="text-theme-faint" />
                   )}
-                  <span className={c.status === 'not_started' ? 'text-slate-500' : 'text-slate-300'}>
+                  <span className={c.status === 'not_started' ? 'text-theme-faint' : 'text-theme-secondary'}>
                     {c.label}
                   </span>
-                  {c.count > 0 && <span className="text-xs text-slate-500 ml-auto">{c.count}</span>}
+                  {c.count > 0 && <span className="text-xs text-theme-faint ml-auto">{c.count}</span>}
                 </div>
               ))}
             </div>
@@ -115,17 +115,17 @@ export default function ForecastOverview({ items, allValues, months, settings: _
           {/* KPI Cards */}
           <div className="grid grid-cols-3 gap-4">
             <div className="bg-slate-800 rounded-lg p-5">
-              <div className="text-xs text-slate-400 uppercase tracking-wider mb-1">Net Profit</div>
+              <div className="text-xs text-theme-muted uppercase tracking-wider mb-1">Net Profit</div>
               <div className={`text-2xl font-bold ${totals.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                 {formatRs(totals.netProfit)}
               </div>
             </div>
             <div className="bg-slate-800 rounded-lg p-5">
-              <div className="text-xs text-slate-400 uppercase tracking-wider mb-1">Net Profit Margin</div>
-              <div className="text-2xl font-bold text-white">{netProfitMargin}%</div>
+              <div className="text-xs text-theme-muted uppercase tracking-wider mb-1">Net Profit Margin</div>
+              <div className="text-2xl font-bold text-theme-heading">{netProfitMargin}%</div>
             </div>
             <div className="bg-slate-800 rounded-lg p-5">
-              <div className="text-xs text-slate-400 uppercase tracking-wider mb-1">Cash Balance (End of Year)</div>
+              <div className="text-xs text-theme-muted uppercase tracking-wider mb-1">Cash Balance (End of Year)</div>
               <div className={`text-2xl font-bold ${cumulativeCash >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                 {formatRs(cumulativeCash)}
               </div>
@@ -134,7 +134,7 @@ export default function ForecastOverview({ items, allValues, months, settings: _
 
           {/* Net Profit Chart */}
           <div className="bg-slate-800 rounded-lg p-5">
-            <h3 className="text-sm font-semibold text-slate-300 mb-3">Revenue vs Expenses & Net Profit</h3>
+            <h3 className="text-sm font-semibold text-theme-secondary mb-3">Revenue vs Expenses & Net Profit</h3>
             <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData}>
@@ -156,7 +156,7 @@ export default function ForecastOverview({ items, allValues, months, settings: _
 
           {/* Cash Balance Chart */}
           <div className="bg-slate-800 rounded-lg p-5">
-            <h3 className="text-sm font-semibold text-slate-300 mb-3">Cash Balance</h3>
+            <h3 className="text-sm font-semibold text-theme-secondary mb-3">Cash Balance</h3>
             {lowestCash && lowestCash.cash < 0 && (
               <div className="text-xs text-amber-400 mb-2 flex items-center gap-1">
                 <AlertCircle size={12} />

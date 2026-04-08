@@ -88,14 +88,14 @@ export default function DashboardCashFlow({ items, allValues, months, settings, 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-bold text-white">Cash Flow</h2>
+        <h2 className="text-xl font-bold text-theme-heading">Cash Flow</h2>
         <div className="flex items-center gap-3">
           <select value={selectedPeriod} onChange={e => setSelectedPeriod(e.target.value)} className="input text-sm py-1.5 w-56">
             {periodOptions.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
           </select>
           <div className="flex bg-dark-500 rounded-lg p-1">
-            <button onClick={() => setView('overall')} className={`px-3 py-1.5 rounded-md text-xs font-medium ${view === 'overall' ? 'bg-slate-800 text-white' : 'text-slate-500'}`}>Overall</button>
-            <button onClick={() => setView('monthly')} className={`px-3 py-1.5 rounded-md text-xs font-medium ${view === 'monthly' ? 'bg-slate-800 text-white' : 'text-slate-500'}`}>By Month</button>
+            <button onClick={() => setView('overall')} className={`px-3 py-1.5 rounded-md text-xs font-medium ${view === 'overall' ? 'bg-slate-800 text-theme-heading' : 'text-theme-faint'}`}>Overall</button>
+            <button onClick={() => setView('monthly')} className={`px-3 py-1.5 rounded-md text-xs font-medium ${view === 'monthly' ? 'bg-slate-800 text-theme-heading' : 'text-theme-faint'}`}>By Month</button>
           </div>
         </div>
       </div>
@@ -104,18 +104,18 @@ export default function DashboardCashFlow({ items, allValues, months, settings, 
         <table className="w-full text-sm" style={view === 'monthly' ? { minWidth: periodMonths.length * 200 + 280 } : undefined}>
           <thead>
             <tr className="border-b border-dark-400/50 bg-dark-600">
-              <th className="text-left py-3 px-4 font-semibold text-slate-400 sticky left-0 bg-dark-600 z-10 min-w-[280px]">Cash Flow</th>
+              <th className="text-left py-3 px-4 font-semibold text-theme-muted sticky left-0 bg-dark-600 z-10 min-w-[280px]">Cash Flow</th>
               {view === 'overall' ? (
                 <>
-                  <th className="text-right py-3 px-4 font-semibold text-slate-400 min-w-[120px]">Actual</th>
-                  <th className="text-right py-3 px-4 font-semibold text-slate-400 min-w-[120px]">Forecast</th>
-                  <th className="text-right py-3 px-4 font-semibold text-slate-400 min-w-[100px]">Change</th>
+                  <th className="text-right py-3 px-4 font-semibold text-theme-muted min-w-[120px]">Actual</th>
+                  <th className="text-right py-3 px-4 font-semibold text-theme-muted min-w-[120px]">Forecast</th>
+                  <th className="text-right py-3 px-4 font-semibold text-theme-muted min-w-[100px]">Change</th>
                 </>
               ) : (
                 periodMonths.map(m => (
-                  <th key={m} className="text-right py-3 px-2 font-semibold text-slate-400 whitespace-nowrap min-w-[180px]">
+                  <th key={m} className="text-right py-3 px-2 font-semibold text-theme-muted whitespace-nowrap min-w-[180px]">
                     <div>{monthLabel(m)}</div>
-                    <div className="flex justify-end gap-4 text-xs mt-1 font-normal text-slate-400"><span>Actual</span><span>Forecast</span><span>Chg</span></div>
+                    <div className="flex justify-end gap-4 text-xs mt-1 font-normal text-theme-muted"><span>Actual</span><span>Forecast</span><span>Chg</span></div>
                   </th>
                 ))
               )}
@@ -126,7 +126,7 @@ export default function DashboardCashFlow({ items, allValues, months, settings, 
               if (row.isHeader) {
                 return (
                   <tr key={row.key} className="bg-dark-600 border-b border-dark-400/50">
-                    <td className="py-2.5 px-4 font-semibold text-slate-300 sticky left-0 bg-dark-600 z-10" colSpan={view === 'overall' ? 4 : periodMonths.length + 1}>{row.label}</td>
+                    <td className="py-2.5 px-4 font-semibold text-theme-secondary sticky left-0 bg-dark-600 z-10" colSpan={view === 'overall' ? 4 : periodMonths.length + 1}>{row.label}</td>
                   </tr>
                 );
               }
@@ -141,7 +141,7 @@ export default function DashboardCashFlow({ items, allValues, months, settings, 
                     <td className="text-right py-2.5 px-4 tabular-nums">{f !== 0 ? fmtRs(f) : '--'}</td>
                     <td className="text-right py-2.5 px-4">
                       {(a !== 0 || f !== 0) ? (
-                        <span className={`text-xs font-semibold ${ch.direction === 'up' ? 'text-emerald-400' : ch.direction === 'down' ? 'text-red-500' : 'text-slate-400'}`}>
+                        <span className={`text-xs font-semibold ${ch.direction === 'up' ? 'text-emerald-400' : ch.direction === 'down' ? 'text-red-500' : 'text-theme-muted'}`}>
                           {ch.direction === 'up' ? '↑' : ch.direction === 'down' ? '↓' : ''} {fmtPct(ch.pct)}
                         </span>
                       ) : '--'}
@@ -160,8 +160,8 @@ export default function DashboardCashFlow({ items, allValues, months, settings, 
                         <td key={m} className="text-right py-2 px-2">
                           <div className="flex justify-end gap-3 text-xs tabular-nums">
                             <span>{a !== 0 ? fmtRs(a) : '--'}</span>
-                            <span className="text-slate-500">{f !== 0 ? fmtRs(f) : '--'}</span>
-                            <span className={`font-semibold ${ch.direction === 'up' ? 'text-emerald-400' : ch.direction === 'down' ? 'text-red-500' : 'text-slate-400'}`}>
+                            <span className="text-theme-faint">{f !== 0 ? fmtRs(f) : '--'}</span>
+                            <span className={`font-semibold ${ch.direction === 'up' ? 'text-emerald-400' : ch.direction === 'down' ? 'text-red-500' : 'text-theme-muted'}`}>
                               {a !== 0 || f !== 0 ? `${ch.direction === 'up' ? '↑' : '↓'}${Math.abs(ch.pct).toFixed(0)}%` : '--'}
                             </span>
                           </div>

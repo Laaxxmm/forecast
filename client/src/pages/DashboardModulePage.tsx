@@ -108,7 +108,7 @@ export default function DashboardModulePage() {
                   `flex items-center gap-2 px-4 py-4 text-[13px] font-medium border-b-2 whitespace-nowrap transition-all ${
                     isActive
                       ? 'border-accent-500 text-accent-400'
-                      : 'border-transparent text-slate-500 hover:text-slate-300 hover:border-dark-300'
+                      : 'border-transparent text-theme-faint hover:text-theme-secondary hover:border-dark-300'
                   }`
                 }
               >

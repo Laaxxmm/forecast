@@ -114,11 +114,11 @@ export default function ProfitAndLoss({ items, allValues, months, viewMode, sett
 
   return (
     <div>
-      <h2 className="text-xl font-bold text-white mb-4">Projected Profit & Loss</h2>
+      <h2 className="text-xl font-bold text-theme-heading mb-4">Projected Profit & Loss</h2>
 
       {/* Chart */}
       <div className="card mb-4">
-        <h3 className="text-sm font-semibold text-slate-400 mb-3">Projected Profit & Loss Totals</h3>
+        <h3 className="text-sm font-semibold text-theme-muted mb-3">Projected Profit & Loss Totals</h3>
         <div className="h-48">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={chartData}>
@@ -138,11 +138,11 @@ export default function ProfitAndLoss({ items, allValues, months, viewMode, sett
         <table className="w-full text-sm" style={{ minWidth: months.length * 100 + 280 }}>
           <thead>
             <tr className="border-b border-dark-400/50 bg-dark-600">
-              <th className="text-left py-3 px-4 font-semibold text-slate-400 sticky left-0 bg-dark-600 z-10 min-w-[250px]">Profit & Loss</th>
+              <th className="text-left py-3 px-4 font-semibold text-theme-muted sticky left-0 bg-dark-600 z-10 min-w-[250px]">Profit & Loss</th>
               {months.map(m => (
-                <th key={m} className="text-right py-3 px-3 font-semibold text-slate-400 whitespace-nowrap min-w-[100px]">{getMonthLabel(m)}</th>
+                <th key={m} className="text-right py-3 px-3 font-semibold text-theme-muted whitespace-nowrap min-w-[100px]">{getMonthLabel(m)}</th>
               ))}
-              <th className="text-right py-3 px-4 font-semibold text-slate-400 bg-dark-500 min-w-[120px]">Total</th>
+              <th className="text-right py-3 px-4 font-semibold text-theme-muted bg-dark-500 min-w-[120px]">Total</th>
             </tr>
           </thead>
           <tbody>
@@ -150,7 +150,7 @@ export default function ProfitAndLoss({ items, allValues, months, viewMode, sett
               if (row.isHeader) {
                 return (
                   <tr key={row.key} className="bg-dark-600 border-b border-dark-400/50">
-                    <td className="py-2.5 px-4 font-semibold text-slate-300 sticky left-0 bg-dark-600 z-10">{row.label}</td>
+                    <td className="py-2.5 px-4 font-semibold text-theme-secondary sticky left-0 bg-dark-600 z-10">{row.label}</td>
                     <td colSpan={months.length + 1} />
                   </tr>
                 );
@@ -158,18 +158,18 @@ export default function ProfitAndLoss({ items, allValues, months, viewMode, sett
               const rowTotal = months.reduce((sum, m) => sum + getRowValue(row, m), 0);
               return (
                 <tr key={row.key} className={`border-b border-dark-400/30 ${row.isTotal ? 'font-semibold bg-dark-600/50' : ''}`}>
-                  <td className={`py-2 px-4 text-slate-300 sticky left-0 z-10 ${row.isTotal ? 'bg-dark-600/50 font-semibold' : 'bg-dark-700'} ${row.indent ? 'pl-8' : ''}`}>
+                  <td className={`py-2 px-4 text-theme-secondary sticky left-0 z-10 ${row.isTotal ? 'bg-dark-600/50 font-semibold' : 'bg-dark-700'} ${row.indent ? 'pl-8' : ''}`}>
                     {row.label}
                   </td>
                   {months.map(m => {
                     const val = getRowValue(row, m);
                     return (
-                      <td key={m} className={`text-right py-2 px-3 tabular-nums ${val < 0 ? 'text-red-400' : 'text-slate-300'}`}>
-                        {row.pct ? `${val.toFixed(1)}%` : (val !== 0 ? formatRs(val) : <span className="text-slate-300">-</span>)}
+                      <td key={m} className={`text-right py-2 px-3 tabular-nums ${val < 0 ? 'text-red-400' : 'text-theme-secondary'}`}>
+                        {row.pct ? `${val.toFixed(1)}%` : (val !== 0 ? formatRs(val) : <span className="text-theme-secondary">-</span>)}
                       </td>
                     );
                   })}
-                  <td className={`text-right py-2 px-4 tabular-nums bg-dark-600 ${rowTotal < 0 ? 'text-red-400' : 'text-white'}`}>
+                  <td className={`text-right py-2 px-4 tabular-nums bg-dark-600 ${rowTotal < 0 ? 'text-red-400' : 'text-theme-heading'}`}>
                     {row.pct ? `${(totals.revenue > 0 ? (totals.grossProfit / totals.revenue * 100) : 0).toFixed(1)}%` : formatRs(rowTotal)}
                   </td>
                 </tr>

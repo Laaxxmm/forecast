@@ -112,11 +112,11 @@ function ActualsEntryForm({ category, items, scenario, selectedMonth, onReload }
         <div className="flex items-center gap-3 mb-4">
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="radio" checked={enterMode === 'individual'} onChange={() => setEnterMode('individual')} className="text-accent-400" />
-            <span className="text-sm text-slate-400">Enter individual revenue streams</span>
+            <span className="text-sm text-theme-muted">Enter individual revenue streams</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="radio" checked={enterMode === 'overall'} onChange={() => setEnterMode('overall')} className="text-accent-400" />
-            <span className="text-sm text-slate-400">Enter overall revenue only</span>
+            <span className="text-sm text-theme-muted">Enter overall revenue only</span>
           </label>
         </div>
       )}
@@ -129,11 +129,11 @@ function ActualsEntryForm({ category, items, scenario, selectedMonth, onReload }
             : entries
           ).map((entry, idx) => (
             <div key={idx} className="flex items-center gap-4">
-              <label className="text-sm text-slate-300 w-64 flex-shrink-0 truncate" title={entry.item_name}>
+              <label className="text-sm text-theme-secondary w-64 flex-shrink-0 truncate" title={entry.item_name}>
                 {entry.item_name}
               </label>
               <div className="relative flex-1 max-w-xs">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">Rs</span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-theme-muted">Rs</span>
                 <input
                   type="number"
                   value={entry.amount || ''}
@@ -180,8 +180,8 @@ export default function UpdateActuals({ items, months, scenario, onReload }: Pro
     <div>
       {/* Header */}
       <div className="mb-6">
-        <h2 className="text-xl font-bold text-white mb-1">Update your actuals</h2>
-        <p className="text-sm text-slate-500">Enter actual financial results for {monthFullLabel(selectedMonth)}</p>
+        <h2 className="text-xl font-bold text-theme-heading mb-1">Update your actuals</h2>
+        <p className="text-sm text-theme-faint">Enter actual financial results for {monthFullLabel(selectedMonth)}</p>
       </div>
 
       {/* Month selector */}
@@ -214,7 +214,7 @@ export default function UpdateActuals({ items, months, scenario, onReload }: Pro
               `px-4 py-2 text-xs font-medium rounded-t-lg whitespace-nowrap border-b-2 transition-colors ${
                 isActive
                   ? 'border-accent-500 text-accent-400 bg-accent-500/10'
-                  : 'border-transparent text-slate-500 hover:text-slate-300 hover:bg-dark-600'
+                  : 'border-transparent text-theme-faint hover:text-theme-secondary hover:bg-dark-600'
               }`
             }
           >

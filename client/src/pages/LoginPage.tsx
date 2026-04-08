@@ -43,13 +43,13 @@ export default function LoginPage() {
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-accent-500 shadow-glow mb-4">
             <BarChart3 size={24} className="text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-white">Vision</h1>
-          <p className="text-slate-500 mt-1.5 text-sm">by Indefine</p>
+          <h1 className="text-2xl font-bold text-theme-heading">Vision</h1>
+          <p className="text-theme-faint mt-1.5 text-sm">by Indefine</p>
         </div>
 
         {/* Login Card */}
         <div className="card">
-          <h2 className="text-lg font-semibold text-white mb-6">Welcome back</h2>
+          <h2 className="text-lg font-semibold text-theme-heading mb-6">Welcome back</h2>
 
           {error && (
             <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-xl mb-5 text-sm flex items-center gap-2">
@@ -60,7 +60,7 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit}>
             <div className="mb-4">
-              <label className="block text-sm font-medium text-slate-400 mb-2">Username</label>
+              <label className="block text-sm font-medium text-theme-muted mb-2">Username</label>
               <input
                 type="text"
                 value={username}
@@ -71,7 +71,7 @@ export default function LoginPage() {
               />
             </div>
             <div className="mb-6">
-              <label className="block text-sm font-medium text-slate-400 mb-2">Password</label>
+              <label className="block text-sm font-medium text-theme-muted mb-2">Password</label>
               <div className="relative">
                 <input
                   type={showPassword ? 'text' : 'password'}
@@ -84,7 +84,7 @@ export default function LoginPage() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-theme-faint hover:text-theme-secondary transition-colors"
                 >
                   {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>

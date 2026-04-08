@@ -58,7 +58,7 @@ export default function PharmacyDetailPage() {
 
   if (loading) return (
     <div className="flex items-center justify-center py-20">
-      <div className="text-slate-400">Loading...</div>
+      <div className="text-theme-muted">Loading...</div>
     </div>
   );
 
@@ -66,8 +66,8 @@ export default function PharmacyDetailPage() {
     <div className="animate-fade-in">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">Pharmacy Details</h1>
-          <p className="text-slate-500 mt-1 text-sm">Sales, purchases, and profitability analysis</p>
+          <h1 className="text-2xl font-bold text-theme-heading">Pharmacy Details</h1>
+          <p className="text-theme-faint mt-1 text-sm">Sales, purchases, and profitability analysis</p>
         </div>
         <select value={selectedFY || ''} onChange={e => setSelectedFY(Number(e.target.value))} className="input w-48">
           {fys.map(fy => <option key={fy.id} value={fy.id}>{fy.label}</option>)}
@@ -78,7 +78,7 @@ export default function PharmacyDetailPage() {
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
         {summaryCards.map(item => (
           <div key={item.label} className="card p-4">
-            <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">{item.label}</p>
+            <p className="text-[10px] text-theme-faint uppercase tracking-wider mb-1">{item.label}</p>
             <p className={`text-lg font-bold ${item.color}`}>{item.value}</p>
           </div>
         ))}
@@ -86,8 +86,8 @@ export default function PharmacyDetailPage() {
 
       {/* Sales vs COGS Chart */}
       <div className="card mb-6">
-        <h3 className="text-sm font-semibold text-white mb-1">Monthly Sales, COGS & Profit</h3>
-        <p className="text-xs text-slate-500 mb-6">Revenue breakdown with profitability</p>
+        <h3 className="text-sm font-semibold text-theme-heading mb-1">Monthly Sales, COGS & Profit</h3>
+        <p className="text-xs text-theme-faint mb-6">Revenue breakdown with profitability</p>
         {chartData.length > 0 ? (
           <ResponsiveContainer width="100%" height={350}>
             <BarChart data={chartData} barGap={2}>
@@ -102,15 +102,15 @@ export default function PharmacyDetailPage() {
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <p className="text-slate-500 text-center py-16 text-sm">Import Oneglance sales data to see pharmacy details</p>
+          <p className="text-theme-faint text-center py-16 text-sm">Import Oneglance sales data to see pharmacy details</p>
         )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Margin Trend */}
         <div className="card">
-          <h3 className="text-sm font-semibold text-white mb-1">Profit Margin Trend</h3>
-          <p className="text-xs text-slate-500 mb-6">Monthly margin percentage</p>
+          <h3 className="text-sm font-semibold text-theme-heading mb-1">Profit Margin Trend</h3>
+          <p className="text-xs text-theme-faint mb-6">Monthly margin percentage</p>
           {chartData.length > 0 ? (
             <ResponsiveContainer width="100%" height={250}>
               <AreaChart data={chartData}>
@@ -128,35 +128,35 @@ export default function PharmacyDetailPage() {
               </AreaChart>
             </ResponsiveContainer>
           ) : (
-            <p className="text-slate-500 text-center py-8 text-sm">No data</p>
+            <p className="text-theme-faint text-center py-8 text-sm">No data</p>
           )}
         </div>
 
         {/* Budget vs Actual */}
         <div className="card">
-          <h3 className="text-sm font-semibold text-white mb-1">Budget vs Actual</h3>
-          <p className="text-xs text-slate-500 mb-4">Variance analysis</p>
+          <h3 className="text-sm font-semibold text-theme-heading mb-1">Budget vs Actual</h3>
+          <p className="text-xs text-theme-faint mb-4">Variance analysis</p>
           {variance.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-dark-400/50">
-                    <th className="text-left py-2.5 px-2 text-slate-500 font-medium text-[10px] uppercase tracking-wider">Month</th>
-                    <th className="text-left py-2.5 px-2 text-slate-500 font-medium text-[10px] uppercase tracking-wider">Metric</th>
-                    <th className="text-right py-2.5 px-2 text-slate-500 font-medium text-[10px] uppercase tracking-wider">Budget</th>
-                    <th className="text-right py-2.5 px-2 text-slate-500 font-medium text-[10px] uppercase tracking-wider">Actual</th>
-                    <th className="text-right py-2.5 px-2 text-slate-500 font-medium text-[10px] uppercase tracking-wider">Var %</th>
-                    <th className="text-center py-2.5 px-2 text-slate-500 font-medium text-[10px] uppercase tracking-wider">RAG</th>
+                    <th className="text-left py-2.5 px-2 text-theme-faint font-medium text-[10px] uppercase tracking-wider">Month</th>
+                    <th className="text-left py-2.5 px-2 text-theme-faint font-medium text-[10px] uppercase tracking-wider">Metric</th>
+                    <th className="text-right py-2.5 px-2 text-theme-faint font-medium text-[10px] uppercase tracking-wider">Budget</th>
+                    <th className="text-right py-2.5 px-2 text-theme-faint font-medium text-[10px] uppercase tracking-wider">Actual</th>
+                    <th className="text-right py-2.5 px-2 text-theme-faint font-medium text-[10px] uppercase tracking-wider">Var %</th>
+                    <th className="text-center py-2.5 px-2 text-theme-faint font-medium text-[10px] uppercase tracking-wider">RAG</th>
                   </tr>
                 </thead>
                 <tbody>
                   {variance.map((v, i) => (
                     <tr key={i} className="border-b border-dark-400/30 hover:bg-dark-600/50 transition-colors">
-                      <td className="py-2.5 px-2 text-slate-300">{getMonthLabel(v.month)}</td>
-                      <td className="py-2.5 px-2 text-slate-400">{v.metric}</td>
-                      <td className="py-2.5 px-2 text-right text-slate-400">{formatINR(v.amount)}</td>
-                      <td className="py-2.5 px-2 text-right text-slate-200">{formatINR(v.actual_amount)}</td>
-                      <td className="py-2.5 px-2 text-right text-slate-300">{v.variance_pct.toFixed(1)}%</td>
+                      <td className="py-2.5 px-2 text-theme-secondary">{getMonthLabel(v.month)}</td>
+                      <td className="py-2.5 px-2 text-theme-muted">{v.metric}</td>
+                      <td className="py-2.5 px-2 text-right text-theme-muted">{formatINR(v.amount)}</td>
+                      <td className="py-2.5 px-2 text-right text-theme-primary">{formatINR(v.actual_amount)}</td>
+                      <td className="py-2.5 px-2 text-right text-theme-secondary">{v.variance_pct.toFixed(1)}%</td>
                       <td className="py-2.5 px-2 text-center">
                         <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium ${
                           v.rag === 'GREEN' ? 'bg-emerald-500/15 text-emerald-400' :
@@ -170,7 +170,7 @@ export default function PharmacyDetailPage() {
               </table>
             </div>
           ) : (
-            <p className="text-slate-500 text-center py-8 text-sm">Set a budget to see variance</p>
+            <p className="text-theme-faint text-center py-8 text-sm">Set a budget to see variance</p>
           )}
         </div>
       </div>

@@ -116,7 +116,7 @@ export default function ExpensesTab({ category, label, scenario, months, items, 
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
-          <h2 className="text-xl font-bold text-white">{label}</h2>
+          <h2 className="text-xl font-bold text-theme-heading">{label}</h2>
           <span className="text-xs px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-400 font-medium cursor-pointer">In Progress</span>
         </div>
         {!readOnly && (
@@ -133,7 +133,7 @@ export default function ExpensesTab({ category, label, scenario, months, items, 
       {/* Chart */}
       {items.length > 0 && (
         <div className="card mb-4">
-          <h3 className="text-sm font-semibold text-slate-400 mb-3">Expenses Totals</h3>
+          <h3 className="text-sm font-semibold text-theme-muted mb-3">Expenses Totals</h3>
           <div className="h-48">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData}>
@@ -169,18 +169,18 @@ export default function ExpensesTab({ category, label, scenario, months, items, 
         <table className="w-full text-sm" style={{ minWidth: months.length * 100 + 300 }}>
           <thead>
             <tr className="border-b border-dark-400/50 bg-dark-600">
-              <th className="text-left py-3 px-4 font-semibold text-slate-400 sticky left-0 bg-dark-600 z-10 min-w-[240px]">
+              <th className="text-left py-3 px-4 font-semibold text-theme-muted sticky left-0 bg-dark-600 z-10 min-w-[240px]">
                 <div className="flex items-center gap-2">
                   <span>{label}</span>
-                  <button className="text-xs text-slate-400 hover:text-slate-400 border border-dark-400 rounded px-2 py-0.5">Organize</button>
+                  <button className="text-xs text-theme-muted hover:text-theme-muted border border-dark-400 rounded px-2 py-0.5">Organize</button>
                 </div>
               </th>
               {months.map(m => (
-                <th key={m} className="text-right py-3 px-3 font-semibold text-slate-400 whitespace-nowrap min-w-[100px]">
+                <th key={m} className="text-right py-3 px-3 font-semibold text-theme-muted whitespace-nowrap min-w-[100px]">
                   {getMonthLabel(m)}
                 </th>
               ))}
-              <th className="text-right py-3 px-4 font-semibold text-slate-400 bg-dark-500 min-w-[120px]">Total</th>
+              <th className="text-right py-3 px-4 font-semibold text-theme-muted bg-dark-500 min-w-[120px]">Total</th>
             </tr>
           </thead>
           <tbody>
@@ -191,9 +191,9 @@ export default function ExpensesTab({ category, label, scenario, months, items, 
                 <tr key={item.id} className="border-b border-dark-400/30 hover:bg-dark-600 group">
                   <td className="py-2.5 px-4 sticky left-0 bg-dark-700 z-10 group-hover:bg-dark-600">
                     <div className="flex items-center gap-2">
-                      {!readOnly && <GripVertical size={14} className="text-slate-300 cursor-grab opacity-0 group-hover:opacity-100" />}
+                      {!readOnly && <GripVertical size={14} className="text-theme-secondary cursor-grab opacity-0 group-hover:opacity-100" />}
                       {readOnly ? (
-                        <span className="text-slate-300 font-medium text-left">{item.name}</span>
+                        <span className="text-theme-secondary font-medium text-left">{item.name}</span>
                       ) : (
                         <button
                           onClick={() => setEditingItem(item)}
@@ -224,11 +224,11 @@ export default function ExpensesTab({ category, label, scenario, months, items, 
                     </div>
                   </td>
                   {months.map(m => (
-                    <td key={m} className="text-right py-2.5 px-3 text-slate-300 tabular-nums">
-                      {itemValues[m] ? formatRs(itemValues[m]) : <span className="text-slate-300">-</span>}
+                    <td key={m} className="text-right py-2.5 px-3 text-theme-secondary tabular-nums">
+                      {itemValues[m] ? formatRs(itemValues[m]) : <span className="text-theme-secondary">-</span>}
                     </td>
                   ))}
-                  <td className="text-right py-2.5 px-4 font-semibold text-white bg-dark-600 tabular-nums">
+                  <td className="text-right py-2.5 px-4 font-semibold text-theme-heading bg-dark-600 tabular-nums">
                     {formatRs(rowTotal)}
                   </td>
                 </tr>
@@ -252,13 +252,13 @@ export default function ExpensesTab({ category, label, scenario, months, items, 
 
             {/* Totals row */}
             <tr className="border-t-2 border-accent-500/30 bg-dark-600 font-semibold">
-              <td className="py-3 px-4 text-slate-300 sticky left-0 bg-dark-600 z-10">Totals</td>
+              <td className="py-3 px-4 text-theme-secondary sticky left-0 bg-dark-600 z-10">Totals</td>
               {months.map(m => (
-                <td key={m} className="text-right py-3 px-3 text-white tabular-nums">
+                <td key={m} className="text-right py-3 px-3 text-theme-heading tabular-nums">
                   {formatRs(monthlyTotals[m] || 0)}
                 </td>
               ))}
-              <td className="text-right py-3 px-4 text-white bg-dark-500 tabular-nums">
+              <td className="text-right py-3 px-4 text-theme-heading bg-dark-500 tabular-nums">
                 {formatRs(grandTotal)}
               </td>
             </tr>

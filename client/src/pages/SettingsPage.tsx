@@ -110,33 +110,33 @@ export default function SettingsPage() {
 
   if (loading) return (
     <div className="flex items-center justify-center py-20">
-      <div className="text-slate-400">Loading...</div>
+      <div className="text-theme-muted">Loading...</div>
     </div>
   );
 
   return (
     <div className="animate-fade-in">
-      <h1 className="text-2xl font-bold text-white mb-6">Settings</h1>
+      <h1 className="text-2xl font-bold text-theme-heading mb-6">Settings</h1>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Financial Years */}
         <div className="card">
-          <h3 className="font-semibold text-white mb-4">Financial Years</h3>
+          <h3 className="font-semibold text-theme-heading mb-4">Financial Years</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-sm mb-4">
               <thead>
                 <tr className="border-b border-dark-400/50">
-                  <th className="text-left py-2 text-slate-500 font-medium text-xs uppercase">Label</th>
-                  <th className="text-left py-2 text-slate-500 font-medium text-xs uppercase">Period</th>
-                  <th className="text-center py-2 text-slate-500 font-medium text-xs uppercase">Active</th>
-                  <th className="text-right py-2 text-slate-500 font-medium text-xs uppercase">Actions</th>
+                  <th className="text-left py-2 text-theme-faint font-medium text-xs uppercase">Label</th>
+                  <th className="text-left py-2 text-theme-faint font-medium text-xs uppercase">Period</th>
+                  <th className="text-center py-2 text-theme-faint font-medium text-xs uppercase">Active</th>
+                  <th className="text-right py-2 text-theme-faint font-medium text-xs uppercase">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {fys.map(fy => (
                   <tr key={fy.id} className="border-b border-dark-400/30">
-                    <td className="py-2.5 font-medium text-slate-200">{fy.label}</td>
-                    <td className="py-2.5 text-slate-500">{fy.start_date} to {fy.end_date}</td>
+                    <td className="py-2.5 font-medium text-theme-primary">{fy.label}</td>
+                    <td className="py-2.5 text-theme-faint">{fy.start_date} to {fy.end_date}</td>
                     <td className="py-2.5 text-center">
                       {fy.is_active ? <span className="badge-success text-[10px]">Active</span> : null}
                     </td>
@@ -153,7 +153,7 @@ export default function SettingsPage() {
             </table>
           </div>
           <div className="border-t border-dark-400/30 pt-4">
-            <p className="text-sm text-slate-400 mb-2">Add Financial Year</p>
+            <p className="text-sm text-theme-muted mb-2">Add Financial Year</p>
             <div className="flex gap-2">
               <input type="number" placeholder="Start year (e.g. 2026)" className="input w-48" onChange={e => generateFY(e.target.value)} />
               <input type="text" value={newFY.label} readOnly className="input w-32 bg-dark-600" placeholder="Label" />
@@ -164,18 +164,18 @@ export default function SettingsPage() {
 
         {/* Doctors */}
         <div className="card">
-          <h3 className="font-semibold text-white mb-4">Doctors</h3>
-          <p className="text-sm text-slate-500 mb-3">Doctors are auto-imported from Healthplix reports. You can also add manually.</p>
+          <h3 className="font-semibold text-theme-heading mb-4">Doctors</h3>
+          <p className="text-sm text-theme-faint mb-3">Doctors are auto-imported from Healthplix reports. You can also add manually.</p>
           <div className="max-h-64 overflow-y-auto mb-4">
             {doctors.map(d => (
               <div key={d.id} className="flex items-center justify-between py-2.5 px-3 border-b border-dark-400/30">
-                <span className="text-sm text-slate-300">{d.name}</span>
-                <span className={`text-[10px] font-medium ${d.is_active ? 'text-accent-400' : 'text-slate-500'}`}>
+                <span className="text-sm text-theme-secondary">{d.name}</span>
+                <span className={`text-[10px] font-medium ${d.is_active ? 'text-accent-400' : 'text-theme-faint'}`}>
                   {d.is_active ? 'Active' : 'Inactive'}
                 </span>
               </div>
             ))}
-            {doctors.length === 0 && <p className="text-slate-500 text-center py-4 text-sm">No doctors yet</p>}
+            {doctors.length === 0 && <p className="text-theme-faint text-center py-4 text-sm">No doctors yet</p>}
           </div>
           <div className="flex gap-2">
             <input type="text" value={newDoctor} onChange={e => setNewDoctor(e.target.value)}
@@ -191,31 +191,31 @@ export default function SettingsPage() {
               <Stethoscope size={20} className="text-accent-400" />
             </div>
             <div className="flex-1">
-              <h3 className="font-semibold text-white">Healthplix Credentials</h3>
-              <p className="text-sm text-slate-500">Clinic billing auto-sync</p>
+              <h3 className="font-semibold text-theme-heading">Healthplix Credentials</h3>
+              <p className="text-sm text-theme-faint">Clinic billing auto-sync</p>
             </div>
             {hpHasPassword && <span className="badge-success text-[10px]"><CheckCircle size={10} /> Configured</span>}
           </div>
           <div className="space-y-3 mb-4">
             <div>
-              <label className="block text-sm font-medium text-slate-400 mb-1.5">Username / Email</label>
+              <label className="block text-sm font-medium text-theme-muted mb-1.5">Username / Email</label>
               <input type="text" value={hpCreds.username} onChange={e => setHpCreds(c => ({ ...c, username: e.target.value }))} placeholder="your@email.com" className="input w-full" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-400 mb-1.5">
-                Password {hpHasPassword && <span className="text-xs text-slate-500">(saved)</span>}
+              <label className="block text-sm font-medium text-theme-muted mb-1.5">
+                Password {hpHasPassword && <span className="text-xs text-theme-faint">(saved)</span>}
               </label>
               <div className="relative">
                 <input type={showHpPassword ? 'text' : 'password'} value={hpCreds.password} onChange={e => setHpCreds(c => ({ ...c, password: e.target.value }))}
                   placeholder={hpHasPassword ? '••••••••' : 'Enter password'} className="input w-full pr-10" />
                 <button type="button" onClick={() => setShowHpPassword(!showHpPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors">
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-theme-faint hover:text-theme-secondary transition-colors">
                   {showHpPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-400 mb-1.5">Clinic Name</label>
+              <label className="block text-sm font-medium text-theme-muted mb-1.5">Clinic Name</label>
               <input type="text" value={hpCreds.clinicName} onChange={e => setHpCreds(c => ({ ...c, clinicName: e.target.value }))} placeholder="MagnaCode Bangalore" className="input w-full" />
             </div>
           </div>
@@ -238,25 +238,25 @@ export default function SettingsPage() {
               <Pill size={20} className="text-purple-400" />
             </div>
             <div className="flex-1">
-              <h3 className="font-semibold text-white">Oneglance Credentials</h3>
-              <p className="text-sm text-slate-500">Pharmacy reports auto-sync</p>
+              <h3 className="font-semibold text-theme-heading">Oneglance Credentials</h3>
+              <p className="text-sm text-theme-faint">Pharmacy reports auto-sync</p>
             </div>
             {ogHasPassword && <span className="badge-success text-[10px]"><CheckCircle size={10} /> Configured</span>}
           </div>
           <div className="space-y-3 mb-4">
             <div>
-              <label className="block text-sm font-medium text-slate-400 mb-1.5">Username</label>
+              <label className="block text-sm font-medium text-theme-muted mb-1.5">Username</label>
               <input type="text" value={ogCreds.username} onChange={e => setOgCreds(c => ({ ...c, username: e.target.value }))} placeholder="Username" className="input w-full" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-400 mb-1.5">
-                Password {ogHasPassword && <span className="text-xs text-slate-500">(saved)</span>}
+              <label className="block text-sm font-medium text-theme-muted mb-1.5">
+                Password {ogHasPassword && <span className="text-xs text-theme-faint">(saved)</span>}
               </label>
               <div className="relative">
                 <input type={showOgPassword ? 'text' : 'password'} value={ogCreds.password} onChange={e => setOgCreds(c => ({ ...c, password: e.target.value }))}
                   placeholder={ogHasPassword ? '••••••••' : 'Enter password'} className="input w-full pr-10" />
                 <button type="button" onClick={() => setShowOgPassword(!showOgPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors">
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-theme-faint hover:text-theme-secondary transition-colors">
                   {showOgPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
@@ -275,7 +275,7 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      <p className="text-xs text-slate-500 mt-4">
+      <p className="text-xs text-theme-faint mt-4">
         Credentials are encrypted and stored locally. They are only used to automate report downloads.
       </p>
     </div>

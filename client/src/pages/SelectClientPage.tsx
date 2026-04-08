@@ -46,18 +46,18 @@ export default function SelectClientPage() {
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-accent-500 shadow-glow mb-4">
             <BarChart3 size={24} className="text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-white">Vision</h1>
-          <p className="text-slate-500 mt-1.5 text-sm">Select a client to manage</p>
+          <h1 className="text-2xl font-bold text-theme-heading">Vision</h1>
+          <p className="text-theme-faint mt-1.5 text-sm">Select a client to manage</p>
         </div>
 
         {loading ? (
-          <div className="text-center text-slate-500">
+          <div className="text-center text-theme-faint">
             <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto mb-3" />
             Loading clients...
           </div>
         ) : clients.length === 0 ? (
           <div className="card text-center">
-            <p className="text-slate-400 mb-4">No clients found.</p>
+            <p className="text-theme-muted mb-4">No clients found.</p>
             {userType === 'super_admin' && (
               <button onClick={() => navigate('/admin/clients')} className="btn-primary">
                 Create First Client
@@ -77,9 +77,9 @@ export default function SelectClientPage() {
                     <Building2 size={20} className="text-accent-400" />
                   </div>
                   <div className="flex-1">
-                    <h3 className="text-base font-semibold text-white">{client.name}</h3>
+                    <h3 className="text-base font-semibold text-theme-heading">{client.name}</h3>
                     <div className="flex items-center gap-3 mt-1">
-                      <span className="flex items-center gap-1 text-xs text-slate-500">
+                      <span className="flex items-center gap-1 text-xs text-theme-faint">
                         <Users size={11} />
                         {client.user_count} user{client.user_count !== 1 ? 's' : ''}
                       </span>
@@ -94,7 +94,7 @@ export default function SelectClientPage() {
                       )}
                     </div>
                   </div>
-                  <ChevronRight size={18} className="text-slate-500 group-hover:text-accent-400 transition-colors" />
+                  <ChevronRight size={18} className="text-theme-faint group-hover:text-accent-400 transition-colors" />
                 </div>
               </div>
             ))}

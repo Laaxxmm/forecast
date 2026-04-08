@@ -92,8 +92,8 @@ function SyncStepTracker({ status, steps }: { status: { step: string; message: s
   return (
     <div className="mb-5 bg-dark-600 border border-dark-400/50 rounded-2xl p-5">
       <div className="flex items-center justify-between mb-4">
-        <h4 className="text-sm font-semibold text-slate-200">Sync Progress</h4>
-        <span className="text-xs text-slate-500">
+        <h4 className="text-sm font-semibold text-theme-primary">Sync Progress</h4>
+        <span className="text-xs text-theme-faint">
           {isError ? 'Failed' : status.step === 'complete' ? 'Done' : `${status.pct || 0}%`}
         </span>
       </div>
@@ -123,7 +123,7 @@ function SyncStepTracker({ status, steps }: { status: { step: string; message: s
                 stepStatus === 'done' ? 'bg-accent-500/15 text-accent-400' :
                 stepStatus === 'active' ? 'bg-accent-500/15 text-accent-400' :
                 stepStatus === 'error' ? 'bg-red-500/15 text-red-400' :
-                'bg-dark-500 text-slate-500'
+                'bg-dark-500 text-theme-faint'
               }`}>
                 {stepStatus === 'done' ? <CheckCircle size={14} /> :
                  stepStatus === 'active' ? <RefreshCw size={14} className="animate-spin" /> :
@@ -135,7 +135,7 @@ function SyncStepTracker({ status, steps }: { status: { step: string; message: s
                   stepStatus === 'done' ? 'text-accent-400' :
                   stepStatus === 'active' ? 'text-accent-300' :
                   stepStatus === 'error' ? 'text-red-400' :
-                  'text-slate-500'
+                  'text-theme-faint'
                 }`}>{step.label}</p>
                 {(stepStatus === 'active' || stepStatus === 'error') && (
                   <p className={`text-xs mt-0.5 ${stepStatus === 'error' ? 'text-red-400' : 'text-accent-500/70'}`}>
@@ -249,8 +249,8 @@ export default function ImportPage() {
 
   return (
     <div className="animate-fade-in">
-      <h1 className="text-2xl font-bold text-white mb-1">Import Data</h1>
-      <p className="text-slate-500 text-sm mb-6">Upload Excel reports or sync directly from Healthplix / Oneglance</p>
+      <h1 className="text-2xl font-bold text-theme-heading mb-1">Import Data</h1>
+      <p className="text-theme-faint text-sm mb-6">Upload Excel reports or sync directly from Healthplix / Oneglance</p>
 
       {/* Mode Toggle */}
       <div className="flex gap-2 mb-6">
@@ -259,7 +259,7 @@ export default function ImportPage() {
           className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
             mode === 'upload'
               ? 'bg-accent-500 text-white shadow-glow'
-              : 'bg-dark-700 text-slate-400 border border-dark-400/50 hover:border-dark-300'
+              : 'bg-dark-700 text-theme-muted border border-dark-400/50 hover:border-dark-300'
           }`}
         >
           <Upload size={16} /> Upload File
@@ -269,7 +269,7 @@ export default function ImportPage() {
           className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
             mode === 'sync'
               ? 'bg-accent-500 text-white shadow-glow'
-              : 'bg-dark-700 text-slate-400 border border-dark-400/50 hover:border-dark-300'
+              : 'bg-dark-700 text-theme-muted border border-dark-400/50 hover:border-dark-300'
           }`}
         >
           <Cloud size={16} /> Auto Sync
@@ -291,17 +291,17 @@ export default function ImportPage() {
                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-3 ${
                   selected === s.key ? 'bg-accent-500/15' : 'bg-dark-500'
                 }`}>
-                  <s.icon size={20} className={selected === s.key ? 'text-accent-400' : 'text-slate-500'} />
+                  <s.icon size={20} className={selected === s.key ? 'text-accent-400' : 'text-theme-faint'} />
                 </div>
-                <h3 className="font-semibold text-white mt-1">{s.label}</h3>
-                <p className="text-sm text-slate-500 mt-1">{s.desc}</p>
+                <h3 className="font-semibold text-theme-heading mt-1">{s.label}</h3>
+                <p className="text-sm text-theme-faint mt-1">{s.desc}</p>
               </button>
             ))}
           </div>
 
           {selected && !result && (
             <div className="card mb-8">
-              <h3 className="font-semibold text-white mb-4">
+              <h3 className="font-semibold text-theme-heading mb-4">
                 Upload {sources.find(s => s.key === selected)?.label} Report
               </h3>
               <div
@@ -313,9 +313,9 @@ export default function ImportPage() {
                 }`}
               >
                 <div className="w-14 h-14 rounded-2xl bg-dark-600 flex items-center justify-center mx-auto mb-4">
-                  <Upload size={24} className="text-slate-500" />
+                  <Upload size={24} className="text-theme-faint" />
                 </div>
-                <p className="text-slate-300 mb-2">Drag & drop your Excel file here, or</p>
+                <p className="text-theme-secondary mb-2">Drag & drop your Excel file here, or</p>
                 <label className="btn-primary cursor-pointer inline-block">
                   Browse Files
                   <input type="file" accept=".xlsx,.xls" className="hidden" onChange={e => setFile(e.target.files?.[0] || null)} />
@@ -350,11 +350,11 @@ export default function ImportPage() {
               className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex-1 ${
                 syncSource === 'healthplix'
                   ? 'bg-accent-500/10 border-2 border-accent-500/50 text-accent-400'
-                  : 'bg-dark-600 border border-dark-400/50 text-slate-400 hover:border-dark-300'
+                  : 'bg-dark-600 border border-dark-400/50 text-theme-muted hover:border-dark-300'
               }`}
             >
               <Stethoscope size={18} /> Healthplix
-              <span className="text-xs text-slate-500 ml-auto">Clinic</span>
+              <span className="text-xs text-theme-faint ml-auto">Clinic</span>
             </button>
             <button
               onClick={() => { setSyncSource('oneglance'); setSyncStatus(null); setError(''); }}
@@ -362,11 +362,11 @@ export default function ImportPage() {
               className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex-1 ${
                 syncSource === 'oneglance'
                   ? 'bg-purple-500/10 border-2 border-purple-500/50 text-purple-400'
-                  : 'bg-dark-600 border border-dark-400/50 text-slate-400 hover:border-dark-300'
+                  : 'bg-dark-600 border border-dark-400/50 text-theme-muted hover:border-dark-300'
               }`}
             >
               <Pill size={18} /> Oneglance
-              <span className="text-xs text-slate-500 ml-auto">Pharmacy</span>
+              <span className="text-xs text-theme-faint ml-auto">Pharmacy</span>
             </button>
           </div>
 
@@ -380,10 +380,10 @@ export default function ImportPage() {
               }
             </div>
             <div>
-              <h3 className="font-semibold text-white">
+              <h3 className="font-semibold text-theme-heading">
                 Sync from {syncSource === 'healthplix' ? 'Healthplix' : 'Oneglance'}
               </h3>
-              <p className="text-sm text-slate-500">
+              <p className="text-sm text-theme-faint">
                 {syncSource === 'healthplix'
                   ? 'Auto-fetch clinic billing report via browser automation'
                   : 'Auto-fetch pharmacy sales/purchase reports via browser automation'
@@ -411,13 +411,13 @@ export default function ImportPage() {
             <>
               <div className="grid grid-cols-2 gap-4 mb-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-1.5">
+                  <label className="block text-sm font-medium text-theme-muted mb-1.5">
                     <Calendar size={14} className="inline mr-1" /> From Date
                   </label>
                   <input type="date" value={syncDates.from} onChange={e => setSyncDates(d => ({ ...d, from: e.target.value }))} className="input w-full" disabled={syncing} />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-1.5">
+                  <label className="block text-sm font-medium text-theme-muted mb-1.5">
                     <Calendar size={14} className="inline mr-1" /> To Date
                   </label>
                   <input type="date" value={syncDates.to} onChange={e => setSyncDates(d => ({ ...d, to: e.target.value }))} className="input w-full" disabled={syncing} />
@@ -431,14 +431,14 @@ export default function ImportPage() {
                   { label: 'Last 3 Months', fn: () => { const now = new Date(); const start = new Date(now.getFullYear(), now.getMonth() - 3, 1); setSyncDates({ from: fmtDate(start), to: fmtDate(now) }); }},
                 ].map(p => (
                   <button key={p.label} onClick={p.fn} disabled={syncing}
-                    className="text-xs px-3 py-1.5 rounded-full bg-dark-600 text-slate-400 hover:bg-dark-500 hover:text-slate-300 transition-all border border-dark-400/50"
+                    className="text-xs px-3 py-1.5 rounded-full bg-dark-600 text-theme-muted hover:bg-dark-500 hover:text-theme-secondary transition-all border border-dark-400/50"
                   >{p.label}</button>
                 ))}
               </div>
 
               {syncSource === 'oneglance' && (
                 <div className="mb-4">
-                  <label className="block text-sm font-medium text-slate-400 mb-2">Report Type</label>
+                  <label className="block text-sm font-medium text-theme-muted mb-2">Report Type</label>
                   <div className="flex gap-2">
                     {([
                       { key: 'both' as const, label: 'Sales & Purchase' },
@@ -449,7 +449,7 @@ export default function ImportPage() {
                         className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all ${
                           ogReportType === rt.key
                             ? 'bg-purple-500/15 text-purple-400 border border-purple-500/30'
-                            : 'bg-dark-600 text-slate-400 border border-dark-400/50 hover:border-dark-300'
+                            : 'bg-dark-600 text-theme-muted border border-dark-400/50 hover:border-dark-300'
                         }`}
                       >{rt.label}</button>
                     ))}
@@ -490,18 +490,18 @@ export default function ImportPage() {
           </div>
           <div className="grid grid-cols-3 gap-4 text-sm">
             <div className="bg-dark-600 rounded-xl p-3">
-              <p className="text-xs text-slate-500 mb-1">Rows Imported</p>
-              <p className="text-lg font-bold text-white">{result.totalRows?.toLocaleString('en-IN')}</p>
+              <p className="text-xs text-theme-faint mb-1">Rows Imported</p>
+              <p className="text-lg font-bold text-theme-heading">{result.totalRows?.toLocaleString('en-IN')}</p>
             </div>
             <div className="bg-dark-600 rounded-xl p-3">
-              <p className="text-xs text-slate-500 mb-1">Date Range</p>
-              <p className="text-lg font-bold text-white">
+              <p className="text-xs text-theme-faint mb-1">Date Range</p>
+              <p className="text-lg font-bold text-theme-heading">
                 {result.dateRange ? `${result.dateRange.start} to ${result.dateRange.end}` : 'N/A'}
               </p>
             </div>
             <div className="bg-dark-600 rounded-xl p-3">
-              <p className="text-xs text-slate-500 mb-1">Warnings</p>
-              <p className="text-lg font-bold text-white">{result.warnings?.length || 0}</p>
+              <p className="text-xs text-theme-faint mb-1">Warnings</p>
+              <p className="text-lg font-bold text-theme-heading">{result.warnings?.length || 0}</p>
             </div>
           </div>
           <button onClick={reset} className="btn-primary mt-4">
@@ -512,20 +512,20 @@ export default function ImportPage() {
 
       {/* Import History */}
       <div className="card">
-        <h3 className="font-semibold text-white mb-4">Import History</h3>
+        <h3 className="font-semibold text-theme-heading mb-4">Import History</h3>
         {history.length === 0 ? (
-          <p className="text-slate-500 text-center py-8">No imports yet</p>
+          <p className="text-theme-faint text-center py-8">No imports yet</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-dark-400/50">
-                  <th className="text-left py-3 px-3 text-slate-500 font-medium text-xs uppercase tracking-wider">Source</th>
-                  <th className="text-left py-3 px-3 text-slate-500 font-medium text-xs uppercase tracking-wider">File</th>
-                  <th className="text-right py-3 px-3 text-slate-500 font-medium text-xs uppercase tracking-wider">Rows</th>
-                  <th className="text-left py-3 px-3 text-slate-500 font-medium text-xs uppercase tracking-wider">Date Range</th>
-                  <th className="text-left py-3 px-3 text-slate-500 font-medium text-xs uppercase tracking-wider">Imported At</th>
-                  <th className="text-right py-3 px-3 text-slate-500 font-medium text-xs uppercase tracking-wider">Actions</th>
+                  <th className="text-left py-3 px-3 text-theme-faint font-medium text-xs uppercase tracking-wider">Source</th>
+                  <th className="text-left py-3 px-3 text-theme-faint font-medium text-xs uppercase tracking-wider">File</th>
+                  <th className="text-right py-3 px-3 text-theme-faint font-medium text-xs uppercase tracking-wider">Rows</th>
+                  <th className="text-left py-3 px-3 text-theme-faint font-medium text-xs uppercase tracking-wider">Date Range</th>
+                  <th className="text-left py-3 px-3 text-theme-faint font-medium text-xs uppercase tracking-wider">Imported At</th>
+                  <th className="text-right py-3 px-3 text-theme-faint font-medium text-xs uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -543,12 +543,12 @@ export default function ImportPage() {
                          log.source}
                       </span>
                     </td>
-                    <td className="py-3 px-3 text-slate-300">{log.filename}</td>
-                    <td className="py-3 px-3 text-right text-slate-300">{log.rows_imported.toLocaleString('en-IN')}</td>
-                    <td className="py-3 px-3 text-slate-500">
+                    <td className="py-3 px-3 text-theme-secondary">{log.filename}</td>
+                    <td className="py-3 px-3 text-right text-theme-secondary">{log.rows_imported.toLocaleString('en-IN')}</td>
+                    <td className="py-3 px-3 text-theme-faint">
                       {log.date_range_start && log.date_range_end ? `${log.date_range_start} to ${log.date_range_end}` : '-'}
                     </td>
-                    <td className="py-3 px-3 text-slate-500">{new Date(log.created_at).toLocaleString('en-IN')}</td>
+                    <td className="py-3 px-3 text-theme-faint">{new Date(log.created_at).toLocaleString('en-IN')}</td>
                     <td className="py-3 px-3 text-right">
                       <button onClick={() => handleDelete(log.id)} className="text-red-400/60 hover:text-red-400 transition-colors">
                         <Trash2 size={15} />

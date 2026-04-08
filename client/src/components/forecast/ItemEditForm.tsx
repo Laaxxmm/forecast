@@ -778,7 +778,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
       <div className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-3">
           <button onClick={onDiscard} className="p-2 hover:bg-dark-500 rounded-lg transition-colors">
-            <ArrowLeft size={20} className="text-slate-400" />
+            <ArrowLeft size={20} className="text-theme-muted" />
           </button>
           {isEditingName ? (
             <input
@@ -788,12 +788,12 @@ export default function ItemEditForm({ item, category, months, values: initialVa
               onBlur={() => setIsEditingName(false)}
               onKeyDown={e => e.key === 'Enter' && setIsEditingName(false)}
               autoFocus
-              className="text-2xl font-bold text-white bg-dark-700 border-2 border-primary-400 rounded-lg outline-none px-3 py-1"
+              className="text-2xl font-bold text-theme-heading bg-dark-700 border-2 border-primary-400 rounded-lg outline-none px-3 py-1"
             />
           ) : (
             <div className="flex items-center gap-2">
-              <h2 className="text-2xl font-bold text-white">{name}</h2>
-              <button onClick={() => setIsEditingName(true)} className="p-1 hover:bg-dark-500 rounded text-slate-400 hover:text-slate-400">
+              <h2 className="text-2xl font-bold text-theme-heading">{name}</h2>
+              <button onClick={() => setIsEditingName(true)} className="p-1 hover:bg-dark-500 rounded text-theme-muted hover:text-theme-muted">
                 <Edit3 size={14} />
               </button>
             </div>
@@ -801,24 +801,24 @@ export default function ItemEditForm({ item, category, months, values: initialVa
         </div>
         <div className="flex items-center gap-2">
           <div className="flex border border-dark-400 rounded-lg overflow-hidden text-sm mr-3">
-            <button className="px-4 py-1.5 bg-dark-700 text-slate-500 hover:bg-dark-600">Yearly</button>
-            <button className="px-4 py-1.5 bg-slate-800 text-white font-medium">Monthly</button>
+            <button className="px-4 py-1.5 bg-dark-700 text-theme-faint hover:bg-dark-600">Yearly</button>
+            <button className="px-4 py-1.5 bg-slate-800 text-theme-heading font-medium">Monthly</button>
           </div>
           <div className="flex items-center gap-1.5 px-3 py-1.5 bg-dark-500 rounded-lg text-sm mr-3">
             <span className="w-5 h-5 rounded bg-teal-600 text-white text-[10px] font-bold flex items-center justify-center">F</span>
-            <span className="text-slate-400 font-medium">Forecast</span>
+            <span className="text-theme-muted font-medium">Forecast</span>
           </div>
-          <button className="p-2 hover:bg-dark-500 rounded-lg text-slate-400" title="Comment"><MessageSquare size={16} /></button>
-          <button className="p-2 hover:bg-dark-500 rounded-lg text-slate-400" title="Add"><Plus size={16} /></button>
-          <button onClick={handleDelete} className="p-2 hover:bg-red-500/10 text-slate-400 hover:text-red-400 rounded-lg" title="Delete"><Trash2 size={16} /></button>
+          <button className="p-2 hover:bg-dark-500 rounded-lg text-theme-muted" title="Comment"><MessageSquare size={16} /></button>
+          <button className="p-2 hover:bg-dark-500 rounded-lg text-theme-muted" title="Add"><Plus size={16} /></button>
+          <button onClick={handleDelete} className="p-2 hover:bg-red-500/10 text-theme-muted hover:text-red-400 rounded-lg" title="Delete"><Trash2 size={16} /></button>
         </div>
       </div>
 
       {/* ──── Type selector ──── */}
       <div className="flex items-center gap-3 mb-5">
-        <span className="text-sm text-slate-500 flex items-center gap-1">
+        <span className="text-sm text-theme-faint flex items-center gap-1">
           Type
-          <Info size={12} className="text-slate-400" />
+          <Info size={12} className="text-theme-muted" />
         </span>
         {isDirectCost ? (
           <>
@@ -870,7 +870,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                itemType === 'individual' ? '👤' : itemType === 'group' ? '👥' :
                itemType === 'rent' ? '🏢' : itemType === 'marketing' ? '📣' : itemType === 'loan' ? '🏦' : '📋'}
             </span>
-            <span className="font-medium text-slate-300">
+            <span className="font-medium text-theme-secondary">
               {steps.length > 1 ? typeDef.formula?.split('=')[0]?.trim() || itemType.replace(/_/g, ' ') : activeStep.label}
             </span>
           </div>
@@ -882,7 +882,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
         <div className="bg-dark-700 rounded-xl border border-dark-400/50 p-4 mb-5">
           <div className="grid grid-cols-3 gap-4">
             <div>
-              <label className="text-xs font-medium text-slate-500 mb-1 block">Personnel Type</label>
+              <label className="text-xs font-medium text-theme-faint mb-1 block">Personnel Type</label>
               <select
                 value={itemType}
                 onChange={e => setItemType(e.target.value)}
@@ -893,7 +893,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
               </select>
             </div>
             <div>
-              <label className="text-xs font-medium text-slate-500 mb-1 block">Labor Type</label>
+              <label className="text-xs font-medium text-theme-faint mb-1 block">Labor Type</label>
               <select
                 value={laborType}
                 onChange={e => setLaborType(e.target.value)}
@@ -904,7 +904,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
               </select>
             </div>
             <div>
-              <label className="text-xs font-medium text-slate-500 mb-1 block">Staffing Type</label>
+              <label className="text-xs font-medium text-theme-faint mb-1 block">Staffing Type</label>
               <select
                 value={staffingType}
                 onChange={e => setStaffingType(e.target.value)}
@@ -946,8 +946,8 @@ export default function ItemEditForm({ item, category, months, values: initialVa
         <div className="flex overflow-x-auto border-t border-dark-400/30">
           {months.map(m => (
             <div key={m} className="text-center min-w-[85px] flex-shrink-0 py-2.5 border-r border-dark-400/30 last:border-0">
-              <div className="text-[10px] text-slate-400 mb-0.5">{getMonthLabel(m)}</div>
-              <div className="text-xs font-semibold text-slate-300 tabular-nums">{formatRs(computedValues[m] || 0)}</div>
+              <div className="text-[10px] text-theme-muted mb-0.5">{getMonthLabel(m)}</div>
+              <div className="text-xs font-semibold text-theme-secondary tabular-nums">{formatRs(computedValues[m] || 0)}</div>
             </div>
           ))}
         </div>
@@ -970,11 +970,11 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                 }`}
               >
                 <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold border-2 ${
-                  isActive ? 'border-teal-500 text-teal-600' : 'border-dark-400 text-slate-400'
+                  isActive ? 'border-teal-500 text-teal-600' : 'border-dark-400 text-theme-muted'
                 }`}>
                   {idx + 1}
                 </span>
-                <span className={`font-semibold text-sm ${isActive ? 'text-white' : 'text-slate-500'}`}>
+                <span className={`font-semibold text-sm ${isActive ? 'text-theme-heading' : 'text-theme-faint'}`}>
                   {step.label}
                 </span>
                 {status === 'incomplete' && !isActive && (
@@ -993,7 +993,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
       <div className={`bg-dark-700 border border-dark-400/50 p-6 ${steps.length > 1 ? 'rounded-b-xl' : 'rounded-xl'} mb-5`}>
         {/* Entry mode selector */}
         <div className="flex items-center gap-3 mb-6">
-          <span className="text-sm font-medium text-slate-400">{isDirectCost ? 'How do you want to enter this cost?' : 'How will you enter this?'}</span>
+          <span className="text-sm font-medium text-theme-muted">{isDirectCost ? 'How do you want to enter this cost?' : 'How will you enter this?'}</span>
           <select
             value={stepEntryModes[activeStep.key]}
             onChange={e => setStepEntryModes(prev => ({ ...prev, [activeStep.key]: e.target.value }))}
@@ -1010,11 +1010,11 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'constant' && activeStep.unit === 'Rs' && !isDirectCost && !isExpense && category !== 'personnel' && (
             <div className="flex items-start gap-8">
               <div className="flex-1">
-                <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-2">
+                <h3 className="text-lg font-bold text-theme-heading flex items-center gap-2 mb-2">
                   {activeStep.question}
                   <Info size={16} className="text-teal-500 cursor-help" />
                 </h3>
-                <p className="text-sm text-slate-500 leading-relaxed max-w-xl">{activeStep.helpText}</p>
+                <p className="text-sm text-theme-faint leading-relaxed max-w-xl">{activeStep.helpText}</p>
               </div>
               <div className="flex-shrink-0 pt-1">
                 <input
@@ -1039,15 +1039,15 @@ export default function ItemEditForm({ item, category, months, values: initialVa
             <div>
               <div className="flex items-start gap-6 mb-4">
                 <div className="flex-1">
-                  <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-2">
+                  <h3 className="text-lg font-bold text-theme-heading flex items-center gap-2 mb-2">
                     {activeStep.question}
                     <Info size={16} className="text-teal-500 cursor-help" />
                   </h3>
-                  <p className="text-sm text-slate-500 leading-relaxed max-w-xl">{activeStep.helpText}</p>
+                  <p className="text-sm text-theme-faint leading-relaxed max-w-xl">{activeStep.helpText}</p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">Rs</span>
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-theme-muted">Rs</span>
                     <input
                       type="number"
                       value={stepConstants[activeStep.key]?.amount || ''}
@@ -1062,7 +1062,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                       className="input text-sm w-36 pl-8"
                     />
                   </div>
-                  <span className="text-sm text-slate-500 font-medium">per</span>
+                  <span className="text-sm text-theme-faint font-medium">per</span>
                   <select
                     value={stepConstants[activeStep.key]?.period || 'month'}
                     onChange={e => {
@@ -1076,7 +1076,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                     <option value="month">Month</option>
                     <option value="year">Year</option>
                   </select>
-                  <span className="text-sm text-slate-500 font-medium">starting</span>
+                  <span className="text-sm text-theme-faint font-medium">starting</span>
                   <select
                     value={stepConstants[activeStep.key]?.startMonth || months[0]}
                     onChange={e => {
@@ -1093,7 +1093,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
               </div>
               {/* Annual raise */}
               <div className="flex items-center gap-3 pt-3 border-t border-dark-400/30">
-                <label className="text-sm text-slate-400 font-medium">Annual raise</label>
+                <label className="text-sm text-theme-muted font-medium">Annual raise</label>
                 <input
                   type="number"
                   value={annualRaisePct || ''}
@@ -1102,7 +1102,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                   className="input text-sm w-20"
                   step="0.5"
                 />
-                <span className="text-sm text-slate-500">%</span>
+                <span className="text-sm text-theme-faint">%</span>
               </div>
             </div>
           )}
@@ -1111,11 +1111,11 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'constant' && activeStep.unit === '%' && (
             <div className="flex items-start gap-8">
               <div className="flex-1">
-                <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-2">
+                <h3 className="text-lg font-bold text-theme-heading flex items-center gap-2 mb-2">
                   {activeStep.question}
                   <Info size={16} className="text-teal-500 cursor-help" />
                 </h3>
-                <p className="text-sm text-slate-500 leading-relaxed max-w-xl">{activeStep.helpText}</p>
+                <p className="text-sm text-theme-faint leading-relaxed max-w-xl">{activeStep.helpText}</p>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0 pt-1">
                 <input
@@ -1132,7 +1132,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                   className="input text-sm w-28"
                   step="0.5"
                 />
-                <span className="text-sm text-slate-500 font-medium">%</span>
+                <span className="text-sm text-theme-faint font-medium">%</span>
               </div>
             </div>
           )}
@@ -1141,13 +1141,13 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'constant' && (isDirectCost || isExpense) && (
             <div className="flex items-start gap-6">
               <div className="flex-1">
-                <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-2">
+                <h3 className="text-lg font-bold text-theme-heading flex items-center gap-2 mb-2">
                   {activeStep.question}
                 </h3>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">Rs</span>
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-theme-muted">Rs</span>
                   <input
                     type="number"
                     value={stepConstants[activeStep.key]?.amount || ''}
@@ -1162,7 +1162,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                     className="input text-sm w-36 pl-8"
                   />
                 </div>
-                <span className="text-sm text-slate-500 font-medium">per</span>
+                <span className="text-sm text-theme-faint font-medium">per</span>
                 <select
                   value={stepConstants[activeStep.key]?.period || 'month'}
                   onChange={e => {
@@ -1176,7 +1176,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                   <option value="month">Month</option>
                   <option value="year">Year</option>
                 </select>
-                <span className="text-sm text-slate-500 font-medium">starting</span>
+                <span className="text-sm text-theme-faint font-medium">starting</span>
                 <select
                   value={stepConstants[activeStep.key]?.startMonth || months[0]}
                   onChange={e => {
@@ -1197,12 +1197,12 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'constant' && activeStep.unit !== 'Rs' && !isDirectCost && (
             <>
               <div className="mb-2">
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <h3 className="text-lg font-bold text-theme-heading flex items-center gap-2">
                   {activeStep.question}
                   <Info size={16} className="text-teal-500 cursor-help" />
                 </h3>
               </div>
-              <p className="text-sm text-slate-500 leading-relaxed mb-6 max-w-3xl">{activeStep.helpText}</p>
+              <p className="text-sm text-theme-faint leading-relaxed mb-6 max-w-3xl">{activeStep.helpText}</p>
 
               <div className="flex items-center gap-3 flex-wrap">
                 <div className="max-w-[220px]">
@@ -1220,7 +1220,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                     className="input text-sm w-full"
                   />
                 </div>
-                <span className="text-sm text-slate-500 font-medium">per</span>
+                <span className="text-sm text-theme-faint font-medium">per</span>
                 <select
                   value={stepConstants[activeStep.key]?.period || 'month'}
                   onChange={e => {
@@ -1234,7 +1234,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                   <option value="month">Month</option>
                   <option value="year">Year</option>
                 </select>
-                <span className="text-sm text-slate-500 font-medium">starting</span>
+                <span className="text-sm text-theme-faint font-medium">starting</span>
                 <select
                   value={stepConstants[activeStep.key]?.startMonth || months[0]}
                   onChange={e => {
@@ -1255,7 +1255,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'percent' && (
             <div className="flex items-start gap-6">
               <div className="flex-1">
-                <h3 className="text-lg font-bold text-white mb-2">
+                <h3 className="text-lg font-bold text-theme-heading mb-2">
                   What percentage of this revenue stream?
                 </h3>
               </div>
@@ -1268,8 +1268,8 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                   className="input text-sm w-28"
                   step="0.5"
                 />
-                <span className="text-sm text-slate-500 font-medium">%</span>
-                <span className="text-sm text-slate-500 font-medium">starting</span>
+                <span className="text-sm text-theme-faint font-medium">%</span>
+                <span className="text-sm text-theme-faint font-medium">starting</span>
                 <select
                   value={percentStartMonth}
                   onChange={e => setPercentStartMonth(e.target.value)}
@@ -1285,10 +1285,10 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'pct_overall' && (
             <div className="flex items-start gap-6">
               <div className="flex-1">
-                <h3 className="text-lg font-bold text-white mb-2">
+                <h3 className="text-lg font-bold text-theme-heading mb-2">
                   What percentage of overall revenue?
                 </h3>
-                <p className="text-sm text-slate-500 leading-relaxed">This salary will be calculated as a percentage of your total revenue across all streams.</p>
+                <p className="text-sm text-theme-faint leading-relaxed">This salary will be calculated as a percentage of your total revenue across all streams.</p>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 <input
@@ -1299,8 +1299,8 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                   className="input text-sm w-28"
                   step="0.5"
                 />
-                <span className="text-sm text-slate-500 font-medium">%</span>
-                <span className="text-sm text-slate-500 font-medium">starting</span>
+                <span className="text-sm text-theme-faint font-medium">%</span>
+                <span className="text-sm text-theme-faint font-medium">starting</span>
                 <select
                   value={pctRevenueStartMonth}
                   onChange={e => setPctRevenueStartMonth(e.target.value)}
@@ -1316,10 +1316,10 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'pct_specific' && (
             <div className="flex items-start gap-6">
               <div className="flex-1">
-                <h3 className="text-lg font-bold text-white mb-2">
+                <h3 className="text-lg font-bold text-theme-heading mb-2">
                   What percentage of a specific revenue stream?
                 </h3>
-                <p className="text-sm text-slate-500 leading-relaxed">Select a revenue stream and enter the percentage.</p>
+                <p className="text-sm text-theme-faint leading-relaxed">Select a revenue stream and enter the percentage.</p>
               </div>
               <div className="flex flex-col gap-2 flex-shrink-0">
                 <select
@@ -1341,8 +1341,8 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                     className="input text-sm w-28"
                     step="0.5"
                   />
-                  <span className="text-sm text-slate-500 font-medium">%</span>
-                  <span className="text-sm text-slate-500 font-medium">starting</span>
+                  <span className="text-sm text-theme-faint font-medium">%</span>
+                  <span className="text-sm text-theme-faint font-medium">starting</span>
                   <select
                     value={pctRevenueStartMonth}
                     onChange={e => setPctRevenueStartMonth(e.target.value)}
@@ -1359,14 +1359,14 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'one_time' && (
             <div className="flex items-start gap-6">
               <div className="flex-1">
-                <h3 className="text-lg font-bold text-white mb-2">
+                <h3 className="text-lg font-bold text-theme-heading mb-2">
                   When will this expense occur?
                 </h3>
-                <p className="text-sm text-slate-500">Select the month and enter the one-time amount.</p>
+                <p className="text-sm text-theme-faint">Select the month and enter the one-time amount.</p>
               </div>
               <div className="flex items-center gap-2">
                 <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">Rs</span>
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-theme-muted">Rs</span>
                   <input
                     type="number"
                     value={oneTimeAmount || ''}
@@ -1375,7 +1375,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                     className="input text-sm w-36 pl-8"
                   />
                 </div>
-                <span className="text-sm text-slate-500 font-medium">in</span>
+                <span className="text-sm text-theme-faint font-medium">in</span>
                 <select
                   value={oneTimeMonth}
                   onChange={e => setOneTimeMonth(e.target.value)}
@@ -1391,12 +1391,12 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           {stepEntryModes[activeStep.key] === 'varying' && (
             <>
               <div className="mb-2">
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <h3 className="text-lg font-bold text-theme-heading flex items-center gap-2">
                   {activeStep.question}
                   <Info size={16} className="text-teal-500 cursor-help" />
                 </h3>
               </div>
-              <p className="text-sm text-slate-500 leading-relaxed mb-6 max-w-3xl">{activeStep.helpText}</p>
+              <p className="text-sm text-theme-faint leading-relaxed mb-6 max-w-3xl">{activeStep.helpText}</p>
             </>
           )}
 
@@ -1406,25 +1406,25 @@ export default function ItemEditForm({ item, category, months, values: initialVa
               <table className="w-full text-sm border border-dark-400/50 rounded-lg overflow-hidden" style={{ minWidth: '900px' }}>
                 <thead>
                   <tr className="bg-dark-600">
-                    <th className="text-left py-2.5 px-3 font-semibold text-slate-400 w-20 border-r border-dark-400/50"></th>
+                    <th className="text-left py-2.5 px-3 font-semibold text-theme-muted w-20 border-r border-dark-400/50"></th>
                     {months.map(m => {
                       const [, mo] = m.split('-');
                       const monthNames = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
                       return (
-                        <th key={m} className="text-center py-2.5 px-1.5 font-semibold text-slate-400 border-r border-dark-400/50 last:border-0 min-w-[70px]">
+                        <th key={m} className="text-center py-2.5 px-1.5 font-semibold text-theme-muted border-r border-dark-400/50 last:border-0 min-w-[70px]">
                           {monthNames[parseInt(mo)]}
                         </th>
                       );
                     })}
-                    <th className="text-center py-2.5 px-3 font-bold text-slate-300 min-w-[80px] bg-dark-500">TOTAL</th>
+                    <th className="text-center py-2.5 px-3 font-bold text-theme-secondary min-w-[80px] bg-dark-500">TOTAL</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr className="border-t border-dark-400/50">
-                    <td className="py-2 px-3 text-sm font-medium text-slate-400 border-r border-dark-400/50 bg-dark-700">
+                    <td className="py-2 px-3 text-sm font-medium text-theme-muted border-r border-dark-400/50 bg-dark-700">
                       <div className="flex items-center gap-1">
                         <div className="w-1 h-6 bg-primary-400 rounded-full"></div>
-                        <span className="text-xs text-slate-500">
+                        <span className="text-xs text-theme-faint">
                           {months[0].slice(0, 4)}-{months[months.length - 1].slice(2, 4)}
                         </span>
                       </div>
@@ -1440,7 +1440,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                         />
                       </td>
                     ))}
-                    <td className="py-2 px-3 text-center font-bold text-slate-300 bg-dark-600 tabular-nums">
+                    <td className="py-2 px-3 text-center font-bold text-theme-secondary bg-dark-600 tabular-nums">
                       {currentStepTotal > 0 ? currentStepTotal.toLocaleString('en-IN') : '0'}
                     </td>
                   </tr>
@@ -1454,7 +1454,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                   months.forEach(m => { cleared[m] = 0; });
                   setStepValues(prev => ({ ...prev, [activeStep.key]: cleared }));
                 }}
-                className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-300 mt-3 px-2 py-1 border border-dark-400 rounded-lg hover:bg-dark-600"
+                className="flex items-center gap-1.5 text-sm text-theme-faint hover:text-theme-secondary mt-3 px-2 py-1 border border-dark-400 rounded-lg hover:bg-dark-600"
               >
                 <span className="text-xs">✕</span> Reset Form
               </button>

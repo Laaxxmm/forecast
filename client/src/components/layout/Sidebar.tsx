@@ -2,9 +2,10 @@ import { useState, useEffect, useRef } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, TrendingUp, Upload, Settings, LogOut, BarChart3, Building2, ArrowLeftRight,
-  ChevronLeft, MapPin, ChevronDown
+  ChevronLeft, MapPin, ChevronDown, Sun, Moon
 } from 'lucide-react';
 import api from '../../api/client';
+import { useTheme } from '../../contexts/ThemeContext';
 
 // Main navigation — top section
 const mainLinks = [
@@ -26,6 +27,7 @@ interface SidebarProps {
 
 export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
   const navigate = useNavigate();
+  const { theme, toggleTheme } = useTheme();
   const userType = localStorage.getItem('user_type');
   const userRole = localStorage.getItem('user_role');
   const clientName = localStorage.getItem('client_name');
@@ -73,7 +75,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
     localStorage.setItem('branch_id', id);
     localStorage.setItem('branch_name', name);
     setShowBranchDropdown(false);
-    window.location.reload(); // Reload to re-fetch data with new branch context
+    window.location.reload();
   };
 
   const visibleMain = isSuperAdmin ? [] : mainLinks;
@@ -119,7 +121,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
         } ${
           isActive
             ? 'bg-accent-500/15 text-accent-400 shadow-sm'
-            : 'text-slate-400 hover:bg-dark-600 hover:text-slate-200'
+            : 'text-theme-muted hover:bg-dark-600 hover:text-theme-primary'
         }`
       }
     >
@@ -130,7 +132,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
 
   return (
     <aside
-      className={`${w} bg-dark-800 text-white flex flex-col min-h-screen fixed left-0 top-0 z-40 border-r border-dark-400/30 transition-all duration-200 ease-in-out overflow-hidden`}
+      className={`${w} bg-dark-800 flex flex-col min-h-screen fixed left-0 top-0 z-40 border-r border-dark-400/30 transition-all duration-200 ease-in-out overflow-hidden`}
       onMouseEnter={() => onExpandedChange(true)}
       onMouseLeave={() => { if (!showBranchDropdown) onExpandedChange(false); }}
     >
@@ -142,12 +144,12 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
           </div>
           {expanded && (
             <div className="min-w-0">
-              <h1 className="text-base font-bold text-white leading-tight">Vision</h1>
-              <p className="text-[10px] text-slate-500 font-medium tracking-wide uppercase">by Indefine</p>
+              <h1 className="text-base font-bold text-theme-heading leading-tight">Vision</h1>
+              <p className="text-[10px] text-theme-faint font-medium tracking-wide uppercase">by Indefine</p>
             </div>
           )}
           {expanded && (
-            <ChevronLeft size={14} className="text-slate-500 ml-auto flex-shrink-0" />
+            <ChevronLeft size={14} className="text-theme-faint ml-auto flex-shrink-0" />
           )}
         </div>
       </div>
@@ -160,7 +162,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
               <Building2 size={13} className="text-accent-400" />
             </div>
             <div className="flex-1 min-w-0">
-              <span className="text-xs font-semibold text-slate-200 truncate block">{clientName}</span>
+              <span className="text-xs font-semibold text-theme-primary truncate block">{clientName}</span>
               {isSuperAdmin && (
                 <button
                   onClick={switchClient}
@@ -193,8 +195,8 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
               className="w-full flex items-center gap-2 bg-dark-600 rounded-xl px-3 py-2 hover:bg-dark-500 transition-colors"
             >
               <MapPin size={13} className="text-accent-400 flex-shrink-0" />
-              <span className="text-xs font-medium text-slate-200 truncate flex-1 text-left">{selectedBranchName}</span>
-              <ChevronDown size={12} className={`text-slate-500 transition-transform ${showBranchDropdown ? 'rotate-180' : ''}`} />
+              <span className="text-xs font-medium text-theme-primary truncate flex-1 text-left">{selectedBranchName}</span>
+              <ChevronDown size={12} className={`text-theme-faint transition-transform ${showBranchDropdown ? 'rotate-180' : ''}`} />
             </button>
             {showBranchDropdown && (
               <div className="absolute left-0 right-0 top-full mt-1 bg-dark-700 border border-dark-400/30 rounded-xl shadow-xl z-50 max-h-60 overflow-y-auto">
@@ -202,7 +204,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
                   <button
                     onClick={() => selectBranch('all', 'All Branches')}
                     className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors ${
-                      selectedBranchId === 'all' ? 'text-accent-400 bg-accent-500/10' : 'text-slate-300 hover:bg-dark-600'
+                      selectedBranchId === 'all' ? 'text-accent-400 bg-accent-500/10' : 'text-theme-secondary hover:bg-dark-600'
                     }`}
                   >
                     All Branches
@@ -213,11 +215,11 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
                     key={branch.id}
                     onClick={() => selectBranch(String(branch.id), branch.name)}
                     className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors ${
-                      selectedBranchId === String(branch.id) ? 'text-accent-400 bg-accent-500/10' : 'text-slate-300 hover:bg-dark-600'
+                      selectedBranchId === String(branch.id) ? 'text-accent-400 bg-accent-500/10' : 'text-theme-secondary hover:bg-dark-600'
                     }`}
                   >
                     <span>{branch.name}</span>
-                    {branch.city && <span className="text-slate-500 ml-1">· {branch.city}</span>}
+                    {branch.city && <span className="text-theme-faint ml-1">· {branch.city}</span>}
                   </button>
                 ))}
               </div>
@@ -253,7 +255,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
                 } ${
                   isActive
                     ? 'bg-accent-500/15 text-accent-400 shadow-sm'
-                    : 'text-slate-400 hover:bg-dark-600 hover:text-slate-200'
+                    : 'text-theme-muted hover:bg-dark-600 hover:text-theme-primary'
                 }`
               }
             >
@@ -264,13 +266,26 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
         )}
       </nav>
 
-      {/* Bottom utility links + logout */}
+      {/* Bottom utility links + theme toggle + logout */}
       <div className="px-2 pb-2 border-t border-dark-400/30 pt-3 space-y-1">
         {visibleUtility.map(renderLink)}
+
+        {/* Theme toggle */}
+        <button
+          onClick={toggleTheme}
+          title={!expanded ? (theme === 'dark' ? 'Light mode' : 'Dark mode') : undefined}
+          className={`flex items-center gap-3 px-3 py-2.5 text-[13px] font-medium text-theme-muted hover:bg-dark-600 hover:text-theme-primary rounded-xl w-full transition-all ${
+            expanded ? '' : 'justify-center'
+          }`}
+        >
+          {theme === 'dark' ? <Sun size={17} className="flex-shrink-0" /> : <Moon size={17} className="flex-shrink-0" />}
+          {expanded && <span>{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>}
+        </button>
+
         <button
           onClick={handleLogout}
           title={!expanded ? 'Logout' : undefined}
-          className={`flex items-center gap-3 px-3 py-2.5 text-[13px] font-medium text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-xl w-full transition-all ${
+          className={`flex items-center gap-3 px-3 py-2.5 text-[13px] font-medium text-theme-faint hover:text-red-400 hover:bg-red-500/10 rounded-xl w-full transition-all ${
             expanded ? '' : 'justify-center'
           }`}
         >

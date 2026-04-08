@@ -53,15 +53,15 @@ export default function TypeSelectionScreen({ title, question, types, onSelect, 
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
         <button onClick={onBack} className="p-2 hover:bg-dark-500 rounded-lg transition-colors">
-          <ArrowLeft size={20} className="text-slate-400" />
+          <ArrowLeft size={20} className="text-theme-muted" />
         </button>
-        <h2 className="text-2xl font-bold text-white">{title}</h2>
+        <h2 className="text-2xl font-bold text-theme-heading">{title}</h2>
       </div>
 
       {/* Card layout */}
       <div className="max-w-3xl">
         <div className="bg-dark-700 rounded-xl border border-dark-400/50 p-8">
-          <h3 className="text-lg font-semibold text-slate-300 mb-6">{question}</h3>
+          <h3 className="text-lg font-semibold text-theme-secondary mb-6">{question}</h3>
 
           <div className="grid grid-cols-2 gap-4">
             {types.map(t => (
@@ -72,9 +72,9 @@ export default function TypeSelectionScreen({ title, question, types, onSelect, 
               >
                 <div className="flex items-center gap-3 mb-1.5">
                   <span className="text-xl">{TYPE_ICONS[t.value] || '📋'}</span>
-                  <span className="font-semibold text-white group-hover:text-accent-300">{t.label}</span>
+                  <span className="font-semibold text-theme-heading group-hover:text-accent-300">{t.label}</span>
                 </div>
-                <p className="text-sm text-slate-500 leading-relaxed ml-9">{t.description}</p>
+                <p className="text-sm text-theme-faint leading-relaxed ml-9">{t.description}</p>
               </button>
             ))}
           </div>

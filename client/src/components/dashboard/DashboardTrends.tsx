@@ -177,10 +177,10 @@ export default function DashboardTrends({ items, allValues, months, settings, ac
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-dark-400/50 bg-dark-600">
-                <th className="text-left py-2.5 px-4 font-semibold text-slate-400">Item</th>
-                <th className="text-right py-2.5 px-4 font-semibold text-slate-400">Actual (Rs)</th>
-                <th className="text-right py-2.5 px-4 font-semibold text-slate-400">Forecast (Rs)</th>
-                <th className="text-right py-2.5 px-4 font-semibold text-slate-400">Change (%)</th>
+                <th className="text-left py-2.5 px-4 font-semibold text-theme-muted">Item</th>
+                <th className="text-right py-2.5 px-4 font-semibold text-theme-muted">Actual (Rs)</th>
+                <th className="text-right py-2.5 px-4 font-semibold text-theme-muted">Forecast (Rs)</th>
+                <th className="text-right py-2.5 px-4 font-semibold text-theme-muted">Change (%)</th>
               </tr>
             </thead>
             <tbody>
@@ -190,7 +190,7 @@ export default function DashboardTrends({ items, allValues, months, settings, ac
                   <td className="text-right py-2 px-4 tabular-nums">{d.actual ? fmtRs(d.actual) : '--'}</td>
                   <td className="text-right py-2 px-4 tabular-nums">{fmtRs(d.forecast)}</td>
                   <td className="text-right py-2 px-4">
-                    <span className={`text-xs font-semibold ${d.change.direction === 'up' ? 'text-emerald-400' : d.change.direction === 'down' ? 'text-red-500' : 'text-slate-400'}`}>
+                    <span className={`text-xs font-semibold ${d.change.direction === 'up' ? 'text-emerald-400' : d.change.direction === 'down' ? 'text-red-500' : 'text-theme-muted'}`}>
                       {d.change.direction === 'up' ? '↑' : d.change.direction === 'down' ? '↓' : ''} {fmtPct(d.change.pct)}
                     </span>
                   </td>
@@ -257,11 +257,11 @@ export default function DashboardTrends({ items, allValues, months, settings, ac
           >
             {METRICS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
           </select>
-          <div className="flex items-center gap-2 text-xs text-slate-500">
+          <div className="flex items-center gap-2 text-xs text-theme-faint">
             <button onClick={() => navigateMetric(-1)} className="flex items-center gap-1 hover:text-accent-400">
               <ChevronLeft size={14} />Previous metric
             </button>
-            <span className="text-slate-300">|</span>
+            <span className="text-theme-secondary">|</span>
             <button onClick={() => navigateMetric(1)} className="flex items-center gap-1 hover:text-accent-400">
               Next metric<ChevronRight size={14} />
             </button>
@@ -274,22 +274,22 @@ export default function DashboardTrends({ items, allValues, months, settings, ac
         <div className="card mb-4">
           <div className="grid grid-cols-3 divide-x divide-dark-400/50">
             <div className="px-4 py-2">
-              <p className="text-xs text-slate-500 mb-1">Actual results</p>
-              <p className="text-xl font-bold text-white">
+              <p className="text-xs text-theme-faint mb-1">Actual results</p>
+              <p className="text-xl font-bold text-theme-heading">
                 {isPercent ? `${(totalActual / (months.length || 1)).toFixed(1)}%` : fmtRs(totalActual)}
               </p>
             </div>
             <div className="px-4 py-2">
-              <p className="text-xs text-slate-500 mb-1">Vs. forecast</p>
+              <p className="text-xs text-theme-faint mb-1">Vs. forecast</p>
               <p className="text-xl font-bold flex items-center gap-1">
-                <span className={vsForecast.direction === 'up' ? 'text-emerald-400' : vsForecast.direction === 'down' ? 'text-red-500' : 'text-slate-400'}>
+                <span className={vsForecast.direction === 'up' ? 'text-emerald-400' : vsForecast.direction === 'down' ? 'text-red-500' : 'text-theme-muted'}>
                   {vsForecast.direction === 'up' ? '↑' : vsForecast.direction === 'down' ? '↓' : ''} {fmtPct(vsForecast.pct)}
                 </span>
               </p>
             </div>
             <div className="px-4 py-2">
-              <p className="text-xs text-slate-500 mb-1">Vs. previous period</p>
-              <p className="text-xl font-bold text-slate-400">↑ 0%</p>
+              <p className="text-xs text-theme-faint mb-1">Vs. previous period</p>
+              <p className="text-xl font-bold text-theme-muted">↑ 0%</p>
             </div>
           </div>
         </div>
@@ -303,7 +303,7 @@ export default function DashboardTrends({ items, allValues, months, settings, ac
               key={ct}
               onClick={() => setChartType(ct)}
               className={`px-3 py-1.5 rounded-md text-xs font-medium capitalize ${
-                chartType === ct ? 'bg-dark-700 shadow-sm text-accent-400' : 'text-slate-500 hover:text-slate-300'
+                chartType === ct ? 'bg-dark-700 shadow-sm text-accent-400' : 'text-theme-faint hover:text-theme-secondary'
               }`}
             >
               {ct}

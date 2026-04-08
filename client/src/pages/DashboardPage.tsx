@@ -52,9 +52,9 @@ function KPICard({ title, value, subtitle, icon: Icon, trend, color = 'accent', 
           </div>
         )}
       </div>
-      <p className="text-xs text-slate-500 font-medium uppercase tracking-wide">{title}</p>
-      <p className="text-2xl font-bold text-white mt-1">{value}</p>
-      {subtitle && <p className="text-xs text-slate-500 mt-2">{subtitle}</p>}
+      <p className="text-xs text-theme-faint font-medium uppercase tracking-wide">{title}</p>
+      <p className="text-2xl font-bold text-theme-heading mt-1">{value}</p>
+      {subtitle && <p className="text-xs text-theme-faint mt-2">{subtitle}</p>}
     </div>
   );
 }
@@ -113,15 +113,15 @@ export default function DashboardPage() {
     <div className="flex items-center justify-center py-20">
       <div className="text-center">
         <div className="w-8 h-8 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto mb-3" />
-        <span className="text-slate-500 text-sm">Loading dashboard...</span>
+        <span className="text-theme-faint text-sm">Loading dashboard...</span>
       </div>
     </div>
   );
 
   if (!data) return (
     <div className="text-center py-20">
-      <Activity size={40} className="mx-auto text-slate-500 mb-3" />
-      <span className="text-slate-500">No data available</span>
+      <Activity size={40} className="mx-auto text-theme-faint mb-3" />
+      <span className="text-theme-faint">No data available</span>
     </div>
   );
 
@@ -148,8 +148,8 @@ export default function DashboardPage() {
   return (
     <div className="animate-fade-in">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-white">Actuals</h1>
-        <p className="text-slate-500 mt-1 text-sm">{data.fy?.label || 'All Time'} Overview</p>
+        <h1 className="text-2xl font-bold text-theme-heading">Actuals</h1>
+        <p className="text-theme-faint mt-1 text-sm">{data.fy?.label || 'All Time'} Overview</p>
       </div>
 
       {/* KPI Cards */}
@@ -186,7 +186,7 @@ export default function DashboardPage() {
           })
         ) : (
           <div className="card border border-dashed border-slate-700 flex items-center justify-center col-span-1 md:col-span-1">
-            <p className="text-sm text-slate-500 text-center">Configure revenue streams in Admin Panel</p>
+            <p className="text-sm text-theme-faint text-center">Configure revenue streams in Admin Panel</p>
           </div>
         )}
       </div>
@@ -195,8 +195,8 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-6">
         {/* Monthly Revenue Trend */}
         <div className="card lg:col-span-2">
-          <h3 className="text-sm font-semibold text-white mb-1">Monthly Revenue Trend</h3>
-          <p className="text-xs text-slate-500 mb-6">Clinic vs Pharmacy revenue breakdown</p>
+          <h3 className="text-sm font-semibold text-theme-heading mb-1">Monthly Revenue Trend</h3>
+          <p className="text-xs text-theme-faint mb-6">Clinic vs Pharmacy revenue breakdown</p>
           {trendData.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={trendData} barGap={2}>
@@ -214,7 +214,7 @@ export default function DashboardPage() {
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <div className="flex items-center justify-center h-[300px] text-slate-500">
+            <div className="flex items-center justify-center h-[300px] text-theme-faint">
               <div className="text-center">
                 <Activity size={32} className="mx-auto mb-2" />
                 <p className="text-sm">Import data to see trends</p>
@@ -225,8 +225,8 @@ export default function DashboardPage() {
 
         {/* Clinic Revenue Split */}
         <div className="card">
-          <h3 className="text-sm font-semibold text-white mb-1">Revenue Split</h3>
-          <p className="text-xs text-slate-500 mb-6">By department</p>
+          <h3 className="text-sm font-semibold text-theme-heading mb-1">Revenue Split</h3>
+          <p className="text-xs text-theme-faint mb-6">By department</p>
           {pieData.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
               <PieChart>
@@ -249,7 +249,7 @@ export default function DashboardPage() {
               </PieChart>
             </ResponsiveContainer>
           ) : (
-            <div className="flex items-center justify-center h-[300px] text-slate-500">
+            <div className="flex items-center justify-center h-[300px] text-theme-faint">
               <p className="text-sm">No data</p>
             </div>
           )}
@@ -259,8 +259,8 @@ export default function DashboardPage() {
       {/* Pharmacy Profit Trend */}
       {data.pharmacy.monthly?.length > 0 && (
         <div className="card">
-          <h3 className="text-sm font-semibold text-white mb-1">Pharmacy Profit Trend</h3>
-          <p className="text-xs text-slate-500 mb-6">Sales, COGS & Profit over time</p>
+          <h3 className="text-sm font-semibold text-theme-heading mb-1">Pharmacy Profit Trend</h3>
+          <p className="text-xs text-theme-faint mb-6">Sales, COGS & Profit over time</p>
           <ResponsiveContainer width="100%" height={300}>
             <AreaChart data={data.pharmacy.monthly.map((r: any) => ({
               ...r,

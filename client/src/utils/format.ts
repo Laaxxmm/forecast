@@ -25,6 +25,6 @@ export function ragColor(rag: string): string {
     case 'GREEN': return 'text-emerald-400 bg-emerald-500/15';
     case 'AMBER': return 'text-amber-400 bg-amber-500/15';
     case 'RED': return 'text-red-400 bg-red-500/15';
-    default: return 'text-slate-400 bg-dark-500';
+    default: return 'text-theme-muted bg-dark-500';
   }
 }

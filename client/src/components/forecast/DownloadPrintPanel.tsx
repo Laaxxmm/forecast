@@ -440,10 +440,10 @@ export default function DownloadPrintPanel({ open, onClose, items, allValues, mo
         <div className="flex items-center justify-between px-6 py-4 border-b border-dark-400/50 bg-dark-600">
           <div className="flex items-center gap-3">
             <Printer size={20} className="text-accent-400" />
-            <h2 className="text-lg font-bold text-white">Download & Print</h2>
+            <h2 className="text-lg font-bold text-theme-heading">Download & Print</h2>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-dark-400 rounded-lg transition-colors">
-            <X size={18} className="text-slate-500" />
+            <X size={18} className="text-theme-faint" />
           </button>
         </div>
 
@@ -452,7 +452,7 @@ export default function DownloadPrintPanel({ open, onClose, items, allValues, mo
 
           {/* A. Report Type */}
           <div>
-            <h3 className="text-sm font-semibold text-slate-300 mb-3">Report Type</h3>
+            <h3 className="text-sm font-semibold text-theme-secondary mb-3">Report Type</h3>
             <div className="space-y-2">
               <label className="flex items-center gap-3 p-3 rounded-lg border border-dark-400/50 cursor-pointer hover:bg-dark-600 transition-colors">
                 <input
@@ -463,8 +463,8 @@ export default function DownloadPrintPanel({ open, onClose, items, allValues, mo
                   className="text-accent-400 focus:ring-primary-500"
                 />
                 <div>
-                  <p className="text-sm font-medium text-white">Forecast Only</p>
-                  <p className="text-xs text-slate-500">A PDF using your original forecast data</p>
+                  <p className="text-sm font-medium text-theme-heading">Forecast Only</p>
+                  <p className="text-xs text-theme-faint">A PDF using your original forecast data</p>
                 </div>
               </label>
               <label className="flex items-center gap-3 p-3 rounded-lg border border-dark-400/50 cursor-pointer hover:bg-dark-600 transition-colors">
@@ -476,8 +476,8 @@ export default function DownloadPrintPanel({ open, onClose, items, allValues, mo
                   className="text-accent-400 focus:ring-primary-500"
                 />
                 <div>
-                  <p className="text-sm font-medium text-white">Actuals + Forecast</p>
-                  <p className="text-xs text-slate-500">A PDF with adjusted values based on past actuals and future forecast</p>
+                  <p className="text-sm font-medium text-theme-heading">Actuals + Forecast</p>
+                  <p className="text-xs text-theme-faint">A PDF with adjusted values based on past actuals and future forecast</p>
                 </div>
               </label>
             </div>
@@ -485,7 +485,7 @@ export default function DownloadPrintPanel({ open, onClose, items, allValues, mo
 
           {/* B. Reports to Include */}
           <div>
-            <h3 className="text-sm font-semibold text-slate-300 mb-3">Reports to Include</h3>
+            <h3 className="text-sm font-semibold text-theme-secondary mb-3">Reports to Include</h3>
             <div className="space-y-1.5">
               {reports.map(r => (
                 <label key={r.key} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-dark-600 cursor-pointer transition-colors">
@@ -495,7 +495,7 @@ export default function DownloadPrintPanel({ open, onClose, items, allValues, mo
                     onChange={() => toggleReport(r.key)}
                     className="rounded text-accent-400 focus:ring-primary-500"
                   />
-                  <span className="text-sm text-slate-300">{r.label}</span>
+                  <span className="text-sm text-theme-secondary">{r.label}</span>
                 </label>
               ))}
             </div>
@@ -503,47 +503,47 @@ export default function DownloadPrintPanel({ open, onClose, items, allValues, mo
 
           {/* C. Level of Detail */}
           <div>
-            <h3 className="text-sm font-semibold text-slate-300 mb-3">Level of Detail</h3>
+            <h3 className="text-sm font-semibold text-theme-secondary mb-3">Level of Detail</h3>
             <div className="flex gap-3">
               <label className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-colors ${
                 detailLevel === 'annual' ? 'border-primary-400 bg-accent-500/10' : 'border-dark-400/50 hover:bg-dark-600'
               }`}>
                 <input type="radio" name="detail" checked={detailLevel === 'annual'} onChange={() => setDetailLevel('annual')} className="hidden" />
-                <FileText size={16} className={detailLevel === 'annual' ? 'text-accent-400' : 'text-slate-400'} />
-                <span className={`text-sm font-medium ${detailLevel === 'annual' ? 'text-accent-300' : 'text-slate-400'}`}>Annual Totals</span>
+                <FileText size={16} className={detailLevel === 'annual' ? 'text-accent-400' : 'text-theme-muted'} />
+                <span className={`text-sm font-medium ${detailLevel === 'annual' ? 'text-accent-300' : 'text-theme-muted'}`}>Annual Totals</span>
               </label>
               <label className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-colors ${
                 detailLevel === 'monthly' ? 'border-primary-400 bg-accent-500/10' : 'border-dark-400/50 hover:bg-dark-600'
               }`}>
                 <input type="radio" name="detail" checked={detailLevel === 'monthly'} onChange={() => setDetailLevel('monthly')} className="hidden" />
-                <FileText size={16} className={detailLevel === 'monthly' ? 'text-accent-400' : 'text-slate-400'} />
-                <span className={`text-sm font-medium ${detailLevel === 'monthly' ? 'text-accent-300' : 'text-slate-400'}`}>Monthly Totals</span>
+                <FileText size={16} className={detailLevel === 'monthly' ? 'text-accent-400' : 'text-theme-muted'} />
+                <span className={`text-sm font-medium ${detailLevel === 'monthly' ? 'text-accent-300' : 'text-theme-muted'}`}>Monthly Totals</span>
               </label>
             </div>
           </div>
 
           {/* D. Other Options */}
           <div>
-            <h3 className="text-sm font-semibold text-slate-300 mb-3">Other Options</h3>
+            <h3 className="text-sm font-semibold text-theme-secondary mb-3">Other Options</h3>
             <div className="space-y-1.5">
               <label className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-dark-600 cursor-pointer transition-colors">
                 <input type="checkbox" checked={coverPage} onChange={e => setCoverPage(e.target.checked)} className="rounded text-accent-400 focus:ring-primary-500" />
-                <span className="text-sm text-slate-300">Cover page</span>
+                <span className="text-sm text-theme-secondary">Cover page</span>
               </label>
               <label className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-dark-600 cursor-pointer transition-colors">
                 <input type="checkbox" checked={includeCharts} onChange={e => setIncludeCharts(e.target.checked)} className="rounded text-accent-400 focus:ring-primary-500" />
-                <span className="text-sm text-slate-300">Include charts</span>
+                <span className="text-sm text-theme-secondary">Include charts</span>
               </label>
               <label className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-dark-600 cursor-pointer transition-colors">
                 <input type="checkbox" checked={includeScenarioTitle} onChange={e => setIncludeScenarioTitle(e.target.checked)} className="rounded text-accent-400 focus:ring-primary-500" />
-                <span className="text-sm text-slate-300">Include forecast scenario title</span>
+                <span className="text-sm text-theme-secondary">Include forecast scenario title</span>
               </label>
             </div>
           </div>
 
           {/* E. Paper Size */}
           <div>
-            <h3 className="text-sm font-semibold text-slate-300 mb-3">Paper Size</h3>
+            <h3 className="text-sm font-semibold text-theme-secondary mb-3">Paper Size</h3>
             <select
               value={paperSize}
               onChange={e => setPaperSize(e.target.value as 'a4' | 'letter')}

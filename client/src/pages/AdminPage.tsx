@@ -53,8 +53,8 @@ export default function AdminPage() {
     <div className="animate-fade-in">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">Admin Panel</h1>
-          <p className="text-slate-500 mt-1 text-sm">Manage clients, users, and integrations</p>
+          <h1 className="text-2xl font-bold text-theme-heading">Admin Panel</h1>
+          <p className="text-theme-faint mt-1 text-sm">Manage clients, users, and integrations</p>
         </div>
       </div>
 
@@ -65,7 +65,7 @@ export default function AdminPage() {
           className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
             tab === 'clients'
               ? 'bg-accent-500 text-white shadow-glow'
-              : 'bg-dark-700 text-slate-400 border border-dark-400/50 hover:border-dark-300'
+              : 'bg-dark-700 text-theme-muted border border-dark-400/50 hover:border-dark-300'
           }`}
         >
           <Building2 size={16} /> Clients
@@ -75,7 +75,7 @@ export default function AdminPage() {
           className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
             tab === 'team'
               ? 'bg-accent-500 text-white shadow-glow'
-              : 'bg-dark-700 text-slate-400 border border-dark-400/50 hover:border-dark-300'
+              : 'bg-dark-700 text-theme-muted border border-dark-400/50 hover:border-dark-300'
           }`}
         >
           <Shield size={16} /> Team Members
@@ -122,7 +122,7 @@ function ClientsPanel() {
 
       <div className="card">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-white">All Clients</h3>
+          <h3 className="font-semibold text-theme-heading">All Clients</h3>
           <button onClick={() => setShowCreate(true)} className="btn-primary flex items-center gap-2 text-sm">
             <Plus size={14} /> Add Client
           </button>
@@ -133,7 +133,7 @@ function ClientsPanel() {
             <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
           </div>
         ) : clients.length === 0 ? (
-          <p className="text-slate-500 text-center py-8">No clients yet. Create your first client above.</p>
+          <p className="text-theme-faint text-center py-8">No clients yet. Create your first client above.</p>
         ) : (
           <div className="space-y-2">
             {clients.map(client => (
@@ -147,8 +147,8 @@ function ClientsPanel() {
                 </div>
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="font-medium text-white">{client.name}</span>
-                    <span className="text-xs text-slate-500">({client.slug})</span>
+                    <span className="font-medium text-theme-heading">{client.name}</span>
+                    <span className="text-xs text-theme-faint">({client.slug})</span>
                     {client.is_active ? (
                       <span className="badge-success text-[10px]">Active</span>
                     ) : (
@@ -156,17 +156,17 @@ function ClientsPanel() {
                     )}
                   </div>
                   <div className="flex items-center gap-3 mt-1">
-                    <span className="text-xs text-slate-500 flex items-center gap-1">
+                    <span className="text-xs text-theme-faint flex items-center gap-1">
                       <Users size={11} /> {client.user_count} user{client.user_count !== 1 ? 's' : ''}
                     </span>
                     {client.integrations && (
-                      <span className="text-xs text-slate-500">
+                      <span className="text-xs text-theme-faint">
                         {client.integrations.split(',').join(', ')}
                       </span>
                     )}
                   </div>
                 </div>
-                <ChevronRight size={16} className="text-slate-500 group-hover:text-accent-400 transition-colors" />
+                <ChevronRight size={16} className="text-theme-faint group-hover:text-accent-400 transition-colors" />
               </div>
             ))}
           </div>
@@ -215,13 +215,13 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
           </div>
           <div>
             <h3 className="font-semibold text-accent-300">Client Created!</h3>
-            <p className="text-sm text-slate-500">{result.name}</p>
+            <p className="text-sm text-theme-faint">{result.name}</p>
           </div>
         </div>
         <div className="bg-dark-600 rounded-xl p-4 mb-4">
-          <p className="text-sm text-slate-300 mb-1">Default login credentials:</p>
-          <p className="text-white font-mono text-sm">Username: <span className="text-accent-400">admin</span></p>
-          <p className="text-white font-mono text-sm">Password: <span className="text-accent-400">admin123</span></p>
+          <p className="text-sm text-theme-secondary mb-1">Default login credentials:</p>
+          <p className="text-theme-heading font-mono text-sm">Username: <span className="text-accent-400">admin</span></p>
+          <p className="text-theme-heading font-mono text-sm">Password: <span className="text-accent-400">admin123</span></p>
           <p className="text-xs text-amber-400 mt-2">Change this password immediately after first login!</p>
         </div>
         <button onClick={onCreated} className="btn-primary text-sm">Done</button>
@@ -231,20 +231,20 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
 
   return (
     <div className="card mb-6">
-      <h3 className="font-semibold text-white mb-4">Create New Client</h3>
+      <h3 className="font-semibold text-theme-heading mb-4">Create New Client</h3>
       <div className="grid grid-cols-2 gap-4 mb-4">
         <div>
-          <label className="block text-sm font-medium text-slate-400 mb-1.5">Client Name</label>
+          <label className="block text-sm font-medium text-theme-muted mb-1.5">Client Name</label>
           <input type="text" value={name} onChange={e => autoSlug(e.target.value)}
             placeholder="e.g. Apollo Healthcare" className="input" />
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-400 mb-1.5">Slug (URL identifier)</label>
+          <label className="block text-sm font-medium text-theme-muted mb-1.5">Slug (URL identifier)</label>
           <input type="text" value={slug} onChange={e => setSlug(e.target.value)}
             placeholder="e.g. apollo-healthcare" className="input font-mono" />
         </div>
         <div className="col-span-2">
-          <label className="block text-sm font-medium text-slate-400 mb-2">Industry</label>
+          <label className="block text-sm font-medium text-theme-muted mb-2">Industry</label>
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
             {industries.map((ind: any) => (
               <button
@@ -254,11 +254,11 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
                 className={`text-left px-3 py-2.5 rounded-xl border transition-all ${
                   industry === ind.key
                     ? 'border-accent-500 bg-accent-500/10 text-accent-400'
-                    : 'border-dark-400/50 bg-dark-600 text-slate-400 hover:border-dark-300'
+                    : 'border-dark-400/50 bg-dark-600 text-theme-muted hover:border-dark-300'
                 }`}
               >
                 <div className="text-sm font-medium">{ind.label}</div>
-                <div className="text-[10px] text-slate-500 mt-0.5">{ind.description}</div>
+                <div className="text-[10px] text-theme-faint mt-0.5">{ind.description}</div>
               </button>
             ))}
           </div>
@@ -361,7 +361,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
   return (
     <div>
       {/* Header */}
-      <button onClick={onBack} className="flex items-center gap-2 text-sm text-slate-400 hover:text-accent-400 mb-4 transition-colors">
+      <button onClick={onBack} className="flex items-center gap-2 text-sm text-theme-muted hover:text-accent-400 mb-4 transition-colors">
         <ArrowLeft size={14} /> Back to clients
       </button>
 
@@ -372,14 +372,14 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
               <Building2 size={22} className="text-accent-400" />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-white">{client.name}</h2>
+              <h2 className="text-xl font-bold text-theme-heading">{client.name}</h2>
               <div className="flex items-center gap-2">
-                <span className="text-sm text-slate-500 font-mono">{client.slug}</span>
-                <span className="text-slate-600">·</span>
+                <span className="text-sm text-theme-faint font-mono">{client.slug}</span>
+                <span className="text-theme-faint">·</span>
                 <select
                   value={client.industry || 'custom'}
                   onChange={e => changeIndustry(e.target.value)}
-                  className="text-sm bg-dark-600 text-slate-300 border border-dark-400/30 rounded-lg px-2 py-0.5 cursor-pointer hover:border-accent-500/30 transition-colors"
+                  className="text-sm bg-dark-600 text-theme-secondary border border-dark-400/30 rounded-lg px-2 py-0.5 cursor-pointer hover:border-accent-500/30 transition-colors"
                 >
                   {industries.map((ind: any) => (
                     <option key={ind.key} value={ind.key}>{ind.label}</option>
@@ -413,7 +413,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
         {/* Users */}
         <div className="card">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-white flex items-center gap-2">
+            <h3 className="font-semibold text-theme-heading flex items-center gap-2">
               <Users size={16} /> Users
             </h3>
             <button onClick={() => setShowAddUser(true)} className="flex items-center gap-1.5 text-sm text-accent-400 hover:text-accent-300 font-medium transition-colors">
@@ -430,24 +430,24 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
           )}
 
           {users.length === 0 ? (
-            <p className="text-slate-500 text-center py-6 text-sm">No users</p>
+            <p className="text-theme-faint text-center py-6 text-sm">No users</p>
           ) : (
             <div className="space-y-2">
               {users.map(user => (
                 <div key={user.id} className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-dark-600 border border-dark-400/30">
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-slate-200">{user.display_name}</span>
-                      <span className="text-[10px] font-mono text-slate-500">@{user.username}</span>
+                      <span className="text-sm font-medium text-theme-primary">{user.display_name}</span>
+                      <span className="text-[10px] font-mono text-theme-faint">@{user.username}</span>
                     </div>
-                    <span className={`text-[10px] font-medium ${user.role === 'admin' ? 'text-amber-400' : 'text-slate-500'}`}>
+                    <span className={`text-[10px] font-medium ${user.role === 'admin' ? 'text-amber-400' : 'text-theme-faint'}`}>
                       {user.role}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => resetPassword(user.id, user.username)}
-                      className="text-xs px-2 py-1 rounded-lg text-slate-400 bg-dark-500 hover:bg-dark-400 transition-all flex items-center gap-1"
+                      className="text-xs px-2 py-1 rounded-lg text-theme-muted bg-dark-500 hover:bg-dark-400 transition-all flex items-center gap-1"
                       title="Reset Password"
                     >
                       <KeyRound size={11} /> Reset PW
@@ -471,15 +471,15 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
 
         {/* Integrations */}
         <div className="card">
-          <h3 className="font-semibold text-white flex items-center gap-2 mb-4">
+          <h3 className="font-semibold text-theme-heading flex items-center gap-2 mb-4">
             <Plug size={16} /> Integrations
           </h3>
           <div className="space-y-2">
             {integrations.map(int => (
               <div key={int.key} className="flex items-center justify-between px-3 py-3 rounded-xl bg-dark-600 border border-dark-400/30">
                 <div>
-                  <span className="text-sm font-medium text-slate-200">{int.name}</span>
-                  <p className="text-xs text-slate-500 mt-0.5">{int.description}</p>
+                  <span className="text-sm font-medium text-theme-primary">{int.name}</span>
+                  <p className="text-xs text-theme-faint mt-0.5">{int.description}</p>
                 </div>
                 <button
                   onClick={() => toggleIntegration(int.key, int.enabled)}
@@ -500,10 +500,10 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
         <div className="card lg:col-span-2">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="font-semibold text-white flex items-center gap-2">
+              <h3 className="font-semibold text-theme-heading flex items-center gap-2">
                 <BarChart3 size={16} /> Revenue Streams
               </h3>
-              <p className="text-xs text-slate-500 mt-1">These drive the dashboard KPI cards for this client</p>
+              <p className="text-xs text-theme-faint mt-1">These drive the dashboard KPI cards for this client</p>
             </div>
             <button onClick={() => setShowAddStream(true)} className="flex items-center gap-1.5 text-sm text-accent-400 hover:text-accent-300 font-medium transition-colors">
               <Plus size={14} /> Add Stream
@@ -512,15 +512,15 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
 
           {showAddStream && (
             <div className="bg-dark-600 rounded-xl p-4 mb-4 border border-dark-400/50">
-              <h4 className="text-sm font-semibold text-white mb-3">Add Revenue Stream</h4>
+              <h4 className="text-sm font-semibold text-theme-heading mb-3">Add Revenue Stream</h4>
               <div className="flex gap-3 mb-3">
                 <div className="flex-1">
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Stream Name</label>
+                  <label className="block text-xs font-medium text-theme-muted mb-1">Stream Name</label>
                   <input type="text" value={newStreamName} onChange={e => setNewStreamName(e.target.value)}
                     placeholder="e.g. Dine-in, Consulting" className="input text-sm" />
                 </div>
                 <div className="w-32">
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Color</label>
+                  <label className="block text-xs font-medium text-theme-muted mb-1">Color</label>
                   <select value={newStreamColor} onChange={e => setNewStreamColor(e.target.value)} className="input text-sm">
                     <option value="accent">Green</option>
                     <option value="blue">Blue</option>
@@ -545,7 +545,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
           )}
 
           {streams.length === 0 ? (
-            <p className="text-slate-500 text-center py-6 text-sm">No revenue streams configured</p>
+            <p className="text-theme-faint text-center py-6 text-sm">No revenue streams configured</p>
           ) : (
             <div className="space-y-2">
               {streams.map((stream: any) => (
@@ -556,7 +556,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
                       stream.color === 'purple' ? 'bg-purple-400' :
                       stream.color === 'amber' ? 'bg-amber-400' : 'bg-accent-400'
                     }`} />
-                    <span className="text-sm font-medium text-slate-200">{stream.name}</span>
+                    <span className="text-sm font-medium text-theme-primary">{stream.name}</span>
                   </div>
                   <button
                     onClick={async () => {
@@ -579,10 +579,10 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
       <div className="card mt-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h3 className="font-semibold text-white flex items-center gap-2">
+            <h3 className="font-semibold text-theme-heading flex items-center gap-2">
               <GitBranch size={16} /> Branches / Locations
             </h3>
-            <p className="text-xs text-slate-500 mt-1">
+            <p className="text-xs text-theme-faint mt-1">
               {client?.is_multi_branch
                 ? 'Multi-branch enabled — data is separated by branch'
                 : 'Single-branch mode — enable multi-branch to manage locations'}
@@ -623,25 +623,25 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
 
         {showAddBranch && (
           <div className="bg-dark-600 rounded-xl p-4 mb-4 border border-dark-400/50">
-            <h4 className="text-sm font-semibold text-white mb-3">Add Branch</h4>
+            <h4 className="text-sm font-semibold text-theme-heading mb-3">Add Branch</h4>
             <div className="grid grid-cols-2 gap-3 mb-3">
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Branch Name</label>
+                <label className="block text-xs font-medium text-theme-muted mb-1">Branch Name</label>
                 <input type="text" value={newBranchName} onChange={e => setNewBranchName(e.target.value)}
                   placeholder="e.g. Bangalore" className="input text-sm" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Code</label>
+                <label className="block text-xs font-medium text-theme-muted mb-1">Code</label>
                 <input type="text" value={newBranchCode} onChange={e => setNewBranchCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
                   placeholder="e.g. blr" className="input text-sm" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">City</label>
+                <label className="block text-xs font-medium text-theme-muted mb-1">City</label>
                 <input type="text" value={newBranchCity} onChange={e => setNewBranchCity(e.target.value)}
                   placeholder="optional" className="input text-sm" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Manager</label>
+                <label className="block text-xs font-medium text-theme-muted mb-1">Manager</label>
                 <input type="text" value={newBranchManager} onChange={e => setNewBranchManager(e.target.value)}
                   placeholder="optional" className="input text-sm" />
               </div>
@@ -666,7 +666,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
         )}
 
         {clientBranches.length === 0 ? (
-          <p className="text-slate-500 text-center py-6 text-sm">
+          <p className="text-theme-faint text-center py-6 text-sm">
             {client?.is_multi_branch ? 'No branches configured' : 'Enable multi-branch to add locations'}
           </p>
         ) : (
@@ -674,12 +674,12 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
             {clientBranches.map((branch: any) => (
               <div key={branch.id} className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-dark-600 border border-dark-400/30">
                 <div className="flex items-center gap-3">
-                  <MapPin size={14} className={branch.is_active ? 'text-accent-400' : 'text-slate-600'} />
+                  <MapPin size={14} className={branch.is_active ? 'text-accent-400' : 'text-theme-faint'} />
                   <div>
-                    <span className="text-sm font-medium text-slate-200">{branch.name}</span>
-                    <span className="text-[10px] text-slate-500 ml-2 font-mono">{branch.code}</span>
-                    {branch.city && <span className="text-[10px] text-slate-500 ml-2">{branch.city}</span>}
-                    {branch.manager_name && <span className="text-[10px] text-slate-400 ml-2">· {branch.manager_name}</span>}
+                    <span className="text-sm font-medium text-theme-primary">{branch.name}</span>
+                    <span className="text-[10px] text-theme-faint ml-2 font-mono">{branch.code}</span>
+                    {branch.city && <span className="text-[10px] text-theme-faint ml-2">{branch.city}</span>}
+                    {branch.manager_name && <span className="text-[10px] text-theme-muted ml-2">· {branch.manager_name}</span>}
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -710,11 +710,11 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
       {resetResult && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setResetResult(null)}>
           <div className="bg-dark-700 rounded-2xl p-6 max-w-sm w-full mx-4 border border-dark-400/50" onClick={e => e.stopPropagation()}>
-            <h3 className="font-semibold text-white mb-3">Password Reset</h3>
-            <p className="text-sm text-slate-400 mb-3">New credentials for <span className="text-accent-400">@{resetResult.username}</span>:</p>
-            <div className="bg-dark-600 rounded-xl p-3 font-mono text-sm text-white mb-4 flex items-center justify-between">
+            <h3 className="font-semibold text-theme-heading mb-3">Password Reset</h3>
+            <p className="text-sm text-theme-muted mb-3">New credentials for <span className="text-accent-400">@{resetResult.username}</span>:</p>
+            <div className="bg-dark-600 rounded-xl p-3 font-mono text-sm text-theme-heading mb-4 flex items-center justify-between">
               <span>{resetResult.password}</span>
-              <button onClick={() => navigator.clipboard.writeText(resetResult.password)} className="text-slate-400 hover:text-accent-400 transition-colors" title="Copy password">
+              <button onClick={() => navigator.clipboard.writeText(resetResult.password)} className="text-theme-muted hover:text-accent-400 transition-colors" title="Copy password">
                 <Copy size={14} />
               </button>
             </div>
@@ -761,10 +761,10 @@ function AddUserForm({ slug, onAdded, onCancel }: { slug: string; onAdded: () =>
           <h4 className="text-sm font-semibold text-accent-300">User Created!</h4>
         </div>
         <div className="bg-dark-700 rounded-xl p-3 mb-3">
-          <p className="text-white font-mono text-sm">Username: <span className="text-accent-400">@{createdUser.username}</span></p>
+          <p className="text-theme-heading font-mono text-sm">Username: <span className="text-accent-400">@{createdUser.username}</span></p>
           <div className="flex items-center justify-between mt-1">
-            <p className="text-white font-mono text-sm">Password: <span className="text-accent-400">{createdUser.password}</span></p>
-            <button onClick={() => navigator.clipboard.writeText(createdUser.password)} className="text-slate-400 hover:text-accent-400 transition-colors" title="Copy password">
+            <p className="text-theme-heading font-mono text-sm">Password: <span className="text-accent-400">{createdUser.password}</span></p>
+            <button onClick={() => navigator.clipboard.writeText(createdUser.password)} className="text-theme-muted hover:text-accent-400 transition-colors" title="Copy password">
               <Copy size={14} />
             </button>
           </div>
@@ -777,27 +777,27 @@ function AddUserForm({ slug, onAdded, onCancel }: { slug: string; onAdded: () =>
 
   return (
     <div className="bg-dark-600 rounded-xl p-4 mb-4 border border-dark-400/50">
-      <h4 className="text-sm font-semibold text-white mb-3">Add New User</h4>
+      <h4 className="text-sm font-semibold text-theme-heading mb-3">Add New User</h4>
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">Display Name</label>
+          <label className="block text-xs font-medium text-theme-muted mb-1">Display Name</label>
           <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="John Doe" className="input text-sm" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">Username</label>
+          <label className="block text-xs font-medium text-theme-muted mb-1">Username</label>
           <input type="text" value={username} onChange={e => setUsername(e.target.value)} placeholder="john" className="input text-sm font-mono" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">Password</label>
+          <label className="block text-xs font-medium text-theme-muted mb-1">Password</label>
           <div className="relative">
             <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Strong password" className="input text-sm pr-9" />
-            <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
+            <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-theme-faint hover:text-theme-secondary">
               {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
           </div>
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">Role</label>
+          <label className="block text-xs font-medium text-theme-muted mb-1">Role</label>
           <select value={role} onChange={e => setRole(e.target.value)} className="input text-sm">
             <option value="user">User</option>
             <option value="admin">Admin</option>
@@ -847,10 +847,10 @@ function TeamPanel() {
     <div className="card">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h3 className="font-semibold text-white flex items-center gap-2">
+          <h3 className="font-semibold text-theme-heading flex items-center gap-2">
             <Shield size={16} /> Team Members
           </h3>
-          <p className="text-xs text-slate-500 mt-1">Super admins who can access all clients</p>
+          <p className="text-xs text-theme-faint mt-1">Super admins who can access all clients</p>
         </div>
         <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2 text-sm">
           <UserPlus size={14} /> Add Member
@@ -869,7 +869,7 @@ function TeamPanel() {
           <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
         </div>
       ) : team.length === 0 ? (
-        <p className="text-slate-500 text-center py-8 text-sm">No team members</p>
+        <p className="text-theme-faint text-center py-8 text-sm">No team members</p>
       ) : (
         <div className="space-y-2">
           {team.map(member => (
@@ -880,8 +880,8 @@ function TeamPanel() {
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-slate-200">{member.display_name}</span>
-                    <span className="text-[10px] font-mono text-slate-500">@{member.username}</span>
+                    <span className="text-sm font-medium text-theme-primary">{member.display_name}</span>
+                    <span className="text-[10px] font-mono text-theme-faint">@{member.username}</span>
                   </div>
                   <span className="text-[10px] font-medium text-purple-400">{member.role}</span>
                 </div>
@@ -889,7 +889,7 @@ function TeamPanel() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => resetPassword(member.id, member.username)}
-                  className="text-xs px-2 py-1 rounded-lg text-slate-400 bg-dark-500 hover:bg-dark-400 transition-all flex items-center gap-1"
+                  className="text-xs px-2 py-1 rounded-lg text-theme-muted bg-dark-500 hover:bg-dark-400 transition-all flex items-center gap-1"
                   title="Reset Password"
                 >
                   <KeyRound size={11} /> Reset PW
@@ -910,11 +910,11 @@ function TeamPanel() {
       {resetResult && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setResetResult(null)}>
           <div className="bg-dark-700 rounded-2xl p-6 max-w-sm w-full mx-4 border border-dark-400/50" onClick={e => e.stopPropagation()}>
-            <h3 className="font-semibold text-white mb-3">Password Reset</h3>
-            <p className="text-sm text-slate-400 mb-3">New credentials for <span className="text-accent-400">@{resetResult.username}</span>:</p>
-            <div className="bg-dark-600 rounded-xl p-3 font-mono text-sm text-white mb-4 flex items-center justify-between">
+            <h3 className="font-semibold text-theme-heading mb-3">Password Reset</h3>
+            <p className="text-sm text-theme-muted mb-3">New credentials for <span className="text-accent-400">@{resetResult.username}</span>:</p>
+            <div className="bg-dark-600 rounded-xl p-3 font-mono text-sm text-theme-heading mb-4 flex items-center justify-between">
               <span>{resetResult.password}</span>
-              <button onClick={() => navigator.clipboard.writeText(resetResult.password)} className="text-slate-400 hover:text-accent-400 transition-colors" title="Copy password">
+              <button onClick={() => navigator.clipboard.writeText(resetResult.password)} className="text-theme-muted hover:text-accent-400 transition-colors" title="Copy password">
                 <Copy size={14} />
               </button>
             </div>
@@ -960,10 +960,10 @@ function AddTeamMemberForm({ onAdded, onCancel }: { onAdded: () => void; onCance
           <h4 className="text-sm font-semibold text-accent-300">Team Member Created!</h4>
         </div>
         <div className="bg-dark-700 rounded-xl p-3 mb-3">
-          <p className="text-white font-mono text-sm">Username: <span className="text-accent-400">@{createdUser.username}</span></p>
+          <p className="text-theme-heading font-mono text-sm">Username: <span className="text-accent-400">@{createdUser.username}</span></p>
           <div className="flex items-center justify-between mt-1">
-            <p className="text-white font-mono text-sm">Password: <span className="text-accent-400">{createdUser.password}</span></p>
-            <button onClick={() => navigator.clipboard.writeText(createdUser.password)} className="text-slate-400 hover:text-accent-400 transition-colors" title="Copy password">
+            <p className="text-theme-heading font-mono text-sm">Password: <span className="text-accent-400">{createdUser.password}</span></p>
+            <button onClick={() => navigator.clipboard.writeText(createdUser.password)} className="text-theme-muted hover:text-accent-400 transition-colors" title="Copy password">
               <Copy size={14} />
             </button>
           </div>
@@ -976,22 +976,22 @@ function AddTeamMemberForm({ onAdded, onCancel }: { onAdded: () => void; onCance
 
   return (
     <div className="bg-dark-600 rounded-xl p-4 mb-4 border border-dark-400/50">
-      <h4 className="text-sm font-semibold text-white mb-3">Add Team Member</h4>
-      <p className="text-xs text-slate-500 mb-3">Team members are super admins with access to all clients.</p>
+      <h4 className="text-sm font-semibold text-theme-heading mb-3">Add Team Member</h4>
+      <p className="text-xs text-theme-faint mb-3">Team members are super admins with access to all clients.</p>
       <div className="grid grid-cols-3 gap-3 mb-3">
         <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">Display Name</label>
+          <label className="block text-xs font-medium text-theme-muted mb-1">Display Name</label>
           <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="Jane Smith" className="input text-sm" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">Username</label>
+          <label className="block text-xs font-medium text-theme-muted mb-1">Username</label>
           <input type="text" value={username} onChange={e => setUsername(e.target.value)} placeholder="jane" className="input text-sm font-mono" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">Password</label>
+          <label className="block text-xs font-medium text-theme-muted mb-1">Password</label>
           <div className="relative">
             <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Strong password" className="input text-sm pr-9" />
-            <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
+            <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-theme-faint hover:text-theme-secondary">
               {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
           </div>

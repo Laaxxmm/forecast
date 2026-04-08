@@ -270,14 +270,14 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
-          <h2 className="text-xl font-bold text-white">{label}</h2>
+          <h2 className="text-xl font-bold text-theme-heading">{label}</h2>
           <span className="text-xs px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-400 font-medium cursor-pointer">In Progress</span>
         </div>
         <div className="flex items-center gap-2">
           {items.length > 0 && (
             <button
               onClick={() => exportTableCSV(items, allValues, months, viewMode, category, label)}
-              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:text-slate-300 hover:bg-dark-500 rounded-lg transition-colors border border-dark-400/50"
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-theme-faint hover:text-theme-secondary hover:bg-dark-500 rounded-lg transition-colors border border-dark-400/50"
               title="Download table as CSV"
             >
               <FileDown size={14} />
@@ -299,7 +299,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
       {/* Chart */}
       {config.showChart && items.length > 0 && (
         <div className="card mb-4">
-          <h3 className="text-sm font-semibold text-slate-400 mb-3">{label} Totals</h3>
+          <h3 className="text-sm font-semibold text-theme-muted mb-3">{label} Totals</h3>
           <div className="h-48">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData}>
@@ -335,18 +335,18 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
         <table className="w-full text-sm" style={{ minWidth: months.length * 100 + 300 }}>
           <thead>
             <tr className="border-b border-dark-400/50 bg-dark-600">
-              <th className="text-left py-3 px-4 font-semibold text-slate-400 sticky left-0 bg-dark-600 z-10 min-w-[240px]">
+              <th className="text-left py-3 px-4 font-semibold text-theme-muted sticky left-0 bg-dark-600 z-10 min-w-[240px]">
                 <div className="flex items-center gap-2">
                   <span>{label}</span>
-                  <button className="text-xs text-slate-400 hover:text-slate-400 border border-dark-400 rounded px-2 py-0.5">Organize</button>
+                  <button className="text-xs text-theme-muted hover:text-theme-muted border border-dark-400 rounded px-2 py-0.5">Organize</button>
                 </div>
               </th>
               {months.map(m => (
-                <th key={m} className="text-right py-3 px-3 font-semibold text-slate-400 whitespace-nowrap min-w-[100px]">
+                <th key={m} className="text-right py-3 px-3 font-semibold text-theme-muted whitespace-nowrap min-w-[100px]">
                   {getMonthLabel(m)}
                 </th>
               ))}
-              <th className="text-right py-3 px-4 font-semibold text-slate-400 bg-dark-500 min-w-[120px]">Total</th>
+              <th className="text-right py-3 px-4 font-semibold text-theme-muted bg-dark-500 min-w-[120px]">Total</th>
             </tr>
           </thead>
           <tbody>
@@ -357,9 +357,9 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
                 <tr key={item.id} className="border-b border-dark-400/30 hover:bg-dark-600 group">
                   <td className="py-2.5 px-4 sticky left-0 bg-dark-700 z-10 group-hover:bg-dark-600">
                     <div className="flex items-center gap-2">
-                      {!readOnly && <GripVertical size={14} className="text-slate-300 cursor-grab opacity-0 group-hover:opacity-100" />}
+                      {!readOnly && <GripVertical size={14} className="text-theme-secondary cursor-grab opacity-0 group-hover:opacity-100" />}
                       {readOnly ? (
-                        <span className="text-slate-300 font-medium text-left">{item.name}</span>
+                        <span className="text-theme-secondary font-medium text-left">{item.name}</span>
                       ) : (
                         <button
                           onClick={() => setEditingItem(item)}
@@ -390,11 +390,11 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
                     </div>
                   </td>
                   {months.map(m => (
-                    <td key={m} className="text-right py-2.5 px-3 text-slate-300 tabular-nums">
-                      {itemValues[m] ? formatRs(itemValues[m]) : <span className="text-slate-300">-</span>}
+                    <td key={m} className="text-right py-2.5 px-3 text-theme-secondary tabular-nums">
+                      {itemValues[m] ? formatRs(itemValues[m]) : <span className="text-theme-secondary">-</span>}
                     </td>
                   ))}
-                  <td className="text-right py-2.5 px-4 font-semibold text-white bg-dark-600 tabular-nums">
+                  <td className="text-right py-2.5 px-4 font-semibold text-theme-heading bg-dark-600 tabular-nums">
                     {formatRs(rowTotal)}
                   </td>
                 </tr>
@@ -418,13 +418,13 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
 
             {/* Totals row */}
             <tr className="border-t-2 border-accent-500/30 bg-dark-600 font-semibold">
-              <td className="py-3 px-4 text-slate-300 sticky left-0 bg-dark-600 z-10">Totals</td>
+              <td className="py-3 px-4 text-theme-secondary sticky left-0 bg-dark-600 z-10">Totals</td>
               {months.map(m => (
-                <td key={m} className="text-right py-3 px-3 text-white tabular-nums">
+                <td key={m} className="text-right py-3 px-3 text-theme-heading tabular-nums">
                   {formatRs(monthlyTotals[m] || 0)}
                 </td>
               ))}
-              <td className="text-right py-3 px-4 text-white bg-dark-500 tabular-nums">
+              <td className="text-right py-3 px-4 text-theme-heading bg-dark-500 tabular-nums">
                 {formatRs(grandTotal)}
               </td>
             </tr>
@@ -454,27 +454,27 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
 function CashFlowAssumptionsTab({ items: _items, months: _months, allValues: _allValues }: { items: ForecastItem[]; months: string[]; allValues: Record<number, Record<string, number>> }) {
   return (
     <div>
-      <h2 className="text-xl font-bold text-white mb-4">Cash Flow Assumptions</h2>
+      <h2 className="text-xl font-bold text-theme-heading mb-4">Cash Flow Assumptions</h2>
       <div className="card">
-        <h3 className="font-semibold text-slate-300 mb-3">Accounts Receivable</h3>
-        <p className="text-sm text-slate-500 mb-4">Configure how quickly you collect payments from customers.</p>
+        <h3 className="font-semibold text-theme-secondary mb-3">Accounts Receivable</h3>
+        <p className="text-sm text-theme-faint mb-4">Configure how quickly you collect payments from customers.</p>
         <div className="grid grid-cols-3 gap-4 text-sm">
-          <div className="font-medium text-slate-400">Revenue Stream</div>
-          <div className="font-medium text-slate-400">Sales on Credit (%)</div>
-          <div className="font-medium text-slate-400">Days to Get Paid</div>
-          <div className="text-slate-500">Default</div>
+          <div className="font-medium text-theme-muted">Revenue Stream</div>
+          <div className="font-medium text-theme-muted">Sales on Credit (%)</div>
+          <div className="font-medium text-theme-muted">Days to Get Paid</div>
+          <div className="text-theme-faint">Default</div>
           <input type="number" defaultValue={0} className="input py-1.5 text-sm" />
           <select className="input py-1.5 text-sm"><option>30 days</option><option>15 days</option><option>45 days</option><option>60 days</option><option>90 days</option></select>
         </div>
       </div>
       <div className="card mt-4">
-        <h3 className="font-semibold text-slate-300 mb-3">Accounts Payable</h3>
-        <p className="text-sm text-slate-500 mb-4">Configure how quickly you pay your vendors and suppliers.</p>
+        <h3 className="font-semibold text-theme-secondary mb-3">Accounts Payable</h3>
+        <p className="text-sm text-theme-faint mb-4">Configure how quickly you pay your vendors and suppliers.</p>
         <div className="grid grid-cols-3 gap-4 text-sm">
-          <div className="font-medium text-slate-400">Expense</div>
-          <div className="font-medium text-slate-400">Purchases on Credit (%)</div>
-          <div className="font-medium text-slate-400">Days to Pay</div>
-          <div className="text-slate-500">Default</div>
+          <div className="font-medium text-theme-muted">Expense</div>
+          <div className="font-medium text-theme-muted">Purchases on Credit (%)</div>
+          <div className="font-medium text-theme-muted">Days to Pay</div>
+          <div className="text-theme-faint">Default</div>
           <input type="number" defaultValue={0} className="input py-1.5 text-sm" />
           <select className="input py-1.5 text-sm"><option>30 days</option><option>15 days</option><option>45 days</option><option>60 days</option><option>90 days</option></select>
         </div>
@@ -487,20 +487,20 @@ function CashFlowAssumptionsTab({ items: _items, months: _months, allValues: _al
 function InitialBalancesTab() {
   return (
     <div>
-      <h2 className="text-xl font-bold text-white mb-2">Initial Balances</h2>
-      <p className="text-sm text-slate-500 mb-4">Set your starting financial position before the forecast begins.</p>
+      <h2 className="text-xl font-bold text-theme-heading mb-2">Initial Balances</h2>
+      <p className="text-sm text-theme-faint mb-4">Set your starting financial position before the forecast begins.</p>
       <div className="grid grid-cols-3 gap-4 mb-6">
         <div className="card text-center">
-          <div className="text-xs text-slate-500 uppercase tracking-wider">Total Assets</div>
-          <div className="text-2xl font-bold text-white mt-1">Rs0</div>
+          <div className="text-xs text-theme-faint uppercase tracking-wider">Total Assets</div>
+          <div className="text-2xl font-bold text-theme-heading mt-1">Rs0</div>
         </div>
         <div className="card text-center">
-          <div className="text-xs text-slate-500">= Total Liabilities +</div>
-          <div className="text-2xl font-bold text-white mt-1">Rs0</div>
+          <div className="text-xs text-theme-faint">= Total Liabilities +</div>
+          <div className="text-2xl font-bold text-theme-heading mt-1">Rs0</div>
         </div>
         <div className="card text-center">
-          <div className="text-xs text-slate-500 uppercase tracking-wider">Total Equity</div>
-          <div className="text-2xl font-bold text-white mt-1">Rs0</div>
+          <div className="text-xs text-theme-faint uppercase tracking-wider">Total Equity</div>
+          <div className="text-2xl font-bold text-theme-heading mt-1">Rs0</div>
         </div>
       </div>
       <div className="flex gap-2 mb-4">
@@ -509,7 +509,7 @@ function InitialBalancesTab() {
         ))}
       </div>
       <div className="card">
-        <p className="text-sm text-slate-500">Enter your initial asset, liability, and equity values to start your forecast from your current financial position.</p>
+        <p className="text-sm text-theme-faint">Enter your initial asset, liability, and equity values to start your forecast from your current financial position.</p>
       </div>
     </div>
   );

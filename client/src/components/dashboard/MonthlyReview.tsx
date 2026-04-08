@@ -86,11 +86,11 @@ export default function MonthlyReview({ items, allValues, months, settings, actu
           <div className="flex bg-dark-500 rounded-lg p-1">
             <button
               onClick={() => setViewMode('monthly')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium ${viewMode === 'monthly' ? 'bg-accent-500 text-white' : 'text-slate-500'}`}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium ${viewMode === 'monthly' ? 'bg-accent-500 text-white' : 'text-theme-faint'}`}
             >Monthly Insights</button>
             <button
               onClick={() => setViewMode('ytd')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium ${viewMode === 'ytd' ? 'bg-accent-500 text-white' : 'text-slate-500'}`}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium ${viewMode === 'ytd' ? 'bg-accent-500 text-white' : 'text-theme-faint'}`}
             >Year to Date Insights</button>
           </div>
         </div>
@@ -109,8 +109,8 @@ export default function MonthlyReview({ items, allValues, months, settings, actu
           <div className="mx-auto w-16 h-16 bg-amber-500/15 rounded-full flex items-center justify-center mb-4">
             <AlertCircle size={32} className="text-amber-400" />
           </div>
-          <h3 className="text-lg font-semibold text-white mb-2">Your data for this month is incomplete</h3>
-          <p className="text-sm text-slate-500 max-w-md mx-auto mb-4">
+          <h3 className="text-lg font-semibold text-theme-heading mb-2">Your data for this month is incomplete</h3>
+          <p className="text-sm text-theme-faint max-w-md mx-auto mb-4">
             The monthly review compares your actual results to your forecast values. One or both are missing for {monthFullLabel(selectedMonth)}.
             Please check your forecast and accounting data, and then try again.
           </p>
@@ -135,53 +135,53 @@ export default function MonthlyReview({ items, allValues, months, settings, actu
           <div className="card">
             <div className="flex items-center gap-3 mb-4">
               <FileText size={20} className="text-accent-400" />
-              <h2 className="text-lg font-bold text-white">
+              <h2 className="text-lg font-bold text-theme-heading">
                 {viewMode === 'monthly' ? 'Monthly' : 'Year to Date'} Financial Review — {monthFullLabel(selectedMonth)}
               </h2>
             </div>
-            <p className="text-sm text-slate-500">
+            <p className="text-sm text-theme-faint">
               This automated review compares your actual financial results against your forecast for {viewMode === 'monthly' ? monthFullLabel(selectedMonth) : `April to ${monthFullLabel(selectedMonth)}`}.
             </p>
           </div>
 
           {/* Revenue Section */}
           <div className="card">
-            <h3 className="text-md font-semibold text-slate-300 mb-3 flex items-center gap-2">
+            <h3 className="text-md font-semibold text-theme-secondary mb-3 flex items-center gap-2">
               <span className="w-3 h-3 rounded bg-accent-500" /> Revenue Performance
             </h3>
-            <p className="text-sm text-slate-400 leading-relaxed">{generateInsight('Revenue', metrics.aRev, metrics.fRev)}</p>
+            <p className="text-sm text-theme-muted leading-relaxed">{generateInsight('Revenue', metrics.aRev, metrics.fRev)}</p>
           </div>
 
           {/* Expenses Section */}
           <div className="card">
-            <h3 className="text-md font-semibold text-slate-300 mb-3 flex items-center gap-2">
+            <h3 className="text-md font-semibold text-theme-secondary mb-3 flex items-center gap-2">
               <span className="w-3 h-3 rounded bg-amber-500" /> Expense Analysis
             </h3>
-            <p className="text-sm text-slate-400 leading-relaxed mb-2">{generateInsight('Direct Costs', metrics.aDC, metrics.fDC)}</p>
-            <p className="text-sm text-slate-400 leading-relaxed">{generateInsight('Operating Expenses', metrics.aOpex, metrics.fOpex)}</p>
+            <p className="text-sm text-theme-muted leading-relaxed mb-2">{generateInsight('Direct Costs', metrics.aDC, metrics.fDC)}</p>
+            <p className="text-sm text-theme-muted leading-relaxed">{generateInsight('Operating Expenses', metrics.aOpex, metrics.fOpex)}</p>
           </div>
 
           {/* Profitability */}
           <div className="card">
-            <h3 className="text-md font-semibold text-slate-300 mb-3 flex items-center gap-2">
+            <h3 className="text-md font-semibold text-theme-secondary mb-3 flex items-center gap-2">
               <span className="w-3 h-3 rounded bg-emerald-500" /> Profitability Insights
             </h3>
-            <p className="text-sm text-slate-400 leading-relaxed mb-2">{generateInsight('Gross Profit', metrics.aGrossProfit, metrics.fGrossProfit)}</p>
-            <p className="text-sm text-slate-400 leading-relaxed mb-2">{generateInsight('Operating Income', metrics.aOpIncome, metrics.fOpIncome)}</p>
-            <p className="text-sm text-slate-400 leading-relaxed">{generateInsight('Net Profit', metrics.aNetProfit, metrics.fNetProfit)}</p>
+            <p className="text-sm text-theme-muted leading-relaxed mb-2">{generateInsight('Gross Profit', metrics.aGrossProfit, metrics.fGrossProfit)}</p>
+            <p className="text-sm text-theme-muted leading-relaxed mb-2">{generateInsight('Operating Income', metrics.aOpIncome, metrics.fOpIncome)}</p>
+            <p className="text-sm text-theme-muted leading-relaxed">{generateInsight('Net Profit', metrics.aNetProfit, metrics.fNetProfit)}</p>
           </div>
 
           {/* Key Takeaways */}
           <div className="card border-l-4 border-accent-500">
-            <h3 className="text-md font-semibold text-slate-300 mb-3">Key Takeaways</h3>
-            <ul className="space-y-2 text-sm text-slate-400">
+            <h3 className="text-md font-semibold text-theme-secondary mb-3">Key Takeaways</h3>
+            <ul className="space-y-2 text-sm text-theme-muted">
               {metrics.aRev > metrics.fRev && <li className="flex items-start gap-2"><span className="text-emerald-500 mt-0.5">✓</span> Revenue exceeded forecast — strong top-line performance.</li>}
               {metrics.aRev < metrics.fRev && <li className="flex items-start gap-2"><span className="text-red-500 mt-0.5">✗</span> Revenue fell short of forecast — review sales strategy and pipeline.</li>}
               {metrics.aOpex < metrics.fOpex && <li className="flex items-start gap-2"><span className="text-emerald-500 mt-0.5">✓</span> Operating expenses were below forecast — good cost control.</li>}
               {metrics.aOpex > metrics.fOpex && <li className="flex items-start gap-2"><span className="text-red-500 mt-0.5">✗</span> Operating expenses exceeded forecast — investigate cost overruns.</li>}
               {metrics.aNetProfit > metrics.fNetProfit && <li className="flex items-start gap-2"><span className="text-emerald-500 mt-0.5">✓</span> Net profit is above forecast — overall positive financial health.</li>}
               {metrics.aNetProfit < metrics.fNetProfit && <li className="flex items-start gap-2"><span className="text-red-500 mt-0.5">✗</span> Net profit is below forecast — consider revising expense allocations or revenue targets.</li>}
-              {metrics.aRev === 0 && metrics.fRev === 0 && <li className="text-slate-400">No significant data to analyze for this period.</li>}
+              {metrics.aRev === 0 && metrics.fRev === 0 && <li className="text-theme-muted">No significant data to analyze for this period.</li>}
             </ul>
           </div>
         </div>

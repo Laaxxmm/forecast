@@ -254,9 +254,9 @@ export default function PersonnelTab({ category, label, scenario, months, items,
       <tr key={item.id} className="border-b border-dark-400/30 hover:bg-dark-600 group">
         <td className="py-2.5 px-4 sticky left-0 bg-dark-700 z-10 group-hover:bg-dark-600">
           <div className="flex items-center gap-2">
-            {!readOnly && <GripVertical size={14} className="text-slate-300 cursor-grab opacity-0 group-hover:opacity-100" />}
+            {!readOnly && <GripVertical size={14} className="text-theme-secondary cursor-grab opacity-0 group-hover:opacity-100" />}
             {readOnly ? (
-              <span className="text-slate-300 font-medium text-left">{item.name}</span>
+              <span className="text-theme-secondary font-medium text-left">{item.name}</span>
             ) : (
               <button
                 onClick={() => setEditingItem(item)}
@@ -266,7 +266,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
               </button>
             )}
             {item.item_type === 'group' && (
-              <span className="text-xs px-1.5 py-0.5 bg-dark-500 text-slate-500 rounded">Group</span>
+              <span className="text-xs px-1.5 py-0.5 bg-dark-500 text-theme-faint rounded">Group</span>
             )}
             {!readOnly && (
               <div className="relative ml-auto">
@@ -290,11 +290,11 @@ export default function PersonnelTab({ category, label, scenario, months, items,
           </div>
         </td>
         {months.map(m => (
-          <td key={m} className="text-right py-2.5 px-3 text-slate-300 tabular-nums">
-            {itemValues[m] ? formatRs(itemValues[m]) : <span className="text-slate-300">-</span>}
+          <td key={m} className="text-right py-2.5 px-3 text-theme-secondary tabular-nums">
+            {itemValues[m] ? formatRs(itemValues[m]) : <span className="text-theme-secondary">-</span>}
           </td>
         ))}
-        <td className="text-right py-2.5 px-4 font-semibold text-white bg-dark-600 tabular-nums">
+        <td className="text-right py-2.5 px-4 font-semibold text-theme-heading bg-dark-600 tabular-nums">
           {formatRs(rowTotal)}
         </td>
       </tr>
@@ -305,15 +305,15 @@ export default function PersonnelTab({ category, label, scenario, months, items,
     const sectionTotal = months.reduce((s, m) => s + (totals[m] || 0), 0);
     return (
       <tr className="border-b border-dark-400/50 bg-dark-600/50">
-        <td className="py-2 px-4 font-semibold text-slate-400 text-sm sticky left-0 bg-dark-600/50 z-10">
+        <td className="py-2 px-4 font-semibold text-theme-muted text-sm sticky left-0 bg-dark-600/50 z-10">
           {sectionLabel}
         </td>
         {months.map(m => (
-          <td key={m} className="text-right py-2 px-3 text-slate-400 font-medium tabular-nums text-sm">
+          <td key={m} className="text-right py-2 px-3 text-theme-muted font-medium tabular-nums text-sm">
             {formatRs(totals[m] || 0)}
           </td>
         ))}
-        <td className="text-right py-2 px-4 font-semibold text-slate-300 bg-dark-500 tabular-nums text-sm">
+        <td className="text-right py-2 px-4 font-semibold text-theme-secondary bg-dark-500 tabular-nums text-sm">
           {formatRs(sectionTotal)}
         </td>
       </tr>
@@ -325,7 +325,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
-          <h2 className="text-xl font-bold text-white">{label}</h2>
+          <h2 className="text-xl font-bold text-theme-heading">{label}</h2>
           <span className="text-xs px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-400 font-medium cursor-pointer">In Progress</span>
         </div>
         {!readOnly && <div className="relative">
@@ -349,15 +349,15 @@ export default function PersonnelTab({ category, label, scenario, months, items,
                   }}
                   className="w-full text-left px-4 py-3 hover:bg-dark-600 rounded-t-lg"
                 >
-                  <div className="font-medium text-sm text-white">Add Personnel</div>
-                  <div className="text-xs text-slate-500">Add an individual employee or group</div>
+                  <div className="font-medium text-sm text-theme-heading">Add Personnel</div>
+                  <div className="text-xs text-theme-faint">Add an individual employee or group</div>
                 </button>
                 <button
                   onClick={() => handleAdd('employee_benefits')}
                   className="w-full text-left px-4 py-3 hover:bg-dark-600 rounded-b-lg border-t border-dark-400/30"
                 >
-                  <div className="font-medium text-sm text-white">Employee Taxes or Benefits</div>
-                  <div className="text-xs text-slate-500">Add a burden rate for on-staff employees</div>
+                  <div className="font-medium text-sm text-theme-heading">Employee Taxes or Benefits</div>
+                  <div className="text-xs text-theme-faint">Add a burden rate for on-staff employees</div>
                 </button>
               </div>
             </>
@@ -368,7 +368,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
       {/* Chart */}
       {items.length > 0 && (
         <div className="card mb-4">
-          <h3 className="text-sm font-semibold text-slate-400 mb-3">Personnel Totals</h3>
+          <h3 className="text-sm font-semibold text-theme-muted mb-3">Personnel Totals</h3>
           <div className="h-48">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData}>
@@ -404,18 +404,18 @@ export default function PersonnelTab({ category, label, scenario, months, items,
         <table className="w-full text-sm" style={{ minWidth: months.length * 100 + 300 }}>
           <thead>
             <tr className="border-b border-dark-400/50 bg-dark-600">
-              <th className="text-left py-3 px-4 font-semibold text-slate-400 sticky left-0 bg-dark-600 z-10 min-w-[240px]">
+              <th className="text-left py-3 px-4 font-semibold text-theme-muted sticky left-0 bg-dark-600 z-10 min-w-[240px]">
                 <div className="flex items-center gap-2">
                   <span>{label}</span>
-                  <button className="text-xs text-slate-400 hover:text-slate-400 border border-dark-400 rounded px-2 py-0.5">Organize</button>
+                  <button className="text-xs text-theme-muted hover:text-theme-muted border border-dark-400 rounded px-2 py-0.5">Organize</button>
                 </div>
               </th>
               {months.map(m => (
-                <th key={m} className="text-right py-3 px-3 font-semibold text-slate-400 whitespace-nowrap min-w-[100px]">
+                <th key={m} className="text-right py-3 px-3 font-semibold text-theme-muted whitespace-nowrap min-w-[100px]">
                   {getMonthLabel(m)}
                 </th>
               ))}
-              <th className="text-right py-3 px-4 font-semibold text-slate-400 bg-dark-500 min-w-[120px]">Total</th>
+              <th className="text-right py-3 px-4 font-semibold text-theme-muted bg-dark-500 min-w-[120px]">Total</th>
             </tr>
           </thead>
           <tbody>
@@ -452,7 +452,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
               <>
                 <tr className="border-b border-dark-400/50 bg-dark-600/50">
                   <td colSpan={months.length + 2} className="py-2 px-4 sticky left-0 z-10">
-                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Other Labor</span>
+                    <span className="text-xs font-bold text-theme-muted uppercase tracking-wider">Other Labor</span>
                   </td>
                 </tr>
                 {otherLaborItems.map(renderItemRow)}
@@ -484,7 +484,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
                 <td className="py-2.5 px-4 sticky left-0 bg-amber-500/10/30 z-10">
                   <div className="flex items-center gap-2">
                     {readOnly ? (
-                      <span className="text-slate-300 font-medium text-left">Employee Taxes & Benefits</span>
+                      <span className="text-theme-secondary font-medium text-left">Employee Taxes & Benefits</span>
                     ) : (
                       <button
                         onClick={() => {
@@ -502,11 +502,11 @@ export default function PersonnelTab({ category, label, scenario, months, items,
                   </div>
                 </td>
                 {months.map(m => (
-                  <td key={m} className="text-right py-2.5 px-3 text-slate-300 tabular-nums">
-                    {benefitsTotals[m] ? formatRs(benefitsTotals[m]) : <span className="text-slate-300">-</span>}
+                  <td key={m} className="text-right py-2.5 px-3 text-theme-secondary tabular-nums">
+                    {benefitsTotals[m] ? formatRs(benefitsTotals[m]) : <span className="text-theme-secondary">-</span>}
                   </td>
                 ))}
-                <td className="text-right py-2.5 px-4 font-semibold text-white bg-dark-600 tabular-nums">
+                <td className="text-right py-2.5 px-4 font-semibold text-theme-heading bg-dark-600 tabular-nums">
                   {formatRs(months.reduce((s, m) => s + (benefitsTotals[m] || 0), 0))}
                 </td>
               </tr>
@@ -514,13 +514,13 @@ export default function PersonnelTab({ category, label, scenario, months, items,
 
             {/* ── Totals Row ── */}
             <tr className="border-t-2 border-accent-500/30 bg-dark-600 font-semibold">
-              <td className="py-3 px-4 text-slate-300 sticky left-0 bg-dark-600 z-10">Totals</td>
+              <td className="py-3 px-4 text-theme-secondary sticky left-0 bg-dark-600 z-10">Totals</td>
               {months.map(m => (
-                <td key={m} className="text-right py-3 px-3 text-white tabular-nums">
+                <td key={m} className="text-right py-3 px-3 text-theme-heading tabular-nums">
                   {formatRs(monthlyTotals[m] || 0)}
                 </td>
               ))}
-              <td className="text-right py-3 px-4 text-white bg-dark-500 tabular-nums">
+              <td className="text-right py-3 px-4 text-theme-heading bg-dark-500 tabular-nums">
                 {formatRs(grandTotal)}
               </td>
             </tr>
@@ -530,18 +530,18 @@ export default function PersonnelTab({ category, label, scenario, months, items,
               className="border-t border-dark-400/50 bg-dark-600/50 cursor-pointer hover:bg-dark-500/50"
               onClick={() => setHeadCountExpanded(!headCountExpanded)}
             >
-              <td className="py-2.5 px-4 text-slate-400 font-medium sticky left-0 bg-dark-600/50 z-10">
+              <td className="py-2.5 px-4 text-theme-muted font-medium sticky left-0 bg-dark-600/50 z-10">
                 <div className="flex items-center gap-2">
                   {headCountExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                   Head Count
                 </div>
               </td>
               {months.map(m => (
-                <td key={m} className="text-right py-2.5 px-3 text-slate-400 tabular-nums">
+                <td key={m} className="text-right py-2.5 px-3 text-theme-muted tabular-nums">
                   {headCountPerMonth[m] || 0}
                 </td>
               ))}
-              <td className="text-right py-2.5 px-4 font-semibold text-slate-300 bg-dark-500 tabular-nums">
+              <td className="text-right py-2.5 px-4 font-semibold text-theme-secondary bg-dark-500 tabular-nums">
                 {totalHeadCount}
               </td>
             </tr>
@@ -551,19 +551,19 @@ export default function PersonnelTab({ category, label, scenario, months, items,
               const isGroup = item.item_type === 'group';
               return (
                 <tr key={`hc-${item.id}`} className="border-b border-dark-400/30 bg-dark-700">
-                  <td className="py-1.5 px-4 pl-10 text-slate-500 text-xs sticky left-0 bg-dark-700 z-10">
+                  <td className="py-1.5 px-4 pl-10 text-theme-faint text-xs sticky left-0 bg-dark-700 z-10">
                     {item.name}
                   </td>
                   {months.map(m => {
                     const hasValue = (allValues[item.id]?.[m] || 0) > 0;
                     const count = isGroup ? (item.meta?.stepValues?.headcount?.[m] || 0) : (hasValue ? 1 : 0);
                     return (
-                      <td key={m} className="text-right py-1.5 px-3 text-slate-400 tabular-nums text-xs">
-                        {count || <span className="text-slate-200">-</span>}
+                      <td key={m} className="text-right py-1.5 px-3 text-theme-muted tabular-nums text-xs">
+                        {count || <span className="text-theme-primary">-</span>}
                       </td>
                     );
                   })}
-                  <td className="text-right py-1.5 px-4 text-slate-500 bg-dark-600 tabular-nums text-xs">
+                  <td className="text-right py-1.5 px-4 text-theme-faint bg-dark-600 tabular-nums text-xs">
                     {isGroup
                       ? Math.max(...months.map(m => item.meta?.stepValues?.headcount?.[m] || 0), 0)
                       : (months.some(m => (allValues[item.id]?.[m] || 0) > 0) ? 1 : 0)

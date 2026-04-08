@@ -129,7 +129,7 @@ export default function ForecastModulePage() {
                   `flex items-center gap-2 px-5 py-4 text-[13px] font-medium border-b-2 transition-all ${
                     isActive
                       ? 'border-accent-500 text-accent-400'
-                      : 'border-transparent text-slate-500 hover:text-slate-300 hover:border-dark-300'
+                      : 'border-transparent text-theme-faint hover:text-theme-secondary hover:border-dark-300'
                   }`
                 }
               >
@@ -141,7 +141,7 @@ export default function ForecastModulePage() {
           <div className="flex items-center gap-3">
             <button
               onClick={() => setShowDownloadPanel(true)}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-400 hover:text-accent-400 hover:bg-accent-500/10 rounded-xl transition-all"
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-theme-muted hover:text-accent-400 hover:bg-accent-500/10 rounded-xl transition-all"
               title="Download & Print Reports"
             >
               <Printer size={16} />
@@ -178,27 +178,27 @@ export default function ForecastModulePage() {
           <div className="flex bg-dark-700 border border-dark-400/50 rounded-xl overflow-hidden">
             <button
               onClick={() => setViewMode('yearly')}
-              className={`px-3 py-1.5 text-xs font-medium transition-all ${viewMode === 'yearly' ? 'bg-accent-500/15 text-accent-400' : 'text-slate-500 hover:text-slate-300'}`}
+              className={`px-3 py-1.5 text-xs font-medium transition-all ${viewMode === 'yearly' ? 'bg-accent-500/15 text-accent-400' : 'text-theme-faint hover:text-theme-secondary'}`}
             >Yearly</button>
             <button
               onClick={() => setViewMode('monthly')}
-              className={`px-3 py-1.5 text-xs font-medium transition-all ${viewMode === 'monthly' ? 'bg-accent-500/15 text-accent-400' : 'text-slate-500 hover:text-slate-300'}`}
+              className={`px-3 py-1.5 text-xs font-medium transition-all ${viewMode === 'monthly' ? 'bg-accent-500/15 text-accent-400' : 'text-theme-faint hover:text-theme-secondary'}`}
             >Monthly</button>
           </div>
           <div className="flex items-center gap-1 ml-3">
-            <button className="p-1.5 hover:bg-dark-600 rounded-lg text-slate-500 transition-colors"><ChevronLeft size={14} /></button>
-            <div className="flex items-center gap-1 px-2 text-sm text-slate-400">
+            <button className="p-1.5 hover:bg-dark-600 rounded-lg text-theme-faint transition-colors"><ChevronLeft size={14} /></button>
+            <div className="flex items-center gap-1 px-2 text-sm text-theme-muted">
               <Calendar size={14} />
               <span className="font-medium">{currentYear}-{String(currentYear + 1).slice(-2)}</span>
             </div>
-            <button className="p-1.5 hover:bg-dark-600 rounded-lg text-slate-500 transition-colors"><ChevronRight size={14} /></button>
+            <button className="p-1.5 hover:bg-dark-600 rounded-lg text-theme-faint transition-colors"><ChevronRight size={14} /></button>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <span className="badge-warning text-[10px]">In Progress</span>
           <button
             onClick={() => exportAllItemsCSV(items, allValues, months, viewMode)}
-            className="flex items-center gap-1 px-2 py-1.5 hover:bg-dark-600 rounded-lg text-slate-500 hover:text-slate-300 transition-colors"
+            className="flex items-center gap-1 px-2 py-1.5 hover:bg-dark-600 rounded-lg text-theme-faint hover:text-theme-secondary transition-colors"
             title="Download table as CSV"
           >
             <FileDown size={14} />
