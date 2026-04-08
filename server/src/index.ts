@@ -81,6 +81,16 @@ app.use('/api/dashboard-actuals', requireAuth, resolveTenant, dashboardActualsRo
 app.use('/api/sync', requireAuth, resolveTenant, syncRoutes);
 app.use('/api/db', requireAuth, resolveTenant, requireAdmin, dbViewerRoutes);
 
+// ─── Client streams (accessible to all authenticated users for their tenant) ─
+app.get('/api/streams', requireAuth, resolveTenant, async (req, res) => {
+  const platformDb = await getPlatformHelper();
+  const streams = platformDb.all(
+    'SELECT id, name, icon, color, sort_order FROM business_streams WHERE client_id = ? AND is_active = 1 ORDER BY sort_order, id',
+    (req as any).clientId
+  );
+  res.json(streams);
+});
+
 // ─── Static files ───────────────────────────────────────────────────────────
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
 app.use(express.static(clientDist));

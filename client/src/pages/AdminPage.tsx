@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import {
   Building2, Users, UserPlus, Plus, Edit3, Power, ChevronRight, ArrowLeft,
-  Eye, EyeOff, CheckCircle, XCircle, Plug, Shield, Trash2
+  Eye, EyeOff, CheckCircle, XCircle, Plug, Shield, Trash2, Copy, KeyRound, BarChart3
 } from 'lucide-react';
 
 interface Client {
@@ -180,9 +180,13 @@ function ClientsPanel() {
 function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCancel: () => void }) {
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
+  const [industry, setIndustry] = useState('custom');
+  const [industries, setIndustries] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<any>(null);
+
+  useEffect(() => { api.get('/admin/industries').then(res => setIndustries(res.data)); }, []);
 
   const autoSlug = (n: string) => {
     setName(n);
@@ -193,7 +197,7 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
     setSaving(true);
     setError('');
     try {
-      const res = await api.post('/admin/clients', { slug, name });
+      const res = await api.post('/admin/clients', { slug, name, industry });
       setResult(res.data);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to create client');
@@ -238,6 +242,26 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
           <input type="text" value={slug} onChange={e => setSlug(e.target.value)}
             placeholder="e.g. apollo-healthcare" className="input font-mono" />
         </div>
+        <div className="col-span-2">
+          <label className="block text-sm font-medium text-slate-400 mb-2">Industry</label>
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
+            {industries.map((ind: any) => (
+              <button
+                key={ind.key}
+                type="button"
+                onClick={() => setIndustry(ind.key)}
+                className={`text-left px-3 py-2.5 rounded-xl border transition-all ${
+                  industry === ind.key
+                    ? 'border-accent-500 bg-accent-500/10 text-accent-400'
+                    : 'border-dark-400/50 bg-dark-600 text-slate-400 hover:border-dark-300'
+                }`}
+              >
+                <div className="text-sm font-medium">{ind.label}</div>
+                <div className="text-[10px] text-slate-500 mt-0.5">{ind.description}</div>
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
       {error && (
         <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-2.5 rounded-xl mb-4 text-sm">{error}</div>
@@ -258,17 +282,24 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
   const [client, setClient] = useState<any>(null);
   const [users, setUsers] = useState<ClientUser[]>([]);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [streams, setStreams] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddUser, setShowAddUser] = useState(false);
+  const [showAddStream, setShowAddStream] = useState(false);
+  const [newStreamName, setNewStreamName] = useState('');
+  const [newStreamColor, setNewStreamColor] = useState('accent');
+  const [resetResult, setResetResult] = useState<{username: string; password: string} | null>(null);
 
   const loadDetail = useCallback(() => {
     Promise.all([
       api.get(`/admin/clients/${slug}`),
       api.get(`/admin/clients/${slug}/integrations`),
-    ]).then(([clientRes, intRes]) => {
+      api.get(`/admin/clients/${slug}/streams`),
+    ]).then(([clientRes, intRes, streamsRes]) => {
       setClient(clientRes.data);
       setUsers(clientRes.data.users || []);
       setIntegrations(intRes.data.catalog || []);
+      setStreams(streamsRes.data);
       setLoading(false);
     });
   }, [slug]);
@@ -288,6 +319,17 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
   const toggleUserActive = async (userId: number, isActive: number) => {
     await api.put(`/admin/clients/${slug}/users/${userId}`, { is_active: !isActive });
     loadDetail();
+  };
+
+  const resetPassword = async (userId: number, username: string) => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    const newPw = Array.from({length: 10}, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    try {
+      await api.put(`/admin/clients/${slug}/users/${userId}`, { password: newPw });
+      setResetResult({ username, password: newPw });
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to reset password');
+    }
   };
 
   if (loading) return (
@@ -311,7 +353,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
             </div>
             <div>
               <h2 className="text-xl font-bold text-white">{client.name}</h2>
-              <p className="text-sm text-slate-500 font-mono">{client.slug}</p>
+              <p className="text-sm text-slate-500 font-mono">{client.slug} · <span className="text-slate-400 font-sans">{client.industry || 'Custom'}</span></p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -370,16 +412,25 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
                       {user.role}
                     </span>
                   </div>
-                  <button
-                    onClick={() => toggleUserActive(user.id, user.is_active)}
-                    className={`text-xs px-2 py-1 rounded-lg transition-all ${
-                      user.is_active
-                        ? 'text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20'
-                        : 'text-red-400 bg-red-500/10 hover:bg-red-500/20'
-                    }`}
-                  >
-                    {user.is_active ? 'Active' : 'Disabled'}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => resetPassword(user.id, user.username)}
+                      className="text-xs px-2 py-1 rounded-lg text-slate-400 bg-dark-500 hover:bg-dark-400 transition-all flex items-center gap-1"
+                      title="Reset Password"
+                    >
+                      <KeyRound size={11} /> Reset PW
+                    </button>
+                    <button
+                      onClick={() => toggleUserActive(user.id, user.is_active)}
+                      className={`text-xs px-2 py-1 rounded-lg transition-all ${
+                        user.is_active
+                          ? 'text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20'
+                          : 'text-red-400 bg-red-500/10 hover:bg-red-500/20'
+                      }`}
+                    >
+                      {user.is_active ? 'Active' : 'Disabled'}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -412,7 +463,102 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
             ))}
           </div>
         </div>
+
+        {/* Revenue Streams */}
+        <div className="card lg:col-span-2">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="font-semibold text-white flex items-center gap-2">
+                <BarChart3 size={16} /> Revenue Streams
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">These drive the dashboard KPI cards for this client</p>
+            </div>
+            <button onClick={() => setShowAddStream(true)} className="flex items-center gap-1.5 text-sm text-accent-400 hover:text-accent-300 font-medium transition-colors">
+              <Plus size={14} /> Add Stream
+            </button>
+          </div>
+
+          {showAddStream && (
+            <div className="bg-dark-600 rounded-xl p-4 mb-4 border border-dark-400/50">
+              <h4 className="text-sm font-semibold text-white mb-3">Add Revenue Stream</h4>
+              <div className="flex gap-3 mb-3">
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Stream Name</label>
+                  <input type="text" value={newStreamName} onChange={e => setNewStreamName(e.target.value)}
+                    placeholder="e.g. Dine-in, Consulting" className="input text-sm" />
+                </div>
+                <div className="w-32">
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Color</label>
+                  <select value={newStreamColor} onChange={e => setNewStreamColor(e.target.value)} className="input text-sm">
+                    <option value="accent">Green</option>
+                    <option value="blue">Blue</option>
+                    <option value="purple">Purple</option>
+                    <option value="amber">Amber</option>
+                  </select>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={async () => {
+                    if (!newStreamName) return;
+                    await api.post(`/admin/clients/${slug}/streams`, { name: newStreamName, color: newStreamColor });
+                    setNewStreamName(''); setShowAddStream(false); loadDetail();
+                  }}
+                  disabled={!newStreamName}
+                  className="btn-primary text-xs px-3 py-2"
+                >Add Stream</button>
+                <button onClick={() => setShowAddStream(false)} className="btn-secondary text-xs px-3 py-2">Cancel</button>
+              </div>
+            </div>
+          )}
+
+          {streams.length === 0 ? (
+            <p className="text-slate-500 text-center py-6 text-sm">No revenue streams configured</p>
+          ) : (
+            <div className="space-y-2">
+              {streams.map((stream: any) => (
+                <div key={stream.id} className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-dark-600 border border-dark-400/30">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-3 h-3 rounded-full ${
+                      stream.color === 'blue' ? 'bg-blue-400' :
+                      stream.color === 'purple' ? 'bg-purple-400' :
+                      stream.color === 'amber' ? 'bg-amber-400' : 'bg-accent-400'
+                    }`} />
+                    <span className="text-sm font-medium text-slate-200">{stream.name}</span>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      if (!confirm(`Delete stream "${stream.name}"?`)) return;
+                      await api.delete(`/admin/clients/${slug}/streams/${stream.id}`);
+                      loadDetail();
+                    }}
+                    className="text-xs text-red-400 hover:text-red-300 px-2 py-1 hover:bg-red-500/10 rounded-lg transition-all"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
+
+      {resetResult && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setResetResult(null)}>
+          <div className="bg-dark-700 rounded-2xl p-6 max-w-sm w-full mx-4 border border-dark-400/50" onClick={e => e.stopPropagation()}>
+            <h3 className="font-semibold text-white mb-3">Password Reset</h3>
+            <p className="text-sm text-slate-400 mb-3">New credentials for <span className="text-accent-400">@{resetResult.username}</span>:</p>
+            <div className="bg-dark-600 rounded-xl p-3 font-mono text-sm text-white mb-4 flex items-center justify-between">
+              <span>{resetResult.password}</span>
+              <button onClick={() => navigator.clipboard.writeText(resetResult.password)} className="text-slate-400 hover:text-accent-400 transition-colors" title="Copy password">
+                <Copy size={14} />
+              </button>
+            </div>
+            <p className="text-xs text-amber-400 mb-4">Save this password — it won't be shown again!</p>
+            <button onClick={() => setResetResult(null)} className="btn-primary text-sm w-full">Done</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -427,18 +573,43 @@ function AddUserForm({ slug, onAdded, onCancel }: { slug: string; onAdded: () =>
   const [showPw, setShowPw] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [createdUser, setCreatedUser] = useState<{username: string; password: string} | null>(null);
 
   const save = async () => {
     setSaving(true);
     setError('');
     try {
       await api.post(`/admin/clients/${slug}/users`, { username, password, display_name: displayName, role });
-      onAdded();
+      setCreatedUser({ username, password });
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed');
     }
     setSaving(false);
   };
+
+  if (createdUser) {
+    return (
+      <div className="bg-dark-600 rounded-xl p-4 mb-4 border border-accent-500/30">
+        <div className="flex items-center gap-3 mb-3">
+          <div className="w-8 h-8 rounded-xl bg-accent-500/15 flex items-center justify-center">
+            <CheckCircle size={16} className="text-accent-400" />
+          </div>
+          <h4 className="text-sm font-semibold text-accent-300">User Created!</h4>
+        </div>
+        <div className="bg-dark-700 rounded-xl p-3 mb-3">
+          <p className="text-white font-mono text-sm">Username: <span className="text-accent-400">@{createdUser.username}</span></p>
+          <div className="flex items-center justify-between mt-1">
+            <p className="text-white font-mono text-sm">Password: <span className="text-accent-400">{createdUser.password}</span></p>
+            <button onClick={() => navigator.clipboard.writeText(createdUser.password)} className="text-slate-400 hover:text-accent-400 transition-colors" title="Copy password">
+              <Copy size={14} />
+            </button>
+          </div>
+        </div>
+        <p className="text-xs text-amber-400 mb-3">Save these credentials — the password won't be shown again!</p>
+        <button onClick={onAdded} className="btn-primary text-xs px-3 py-2">Done</button>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-dark-600 rounded-xl p-4 mb-4 border border-dark-400/50">
@@ -486,6 +657,7 @@ function TeamPanel() {
   const [team, setTeam] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [resetResult, setResetResult] = useState<{username: string; password: string} | null>(null);
 
   const loadTeam = useCallback(() => {
     api.get('/admin/team').then(res => {
@@ -495,6 +667,17 @@ function TeamPanel() {
   }, []);
 
   useEffect(() => { loadTeam(); }, [loadTeam]);
+
+  const resetPassword = async (id: number, username: string) => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    const newPw = Array.from({length: 10}, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    try {
+      await api.put(`/admin/team/${id}`, { password: newPw });
+      setResetResult({ username, password: newPw });
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to reset password');
+    }
+  };
 
   return (
     <div className="card">
@@ -539,15 +722,41 @@ function TeamPanel() {
                   <span className="text-[10px] font-medium text-purple-400">{member.role}</span>
                 </div>
               </div>
-              <span className={`text-xs px-2 py-1 rounded-lg ${
-                member.is_active
-                  ? 'text-emerald-400 bg-emerald-500/10'
-                  : 'text-red-400 bg-red-500/10'
-              }`}>
-                {member.is_active ? 'Active' : 'Disabled'}
-              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => resetPassword(member.id, member.username)}
+                  className="text-xs px-2 py-1 rounded-lg text-slate-400 bg-dark-500 hover:bg-dark-400 transition-all flex items-center gap-1"
+                  title="Reset Password"
+                >
+                  <KeyRound size={11} /> Reset PW
+                </button>
+                <span className={`text-xs px-2 py-1 rounded-lg ${
+                  member.is_active
+                    ? 'text-emerald-400 bg-emerald-500/10'
+                    : 'text-red-400 bg-red-500/10'
+                }`}>
+                  {member.is_active ? 'Active' : 'Disabled'}
+                </span>
+              </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {resetResult && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setResetResult(null)}>
+          <div className="bg-dark-700 rounded-2xl p-6 max-w-sm w-full mx-4 border border-dark-400/50" onClick={e => e.stopPropagation()}>
+            <h3 className="font-semibold text-white mb-3">Password Reset</h3>
+            <p className="text-sm text-slate-400 mb-3">New credentials for <span className="text-accent-400">@{resetResult.username}</span>:</p>
+            <div className="bg-dark-600 rounded-xl p-3 font-mono text-sm text-white mb-4 flex items-center justify-between">
+              <span>{resetResult.password}</span>
+              <button onClick={() => navigator.clipboard.writeText(resetResult.password)} className="text-slate-400 hover:text-accent-400 transition-colors" title="Copy password">
+                <Copy size={14} />
+              </button>
+            </div>
+            <p className="text-xs text-amber-400 mb-4">Save this password — it won't be shown again!</p>
+            <button onClick={() => setResetResult(null)} className="btn-primary text-sm w-full">Done</button>
+          </div>
         </div>
       )}
     </div>
@@ -563,18 +772,43 @@ function AddTeamMemberForm({ onAdded, onCancel }: { onAdded: () => void; onCance
   const [showPw, setShowPw] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [createdUser, setCreatedUser] = useState<{username: string; password: string} | null>(null);
 
   const save = async () => {
     setSaving(true);
     setError('');
     try {
       await api.post('/admin/team', { username, password, display_name: displayName, role: 'super_admin' });
-      onAdded();
+      setCreatedUser({ username, password });
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed');
     }
     setSaving(false);
   };
+
+  if (createdUser) {
+    return (
+      <div className="bg-dark-600 rounded-xl p-4 mb-4 border border-accent-500/30">
+        <div className="flex items-center gap-3 mb-3">
+          <div className="w-8 h-8 rounded-xl bg-accent-500/15 flex items-center justify-center">
+            <CheckCircle size={16} className="text-accent-400" />
+          </div>
+          <h4 className="text-sm font-semibold text-accent-300">Team Member Created!</h4>
+        </div>
+        <div className="bg-dark-700 rounded-xl p-3 mb-3">
+          <p className="text-white font-mono text-sm">Username: <span className="text-accent-400">@{createdUser.username}</span></p>
+          <div className="flex items-center justify-between mt-1">
+            <p className="text-white font-mono text-sm">Password: <span className="text-accent-400">{createdUser.password}</span></p>
+            <button onClick={() => navigator.clipboard.writeText(createdUser.password)} className="text-slate-400 hover:text-accent-400 transition-colors" title="Copy password">
+              <Copy size={14} />
+            </button>
+          </div>
+        </div>
+        <p className="text-xs text-amber-400 mb-3">Save these credentials — the password won't be shown again!</p>
+        <button onClick={onAdded} className="btn-primary text-xs px-3 py-2">Done</button>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-dark-600 rounded-xl p-4 mb-4 border border-dark-400/50">

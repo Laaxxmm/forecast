@@ -4,10 +4,17 @@ import { getPlatformHelper } from '../db/platform-connection.js';
 import { getClientHelper, getClientsDir } from '../db/connection.js';
 import { initializeSchema } from '../db/schema.js';
 import { seedDatabase } from '../db/seed.js';
+import { INDUSTRY_TEMPLATES } from '../config/industry-templates.js';
 import path from 'path';
 import fs from 'fs';
 
 const router = Router();
+
+// ─── Industry Templates ────────────────────────────────────────────────────
+
+router.get('/industries', (_req: Request, res: Response) => {
+  res.json(INDUSTRY_TEMPLATES);
+});
 
 // ─── Client Management ──────────────────────────────────────────────────────
 
@@ -30,8 +37,9 @@ router.get('/clients/:slug', async (req: Request, res: Response) => {
 
   const users = db.all('SELECT id, username, display_name, role, is_active, created_at FROM client_users WHERE client_id = ?', client.id);
   const integrations = db.all('SELECT * FROM client_integrations WHERE client_id = ?', client.id);
+  const streams = db.all('SELECT * FROM business_streams WHERE client_id = ? ORDER BY sort_order, id', client.id);
 
-  res.json({ ...client, users, integrations });
+  res.json({ ...client, users, integrations, streams });
 });
 
 router.post('/clients', async (req: Request, res: Response) => {
@@ -67,6 +75,21 @@ router.post('/clients', async (req: Request, res: Response) => {
     [clientId, 'admin', adminHash, `${name} Admin`, 'admin']
   );
 
+  // Save industry
+  const industry = req.body.industry || 'custom';
+  db.run('UPDATE clients SET industry = ? WHERE id = ?', [industry, clientId]);
+
+  // Create default streams from industry template
+  const template = INDUSTRY_TEMPLATES.find(t => t.key === industry);
+  if (template) {
+    template.streams.forEach((stream, idx) => {
+      db.run(
+        'INSERT INTO business_streams (client_id, name, icon, color, sort_order) VALUES (?, ?, ?, ?, ?)',
+        [clientId, stream.name, stream.icon, stream.color, idx]
+      );
+    });
+  }
+
   // Enable manual upload by default
   db.run(
     'INSERT INTO client_integrations (client_id, integration_key, is_enabled) VALUES (?, ?, ?)',
@@ -84,6 +107,7 @@ router.post('/clients', async (req: Request, res: Response) => {
     id: clientId,
     slug,
     name,
+    industry,
     db_filename: dbFilename,
     message: `Client created. Default login: admin / admin123`,
   });
@@ -218,6 +242,62 @@ router.put('/clients/:slug/integrations/:key', async (req: Request, res: Respons
     );
   }
 
+  res.json({ ok: true });
+});
+
+// ─── Business Stream Management ────────────────────────────────────────────
+
+router.get('/clients/:slug/streams', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+  const streams = db.all('SELECT * FROM business_streams WHERE client_id = ? ORDER BY sort_order, id', client.id);
+  res.json(streams);
+});
+
+router.post('/clients/:slug/streams', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const { name, icon, color } = req.body;
+  if (!name) return res.status(400).json({ error: 'name is required' });
+
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  const maxOrder = db.get('SELECT MAX(sort_order) as max_order FROM business_streams WHERE client_id = ?', client.id);
+  const sortOrder = (maxOrder?.max_order || 0) + 1;
+
+  const result = db.run(
+    'INSERT INTO business_streams (client_id, name, icon, color, sort_order) VALUES (?, ?, ?, ?, ?)',
+    [client.id, name, icon || 'BarChart3', color || 'accent', sortOrder]
+  );
+  res.status(201).json({ id: result.lastInsertRowid, name, icon: icon || 'BarChart3', color: color || 'accent', sort_order: sortOrder });
+});
+
+router.put('/clients/:slug/streams/:id', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const { name, icon, color, sort_order, is_active } = req.body;
+  const streamId = parseInt(req.params.id);
+
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  if (name !== undefined) db.run('UPDATE business_streams SET name = ? WHERE id = ? AND client_id = ?', [name, streamId, client.id]);
+  if (icon !== undefined) db.run('UPDATE business_streams SET icon = ? WHERE id = ? AND client_id = ?', [icon, streamId, client.id]);
+  if (color !== undefined) db.run('UPDATE business_streams SET color = ? WHERE id = ? AND client_id = ?', [color, streamId, client.id]);
+  if (sort_order !== undefined) db.run('UPDATE business_streams SET sort_order = ? WHERE id = ? AND client_id = ?', [sort_order, streamId, client.id]);
+  if (is_active !== undefined) db.run('UPDATE business_streams SET is_active = ? WHERE id = ? AND client_id = ?', [is_active ? 1 : 0, streamId, client.id]);
+
+  res.json({ ok: true });
+});
+
+router.delete('/clients/:slug/streams/:id', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const streamId = parseInt(req.params.id);
+
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  db.run('DELETE FROM business_streams WHERE id = ? AND client_id = ?', [streamId, client.id]);
   res.json({ ok: true });
 });
 

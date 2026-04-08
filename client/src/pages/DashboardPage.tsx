@@ -3,7 +3,17 @@ import { useNavigate } from 'react-router-dom';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, Area, AreaChart } from 'recharts';
 import api from '../api/client';
 import { formatINR, formatNumber, getMonthLabel } from '../utils/format';
-import { TrendingUp, TrendingDown, Users, IndianRupee, Pill, Stethoscope, Activity } from 'lucide-react';
+import {
+  TrendingUp, TrendingDown, Users, IndianRupee, Pill, Stethoscope, Activity,
+  BarChart3, Briefcase, RefreshCcw, GraduationCap, Store, Globe, Warehouse,
+  UtensilsCrossed, Truck, ChefHat, ShoppingBag, FlaskConical
+} from 'lucide-react';
+
+const ICON_MAP: Record<string, any> = {
+  Stethoscope, Pill, BarChart3, Briefcase, RefreshCcw, GraduationCap,
+  Store, Globe, Warehouse, UtensilsCrossed, Truck, ChefHat, ShoppingBag,
+  FlaskConical, TrendingUp, Users, IndianRupee, Activity,
+};
 
 interface OverviewData {
   fy: any;
@@ -49,9 +59,46 @@ function KPICard({ title, value, subtitle, icon: Icon, trend, color = 'accent', 
   );
 }
 
+function getStreamData(streamName: string, data: OverviewData): {
+  revenue: number; subtitle: string; trend?: number; detailPath?: string;
+} {
+  const lower = streamName.toLowerCase();
+
+  if (lower === 'clinic') {
+    return {
+      revenue: data.clinic.total_revenue || 0,
+      subtitle: `${formatNumber(data.clinic.total_transactions || 0)} transactions`,
+      trend: data.clinic.budget_total > 0
+        ? ((data.clinic.total_revenue - data.clinic.budget_total) / data.clinic.budget_total) * 100
+        : undefined,
+      detailPath: '/clinic',
+    };
+  }
+
+  if (lower === 'pharmacy') {
+    return {
+      revenue: data.pharmacy.total_sales || 0,
+      subtitle: `${formatNumber(data.pharmacy.total_transactions || 0)} transactions`,
+      trend: data.pharmacy.budget_total > 0
+        ? ((data.pharmacy.total_sales - data.pharmacy.budget_total) / data.pharmacy.budget_total) * 100
+        : undefined,
+      detailPath: '/pharmacy',
+    };
+  }
+
+  // For streams without actual data yet, show placeholder
+  return {
+    revenue: 0,
+    subtitle: 'No data imported yet',
+    trend: undefined,
+    detailPath: undefined,
+  };
+}
+
 export default function DashboardPage() {
   const navigate = useNavigate();
   const [data, setData] = useState<OverviewData | null>(null);
+  const [streams, setStreams] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -59,6 +106,7 @@ export default function DashboardPage() {
       setData(res.data);
       setLoading(false);
     }).catch(() => setLoading(false));
+    api.get('/streams').then(res => setStreams(res.data)).catch(() => {});
   }, []);
 
   if (loading) return (
@@ -76,11 +124,6 @@ export default function DashboardPage() {
       <span className="text-slate-500">No data available</span>
     </div>
   );
-
-  const clinicBudgetVar = data.clinic.budget_total > 0
-    ? ((data.clinic.total_revenue - data.clinic.budget_total) / data.clinic.budget_total) * 100 : undefined;
-  const pharmaBudgetVar = data.pharmacy.budget_total > 0
-    ? ((data.pharmacy.total_sales - data.pharmacy.budget_total) / data.pharmacy.budget_total) * 100 : undefined;
 
   // Build monthly trend data
   const monthlyMap: Record<string, any> = {};
@@ -111,41 +154,41 @@ export default function DashboardPage() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
+        {/* Total Revenue card - always shown */}
         <KPICard
           title="Total Revenue"
           value={formatINR(data.combined.total_revenue)}
-          subtitle="Clinic + Pharmacy"
+          subtitle="All streams"
           icon={IndianRupee}
           color="accent"
           trend={data.combined.total_budget > 0
             ? ((data.combined.total_revenue - data.combined.total_budget) / data.combined.total_budget) * 100
             : undefined}
         />
-        <KPICard
-          title="Clinic Revenue"
-          value={formatINR(data.clinic.total_revenue || 0)}
-          subtitle={`${formatNumber(data.clinic.total_transactions || 0)} transactions`}
-          icon={Stethoscope}
-          color="blue"
-          trend={clinicBudgetVar}
-          onClick={() => navigate('/clinic')}
-        />
-        <KPICard
-          title="Pharmacy Sales"
-          value={formatINR(data.pharmacy.total_sales || 0)}
-          subtitle={`${formatNumber(data.pharmacy.total_transactions || 0)} transactions`}
-          icon={Pill}
-          color="purple"
-          trend={pharmaBudgetVar}
-          onClick={() => navigate('/pharmacy')}
-        />
-        <KPICard
-          title="Unique Patients"
-          value={formatNumber(data.clinic.unique_patients || 0)}
-          subtitle="Clinic patients"
-          icon={Users}
-          color="amber"
-        />
+
+        {/* Dynamic stream cards */}
+        {streams.length > 0 ? (
+          streams.map((stream: any) => {
+            const streamData = getStreamData(stream.name, data);
+            const StreamIcon = ICON_MAP[stream.icon] || BarChart3;
+            return (
+              <KPICard
+                key={stream.id}
+                title={`${stream.name} Revenue`}
+                value={formatINR(streamData.revenue)}
+                subtitle={streamData.subtitle}
+                icon={StreamIcon}
+                color={stream.color}
+                trend={streamData.trend}
+                onClick={streamData.detailPath ? () => navigate(streamData.detailPath!) : undefined}
+              />
+            );
+          })
+        ) : (
+          <div className="card border border-dashed border-slate-700 flex items-center justify-center col-span-1 md:col-span-1">
+            <p className="text-sm text-slate-500 text-center">Configure revenue streams in Admin Panel</p>
+          </div>
+        )}
       </div>
 
       {/* Charts Row */}

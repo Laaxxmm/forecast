@@ -60,6 +60,23 @@ export async function seedPlatformDatabase(platformDb: DbHelper) {
       [client.id, 'oneglance', 1]
     );
 
+    // Set industry and create default business streams
+    try {
+      platformDb.run("UPDATE clients SET industry = 'healthcare' WHERE slug = 'magnacode'");
+      const magnaClient = platformDb.get('SELECT id FROM clients WHERE slug = ?', 'magnacode');
+      if (magnaClient) {
+        const existingStreams = platformDb.get('SELECT COUNT(*) as cnt FROM business_streams WHERE client_id = ?', magnaClient.id);
+        if (existingStreams.cnt === 0) {
+          platformDb.run('INSERT INTO business_streams (client_id, name, icon, color, sort_order) VALUES (?, ?, ?, ?, ?)', [magnaClient.id, 'Clinic', 'Stethoscope', 'blue', 0]);
+          platformDb.run('INSERT INTO business_streams (client_id, name, icon, color, sort_order) VALUES (?, ?, ?, ?, ?)', [magnaClient.id, 'Pharmacy', 'Pill', 'purple', 1]);
+          console.log(`[Platform Seed] Default healthcare streams created for magnacode`);
+        }
+      }
+    } catch (e) {
+      // business_streams table may not exist yet on first run
+      console.log('[Platform Seed] Skipping stream seed (table may not exist yet)');
+    }
+
     console.log(`[Platform Seed] Client "${slug}" created with user "${adminUser}"`);
 
     // 3. Initialize client DB if it doesn't exist

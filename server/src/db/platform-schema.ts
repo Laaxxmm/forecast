@@ -47,5 +47,25 @@ export function initializePlatformSchema(db: DbHelper) {
       config TEXT,
       UNIQUE(client_id, integration_key)
     );
+
+    -- Business streams (revenue sources) per client
+    CREATE TABLE IF NOT EXISTS business_streams (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id INTEGER NOT NULL REFERENCES clients(id),
+      name TEXT NOT NULL,
+      icon TEXT DEFAULT 'BarChart3',
+      color TEXT DEFAULT 'accent',
+      sort_order INTEGER DEFAULT 0,
+      is_active INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(client_id, name)
+    );
   `);
+
+  // Add industry column to clients (safe migration for existing DBs)
+  try {
+    db.exec("ALTER TABLE clients ADD COLUMN industry TEXT DEFAULT 'custom'");
+  } catch (e) {
+    // Column already exists
+  }
 }
