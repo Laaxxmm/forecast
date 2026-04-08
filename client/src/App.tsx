@@ -4,6 +4,7 @@ import api from './api/client';
 import { ThemeProvider } from './contexts/ThemeContext';
 import Layout from './components/layout/Layout';
 import LoginPage from './pages/LoginPage';
+import DesignShowcase from './pages/DesignShowcase';
 import DashboardModulePage from './pages/DashboardModulePage';
 import DashboardPage from './pages/DashboardPage';
 import ForecastModulePage from './pages/ForecastModulePage';
@@ -98,6 +99,7 @@ export default function App() {
     <ThemeProvider>
     <BrowserRouter>
       <Routes>
+        <Route path="/design" element={<DesignShowcase />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/select-client" element={<ProtectedRoute><SelectClientPage /></ProtectedRoute>} />
         <Route path="/modules" element={<ProtectedRoute><ModuleSelectPage /></ProtectedRoute>} />
