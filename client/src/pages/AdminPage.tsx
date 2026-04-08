@@ -510,6 +510,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
               { key: 'forecast_ops', name: 'Forecast & Operations', desc: 'Build forecasts, link actuals, integrated reports' },
               { key: 'vcfo_portal', name: 'VCFO Portal', desc: 'Comprehensive Virtual CFO portal' },
               { key: 'audit_view', name: 'Audit View', desc: 'Audit support and compliance tools' },
+              { key: 'litigation_tool', name: 'Litigation Tool', desc: 'Track notices and prepare legal responses' },
             ].map(mod => {
               const m = modules.find(x => x.module_key === mod.key);
               const enabled = !!m?.is_enabled;

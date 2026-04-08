@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BarChart3, TrendingUp, ShieldCheck, ClipboardCheck, ArrowLeft, Lock } from 'lucide-react';
+import { BarChart3, TrendingUp, ShieldCheck, ClipboardCheck, Scale, ArrowLeft, Lock } from 'lucide-react';
 
 const MODULE_CATALOG = [
   {
@@ -25,6 +25,14 @@ const MODULE_CATALOG = [
     description: 'Audit support tools including compliance tracking, document management, and audit trails.',
     icon: ClipboardCheck,
     color: 'purple',
+    path: null, // Coming soon
+  },
+  {
+    key: 'litigation_tool',
+    name: 'Litigation Tool',
+    description: 'Track all legal notices, manage case timelines, and prepare responses with your team.',
+    icon: Scale,
+    color: 'amber',
     path: null, // Coming soon
   },
 ];
@@ -54,6 +62,7 @@ export default function ModuleSelectPage() {
     accent: { bg: 'bg-accent-500/10', border: 'border-accent-500/30', icon: 'text-accent-400', glow: 'shadow-[0_0_30px_rgba(16,185,129,0.1)]' },
     blue: { bg: 'bg-blue-500/10', border: 'border-blue-500/30', icon: 'text-blue-400', glow: 'shadow-[0_0_30px_rgba(59,130,246,0.1)]' },
     purple: { bg: 'bg-purple-500/10', border: 'border-purple-500/30', icon: 'text-purple-400', glow: 'shadow-[0_0_30px_rgba(168,85,247,0.1)]' },
+    amber: { bg: 'bg-amber-500/10', border: 'border-amber-500/30', icon: 'text-amber-400', glow: 'shadow-[0_0_30px_rgba(245,158,11,0.1)]' },
   };
 
   return (
@@ -73,7 +82,7 @@ export default function ModuleSelectPage() {
       </div>
 
       {/* Module Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl w-full">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-5xl w-full">
         {MODULE_CATALOG.map(mod => {
           const enabled = enabledModules.includes(mod.key);
           const colors = colorMap[mod.color] || colorMap.accent;

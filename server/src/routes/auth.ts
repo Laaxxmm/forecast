@@ -78,6 +78,7 @@ router.post('/login', loginLimiter, async (req, res) => {
       { key: 'forecast_ops', enabled: 1 },
       { key: 'vcfo_portal', enabled: 0 },
       { key: 'audit_view', enabled: 0 },
+      { key: 'litigation_tool', enabled: 0 },
     ];
     for (const m of defaultModules) {
       platformDb.run(
