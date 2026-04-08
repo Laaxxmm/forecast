@@ -2,12 +2,13 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api/client';
 import { Stethoscope, Pill, ShoppingCart, Upload, CheckCircle, AlertCircle, Trash2,
          RefreshCw, Cloud, Settings as SettingsIcon, Calendar,
-         LogIn, Building2, FileSearch, CalendarRange, Download, Database, Check, XCircle } from 'lucide-react';
+         LogIn, Building2, FileSearch, CalendarRange, Download, Database, Check, XCircle,
+         Phone, KeyRound, Briefcase } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
-type Source = 'healthplix' | 'oneglance-sales' | 'oneglance-purchase';
+type Source = 'healthplix' | 'oneglance-sales' | 'oneglance-purchase' | 'turia';
 type Mode = 'upload' | 'sync';
-type SyncSource = 'healthplix' | 'oneglance';
+type SyncSource = 'healthplix' | 'oneglance' | 'turia';
 
 interface ImportLog {
   id: number;
@@ -24,6 +25,7 @@ const allSources: { key: Source; label: string; desc: string; icon: any; endpoin
   { key: 'healthplix', label: 'Healthplix', desc: 'Clinic billing report', icon: Stethoscope, endpoint: '/import/healthplix', integration: 'healthplix' },
   { key: 'oneglance-sales', label: 'Oneglance Sales', desc: 'Pharmacy sales report', icon: Pill, endpoint: '/import/oneglance-sales', integration: 'oneglance' },
   { key: 'oneglance-purchase', label: 'Oneglance Purchase', desc: 'Pharmacy purchase report', icon: ShoppingCart, endpoint: '/import/oneglance-purchase', integration: 'oneglance' },
+  { key: 'turia', label: 'Turia Invoices', desc: 'Consultancy invoice data', icon: Briefcase, endpoint: '/import/turia', integration: 'turia' },
 ];
 
 function fmtDate(d: Date): string {
@@ -60,6 +62,16 @@ const OG_SYNC_STEPS = [
   { key: 'parsing',  label: 'Parsing data',         desc: 'Reading rows from CSV',            icon: FileSearch },
   { key: 'saving',   label: 'Saving to database',   desc: 'Importing records',                icon: Database },
   { key: 'complete', label: 'Complete',              desc: 'Sync finished successfully',       icon: Check },
+];
+
+const TURIA_SYNC_STEPS = [
+  { key: 'login',       label: 'Opening login',       desc: 'Navigating to Turia login',       icon: LogIn },
+  { key: 'waiting_otp', label: 'Waiting for OTP',     desc: 'Enter OTP sent to your phone',    icon: KeyRound },
+  { key: 'navigate',    label: 'Opening invoices',    desc: 'Navigating to invoice list',      icon: FileSearch },
+  { key: 'download',    label: 'Downloading data',    desc: 'Exporting invoice data',          icon: Download },
+  { key: 'parsing',     label: 'Parsing data',        desc: 'Reading invoice rows',            icon: FileSearch },
+  { key: 'saving',      label: 'Saving to database',  desc: 'Importing invoices',              icon: Database },
+  { key: 'complete',    label: 'Complete',             desc: 'Sync finished successfully',      icon: Check },
 ];
 
 function getStepStatus(stepKey: string, currentStep: string, isError: boolean, steps: typeof HP_SYNC_STEPS): 'done' | 'active' | 'pending' | 'error' {
@@ -174,16 +186,21 @@ export default function ImportPage() {
   const sources = allSources.filter(s => enabledIntegrations.includes(s.integration));
   const showHpSync = enabledIntegrations.includes('healthplix');
   const showOgSync = enabledIntegrations.includes('oneglance');
+  const showTuriaSync = enabledIntegrations.includes('turia');
 
-  const [syncSource, setSyncSource] = useState<SyncSource>(showHpSync ? 'healthplix' : 'oneglance');
+  const [syncSource, setSyncSource] = useState<SyncSource>(showHpSync ? 'healthplix' : showOgSync ? 'oneglance' : 'turia');
   const [syncDates, setSyncDates] = useState(getDefaultDates);
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<any>(null);
   const [hasHpCreds, setHasHpCreds] = useState<boolean | null>(null);
   const [hasOgCreds, setHasOgCreds] = useState<boolean | null>(null);
+  const [hasTuriaCreds, setHasTuriaCreds] = useState<boolean | null>(null);
   const [ogReportType, setOgReportType] = useState<'sales' | 'purchase' | 'both'>('both');
+  const [turiaOtp, setTuriaOtp] = useState('');
+  const [otpSubmitting, setOtpSubmitting] = useState(false);
+  const [turiaFY, setTuriaFY] = useState('2025-26');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const hasCredentials = syncSource === 'healthplix' ? hasHpCreds : hasOgCreds;
+  const hasCredentials = syncSource === 'healthplix' ? hasHpCreds : syncSource === 'oneglance' ? hasOgCreds : hasTuriaCreds;
 
   const loadHistory = useCallback(() => {
     api.get('/import/history').then(res => setHistory(res.data));
@@ -197,6 +214,12 @@ export default function ImportPage() {
     }
     if (showOgSync) {
       api.get('/sync/credentials/oneglance').then(res => setHasOgCreds(res.data.hasPassword && !!res.data.username)).catch(() => setHasOgCreds(false));
+    }
+    if (showTuriaSync) {
+      api.get('/sync/credentials/turia').then(res => {
+        setHasTuriaCreds(res.data.hasCredentials);
+        if (res.data.financialYear) setTuriaFY(res.data.financialYear);
+      }).catch(() => setHasTuriaCreds(false));
     }
   }, []);
 
@@ -231,16 +254,22 @@ export default function ImportPage() {
 
   const reset = () => {
     setSelected(null); setFile(null); setResult(null); setError(''); setSyncStatus(null); setSyncing(false);
+    setTuriaOtp(''); setOtpSubmitting(false);
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   };
 
   const startSync = async () => {
     setSyncing(true); setError(''); setSyncStatus({ step: 'starting', message: 'Starting sync...', pct: 0 });
+    setTuriaOtp('');
+    const isTuria = syncSource === 'turia';
     const isOg = syncSource === 'oneglance';
-    const endpoint = isOg ? '/sync/oneglance' : '/sync/healthplix';
-    const statusEndpoint = isOg ? '/sync/oneglance/status' : '/sync/healthplix/status';
+    const endpoint = isTuria ? '/sync/turia' : isOg ? '/sync/oneglance' : '/sync/healthplix';
+    const statusEndpoint = isTuria ? '/sync/turia/status' : isOg ? '/sync/oneglance/status' : '/sync/healthplix/status';
     try {
-      await api.post(endpoint, { fromDate: syncDates.from, toDate: syncDates.to, ...(isOg && { reportType: ogReportType }) });
+      await api.post(endpoint, isTuria
+        ? { financialYear: turiaFY }
+        : { fromDate: syncDates.from, toDate: syncDates.to, ...(isOg && { reportType: ogReportType }) }
+      );
       pollRef.current = setInterval(async () => {
         try {
           const res = await api.get(statusEndpoint);
@@ -257,12 +286,25 @@ export default function ImportPage() {
     } catch (err: any) { setSyncing(false); setError(err.response?.data?.error || 'Failed to start sync'); }
   };
 
+  const submitOtp = async () => {
+    if (!turiaOtp || turiaOtp.length < 4) return;
+    setOtpSubmitting(true);
+    try {
+      await api.post('/sync/turia/otp', { otp: turiaOtp });
+      setTuriaOtp('');
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to submit OTP');
+    } finally {
+      setOtpSubmitting(false);
+    }
+  };
+
   useEffect(() => { return () => { if (pollRef.current) clearInterval(pollRef.current); }; }, []);
 
   return (
     <div className="animate-fade-in">
       <h1 className="text-2xl font-bold text-theme-heading mb-1">Import Data</h1>
-      <p className="text-theme-faint text-sm mb-6">Upload Excel reports{(showHpSync || showOgSync) ? ' or sync directly from your integrations' : ''}</p>
+      <p className="text-theme-faint text-sm mb-6">Upload Excel reports{(showHpSync || showOgSync || showTuriaSync) ? ' or sync directly from your integrations' : ''}</p>
 
       {/* Mode Toggle */}
       <div className="flex gap-2 mb-6">
@@ -276,7 +318,7 @@ export default function ImportPage() {
         >
           <Upload size={16} /> Upload File
         </button>
-        {(showHpSync || showOgSync) && (
+        {(showHpSync || showOgSync || showTuriaSync) && (
           <button
             onClick={() => { setMode('sync'); reset(); }}
             className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
@@ -357,51 +399,73 @@ export default function ImportPage() {
       {/* SYNC MODE */}
       {mode === 'sync' && !result && (
         <div className="card mb-8">
-          {(showHpSync && showOgSync) && (
+          {([showHpSync, showOgSync, showTuriaSync].filter(Boolean).length > 1) && (
             <div className="flex gap-3 mb-5">
-              <button
-                onClick={() => { setSyncSource('healthplix'); setSyncStatus(null); setError(''); }}
-                disabled={syncing}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex-1 ${
-                  syncSource === 'healthplix'
-                    ? 'bg-accent-500/10 border-2 border-accent-500/50 text-accent-400'
-                    : 'bg-dark-600 border border-dark-400/50 text-theme-muted hover:border-dark-300'
-                }`}
-              >
-                <Stethoscope size={18} /> Healthplix
-                <span className="text-xs text-theme-faint ml-auto">Clinic</span>
-              </button>
-              <button
-                onClick={() => { setSyncSource('oneglance'); setSyncStatus(null); setError(''); }}
-                disabled={syncing}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex-1 ${
-                  syncSource === 'oneglance'
-                    ? 'bg-purple-500/10 border-2 border-purple-500/50 text-purple-400'
-                    : 'bg-dark-600 border border-dark-400/50 text-theme-muted hover:border-dark-300'
-                }`}
-              >
-                <Pill size={18} /> Oneglance
-                <span className="text-xs text-theme-faint ml-auto">Pharmacy</span>
-              </button>
+              {showHpSync && (
+                <button
+                  onClick={() => { setSyncSource('healthplix'); setSyncStatus(null); setError(''); }}
+                  disabled={syncing}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex-1 ${
+                    syncSource === 'healthplix'
+                      ? 'bg-accent-500/10 border-2 border-accent-500/50 text-accent-400'
+                      : 'bg-dark-600 border border-dark-400/50 text-theme-muted hover:border-dark-300'
+                  }`}
+                >
+                  <Stethoscope size={18} /> Healthplix
+                  <span className="text-xs text-theme-faint ml-auto">Clinic</span>
+                </button>
+              )}
+              {showOgSync && (
+                <button
+                  onClick={() => { setSyncSource('oneglance'); setSyncStatus(null); setError(''); }}
+                  disabled={syncing}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex-1 ${
+                    syncSource === 'oneglance'
+                      ? 'bg-purple-500/10 border-2 border-purple-500/50 text-purple-400'
+                      : 'bg-dark-600 border border-dark-400/50 text-theme-muted hover:border-dark-300'
+                  }`}
+                >
+                  <Pill size={18} /> Oneglance
+                  <span className="text-xs text-theme-faint ml-auto">Pharmacy</span>
+                </button>
+              )}
+              {showTuriaSync && (
+                <button
+                  onClick={() => { setSyncSource('turia'); setSyncStatus(null); setError(''); }}
+                  disabled={syncing}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex-1 ${
+                    syncSource === 'turia'
+                      ? 'bg-blue-500/10 border-2 border-blue-500/50 text-blue-400'
+                      : 'bg-dark-600 border border-dark-400/50 text-theme-muted hover:border-dark-300'
+                  }`}
+                >
+                  <Briefcase size={18} /> Turia
+                  <span className="text-xs text-theme-faint ml-auto">Consultancy</span>
+                </button>
+              )}
             </div>
           )}
 
           <div className="flex items-center gap-3 mb-4">
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-              syncSource === 'healthplix' ? 'bg-accent-500/10' : 'bg-purple-500/10'
+              syncSource === 'healthplix' ? 'bg-accent-500/10' : syncSource === 'turia' ? 'bg-blue-500/10' : 'bg-purple-500/10'
             }`}>
               {syncSource === 'healthplix'
                 ? <Stethoscope size={20} className="text-accent-400" />
+                : syncSource === 'turia'
+                ? <Briefcase size={20} className="text-blue-400" />
                 : <Pill size={20} className="text-purple-400" />
               }
             </div>
             <div>
               <h3 className="font-semibold text-theme-heading">
-                Sync from {syncSource === 'healthplix' ? 'Healthplix' : 'Oneglance'}
+                Sync from {syncSource === 'healthplix' ? 'Healthplix' : syncSource === 'turia' ? 'Turia' : 'Oneglance'}
               </h3>
               <p className="text-sm text-theme-faint">
                 {syncSource === 'healthplix'
                   ? 'Auto-fetch clinic billing report via browser automation'
+                  : syncSource === 'turia'
+                  ? 'Auto-fetch consultancy invoices via OTP-based login'
                   : 'Auto-fetch pharmacy sales/purchase reports via browser automation'
                 }
               </p>
@@ -413,7 +477,7 @@ export default function ImportPage() {
               <SettingsIcon size={18} className="text-amber-400 flex-shrink-0" />
               <div className="flex-1">
                 <p className="text-sm text-amber-300 font-medium">
-                  {syncSource === 'healthplix' ? 'Healthplix' : 'Oneglance'} credentials not configured
+                  {syncSource === 'healthplix' ? 'Healthplix' : syncSource === 'turia' ? 'Turia' : 'Oneglance'} credentials not configured
                 </p>
                 <p className="text-xs text-amber-400/60 mt-0.5">Set up your login details in Settings first</p>
               </div>
@@ -425,32 +489,49 @@ export default function ImportPage() {
 
           {hasCredentials && (
             <>
-              <div className="grid grid-cols-2 gap-4 mb-4">
-                <div>
+              {/* Date range for HP/OG, FY selector for Turia */}
+              {syncSource === 'turia' ? (
+                <div className="mb-4">
                   <label className="block text-sm font-medium text-theme-muted mb-1.5">
-                    <Calendar size={14} className="inline mr-1" /> From Date
+                    <Calendar size={14} className="inline mr-1" /> Financial Year
                   </label>
-                  <input type="date" value={syncDates.from} onChange={e => setSyncDates(d => ({ ...d, from: e.target.value }))} className="input w-full" disabled={syncing} />
+                  <select value={turiaFY} onChange={e => setTuriaFY(e.target.value)} className="input w-full" disabled={syncing}>
+                    <option value="2023-24">2023-24</option>
+                    <option value="2024-25">2024-25</option>
+                    <option value="2025-26">2025-26</option>
+                    <option value="2026-27">2026-27</option>
+                  </select>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-theme-muted mb-1.5">
-                    <Calendar size={14} className="inline mr-1" /> To Date
-                  </label>
-                  <input type="date" value={syncDates.to} onChange={e => setSyncDates(d => ({ ...d, to: e.target.value }))} className="input w-full" disabled={syncing} />
-                </div>
-              </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                      <label className="block text-sm font-medium text-theme-muted mb-1.5">
+                        <Calendar size={14} className="inline mr-1" /> From Date
+                      </label>
+                      <input type="date" value={syncDates.from} onChange={e => setSyncDates(d => ({ ...d, from: e.target.value }))} className="input w-full" disabled={syncing} />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-theme-muted mb-1.5">
+                        <Calendar size={14} className="inline mr-1" /> To Date
+                      </label>
+                      <input type="date" value={syncDates.to} onChange={e => setSyncDates(d => ({ ...d, to: e.target.value }))} className="input w-full" disabled={syncing} />
+                    </div>
+                  </div>
 
-              <div className="flex gap-2 mb-4">
-                {[
-                  { label: 'Last Month', fn: () => { const d = getDefaultDates(); setSyncDates({ from: d.from, to: d.to }); }},
-                  { label: 'This Month', fn: () => { const now = new Date(); const first = new Date(now.getFullYear(), now.getMonth(), 1); setSyncDates({ from: fmtDate(first), to: fmtDate(now) }); }},
-                  { label: 'Last 3 Months', fn: () => { const now = new Date(); const start = new Date(now.getFullYear(), now.getMonth() - 3, 1); setSyncDates({ from: fmtDate(start), to: fmtDate(now) }); }},
-                ].map(p => (
-                  <button key={p.label} onClick={p.fn} disabled={syncing}
-                    className="text-xs px-3 py-1.5 rounded-full bg-dark-600 text-theme-muted hover:bg-dark-500 hover:text-theme-secondary transition-all border border-dark-400/50"
-                  >{p.label}</button>
-                ))}
-              </div>
+                  <div className="flex gap-2 mb-4">
+                    {[
+                      { label: 'Last Month', fn: () => { const d = getDefaultDates(); setSyncDates({ from: d.from, to: d.to }); }},
+                      { label: 'This Month', fn: () => { const now = new Date(); const first = new Date(now.getFullYear(), now.getMonth(), 1); setSyncDates({ from: fmtDate(first), to: fmtDate(now) }); }},
+                      { label: 'Last 3 Months', fn: () => { const now = new Date(); const start = new Date(now.getFullYear(), now.getMonth() - 3, 1); setSyncDates({ from: fmtDate(start), to: fmtDate(now) }); }},
+                    ].map(p => (
+                      <button key={p.label} onClick={p.fn} disabled={syncing}
+                        className="text-xs px-3 py-1.5 rounded-full bg-dark-600 text-theme-muted hover:bg-dark-500 hover:text-theme-secondary transition-all border border-dark-400/50"
+                      >{p.label}</button>
+                    ))}
+                  </div>
+                </>
+              )}
 
               {syncSource === 'oneglance' && (
                 <div className="mb-4">
@@ -474,7 +555,41 @@ export default function ImportPage() {
               )}
 
               {(syncing || syncStatus?.step === 'error') && syncStatus && (
-                <SyncStepTracker status={syncStatus} steps={syncSource === 'healthplix' ? HP_SYNC_STEPS : OG_SYNC_STEPS} />
+                <SyncStepTracker
+                  status={syncStatus}
+                  steps={syncSource === 'healthplix' ? HP_SYNC_STEPS : syncSource === 'turia' ? TURIA_SYNC_STEPS : OG_SYNC_STEPS}
+                />
+              )}
+
+              {/* Turia OTP input — shown when sync is waiting for OTP */}
+              {syncSource === 'turia' && syncing && syncStatus?.status === 'waiting_otp' && (
+                <div className="mb-4 bg-blue-500/10 border border-blue-500/20 rounded-xl p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <KeyRound size={16} className="text-blue-400" />
+                    <p className="text-sm font-medium text-blue-300">Enter OTP</p>
+                  </div>
+                  <p className="text-xs text-blue-400/70 mb-3">An OTP has been sent to your registered phone number. Enter it below to continue.</p>
+                  <div className="flex gap-3">
+                    <input
+                      type="text"
+                      value={turiaOtp}
+                      onChange={e => setTuriaOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      placeholder="Enter OTP"
+                      className="input flex-1"
+                      maxLength={6}
+                      autoFocus
+                      onKeyDown={e => { if (e.key === 'Enter') submitOtp(); }}
+                    />
+                    <button
+                      onClick={submitOtp}
+                      disabled={otpSubmitting || turiaOtp.length < 4}
+                      className="btn-primary flex items-center gap-2"
+                    >
+                      {otpSubmitting ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
+                      Verify
+                    </button>
+                  </div>
+                </div>
               )}
 
               {error && !syncing && !syncStatus?.step && (
@@ -484,7 +599,11 @@ export default function ImportPage() {
               )}
 
               <div className="flex gap-3">
-                <button onClick={startSync} disabled={syncing || !syncDates.from || !syncDates.to} className="btn-primary flex items-center gap-2">
+                <button
+                  onClick={startSync}
+                  disabled={syncing || (syncSource !== 'turia' && (!syncDates.from || !syncDates.to))}
+                  className="btn-primary flex items-center gap-2"
+                >
                   {syncing ? <><RefreshCw size={16} className="animate-spin" /> Syncing...</> : <><Cloud size={16} /> Sync Now</>}
                 </button>
               </div>
@@ -551,11 +670,14 @@ export default function ImportPage() {
                       <span className={`badge text-[10px] ${
                         log.source === 'HEALTHPLIX_SYNC' ? 'badge-info' :
                         log.source.includes('ONEGLANCE') ? 'badge-warning' :
+                        log.source.includes('TURIA') ? 'badge-info' :
                         'badge-success'
                       }`}>
                         {log.source === 'HEALTHPLIX_SYNC' ? 'HP Sync' :
                          log.source === 'ONEGLANCE_SALES_SYNC' ? 'OG Sales' :
                          log.source === 'ONEGLANCE_PURCHASE_SYNC' ? 'OG Purchase' :
+                         log.source === 'TURIA_SYNC' ? 'Turia Sync' :
+                         log.source === 'TURIA' ? 'Turia Upload' :
                          log.source}
                       </span>
                     </td>

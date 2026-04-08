@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../api/client';
-import { Eye, EyeOff, CheckCircle, Stethoscope, Pill, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, CheckCircle, Stethoscope, Pill, Trash2, Briefcase, Phone } from 'lucide-react';
 
 export default function SettingsPage() {
   const [fys, setFYs] = useState<any[]>([]);
@@ -17,7 +17,18 @@ export default function SettingsPage() {
   const [showOgPassword, setShowOgPassword] = useState(false);
   const [ogSaving, setOgSaving] = useState(false);
   const [ogSaved, setOgSaved] = useState(false);
+  const [turiaCreds, setTuriaCreds] = useState({ phoneNumber: '', financialYear: '2025-26' });
+  const [turiaHasCreds, setTuriaHasCreds] = useState(false);
+  const [turiaSaving, setTuriaSaving] = useState(false);
+  const [turiaSaved, setTuriaSaved] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  const enabledIntegrations: string[] = (() => {
+    try { return JSON.parse(localStorage.getItem('enabled_integrations') || '[]'); } catch { return []; }
+  })();
+  const showHp = enabledIntegrations.includes('healthplix');
+  const showOg = enabledIntegrations.includes('oneglance');
+  const showTuria = enabledIntegrations.includes('turia');
 
   const load = () => {
     Promise.all([api.get('/settings/fy'), api.get('/settings/doctors')]).then(([fyRes, docRes]) => {
@@ -26,14 +37,24 @@ export default function SettingsPage() {
   };
 
   const loadCredentials = () => {
-    api.get('/sync/credentials/healthplix').then(res => {
-      setHpCreds(c => ({ ...c, username: res.data.username || '', clinicName: res.data.clinicName || '', password: '' }));
-      setHpHasPassword(res.data.hasPassword);
-    }).catch(() => {});
-    api.get('/sync/credentials/oneglance').then(res => {
-      setOgCreds(c => ({ ...c, username: res.data.username || '', password: '' }));
-      setOgHasPassword(res.data.hasPassword);
-    }).catch(() => {});
+    if (showHp) {
+      api.get('/sync/credentials/healthplix').then(res => {
+        setHpCreds(c => ({ ...c, username: res.data.username || '', clinicName: res.data.clinicName || '', password: '' }));
+        setHpHasPassword(res.data.hasPassword);
+      }).catch(() => {});
+    }
+    if (showOg) {
+      api.get('/sync/credentials/oneglance').then(res => {
+        setOgCreds(c => ({ ...c, username: res.data.username || '', password: '' }));
+        setOgHasPassword(res.data.hasPassword);
+      }).catch(() => {});
+    }
+    if (showTuria) {
+      api.get('/sync/credentials/turia').then(res => {
+        setTuriaCreds(c => ({ ...c, phoneNumber: res.data.phoneNumber || '', financialYear: res.data.financialYear || '2025-26' }));
+        setTuriaHasCreds(res.data.hasCredentials);
+      }).catch(() => {});
+    }
   };
 
   useEffect(() => { load(); loadCredentials(); }, []);
@@ -106,6 +127,23 @@ export default function SettingsPage() {
     if (!confirm('Remove saved Oneglance credentials?')) return;
     await api.delete('/sync/credentials/oneglance');
     setOgCreds({ username: '', password: '' }); setOgHasPassword(false);
+  };
+
+  const saveTuriaCredentials = async () => {
+    if (!turiaCreds.phoneNumber) return;
+    setTuriaSaving(true); setTuriaSaved(false);
+    try {
+      await api.put('/sync/credentials/turia', { phoneNumber: turiaCreds.phoneNumber, financialYear: turiaCreds.financialYear });
+      setTuriaSaved(true); setTuriaHasCreds(true);
+      setTimeout(() => setTuriaSaved(false), 3000);
+    } catch {}
+    setTuriaSaving(false);
+  };
+
+  const clearTuriaCredentials = async () => {
+    if (!confirm('Remove saved Turia credentials?')) return;
+    await api.delete('/sync/credentials/turia');
+    setTuriaCreds({ phoneNumber: '', financialYear: '2025-26' }); setTuriaHasCreds(false);
   };
 
   if (loading) return (
@@ -185,7 +223,7 @@ export default function SettingsPage() {
         </div>
 
         {/* Healthplix Credentials */}
-        <div className="card">
+        {showHp && <div className="card">
           <div className="flex items-center gap-3 mb-5">
             <div className="w-10 h-10 rounded-xl bg-accent-500/10 flex items-center justify-center">
               <Stethoscope size={20} className="text-accent-400" />
@@ -229,10 +267,10 @@ export default function SettingsPage() {
               </button>
             )}
           </div>
-        </div>
+        </div>}
 
         {/* Oneglance Credentials */}
-        <div className="card">
+        {showOg && <div className="card">
           <div className="flex items-center gap-3 mb-5">
             <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
               <Pill size={20} className="text-purple-400" />
@@ -272,7 +310,49 @@ export default function SettingsPage() {
               </button>
             )}
           </div>
-        </div>
+        </div>}
+
+        {/* Turia Credentials */}
+        {showTuria && <div className="card">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
+              <Briefcase size={20} className="text-blue-400" />
+            </div>
+            <div className="flex-1">
+              <h3 className="font-semibold text-theme-heading">Turia Credentials</h3>
+              <p className="text-sm text-theme-faint">Consultancy invoice auto-sync (OTP login)</p>
+            </div>
+            {turiaHasCreds && <span className="badge-success text-[10px]"><CheckCircle size={10} /> Configured</span>}
+          </div>
+          <div className="space-y-3 mb-4">
+            <div>
+              <label className="block text-sm font-medium text-theme-muted mb-1.5">
+                <Phone size={14} className="inline mr-1" /> Phone Number
+              </label>
+              <input type="tel" value={turiaCreds.phoneNumber} onChange={e => setTuriaCreds(c => ({ ...c, phoneNumber: e.target.value }))}
+                placeholder="9876543210" className="input w-full" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-theme-muted mb-1.5">Default Financial Year</label>
+              <select value={turiaCreds.financialYear} onChange={e => setTuriaCreds(c => ({ ...c, financialYear: e.target.value }))} className="input w-full">
+                <option value="2023-24">2023-24</option>
+                <option value="2024-25">2024-25</option>
+                <option value="2025-26">2025-26</option>
+                <option value="2026-27">2026-27</option>
+              </select>
+            </div>
+          </div>
+          <div className="flex gap-3 items-center">
+            <button onClick={saveTuriaCredentials} disabled={turiaSaving || !turiaCreds.phoneNumber} className="btn-primary text-sm">
+              {turiaSaving ? 'Saving...' : turiaSaved ? 'Saved!' : 'Save'}
+            </button>
+            {turiaHasCreds && (
+              <button onClick={clearTuriaCredentials} className="flex items-center gap-1 text-sm text-red-400/60 hover:text-red-400 transition-colors">
+                <Trash2 size={14} /> Clear
+              </button>
+            )}
+          </div>
+        </div>}
       </div>
 
       <p className="text-xs text-theme-faint mt-4">

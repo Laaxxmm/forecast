@@ -5,9 +5,11 @@ import { branchFilter, getBranchIdForInsert, branchSettingsKey } from '../utils/
 import { parseHealthplix } from '../services/parsers/healthplix.js';
 import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
 import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.js';
+import { parseTuriaInvoices } from '../services/parsers/turia.js';
 // Lazy-import Playwright sync modules (not available on cloud hosts)
 const loadSyncHealthplix = () => import('../services/sync/healthplix-sync.js').then(m => m.syncHealthplix);
 const loadSyncOneglance = () => import('../services/sync/oneglance-sync.js').then(m => m.syncOneglance);
+const loadSyncTuria = () => import('../services/sync/turia-sync.js').then(m => m.syncTuria);
 import fs from 'fs';
 import path from 'path';
 
@@ -21,8 +23,14 @@ interface SyncState {
   progress: { step: string; message: string; pct: number; error?: string; result?: any } | null;
 }
 
+// Turia sync state includes OTP callback
+interface TuriaSyncState extends SyncState {
+  otpResolver: ((otp: string) => void) | null;
+}
+
 const hpSyncStates = new Map<string, SyncState>();
 const ogSyncStates = new Map<string, SyncState>();
+const turiaSyncStates = new Map<string, TuriaSyncState>();
 
 function getHpState(slug: string): SyncState {
   if (!hpSyncStates.has(slug)) {
@@ -36,6 +44,13 @@ function getOgState(slug: string): SyncState {
     ogSyncStates.set(slug, { activeSyncId: null, progress: null });
   }
   return ogSyncStates.get(slug)!;
+}
+
+function getTuriaState(slug: string): TuriaSyncState {
+  if (!turiaSyncStates.has(slug)) {
+    turiaSyncStates.set(slug, { activeSyncId: null, progress: null, otpResolver: null });
+  }
+  return turiaSyncStates.get(slug)!;
 }
 
 // ─── Credential Management ───────────────────────────────────────────────────
@@ -489,6 +504,232 @@ router.post('/oneglance/reset', (_req: Request, res: Response) => {
   const ogState = getOgState(_req.tenantSlug!);
   ogState.activeSyncId = null;
   ogState.progress = null;
+  res.json({ ok: true });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TURIA SYNC (OTP-based)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── Turia Credential Management ─────────────────────────────────────────────
+
+router.get('/credentials/turia', requireIntegration('turia'), async (_req: Request, res: Response) => {
+  const db = _req.tenantDb!;
+  const phone = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('turia_phone', _req));
+  const fy = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('turia_fy', _req));
+
+  res.json({
+    phoneNumber: phone?.value || '',
+    financialYear: fy?.value || '',
+    hasCredentials: !!phone?.value,
+  });
+});
+
+router.put('/credentials/turia', requireAdmin, requireIntegration('turia'), async (req: Request, res: Response) => {
+  const { phoneNumber, financialYear } = req.body;
+  if (!phoneNumber) return res.status(400).json({ error: 'Phone number is required' });
+
+  const db = req.tenantDb!;
+  const pKey = branchSettingsKey('turia_phone', req);
+  const fKey = branchSettingsKey('turia_fy', req);
+
+  db.run(`INSERT INTO app_settings (key, value) VALUES (?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, pKey, phoneNumber);
+
+  if (financialYear) {
+    db.run(`INSERT INTO app_settings (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, fKey, financialYear);
+  }
+
+  res.json({ ok: true });
+});
+
+router.delete('/credentials/turia', requireAdmin, requireIntegration('turia'), async (_req: Request, res: Response) => {
+  const db = _req.tenantDb!;
+  const prefix = branchSettingsKey('turia_', _req);
+  db.run("DELETE FROM app_settings WHERE key LIKE ?", prefix + '%');
+  res.json({ ok: true });
+});
+
+// ─── Turia Sync Trigger ─────────────────────────────────────────────────────
+
+router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Request, res: Response) => {
+  const tenantSlug = req.tenantSlug!;
+  const state = getTuriaState(tenantSlug);
+
+  if (state.activeSyncId) {
+    return res.status(409).json({ error: 'A Turia sync is already in progress' });
+  }
+
+  const db = req.tenantDb!;
+  const branchId = getBranchIdForInsert(req);
+  const phoneRow = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('turia_phone', req));
+  const fyRow = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('turia_fy', req));
+
+  if (!phoneRow?.value) {
+    return res.status(400).json({ error: 'Turia phone number not configured. Go to Settings to set it up.' });
+  }
+
+  const phoneNumber = phoneRow.value;
+  const financialYear = req.body.financialYear || fyRow?.value || '2025-26';
+
+  const syncId = Date.now().toString();
+  state.activeSyncId = syncId;
+  state.progress = { step: 'starting', message: 'Initializing Turia sync...', pct: 0 };
+  state.otpResolver = null;
+
+  res.json({ syncId, status: 'started' });
+
+  try {
+    const syncTuria = await loadSyncTuria();
+    const result = await syncTuria({
+      phoneNumber,
+      financialYear,
+      onProgress: (step, message, pct) => {
+        state.progress = { step, message, pct };
+      },
+      onOtpRequired: () => {
+        state.progress = { step: 'waiting_otp', message: 'Please enter the OTP sent to your phone', pct: 20 };
+      },
+      getOtp: () => new Promise<string>((resolve, reject) => {
+        state.otpResolver = resolve;
+        // Timeout after 5 minutes if no OTP provided
+        setTimeout(() => {
+          if (state.otpResolver === resolve) {
+            state.otpResolver = null;
+            reject(new Error('OTP entry timed out. Please try again.'));
+          }
+        }, 5 * 60 * 1000);
+      }),
+    });
+
+    // Parse the downloaded file
+    state.progress = { step: 'parsing', message: 'Parsing invoice data...', pct: 85 };
+    const { rows, summary } = parseTuriaInvoices(result.filePath);
+
+    state.progress = { step: 'saving', message: `Saving ${rows.length} invoices to database...`, pct: 92 };
+
+    const importLog = db.run(
+      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      'TURIA_SYNC', result.filename, rows.length,
+      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
+    );
+
+    for (const r of rows) {
+      db.run(
+        `INSERT INTO turia_invoices (import_id, invoice_id, billing_org, client_name, gstin, service,
+          sac_code, invoice_date, invoice_month, due_date, total_amount, status, branch_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        importLog.lastInsertRowid, r.invoice_id, r.billing_org, r.client_name, r.gstin,
+        r.service, r.sac_code, r.invoice_date, r.invoice_month, r.due_date,
+        r.total_amount, r.status, branchId
+      );
+    }
+
+    // Auto-sync consultancy revenue to dashboard_actuals
+    const activeScenario = db.get(
+      `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
+       WHERE fy.is_active = 1 AND s.is_default = 1 LIMIT 1`
+    );
+    if (activeScenario) {
+      const bf = branchFilter(req);
+      const turiaMonthly = db.all(
+        `SELECT invoice_month as month, COALESCE(SUM(total_amount), 0) as total
+         FROM turia_invoices WHERE invoice_month IS NOT NULL AND invoice_month != ''${bf.where}
+         GROUP BY invoice_month`,
+        ...bf.params
+      );
+      for (const row of turiaMonthly) {
+        if (!row.month) continue;
+        db.run(
+          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
+           VALUES (?, 'revenue', 'Consultancy Revenue', ?, ?, ?, datetime('now'))
+           ON CONFLICT(scenario_id, category, item_name, month)
+           DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
+          activeScenario.id, row.month, row.total, branchId
+        );
+      }
+    }
+
+    try { fs.unlinkSync(result.filePath); } catch {}
+
+    state.progress = {
+      step: 'complete',
+      message: 'Turia sync completed successfully',
+      pct: 100,
+      result: {
+        importId: importLog.lastInsertRowid,
+        ...summary,
+      },
+    };
+  } catch (err: any) {
+    state.progress = {
+      step: 'error',
+      message: isProd ? 'Sync failed' : (err.message || 'Sync failed'),
+      pct: 0,
+      error: isProd ? 'Sync failed' : err.message,
+    };
+    state.activeSyncId = null;
+    state.otpResolver = null;
+  } finally {
+    if (state.progress?.step === 'complete') {
+      setTimeout(() => {
+        if (state.activeSyncId === syncId) {
+          state.activeSyncId = null;
+          state.progress = null;
+          state.otpResolver = null;
+        }
+      }, 60_000);
+    }
+  }
+});
+
+// ─── Turia OTP Submission ────────────────────────────────────────────────────
+
+router.post('/turia/otp', requireAdmin, requireIntegration('turia'), async (req: Request, res: Response) => {
+  const { otp } = req.body;
+  if (!otp || typeof otp !== 'string' || otp.length < 4) {
+    return res.status(400).json({ error: 'Please provide a valid OTP (at least 4 digits)' });
+  }
+
+  const state = getTuriaState(req.tenantSlug!);
+  if (!state.activeSyncId) {
+    return res.status(400).json({ error: 'No active Turia sync in progress' });
+  }
+  if (!state.otpResolver) {
+    return res.status(400).json({ error: 'Sync is not waiting for OTP' });
+  }
+
+  state.otpResolver(otp);
+  state.otpResolver = null;
+  res.json({ ok: true });
+});
+
+// ─── Turia Progress Polling ──────────────────────────────────────────────────
+
+router.get('/turia/status', (_req: Request, res: Response) => {
+  const state = getTuriaState(_req.tenantSlug!);
+  if (!state.activeSyncId && !state.progress) {
+    return res.json({ status: 'idle' });
+  }
+  res.json({
+    syncId: state.activeSyncId,
+    status: state.progress?.step === 'complete' ? 'complete'
+          : state.progress?.step === 'error' ? 'error'
+          : state.progress?.step === 'waiting_otp' ? 'waiting_otp'
+          : 'running',
+    ...state.progress,
+  });
+});
+
+// ─── Turia Reset ─────────────────────────────────────────────────────────────
+
+router.post('/turia/reset', (_req: Request, res: Response) => {
+  const state = getTuriaState(_req.tenantSlug!);
+  state.activeSyncId = null;
+  state.progress = null;
+  state.otpResolver = null;
   res.json({ ok: true });
 });
 

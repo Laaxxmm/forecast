@@ -218,6 +218,26 @@ export function initializeSchema(db: DbHelper) {
     )
   `);
 
+  // Turia invoices table (consultancy practice management)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS turia_invoices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      import_id INTEGER NOT NULL REFERENCES import_logs(id),
+      invoice_id TEXT,
+      billing_org TEXT,
+      client_name TEXT,
+      gstin TEXT,
+      service TEXT,
+      sac_code TEXT,
+      invoice_date TEXT,
+      invoice_month TEXT,
+      due_date TEXT,
+      total_amount REAL DEFAULT 0,
+      status TEXT,
+      branch_id INTEGER
+    )
+  `);
+
   // Branch-related migrations (add branch_id to data tables)
   const branchMigrations = [
     'ALTER TABLE clinic_actuals ADD COLUMN branch_id INTEGER',

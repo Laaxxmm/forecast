@@ -4,6 +4,7 @@ import { requireAdmin, requireIntegration } from '../middleware/auth.js';
 import { parseHealthplix } from '../services/parsers/healthplix.js';
 import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
 import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.js';
+import { parseTuriaInvoices } from '../services/parsers/turia.js';
 import { getBranchIdForInsert, branchFilter } from '../utils/branch.js';
 import fs from 'fs';
 
@@ -149,6 +150,64 @@ router.post('/oneglance-purchase', requireAdmin, requireIntegration('oneglance')
   }
 });
 
+router.post('/turia', requireAdmin, requireIntegration('turia'), upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  try {
+    const db = req.tenantDb!;
+    const branchId = getBranchIdForInsert(req);
+    const { rows, summary } = parseTuriaInvoices(req.file.path);
+
+    const importLog = db.run(
+      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      'TURIA', req.file.originalname, rows.length,
+      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
+    );
+
+    for (const r of rows) {
+      db.run(
+        `INSERT INTO turia_invoices (import_id, branch_id, invoice_id, billing_org, client_name, gstin,
+          service, sac_code, invoice_date, invoice_month, due_date, total_amount, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        importLog.lastInsertRowid, branchId, r.invoice_id, r.billing_org, r.client_name, r.gstin,
+        r.service, r.sac_code, r.invoice_date, r.invoice_month, r.due_date,
+        r.total_amount, r.status
+      );
+    }
+
+    // Auto-sync consultancy revenue to dashboard_actuals
+    const bf = branchFilter(req);
+    const activeScenario = db.get(
+      `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
+       WHERE fy.is_active = 1 AND s.is_default = 1 LIMIT 1`
+    );
+    if (activeScenario) {
+      const turiaMonthly = db.all(
+        `SELECT invoice_month as month, COALESCE(SUM(total_amount), 0) as total
+         FROM turia_invoices WHERE invoice_month IS NOT NULL AND invoice_month != ''${bf.where}
+         GROUP BY invoice_month`,
+        ...bf.params
+      );
+      for (const row of turiaMonthly) {
+        if (!row.month) continue;
+        db.run(
+          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
+           VALUES (?, 'revenue', 'Consultancy Revenue', ?, ?, ?, datetime('now'))
+           ON CONFLICT(scenario_id, category, item_name, month)
+           DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
+          activeScenario.id, row.month, row.total, branchId
+        );
+      }
+    }
+
+    fs.unlinkSync(req.file.path);
+    res.json({ importId: importLog.lastInsertRowid, ...summary });
+  } catch (err: any) {
+    if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
+    res.status(400).json({ error: isProd ? 'Import failed' : err.message });
+  }
+});
+
 router.get('/history', async (req, res) => {
   const db = req.tenantDb!;
   const bf = branchFilter(req);
@@ -160,6 +219,7 @@ router.delete('/:id', requireAdmin, async (req, res) => {
   db.run('DELETE FROM clinic_actuals WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM pharmacy_sales_actuals WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM pharmacy_purchase_actuals WHERE import_id = ?', req.params.id);
+  db.run('DELETE FROM turia_invoices WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM import_logs WHERE id = ?', req.params.id);
   res.json({ ok: true });
 });
