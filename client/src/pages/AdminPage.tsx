@@ -2,84 +2,73 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import {
-  Building2, Users, UserPlus, Plus, Edit3, Power, ChevronRight, ArrowLeft,
-  Eye, EyeOff, CheckCircle, XCircle, Plug, Shield, Trash2, Copy, KeyRound, BarChart3,
-  MapPin, GitBranch, Layers
+  Building2, Users, UserPlus, Plus, Power, ArrowLeft,
+  Eye, EyeOff, CheckCircle, Plug, Shield, Trash2, Copy, KeyRound, BarChart3,
+  MapPin, GitBranch, Layers, Search, Activity, Globe, ChevronRight,
 } from 'lucide-react';
 
+/* ─── Types ──────────────────────────────────────────────── */
+
 interface Client {
-  id: number;
-  slug: string;
-  name: string;
-  is_active: number;
-  user_count: number;
-  integrations: string | null;
-  created_at: string;
+  id: number; slug: string; name: string; is_active: number;
+  user_count: number; integrations: string | null; created_at: string;
 }
-
 interface ClientUser {
-  id: number;
-  username: string;
-  display_name: string;
-  role: string;
-  is_active: number;
-  created_at: string;
+  id: number; username: string; display_name: string;
+  role: string; is_active: number; created_at: string;
 }
-
 interface TeamMember {
-  id: number;
-  username: string;
-  display_name: string;
-  role: string;
-  is_active: number;
-  created_at: string;
+  id: number; username: string; display_name: string;
+  role: string; is_active: number; created_at: string;
 }
-
 interface Integration {
-  key: string;
-  name: string;
-  description: string;
-  enabled: boolean;
+  key: string; name: string; description: string; enabled: boolean;
 }
 
 type Tab = 'clients' | 'team';
-type ClientView = 'list' | 'detail';
+type ClientDetailTab = 'users' | 'modules' | 'integrations' | 'streams' | 'branches';
+
+/* ─── Main Page ──────────────────────────────────────────── */
 
 export default function AdminPage() {
   const [tab, setTab] = useState<Tab>('clients');
-  const navigate = useNavigate();
 
   return (
-    <div className="animate-fade-in">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-theme-heading">Admin Panel</h1>
-          <p className="text-theme-faint mt-1 text-sm">Manage clients, users, and integrations</p>
+    <div className="animate-fade-in max-w-7xl mx-auto">
+      {/* Header */}
+      <div className="mb-8">
+        <div className="flex items-center gap-3 mb-1">
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center shadow-lg shadow-accent-500/20">
+            <Shield size={20} className="text-white" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-theme-heading">Admin Panel</h1>
+            <p className="text-theme-faint text-sm">Manage clients, users, and platform settings</p>
+          </div>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-6">
-        <button
-          onClick={() => setTab('clients')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            tab === 'clients'
-              ? 'bg-accent-500 text-white shadow-glow'
-              : 'bg-dark-700 text-theme-muted border border-dark-400/50 hover:border-dark-300'
-          }`}
-        >
-          <Building2 size={16} /> Clients
-        </button>
-        <button
-          onClick={() => setTab('team')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            tab === 'team'
-              ? 'bg-accent-500 text-white shadow-glow'
-              : 'bg-dark-700 text-theme-muted border border-dark-400/50 hover:border-dark-300'
-          }`}
-        >
-          <Shield size={16} /> Team Members
-        </button>
+      <div className="border-b border-dark-400/30 mb-6">
+        <div className="flex gap-0">
+          {[
+            { key: 'clients' as Tab, label: 'Clients', icon: Building2 },
+            { key: 'team' as Tab, label: 'Team', icon: Shield },
+          ].map(t => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`flex items-center gap-2 px-5 py-3.5 text-sm font-medium border-b-2 transition-all ${
+                tab === t.key
+                  ? 'border-accent-500 text-accent-400'
+                  : 'border-transparent text-theme-faint hover:text-theme-secondary'
+              }`}
+            >
+              <t.icon size={16} />
+              {t.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {tab === 'clients' && <ClientsPanel />}
@@ -88,31 +77,71 @@ export default function AdminPage() {
   );
 }
 
-// ─── Clients Panel ──────────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════
+   CLIENTS PANEL
+   ═══════════════════════════════════════════════════════════ */
 
 function ClientsPanel() {
-  const [view, setView] = useState<ClientView>('list');
   const [clients, setClients] = useState<Client[]>([]);
-  const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
 
   const loadClients = useCallback(() => {
-    api.get('/admin/clients').then(res => {
-      setClients(res.data);
-      setLoading(false);
-    });
+    api.get('/admin/clients').then(res => { setClients(res.data); setLoading(false); });
   }, []);
 
   useEffect(() => { loadClients(); }, [loadClients]);
 
-  if (view === 'detail' && selectedSlug) {
-    return <ClientDetail slug={selectedSlug} onBack={() => { setView('list'); loadClients(); }} />;
+  if (selectedSlug) {
+    return <ClientDetail slug={selectedSlug} onBack={() => { setSelectedSlug(null); loadClients(); }} />;
   }
 
+  const activeCount = clients.filter(c => c.is_active).length;
+  const totalUsers = clients.reduce((s, c) => s + c.user_count, 0);
+  const filtered = clients.filter(c =>
+    c.name.toLowerCase().includes(search.toLowerCase()) ||
+    c.slug.toLowerCase().includes(search.toLowerCase())
+  );
+
   return (
-    <>
-      {/* Create Client Form */}
+    <div>
+      {/* Stats Row */}
+      <div className="grid grid-cols-3 gap-4 mb-6">
+        <div className="bg-dark-700/60 rounded-2xl p-5 border border-dark-400/20">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-medium text-theme-faint uppercase tracking-wider">Total Clients</span>
+            <div className="w-8 h-8 rounded-xl bg-accent-500/10 flex items-center justify-center">
+              <Building2 size={15} className="text-accent-400" />
+            </div>
+          </div>
+          <div className="text-3xl font-bold text-theme-heading">{clients.length}</div>
+          <p className="text-xs text-theme-faint mt-1">{activeCount} active</p>
+        </div>
+        <div className="bg-dark-700/60 rounded-2xl p-5 border border-dark-400/20">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-medium text-theme-faint uppercase tracking-wider">Total Users</span>
+            <div className="w-8 h-8 rounded-xl bg-blue-500/10 flex items-center justify-center">
+              <Users size={15} className="text-blue-400" />
+            </div>
+          </div>
+          <div className="text-3xl font-bold text-theme-heading">{totalUsers}</div>
+          <p className="text-xs text-theme-faint mt-1">Across all clients</p>
+        </div>
+        <div className="bg-dark-700/60 rounded-2xl p-5 border border-dark-400/20">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-medium text-theme-faint uppercase tracking-wider">Status</span>
+            <div className="w-8 h-8 rounded-xl bg-emerald-500/10 flex items-center justify-center">
+              <Activity size={15} className="text-emerald-400" />
+            </div>
+          </div>
+          <div className="text-3xl font-bold text-emerald-400">Live</div>
+          <p className="text-xs text-theme-faint mt-1">Platform operational</p>
+        </div>
+      </div>
+
+      {/* Create Client */}
       {showCreate && (
         <CreateClientForm
           onCreated={() => { setShowCreate(false); loadClients(); }}
@@ -120,63 +149,107 @@ function ClientsPanel() {
         />
       )}
 
-      <div className="card">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-theme-heading">All Clients</h3>
-          <button onClick={() => setShowCreate(true)} className="btn-primary flex items-center gap-2 text-sm">
-            <Plus size={14} /> Add Client
-          </button>
+      {/* Toolbar */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="relative flex-1 max-w-xs">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-faint" />
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search clients..."
+            className="input pl-9 text-sm py-2"
+          />
         </div>
+        <button onClick={() => setShowCreate(true)} className="btn-primary flex items-center gap-2 text-sm">
+          <Plus size={15} /> New Client
+        </button>
+      </div>
 
-        {loading ? (
-          <div className="text-center py-8">
-            <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
-          </div>
-        ) : clients.length === 0 ? (
-          <p className="text-theme-faint text-center py-8">No clients yet. Create your first client above.</p>
-        ) : (
-          <div className="space-y-2">
-            {clients.map(client => (
-              <div
-                key={client.id}
-                onClick={() => { setSelectedSlug(client.slug); setView('detail'); }}
-                className="flex items-center gap-4 px-4 py-3.5 rounded-xl bg-dark-600 hover:bg-dark-500 cursor-pointer transition-all group border border-dark-400/30 hover:border-dark-300"
-              >
-                <div className="w-10 h-10 rounded-xl bg-accent-500/10 flex items-center justify-center">
-                  <Building2 size={18} className="text-accent-400" />
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-theme-heading">{client.name}</span>
-                    <span className="text-xs text-theme-faint">({client.slug})</span>
-                    {client.is_active ? (
-                      <span className="badge-success text-[10px]">Active</span>
+      {/* Client List */}
+      {loading ? (
+        <div className="text-center py-16">
+          <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-16 bg-dark-700/30 rounded-2xl border border-dark-400/20">
+          <Building2 size={32} className="text-theme-faint mx-auto mb-3" />
+          <p className="text-theme-muted text-sm font-medium">{search ? 'No matching clients' : 'No clients yet'}</p>
+          <p className="text-theme-faint text-xs mt-1">{search ? 'Try a different search term' : 'Create your first client to get started'}</p>
+        </div>
+      ) : (
+        <div className="bg-dark-700/40 rounded-2xl border border-dark-400/20 overflow-hidden">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-dark-400/30">
+                <th className="text-left py-3 px-5 text-xs font-semibold text-theme-faint uppercase tracking-wider">Client</th>
+                <th className="text-left py-3 px-5 text-xs font-semibold text-theme-faint uppercase tracking-wider">Users</th>
+                <th className="text-left py-3 px-5 text-xs font-semibold text-theme-faint uppercase tracking-wider">Integrations</th>
+                <th className="text-left py-3 px-5 text-xs font-semibold text-theme-faint uppercase tracking-wider">Status</th>
+                <th className="w-10" />
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(client => (
+                <tr
+                  key={client.id}
+                  onClick={() => setSelectedSlug(client.slug)}
+                  className="border-b border-dark-400/15 hover:bg-dark-600/50 cursor-pointer transition-colors group"
+                >
+                  <td className="py-3.5 px-5">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-accent-500/10 flex items-center justify-center flex-shrink-0">
+                        <Building2 size={16} className="text-accent-400" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold text-theme-heading">{client.name}</div>
+                        <div className="text-[11px] text-theme-faint font-mono">{client.slug}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="py-3.5 px-5">
+                    <span className="text-sm text-theme-secondary">{client.user_count}</span>
+                  </td>
+                  <td className="py-3.5 px-5">
+                    {client.integrations ? (
+                      <div className="flex gap-1.5 flex-wrap">
+                        {client.integrations.split(',').map(i => (
+                          <span key={i} className="text-[10px] bg-dark-500 text-theme-muted px-2 py-0.5 rounded-full">{i.trim()}</span>
+                        ))}
+                      </div>
                     ) : (
-                      <span className="badge-danger text-[10px]">Inactive</span>
+                      <span className="text-xs text-theme-faint">None</span>
                     )}
-                  </div>
-                  <div className="flex items-center gap-3 mt-1">
-                    <span className="text-xs text-theme-faint flex items-center gap-1">
-                      <Users size={11} /> {client.user_count} user{client.user_count !== 1 ? 's' : ''}
-                    </span>
-                    {client.integrations && (
-                      <span className="text-xs text-theme-faint">
-                        {client.integrations.split(',').join(', ')}
+                  </td>
+                  <td className="py-3.5 px-5">
+                    {client.is_active ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                        Active
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-red-400 bg-red-500/10 px-2.5 py-1 rounded-full">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                        Inactive
                       </span>
                     )}
-                  </div>
-                </div>
-                <ChevronRight size={16} className="text-theme-faint group-hover:text-accent-400 transition-colors" />
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </>
+                  </td>
+                  <td className="py-3.5 px-2">
+                    <ChevronRight size={16} className="text-theme-faint group-hover:text-accent-400 transition-colors" />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 
-// ─── Create Client Form ─────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════
+   CREATE CLIENT FORM
+   ═══════════════════════════════════════════════════════════ */
 
 function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCancel: () => void }) {
   const [name, setName] = useState('');
@@ -195,8 +268,7 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
   };
 
   const create = async () => {
-    setSaving(true);
-    setError('');
+    setSaving(true); setError('');
     try {
       const res = await api.post('/admin/clients', { slug, name, industry });
       setResult(res.data);
@@ -208,21 +280,21 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
 
   if (result) {
     return (
-      <div className="card mb-6 border-accent-500/30">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-xl bg-accent-500/15 flex items-center justify-center">
+      <div className="bg-dark-700/60 rounded-2xl border border-accent-500/30 p-6 mb-6">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-10 h-10 rounded-2xl bg-accent-500/15 flex items-center justify-center">
             <CheckCircle size={20} className="text-accent-400" />
           </div>
           <div>
-            <h3 className="font-semibold text-accent-300">Client Created!</h3>
+            <h3 className="font-semibold text-accent-300 text-base">Client Created</h3>
             <p className="text-sm text-theme-faint">{result.name}</p>
           </div>
         </div>
-        <div className="bg-dark-600 rounded-xl p-4 mb-4">
-          <p className="text-sm text-theme-secondary mb-1">Default login credentials:</p>
+        <div className="bg-dark-800 rounded-xl p-4 mb-5 border border-dark-400/20">
+          <p className="text-xs font-medium text-theme-faint uppercase tracking-wider mb-2">Default Login Credentials</p>
           <p className="text-theme-heading font-mono text-sm">Username: <span className="text-accent-400">admin</span></p>
           <p className="text-theme-heading font-mono text-sm">Password: <span className="text-accent-400">admin123</span></p>
-          <p className="text-xs text-amber-400 mt-2">Change this password immediately after first login!</p>
+          <p className="text-xs text-amber-400 mt-3 flex items-center gap-1">Change this password immediately after first login</p>
         </div>
         <button onClick={onCreated} className="btn-primary text-sm">Done</button>
       </div>
@@ -230,21 +302,21 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
   }
 
   return (
-    <div className="card mb-6">
-      <h3 className="font-semibold text-theme-heading mb-4">Create New Client</h3>
-      <div className="grid grid-cols-2 gap-4 mb-4">
+    <div className="bg-dark-700/60 rounded-2xl border border-dark-400/20 p-6 mb-6">
+      <h3 className="font-semibold text-theme-heading text-base mb-5">Create New Client</h3>
+      <div className="grid grid-cols-2 gap-4 mb-5">
         <div>
-          <label className="block text-sm font-medium text-theme-muted mb-1.5">Client Name</label>
+          <label className="block text-xs font-medium text-theme-muted mb-1.5">Client Name</label>
           <input type="text" value={name} onChange={e => autoSlug(e.target.value)}
             placeholder="e.g. Apollo Healthcare" className="input" />
         </div>
         <div>
-          <label className="block text-sm font-medium text-theme-muted mb-1.5">Slug (URL identifier)</label>
+          <label className="block text-xs font-medium text-theme-muted mb-1.5">Slug (URL identifier)</label>
           <input type="text" value={slug} onChange={e => setSlug(e.target.value)}
             placeholder="e.g. apollo-healthcare" className="input font-mono" />
         </div>
         <div className="col-span-2">
-          <label className="block text-sm font-medium text-theme-muted mb-2">Industry</label>
+          <label className="block text-xs font-medium text-theme-muted mb-2">Industry</label>
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
             {industries.map((ind: any) => (
               <button
@@ -254,7 +326,7 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
                 className={`text-left px-3 py-2.5 rounded-xl border transition-all ${
                   industry === ind.key
                     ? 'border-accent-500 bg-accent-500/10 text-accent-400'
-                    : 'border-dark-400/50 bg-dark-600 text-theme-muted hover:border-dark-300'
+                    : 'border-dark-400/30 bg-dark-600/50 text-theme-muted hover:border-dark-300'
                 }`}
               >
                 <div className="text-sm font-medium">{ind.label}</div>
@@ -277,7 +349,9 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
   );
 }
 
-// ─── Client Detail View ─────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════
+   CLIENT DETAIL — Tabbed Layout
+   ═══════════════════════════════════════════════════════════ */
 
 function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
   const [client, setClient] = useState<any>(null);
@@ -285,20 +359,11 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [streams, setStreams] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showAddUser, setShowAddUser] = useState(false);
-  const [showAddStream, setShowAddStream] = useState(false);
-  const [newStreamName, setNewStreamName] = useState('');
-  const [newStreamColor, setNewStreamColor] = useState('accent');
-  const [resetResult, setResetResult] = useState<{username: string; password: string} | null>(null);
   const [industries, setIndustries] = useState<any[]>([]);
   const [clientBranches, setClientBranches] = useState<any[]>([]);
-  const [showAddBranch, setShowAddBranch] = useState(false);
-  const [newBranchName, setNewBranchName] = useState('');
-  const [newBranchCode, setNewBranchCode] = useState('');
-  const [newBranchCity, setNewBranchCity] = useState('');
-  const [newBranchManager, setNewBranchManager] = useState('');
-  const [enablingMultiBranch, setEnablingMultiBranch] = useState(false);
   const [modules, setModules] = useState<{module_key: string; is_enabled: number}[]>([]);
+  const [activeTab, setActiveTab] = useState<ClientDetailTab>('users');
+  const [resetResult, setResetResult] = useState<{username: string; password: string} | null>(null);
 
   const loadDetail = useCallback(() => {
     Promise.all([
@@ -322,11 +387,6 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
     api.get('/admin/industries').then(res => setIndustries(res.data)).catch(() => {});
   }, []);
 
-  const changeIndustry = async (newIndustry: string) => {
-    await api.put(`/admin/clients/${slug}`, { industry: newIndustry });
-    loadDetail();
-  };
-
   useEffect(() => { loadDetail(); }, [loadDetail]);
 
   const toggleActive = async () => {
@@ -334,13 +394,8 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
     loadDetail();
   };
 
-  const toggleIntegration = async (key: string, enabled: boolean) => {
-    await api.put(`/admin/clients/${slug}/integrations/${key}`, { is_enabled: !enabled });
-    loadDetail();
-  };
-
-  const toggleUserActive = async (userId: number, isActive: number) => {
-    await api.put(`/admin/clients/${slug}/users/${userId}`, { is_active: !isActive });
+  const changeIndustry = async (newIndustry: string) => {
+    await api.put(`/admin/clients/${slug}`, { industry: newIndustry });
     loadDetail();
   };
 
@@ -356,33 +411,42 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
   };
 
   if (loading) return (
-    <div className="text-center py-12">
+    <div className="text-center py-16">
       <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
     </div>
   );
 
+  const detailTabs = [
+    { key: 'users' as ClientDetailTab, label: 'Users', icon: Users, count: users.length },
+    { key: 'modules' as ClientDetailTab, label: 'Modules', icon: Layers },
+    { key: 'integrations' as ClientDetailTab, label: 'Integrations', icon: Plug },
+    { key: 'streams' as ClientDetailTab, label: 'Revenue Streams', icon: BarChart3, count: streams.length },
+    { key: 'branches' as ClientDetailTab, label: 'Branches', icon: GitBranch, count: clientBranches.length },
+  ];
+
   return (
     <div>
-      {/* Header */}
-      <button onClick={onBack} className="flex items-center gap-2 text-sm text-theme-muted hover:text-accent-400 mb-4 transition-colors">
-        <ArrowLeft size={14} /> Back to clients
+      {/* Back button */}
+      <button onClick={onBack} className="flex items-center gap-2 text-sm text-theme-muted hover:text-accent-400 mb-5 transition-colors">
+        <ArrowLeft size={15} /> Back to clients
       </button>
 
-      <div className="card mb-6">
+      {/* Client Header */}
+      <div className="bg-dark-700/60 rounded-2xl border border-dark-400/20 p-6 mb-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-accent-500/10 flex items-center justify-center">
-              <Building2 size={22} className="text-accent-400" />
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-accent-500/20 to-accent-600/10 flex items-center justify-center border border-accent-500/20">
+              <Building2 size={24} className="text-accent-400" />
             </div>
             <div>
               <h2 className="text-xl font-bold text-theme-heading">{client.name}</h2>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3 mt-1">
                 <span className="text-sm text-theme-faint font-mono">{client.slug}</span>
-                <span className="text-theme-faint">·</span>
+                <span className="text-dark-300">·</span>
                 <select
                   value={client.industry || 'custom'}
                   onChange={e => changeIndustry(e.target.value)}
-                  className="text-sm bg-dark-600 text-theme-secondary border border-dark-400/30 rounded-lg px-2 py-0.5 cursor-pointer hover:border-accent-500/30 transition-colors"
+                  className="text-sm bg-transparent text-theme-secondary border-none cursor-pointer hover:text-accent-400 transition-colors p-0"
                 >
                   {industries.map((ind: any) => (
                     <option key={ind.key} value={ind.key}>{ind.label}</option>
@@ -393,13 +457,19 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
           </div>
           <div className="flex items-center gap-3">
             {client.is_active ? (
-              <span className="badge-success">Active</span>
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-full">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                Active
+              </span>
             ) : (
-              <span className="badge-danger">Inactive</span>
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-red-400 bg-red-500/10 px-3 py-1.5 rounded-full">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                Inactive
+              </span>
             )}
             <button
               onClick={toggleActive}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all ${
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-medium transition-all ${
                 client.is_active
                   ? 'text-red-400 hover:bg-red-500/10 border border-red-500/20'
                   : 'text-accent-400 hover:bg-accent-500/10 border border-accent-500/20'
@@ -412,356 +482,51 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Users */}
-        <div className="card">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-theme-heading flex items-center gap-2">
-              <Users size={16} /> Users
-            </h3>
-            <button onClick={() => setShowAddUser(true)} className="flex items-center gap-1.5 text-sm text-accent-400 hover:text-accent-300 font-medium transition-colors">
-              <UserPlus size={14} /> Add User
+      {/* Detail Tabs */}
+      <div className="border-b border-dark-400/30 mb-6">
+        <div className="flex gap-0">
+          {detailTabs.map(t => (
+            <button
+              key={t.key}
+              onClick={() => setActiveTab(t.key)}
+              className={`flex items-center gap-2 px-4 py-3 text-[13px] font-medium border-b-2 transition-all ${
+                activeTab === t.key
+                  ? 'border-accent-500 text-accent-400'
+                  : 'border-transparent text-theme-faint hover:text-theme-secondary'
+              }`}
+            >
+              <t.icon size={14} />
+              {t.label}
+              {t.count !== undefined && (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                  activeTab === t.key ? 'bg-accent-500/15 text-accent-400' : 'bg-dark-500 text-theme-faint'
+                }`}>{t.count}</span>
+              )}
             </button>
-          </div>
-
-          {showAddUser && (
-            <AddUserForm
-              slug={slug}
-              onAdded={() => { setShowAddUser(false); loadDetail(); }}
-              onCancel={() => setShowAddUser(false)}
-            />
-          )}
-
-          {users.length === 0 ? (
-            <p className="text-theme-faint text-center py-6 text-sm">No users</p>
-          ) : (
-            <div className="space-y-2">
-              {users.map(user => (
-                <div key={user.id} className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-dark-600 border border-dark-400/30">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-theme-primary">{user.display_name}</span>
-                      <span className="text-[10px] font-mono text-theme-faint">@{user.username}</span>
-                    </div>
-                    <span className={`text-[10px] font-medium ${user.role === 'admin' ? 'text-amber-400' : 'text-theme-faint'}`}>
-                      {user.role}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => resetPassword(user.id, user.username)}
-                      className="text-xs px-2 py-1 rounded-lg text-theme-muted bg-dark-500 hover:bg-dark-400 transition-all flex items-center gap-1"
-                      title="Reset Password"
-                    >
-                      <KeyRound size={11} /> Reset PW
-                    </button>
-                    <button
-                      onClick={() => toggleUserActive(user.id, user.is_active)}
-                      className={`text-xs px-2 py-1 rounded-lg transition-all ${
-                        user.is_active
-                          ? 'text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20'
-                          : 'text-red-400 bg-red-500/10 hover:bg-red-500/20'
-                      }`}
-                    >
-                      {user.is_active ? 'Active' : 'Disabled'}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Integrations */}
-        <div className="card">
-          <h3 className="font-semibold text-theme-heading flex items-center gap-2 mb-4">
-            <Plug size={16} /> Integrations
-          </h3>
-          <div className="space-y-2">
-            {integrations.map(int => (
-              <div key={int.key} className="flex items-center justify-between px-3 py-3 rounded-xl bg-dark-600 border border-dark-400/30">
-                <div>
-                  <span className="text-sm font-medium text-theme-primary">{int.name}</span>
-                  <p className="text-xs text-theme-faint mt-0.5">{int.description}</p>
-                </div>
-                <button
-                  onClick={() => toggleIntegration(int.key, int.enabled)}
-                  className={`relative w-10 h-5 rounded-full transition-all ${
-                    int.enabled ? 'bg-accent-500' : 'bg-dark-400'
-                  }`}
-                >
-                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${
-                    int.enabled ? 'left-[22px]' : 'left-0.5'
-                  }`} />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Modules */}
-        <div className="card">
-          <h3 className="font-semibold text-theme-heading flex items-center gap-2 mb-4">
-            <Layers size={16} /> Modules
-          </h3>
-          <p className="text-xs text-theme-faint mb-3">Enable or disable portal modules for this client</p>
-          <div className="space-y-2">
-            {[
-              { key: 'forecast_ops', name: 'Forecast & Operations', desc: 'Build forecasts, link actuals, integrated reports' },
-              { key: 'vcfo_portal', name: 'VCFO Portal', desc: 'Comprehensive Virtual CFO portal' },
-              { key: 'audit_view', name: 'Audit View', desc: 'Audit support and compliance tools' },
-              { key: 'litigation_tool', name: 'Litigation Tool', desc: 'Track notices and prepare legal responses' },
-            ].map(mod => {
-              const m = modules.find(x => x.module_key === mod.key);
-              const enabled = !!m?.is_enabled;
-              return (
-                <div key={mod.key} className="flex items-center justify-between px-3 py-3 rounded-xl bg-dark-600 border border-dark-400/30">
-                  <div>
-                    <span className="text-sm font-medium text-theme-primary">{mod.name}</span>
-                    <p className="text-xs text-theme-faint mt-0.5">{mod.desc}</p>
-                  </div>
-                  <button
-                    onClick={async () => {
-                      await api.put(`/admin/clients/${slug}/modules/${mod.key}`, { is_enabled: !enabled });
-                      loadDetail();
-                    }}
-                    className={`relative w-10 h-5 rounded-full transition-all ${
-                      enabled ? 'bg-accent-500' : 'bg-dark-400'
-                    }`}
-                  >
-                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${
-                      enabled ? 'left-[22px]' : 'left-0.5'
-                    }`} />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Revenue Streams */}
-        <div className="card lg:col-span-2">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="font-semibold text-theme-heading flex items-center gap-2">
-                <BarChart3 size={16} /> Revenue Streams
-              </h3>
-              <p className="text-xs text-theme-faint mt-1">These drive the dashboard KPI cards for this client</p>
-            </div>
-            <button onClick={() => setShowAddStream(true)} className="flex items-center gap-1.5 text-sm text-accent-400 hover:text-accent-300 font-medium transition-colors">
-              <Plus size={14} /> Add Stream
-            </button>
-          </div>
-
-          {showAddStream && (
-            <div className="bg-dark-600 rounded-xl p-4 mb-4 border border-dark-400/50">
-              <h4 className="text-sm font-semibold text-theme-heading mb-3">Add Revenue Stream</h4>
-              <div className="flex gap-3 mb-3">
-                <div className="flex-1">
-                  <label className="block text-xs font-medium text-theme-muted mb-1">Stream Name</label>
-                  <input type="text" value={newStreamName} onChange={e => setNewStreamName(e.target.value)}
-                    placeholder="e.g. Dine-in, Consulting" className="input text-sm" />
-                </div>
-                <div className="w-32">
-                  <label className="block text-xs font-medium text-theme-muted mb-1">Color</label>
-                  <select value={newStreamColor} onChange={e => setNewStreamColor(e.target.value)} className="input text-sm">
-                    <option value="accent">Green</option>
-                    <option value="blue">Blue</option>
-                    <option value="purple">Purple</option>
-                    <option value="amber">Amber</option>
-                  </select>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={async () => {
-                    if (!newStreamName) return;
-                    await api.post(`/admin/clients/${slug}/streams`, { name: newStreamName, color: newStreamColor });
-                    setNewStreamName(''); setShowAddStream(false); loadDetail();
-                  }}
-                  disabled={!newStreamName}
-                  className="btn-primary text-xs px-3 py-2"
-                >Add Stream</button>
-                <button onClick={() => setShowAddStream(false)} className="btn-secondary text-xs px-3 py-2">Cancel</button>
-              </div>
-            </div>
-          )}
-
-          {streams.length === 0 ? (
-            <p className="text-theme-faint text-center py-6 text-sm">No revenue streams configured</p>
-          ) : (
-            <div className="space-y-2">
-              {streams.map((stream: any) => (
-                <div key={stream.id} className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-dark-600 border border-dark-400/30">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-3 h-3 rounded-full ${
-                      stream.color === 'blue' ? 'bg-blue-400' :
-                      stream.color === 'purple' ? 'bg-purple-400' :
-                      stream.color === 'amber' ? 'bg-amber-400' : 'bg-accent-400'
-                    }`} />
-                    <span className="text-sm font-medium text-theme-primary">{stream.name}</span>
-                  </div>
-                  <button
-                    onClick={async () => {
-                      if (!confirm(`Delete stream "${stream.name}"?`)) return;
-                      await api.delete(`/admin/clients/${slug}/streams/${stream.id}`);
-                      loadDetail();
-                    }}
-                    className="text-xs text-red-400 hover:text-red-300 px-2 py-1 hover:bg-red-500/10 rounded-lg transition-all"
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+          ))}
         </div>
       </div>
 
-      {/* Branches Management */}
-      <div className="card mt-6">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h3 className="font-semibold text-theme-heading flex items-center gap-2">
-              <GitBranch size={16} /> Branches / Locations
-            </h3>
-            <p className="text-xs text-theme-faint mt-1">
-              {client?.is_multi_branch
-                ? 'Multi-branch enabled — data is separated by branch'
-                : 'Single-branch mode — enable multi-branch to manage locations'}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {!client?.is_multi_branch ? (
-              <button
-                onClick={async () => {
-                  const name = prompt('Default branch name (e.g. "Head Office"):');
-                  if (!name) return;
-                  const code = prompt('Branch code (lowercase, e.g. "head-office"):');
-                  if (!code) return;
-                  setEnablingMultiBranch(true);
-                  try {
-                    await api.post(`/admin/clients/${slug}/enable-multi-branch`, {
-                      default_branch_name: name,
-                      default_branch_code: code,
-                    });
-                    loadDetail();
-                  } catch (err: any) {
-                    alert(err.response?.data?.error || 'Failed');
-                  }
-                  setEnablingMultiBranch(false);
-                }}
-                disabled={enablingMultiBranch}
-                className="flex items-center gap-1.5 text-sm text-amber-400 hover:text-amber-300 font-medium transition-colors border border-amber-500/20 px-3 py-1.5 rounded-xl hover:bg-amber-500/10"
-              >
-                <MapPin size={14} /> {enablingMultiBranch ? 'Enabling...' : 'Enable Multi-Branch'}
-              </button>
-            ) : (
-              <button onClick={() => setShowAddBranch(true)} className="flex items-center gap-1.5 text-sm text-accent-400 hover:text-accent-300 font-medium transition-colors">
-                <Plus size={14} /> Add Branch
-              </button>
-            )}
-          </div>
-        </div>
+      {/* Tab Content */}
+      {activeTab === 'users' && <UsersSection slug={slug} users={users} onReload={loadDetail} resetPassword={resetPassword} />}
+      {activeTab === 'modules' && <ModulesSection slug={slug} modules={modules} onReload={loadDetail} />}
+      {activeTab === 'integrations' && <IntegrationsSection slug={slug} integrations={integrations} onReload={loadDetail} />}
+      {activeTab === 'streams' && <StreamsSection slug={slug} streams={streams} onReload={loadDetail} />}
+      {activeTab === 'branches' && <BranchesSection slug={slug} client={client} branches={clientBranches} onReload={loadDetail} />}
 
-        {showAddBranch && (
-          <div className="bg-dark-600 rounded-xl p-4 mb-4 border border-dark-400/50">
-            <h4 className="text-sm font-semibold text-theme-heading mb-3">Add Branch</h4>
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              <div>
-                <label className="block text-xs font-medium text-theme-muted mb-1">Branch Name</label>
-                <input type="text" value={newBranchName} onChange={e => setNewBranchName(e.target.value)}
-                  placeholder="e.g. Bangalore" className="input text-sm" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-theme-muted mb-1">Code</label>
-                <input type="text" value={newBranchCode} onChange={e => setNewBranchCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
-                  placeholder="e.g. blr" className="input text-sm" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-theme-muted mb-1">City</label>
-                <input type="text" value={newBranchCity} onChange={e => setNewBranchCity(e.target.value)}
-                  placeholder="optional" className="input text-sm" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-theme-muted mb-1">Manager</label>
-                <input type="text" value={newBranchManager} onChange={e => setNewBranchManager(e.target.value)}
-                  placeholder="optional" className="input text-sm" />
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={async () => {
-                  if (!newBranchName || !newBranchCode) return;
-                  await api.post(`/admin/clients/${slug}/branches`, {
-                    name: newBranchName, code: newBranchCode,
-                    city: newBranchCity || undefined, manager_name: newBranchManager || undefined,
-                  });
-                  setNewBranchName(''); setNewBranchCode(''); setNewBranchCity(''); setNewBranchManager('');
-                  setShowAddBranch(false); loadDetail();
-                }}
-                disabled={!newBranchName || !newBranchCode}
-                className="btn-primary text-xs px-3 py-2"
-              >Add Branch</button>
-              <button onClick={() => setShowAddBranch(false)} className="btn-secondary text-xs px-3 py-2">Cancel</button>
-            </div>
-          </div>
-        )}
-
-        {clientBranches.length === 0 ? (
-          <p className="text-theme-faint text-center py-6 text-sm">
-            {client?.is_multi_branch ? 'No branches configured' : 'Enable multi-branch to add locations'}
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {clientBranches.map((branch: any) => (
-              <div key={branch.id} className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-dark-600 border border-dark-400/30">
-                <div className="flex items-center gap-3">
-                  <MapPin size={14} className={branch.is_active ? 'text-accent-400' : 'text-theme-faint'} />
-                  <div>
-                    <span className="text-sm font-medium text-theme-primary">{branch.name}</span>
-                    <span className="text-[10px] text-theme-faint ml-2 font-mono">{branch.code}</span>
-                    {branch.city && <span className="text-[10px] text-theme-faint ml-2">{branch.city}</span>}
-                    {branch.manager_name && <span className="text-[10px] text-theme-muted ml-2">· {branch.manager_name}</span>}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
-                    branch.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
-                  }`}>
-                    {branch.is_active ? 'Active' : 'Inactive'}
-                  </span>
-                  {branch.is_active && (
-                    <button
-                      onClick={async () => {
-                        if (!confirm(`Deactivate branch "${branch.name}"?`)) return;
-                        await api.delete(`/admin/clients/${slug}/branches/${branch.id}`);
-                        loadDetail();
-                      }}
-                      className="text-xs text-red-400 hover:text-red-300 px-2 py-1 hover:bg-red-500/10 rounded-lg transition-all"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
+      {/* Password Reset Modal */}
       {resetResult && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setResetResult(null)}>
-          <div className="bg-dark-700 rounded-2xl p-6 max-w-sm w-full mx-4 border border-dark-400/50" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setResetResult(null)}>
+          <div className="bg-dark-700 rounded-2xl p-6 max-w-sm w-full mx-4 border border-dark-400/30 shadow-2xl" onClick={e => e.stopPropagation()}>
             <h3 className="font-semibold text-theme-heading mb-3">Password Reset</h3>
-            <p className="text-sm text-theme-muted mb-3">New credentials for <span className="text-accent-400">@{resetResult.username}</span>:</p>
-            <div className="bg-dark-600 rounded-xl p-3 font-mono text-sm text-theme-heading mb-4 flex items-center justify-between">
+            <p className="text-sm text-theme-muted mb-3">New credentials for <span className="text-accent-400 font-medium">@{resetResult.username}</span></p>
+            <div className="bg-dark-800 rounded-xl p-3 font-mono text-sm text-theme-heading mb-4 flex items-center justify-between border border-dark-400/20">
               <span>{resetResult.password}</span>
-              <button onClick={() => navigator.clipboard.writeText(resetResult.password)} className="text-theme-muted hover:text-accent-400 transition-colors" title="Copy password">
+              <button onClick={() => navigator.clipboard.writeText(resetResult.password)} className="text-theme-muted hover:text-accent-400 transition-colors" title="Copy">
                 <Copy size={14} />
               </button>
             </div>
-            <p className="text-xs text-amber-400 mb-4">Save this password — it won't be shown again!</p>
+            <p className="text-xs text-amber-400 mb-4">Save this password — it won't be shown again</p>
             <button onClick={() => setResetResult(null)} className="btn-primary text-sm w-full">Done</button>
           </div>
         </div>
@@ -770,7 +535,392 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
   );
 }
 
-// ─── Add User Form ──────────────────────────────────────────────────────────
+/* ─── Users Section ──────────────────────────────────────── */
+
+function UsersSection({ slug, users, onReload, resetPassword }: {
+  slug: string; users: ClientUser[]; onReload: () => void;
+  resetPassword: (id: number, username: string) => void;
+}) {
+  const [showAdd, setShowAdd] = useState(false);
+
+  const toggleUserActive = async (userId: number, isActive: number) => {
+    await api.put(`/admin/clients/${slug}/users/${userId}`, { is_active: !isActive });
+    onReload();
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-theme-faint">Manage user accounts for this client</p>
+        <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2 text-sm">
+          <UserPlus size={14} /> Add User
+        </button>
+      </div>
+
+      {showAdd && (
+        <AddUserForm slug={slug} onAdded={() => { setShowAdd(false); onReload(); }} onCancel={() => setShowAdd(false)} />
+      )}
+
+      {users.length === 0 ? (
+        <div className="text-center py-12 bg-dark-700/30 rounded-2xl border border-dark-400/20">
+          <Users size={28} className="text-theme-faint mx-auto mb-2" />
+          <p className="text-theme-muted text-sm">No users yet</p>
+        </div>
+      ) : (
+        <div className="bg-dark-700/40 rounded-2xl border border-dark-400/20 overflow-hidden">
+          {users.map((user, i) => (
+            <div key={user.id} className={`flex items-center justify-between px-5 py-3.5 ${i < users.length - 1 ? 'border-b border-dark-400/15' : ''}`}>
+              <div className="flex items-center gap-3">
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold ${
+                  user.role === 'admin' ? 'bg-amber-500/10 text-amber-400' : 'bg-dark-500 text-theme-muted'
+                }`}>
+                  {user.display_name.charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-theme-heading">{user.display_name}</span>
+                    <span className="text-[11px] font-mono text-theme-faint">@{user.username}</span>
+                  </div>
+                  <span className={`text-[10px] font-semibold uppercase tracking-wider ${user.role === 'admin' ? 'text-amber-400' : 'text-theme-faint'}`}>
+                    {user.role}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => resetPassword(user.id, user.username)}
+                  className="text-xs px-2.5 py-1.5 rounded-lg text-theme-muted hover:text-theme-secondary bg-dark-600 hover:bg-dark-500 transition-all flex items-center gap-1"
+                >
+                  <KeyRound size={11} /> Reset PW
+                </button>
+                <button
+                  onClick={() => toggleUserActive(user.id, user.is_active)}
+                  className={`text-xs px-2.5 py-1.5 rounded-lg font-medium transition-all ${
+                    user.is_active
+                      ? 'text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20'
+                      : 'text-red-400 bg-red-500/10 hover:bg-red-500/20'
+                  }`}
+                >
+                  {user.is_active ? 'Active' : 'Disabled'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Modules Section ────────────────────────────────────── */
+
+function ModulesSection({ slug, modules, onReload }: {
+  slug: string; modules: {module_key: string; is_enabled: number}[]; onReload: () => void;
+}) {
+  const allModules = [
+    { key: 'forecast_ops', name: 'Forecast & Operations', desc: 'Build forecasts, link actuals, integrated reports', icon: '📊' },
+    { key: 'vcfo_portal', name: 'VCFO Portal', desc: 'Comprehensive Virtual CFO portal with Tally sync', icon: '💼' },
+    { key: 'audit_view', name: 'Audit View', desc: 'Audit support and compliance tools', icon: '🔍' },
+    { key: 'litigation_tool', name: 'Litigation Tool', desc: 'Track notices and prepare legal responses', icon: '⚖️' },
+  ];
+
+  return (
+    <div>
+      <p className="text-sm text-theme-faint mb-4">Enable or disable modules for this client</p>
+      <div className="grid grid-cols-2 gap-3">
+        {allModules.map(mod => {
+          const m = modules.find(x => x.module_key === mod.key);
+          const enabled = !!m?.is_enabled;
+          return (
+            <div key={mod.key} className={`rounded-2xl p-5 border transition-all ${
+              enabled
+                ? 'bg-accent-500/5 border-accent-500/20'
+                : 'bg-dark-700/40 border-dark-400/20'
+            }`}>
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-2xl">{mod.icon}</span>
+                <button
+                  onClick={async () => {
+                    await api.put(`/admin/clients/${slug}/modules/${mod.key}`, { is_enabled: !enabled });
+                    onReload();
+                  }}
+                  className={`relative w-11 h-6 rounded-full transition-all ${enabled ? 'bg-accent-500' : 'bg-dark-400'}`}
+                >
+                  <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-sm ${enabled ? 'left-[24px]' : 'left-1'}`} />
+                </button>
+              </div>
+              <h4 className={`text-sm font-semibold ${enabled ? 'text-theme-heading' : 'text-theme-muted'}`}>{mod.name}</h4>
+              <p className="text-xs text-theme-faint mt-1">{mod.desc}</p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Integrations Section ───────────────────────────────── */
+
+function IntegrationsSection({ slug, integrations, onReload }: {
+  slug: string; integrations: Integration[]; onReload: () => void;
+}) {
+  return (
+    <div>
+      <p className="text-sm text-theme-faint mb-4">Connect third-party services</p>
+      <div className="space-y-2">
+        {integrations.map(int => (
+          <div key={int.key} className="flex items-center justify-between px-5 py-4 rounded-2xl bg-dark-700/40 border border-dark-400/20">
+            <div className="flex items-center gap-3">
+              <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${int.enabled ? 'bg-accent-500/10' : 'bg-dark-500'}`}>
+                <Globe size={16} className={int.enabled ? 'text-accent-400' : 'text-theme-faint'} />
+              </div>
+              <div>
+                <span className="text-sm font-medium text-theme-heading">{int.name}</span>
+                <p className="text-xs text-theme-faint">{int.description}</p>
+              </div>
+            </div>
+            <button
+              onClick={async () => {
+                await api.put(`/admin/clients/${slug}/integrations/${int.key}`, { is_enabled: !int.enabled });
+                onReload();
+              }}
+              className={`relative w-11 h-6 rounded-full transition-all ${int.enabled ? 'bg-accent-500' : 'bg-dark-400'}`}
+            >
+              <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-sm ${int.enabled ? 'left-[24px]' : 'left-1'}`} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Revenue Streams Section ────────────────────────────── */
+
+function StreamsSection({ slug, streams, onReload }: {
+  slug: string; streams: any[]; onReload: () => void;
+}) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [name, setName] = useState('');
+  const [color, setColor] = useState('accent');
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-theme-faint">Revenue streams drive the dashboard KPI cards</p>
+        <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2 text-sm">
+          <Plus size={14} /> Add Stream
+        </button>
+      </div>
+
+      {showAdd && (
+        <div className="bg-dark-700/60 rounded-2xl p-5 mb-4 border border-dark-400/20">
+          <h4 className="text-sm font-semibold text-theme-heading mb-3">New Revenue Stream</h4>
+          <div className="flex gap-3 mb-3">
+            <div className="flex-1">
+              <input type="text" value={name} onChange={e => setName(e.target.value)}
+                placeholder="e.g. Consulting, Dine-in" className="input text-sm" />
+            </div>
+            <select value={color} onChange={e => setColor(e.target.value)} className="input text-sm w-28">
+              <option value="accent">Green</option>
+              <option value="blue">Blue</option>
+              <option value="purple">Purple</option>
+              <option value="amber">Amber</option>
+            </select>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={async () => {
+                if (!name) return;
+                await api.post(`/admin/clients/${slug}/streams`, { name, color });
+                setName(''); setShowAdd(false); onReload();
+              }}
+              disabled={!name}
+              className="btn-primary text-xs"
+            >Add</button>
+            <button onClick={() => setShowAdd(false)} className="btn-secondary text-xs">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {streams.length === 0 ? (
+        <div className="text-center py-12 bg-dark-700/30 rounded-2xl border border-dark-400/20">
+          <BarChart3 size={28} className="text-theme-faint mx-auto mb-2" />
+          <p className="text-theme-muted text-sm">No revenue streams configured</p>
+        </div>
+      ) : (
+        <div className="bg-dark-700/40 rounded-2xl border border-dark-400/20 overflow-hidden">
+          {streams.map((stream: any, i: number) => (
+            <div key={stream.id} className={`flex items-center justify-between px-5 py-3.5 ${i < streams.length - 1 ? 'border-b border-dark-400/15' : ''}`}>
+              <div className="flex items-center gap-3">
+                <div className={`w-3 h-3 rounded-full ${
+                  stream.color === 'blue' ? 'bg-blue-400' :
+                  stream.color === 'purple' ? 'bg-purple-400' :
+                  stream.color === 'amber' ? 'bg-amber-400' : 'bg-accent-400'
+                }`} />
+                <span className="text-sm font-medium text-theme-heading">{stream.name}</span>
+              </div>
+              <button
+                onClick={async () => {
+                  if (!confirm(`Delete stream "${stream.name}"?`)) return;
+                  await api.delete(`/admin/clients/${slug}/streams/${stream.id}`);
+                  onReload();
+                }}
+                className="text-theme-faint hover:text-red-400 p-1.5 hover:bg-red-500/10 rounded-lg transition-all"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Branches Section ───────────────────────────────────── */
+
+function BranchesSection({ slug, client, branches, onReload }: {
+  slug: string; client: any; branches: any[]; onReload: () => void;
+}) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const [city, setCity] = useState('');
+  const [manager, setManager] = useState('');
+  const [enabling, setEnabling] = useState(false);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-theme-faint">
+          {client?.is_multi_branch
+            ? 'Multi-branch enabled — data is separated by branch'
+            : 'Single-branch mode — enable multi-branch to manage locations'}
+        </p>
+        {!client?.is_multi_branch ? (
+          <button
+            onClick={async () => {
+              const branchName = prompt('Default branch name (e.g. "Head Office"):');
+              if (!branchName) return;
+              const branchCode = prompt('Branch code (lowercase, e.g. "head-office"):');
+              if (!branchCode) return;
+              setEnabling(true);
+              try {
+                await api.post(`/admin/clients/${slug}/enable-multi-branch`, {
+                  default_branch_name: branchName, default_branch_code: branchCode,
+                });
+                onReload();
+              } catch (err: any) { alert(err.response?.data?.error || 'Failed'); }
+              setEnabling(false);
+            }}
+            disabled={enabling}
+            className="flex items-center gap-1.5 text-sm text-amber-400 font-medium border border-amber-500/20 px-3.5 py-2 rounded-xl hover:bg-amber-500/10 transition-all"
+          >
+            <MapPin size={14} /> {enabling ? 'Enabling...' : 'Enable Multi-Branch'}
+          </button>
+        ) : (
+          <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2 text-sm">
+            <Plus size={14} /> Add Branch
+          </button>
+        )}
+      </div>
+
+      {showAdd && (
+        <div className="bg-dark-700/60 rounded-2xl p-5 mb-4 border border-dark-400/20">
+          <h4 className="text-sm font-semibold text-theme-heading mb-3">New Branch</h4>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div>
+              <label className="block text-xs font-medium text-theme-muted mb-1">Name</label>
+              <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Bangalore" className="input text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-theme-muted mb-1">Code</label>
+              <input type="text" value={code} onChange={e => setCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} placeholder="e.g. blr" className="input text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-theme-muted mb-1">City</label>
+              <input type="text" value={city} onChange={e => setCity(e.target.value)} placeholder="optional" className="input text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-theme-muted mb-1">Manager</label>
+              <input type="text" value={manager} onChange={e => setManager(e.target.value)} placeholder="optional" className="input text-sm" />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={async () => {
+                if (!name || !code) return;
+                await api.post(`/admin/clients/${slug}/branches`, {
+                  name, code, city: city || undefined, manager_name: manager || undefined,
+                });
+                setName(''); setCode(''); setCity(''); setManager('');
+                setShowAdd(false); onReload();
+              }}
+              disabled={!name || !code}
+              className="btn-primary text-xs"
+            >Add Branch</button>
+            <button onClick={() => setShowAdd(false)} className="btn-secondary text-xs">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {branches.length === 0 ? (
+        <div className="text-center py-12 bg-dark-700/30 rounded-2xl border border-dark-400/20">
+          <GitBranch size={28} className="text-theme-faint mx-auto mb-2" />
+          <p className="text-theme-muted text-sm">
+            {client?.is_multi_branch ? 'No branches configured' : 'Enable multi-branch to add locations'}
+          </p>
+        </div>
+      ) : (
+        <div className="bg-dark-700/40 rounded-2xl border border-dark-400/20 overflow-hidden">
+          {branches.map((branch: any, i: number) => (
+            <div key={branch.id} className={`flex items-center justify-between px-5 py-3.5 ${i < branches.length - 1 ? 'border-b border-dark-400/15' : ''}`}>
+              <div className="flex items-center gap-3">
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${
+                  branch.is_active ? 'bg-accent-500/10' : 'bg-dark-500'
+                }`}>
+                  <MapPin size={15} className={branch.is_active ? 'text-accent-400' : 'text-theme-faint'} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-theme-heading">{branch.name}</span>
+                    <span className="text-[10px] font-mono text-theme-faint">{branch.code}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px] text-theme-faint">
+                    {branch.city && <span>{branch.city}</span>}
+                    {branch.manager_name && <><span className="text-dark-300">·</span><span>{branch.manager_name}</span></>}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={`text-[10px] font-medium px-2.5 py-1 rounded-full ${
+                  branch.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
+                }`}>
+                  {branch.is_active ? 'Active' : 'Inactive'}
+                </span>
+                {branch.is_active && (
+                  <button
+                    onClick={async () => {
+                      if (!confirm(`Deactivate branch "${branch.name}"?`)) return;
+                      await api.delete(`/admin/clients/${slug}/branches/${branch.id}`);
+                      onReload();
+                    }}
+                    className="text-theme-faint hover:text-red-400 p-1.5 hover:bg-red-500/10 rounded-lg transition-all"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Add User Form ──────────────────────────────────────── */
 
 function AddUserForm({ slug, onAdded, onCancel }: { slug: string; onAdded: () => void; onCancel: () => void }) {
   const [username, setUsername] = useState('');
@@ -780,46 +930,39 @@ function AddUserForm({ slug, onAdded, onCancel }: { slug: string; onAdded: () =>
   const [showPw, setShowPw] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [createdUser, setCreatedUser] = useState<{username: string; password: string} | null>(null);
+  const [created, setCreated] = useState<{username: string; password: string} | null>(null);
 
   const save = async () => {
-    setSaving(true);
-    setError('');
+    setSaving(true); setError('');
     try {
       await api.post(`/admin/clients/${slug}/users`, { username, password, display_name: displayName, role });
-      setCreatedUser({ username, password });
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed');
-    }
+      setCreated({ username, password });
+    } catch (err: any) { setError(err.response?.data?.error || 'Failed'); }
     setSaving(false);
   };
 
-  if (createdUser) {
+  if (created) {
     return (
-      <div className="bg-dark-600 rounded-xl p-4 mb-4 border border-accent-500/30">
+      <div className="bg-dark-700/60 rounded-2xl p-5 mb-4 border border-accent-500/30">
         <div className="flex items-center gap-3 mb-3">
-          <div className="w-8 h-8 rounded-xl bg-accent-500/15 flex items-center justify-center">
-            <CheckCircle size={16} className="text-accent-400" />
-          </div>
-          <h4 className="text-sm font-semibold text-accent-300">User Created!</h4>
+          <CheckCircle size={18} className="text-accent-400" />
+          <h4 className="text-sm font-semibold text-accent-300">User Created</h4>
         </div>
-        <div className="bg-dark-700 rounded-xl p-3 mb-3">
-          <p className="text-theme-heading font-mono text-sm">Username: <span className="text-accent-400">@{createdUser.username}</span></p>
+        <div className="bg-dark-800 rounded-xl p-3 mb-3 border border-dark-400/20">
+          <p className="text-theme-heading font-mono text-sm">Username: <span className="text-accent-400">@{created.username}</span></p>
           <div className="flex items-center justify-between mt-1">
-            <p className="text-theme-heading font-mono text-sm">Password: <span className="text-accent-400">{createdUser.password}</span></p>
-            <button onClick={() => navigator.clipboard.writeText(createdUser.password)} className="text-theme-muted hover:text-accent-400 transition-colors" title="Copy password">
-              <Copy size={14} />
-            </button>
+            <p className="text-theme-heading font-mono text-sm">Password: <span className="text-accent-400">{created.password}</span></p>
+            <button onClick={() => navigator.clipboard.writeText(created.password)} className="text-theme-muted hover:text-accent-400"><Copy size={14} /></button>
           </div>
         </div>
-        <p className="text-xs text-amber-400 mb-3">Save these credentials — the password won't be shown again!</p>
-        <button onClick={onAdded} className="btn-primary text-xs px-3 py-2">Done</button>
+        <p className="text-xs text-amber-400 mb-3">Save these credentials — the password won't be shown again</p>
+        <button onClick={onAdded} className="btn-primary text-xs">Done</button>
       </div>
     );
   }
 
   return (
-    <div className="bg-dark-600 rounded-xl p-4 mb-4 border border-dark-400/50">
+    <div className="bg-dark-700/60 rounded-2xl p-5 mb-4 border border-dark-400/20">
       <h4 className="text-sm font-semibold text-theme-heading mb-3">Add New User</h4>
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div>
@@ -849,16 +992,18 @@ function AddUserForm({ slug, onAdded, onCancel }: { slug: string; onAdded: () =>
       </div>
       {error && <p className="text-red-400 text-xs mb-2">{error}</p>}
       <div className="flex gap-2">
-        <button onClick={save} disabled={saving || !username || !password || !displayName} className="btn-primary text-xs px-3 py-2">
+        <button onClick={save} disabled={saving || !username || !password || !displayName} className="btn-primary text-xs">
           {saving ? 'Adding...' : 'Add User'}
         </button>
-        <button onClick={onCancel} className="btn-secondary text-xs px-3 py-2">Cancel</button>
+        <button onClick={onCancel} className="btn-secondary text-xs">Cancel</button>
       </div>
     </div>
   );
 }
 
-// ─── Team Panel ─────────────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════
+   TEAM PANEL
+   ═══════════════════════════════════════════════════════════ */
 
 function TeamPanel() {
   const [team, setTeam] = useState<TeamMember[]>([]);
@@ -867,10 +1012,7 @@ function TeamPanel() {
   const [resetResult, setResetResult] = useState<{username: string; password: string} | null>(null);
 
   const loadTeam = useCallback(() => {
-    api.get('/admin/team').then(res => {
-      setTeam(res.data);
-      setLoading(false);
-    });
+    api.get('/admin/team').then(res => { setTeam(res.data); setLoading(false); });
   }, []);
 
   useEffect(() => { loadTeam(); }, [loadTeam]);
@@ -881,66 +1023,56 @@ function TeamPanel() {
     try {
       await api.put(`/admin/team/${id}`, { password: newPw });
       setResetResult({ username, password: newPw });
-    } catch (err: any) {
-      alert(err.response?.data?.error || 'Failed to reset password');
-    }
+    } catch (err: any) { alert(err.response?.data?.error || 'Failed'); }
   };
 
   return (
-    <div className="card">
+    <div>
       <div className="flex items-center justify-between mb-4">
-        <div>
-          <h3 className="font-semibold text-theme-heading flex items-center gap-2">
-            <Shield size={16} /> Team Members
-          </h3>
-          <p className="text-xs text-theme-faint mt-1">Super admins who can access all clients</p>
-        </div>
+        <p className="text-sm text-theme-faint">Super admins with access to all clients</p>
         <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2 text-sm">
           <UserPlus size={14} /> Add Member
         </button>
       </div>
 
       {showAdd && (
-        <AddTeamMemberForm
-          onAdded={() => { setShowAdd(false); loadTeam(); }}
-          onCancel={() => setShowAdd(false)}
-        />
+        <AddTeamMemberForm onAdded={() => { setShowAdd(false); loadTeam(); }} onCancel={() => setShowAdd(false)} />
       )}
 
       {loading ? (
-        <div className="text-center py-8">
+        <div className="text-center py-16">
           <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
         </div>
       ) : team.length === 0 ? (
-        <p className="text-theme-faint text-center py-8 text-sm">No team members</p>
+        <div className="text-center py-16 bg-dark-700/30 rounded-2xl border border-dark-400/20">
+          <Shield size={32} className="text-theme-faint mx-auto mb-2" />
+          <p className="text-theme-muted text-sm">No team members</p>
+        </div>
       ) : (
-        <div className="space-y-2">
-          {team.map(member => (
-            <div key={member.id} className="flex items-center justify-between px-4 py-3 rounded-xl bg-dark-600 border border-dark-400/30">
+        <div className="bg-dark-700/40 rounded-2xl border border-dark-400/20 overflow-hidden">
+          {team.map((member, i) => (
+            <div key={member.id} className={`flex items-center justify-between px-5 py-4 ${i < team.length - 1 ? 'border-b border-dark-400/15' : ''}`}>
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-purple-500/10 flex items-center justify-center">
-                  <Shield size={16} className="text-purple-400" />
+                <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
+                  <Shield size={17} className="text-purple-400" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-theme-primary">{member.display_name}</span>
-                    <span className="text-[10px] font-mono text-theme-faint">@{member.username}</span>
+                    <span className="text-sm font-semibold text-theme-heading">{member.display_name}</span>
+                    <span className="text-[11px] font-mono text-theme-faint">@{member.username}</span>
                   </div>
-                  <span className="text-[10px] font-medium text-purple-400">{member.role}</span>
+                  <span className="text-[10px] font-semibold text-purple-400 uppercase tracking-wider">{member.role}</span>
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => resetPassword(member.id, member.username)}
-                  className="text-xs px-2 py-1 rounded-lg text-theme-muted bg-dark-500 hover:bg-dark-400 transition-all flex items-center gap-1"
-                  title="Reset Password"
+                  className="text-xs px-2.5 py-1.5 rounded-lg text-theme-muted hover:text-theme-secondary bg-dark-600 hover:bg-dark-500 transition-all flex items-center gap-1"
                 >
                   <KeyRound size={11} /> Reset PW
                 </button>
-                <span className={`text-xs px-2 py-1 rounded-lg ${
-                  member.is_active
-                    ? 'text-emerald-400 bg-emerald-500/10'
-                    : 'text-red-400 bg-red-500/10'
+                <span className={`text-[11px] font-medium px-2.5 py-1 rounded-full ${
+                  member.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
                 }`}>
                   {member.is_active ? 'Active' : 'Disabled'}
                 </span>
@@ -951,17 +1083,15 @@ function TeamPanel() {
       )}
 
       {resetResult && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setResetResult(null)}>
-          <div className="bg-dark-700 rounded-2xl p-6 max-w-sm w-full mx-4 border border-dark-400/50" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setResetResult(null)}>
+          <div className="bg-dark-700 rounded-2xl p-6 max-w-sm w-full mx-4 border border-dark-400/30 shadow-2xl" onClick={e => e.stopPropagation()}>
             <h3 className="font-semibold text-theme-heading mb-3">Password Reset</h3>
-            <p className="text-sm text-theme-muted mb-3">New credentials for <span className="text-accent-400">@{resetResult.username}</span>:</p>
-            <div className="bg-dark-600 rounded-xl p-3 font-mono text-sm text-theme-heading mb-4 flex items-center justify-between">
+            <p className="text-sm text-theme-muted mb-3">New credentials for <span className="text-accent-400 font-medium">@{resetResult.username}</span></p>
+            <div className="bg-dark-800 rounded-xl p-3 font-mono text-sm text-theme-heading mb-4 flex items-center justify-between border border-dark-400/20">
               <span>{resetResult.password}</span>
-              <button onClick={() => navigator.clipboard.writeText(resetResult.password)} className="text-theme-muted hover:text-accent-400 transition-colors" title="Copy password">
-                <Copy size={14} />
-              </button>
+              <button onClick={() => navigator.clipboard.writeText(resetResult.password)} className="text-theme-muted hover:text-accent-400"><Copy size={14} /></button>
             </div>
-            <p className="text-xs text-amber-400 mb-4">Save this password — it won't be shown again!</p>
+            <p className="text-xs text-amber-400 mb-4">Save this password — it won't be shown again</p>
             <button onClick={() => setResetResult(null)} className="btn-primary text-sm w-full">Done</button>
           </div>
         </div>
@@ -970,7 +1100,7 @@ function TeamPanel() {
   );
 }
 
-// ─── Add Team Member Form ───────────────────────────────────────────────────
+/* ─── Add Team Member Form ───────────────────────────────── */
 
 function AddTeamMemberForm({ onAdded, onCancel }: { onAdded: () => void; onCancel: () => void }) {
   const [username, setUsername] = useState('');
@@ -979,48 +1109,41 @@ function AddTeamMemberForm({ onAdded, onCancel }: { onAdded: () => void; onCance
   const [showPw, setShowPw] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [createdUser, setCreatedUser] = useState<{username: string; password: string} | null>(null);
+  const [created, setCreated] = useState<{username: string; password: string} | null>(null);
 
   const save = async () => {
-    setSaving(true);
-    setError('');
+    setSaving(true); setError('');
     try {
       await api.post('/admin/team', { username, password, display_name: displayName, role: 'super_admin' });
-      setCreatedUser({ username, password });
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed');
-    }
+      setCreated({ username, password });
+    } catch (err: any) { setError(err.response?.data?.error || 'Failed'); }
     setSaving(false);
   };
 
-  if (createdUser) {
+  if (created) {
     return (
-      <div className="bg-dark-600 rounded-xl p-4 mb-4 border border-accent-500/30">
+      <div className="bg-dark-700/60 rounded-2xl p-5 mb-4 border border-accent-500/30">
         <div className="flex items-center gap-3 mb-3">
-          <div className="w-8 h-8 rounded-xl bg-accent-500/15 flex items-center justify-center">
-            <CheckCircle size={16} className="text-accent-400" />
-          </div>
-          <h4 className="text-sm font-semibold text-accent-300">Team Member Created!</h4>
+          <CheckCircle size={18} className="text-accent-400" />
+          <h4 className="text-sm font-semibold text-accent-300">Team Member Created</h4>
         </div>
-        <div className="bg-dark-700 rounded-xl p-3 mb-3">
-          <p className="text-theme-heading font-mono text-sm">Username: <span className="text-accent-400">@{createdUser.username}</span></p>
+        <div className="bg-dark-800 rounded-xl p-3 mb-3 border border-dark-400/20">
+          <p className="text-theme-heading font-mono text-sm">Username: <span className="text-accent-400">@{created.username}</span></p>
           <div className="flex items-center justify-between mt-1">
-            <p className="text-theme-heading font-mono text-sm">Password: <span className="text-accent-400">{createdUser.password}</span></p>
-            <button onClick={() => navigator.clipboard.writeText(createdUser.password)} className="text-theme-muted hover:text-accent-400 transition-colors" title="Copy password">
-              <Copy size={14} />
-            </button>
+            <p className="text-theme-heading font-mono text-sm">Password: <span className="text-accent-400">{created.password}</span></p>
+            <button onClick={() => navigator.clipboard.writeText(created.password)} className="text-theme-muted hover:text-accent-400"><Copy size={14} /></button>
           </div>
         </div>
-        <p className="text-xs text-amber-400 mb-3">Save these credentials — the password won't be shown again!</p>
-        <button onClick={onAdded} className="btn-primary text-xs px-3 py-2">Done</button>
+        <p className="text-xs text-amber-400 mb-3">Save these credentials — the password won't be shown again</p>
+        <button onClick={onAdded} className="btn-primary text-xs">Done</button>
       </div>
     );
   }
 
   return (
-    <div className="bg-dark-600 rounded-xl p-4 mb-4 border border-dark-400/50">
+    <div className="bg-dark-700/60 rounded-2xl p-5 mb-4 border border-dark-400/20">
       <h4 className="text-sm font-semibold text-theme-heading mb-3">Add Team Member</h4>
-      <p className="text-xs text-theme-faint mb-3">Team members are super admins with access to all clients.</p>
+      <p className="text-xs text-theme-faint mb-3">Team members are super admins with access to all clients</p>
       <div className="grid grid-cols-3 gap-3 mb-3">
         <div>
           <label className="block text-xs font-medium text-theme-muted mb-1">Display Name</label>
@@ -1042,10 +1165,10 @@ function AddTeamMemberForm({ onAdded, onCancel }: { onAdded: () => void; onCance
       </div>
       {error && <p className="text-red-400 text-xs mb-2">{error}</p>}
       <div className="flex gap-2">
-        <button onClick={save} disabled={saving || !username || !password || !displayName} className="btn-primary text-xs px-3 py-2">
-          {saving ? 'Adding...' : 'Add Team Member'}
+        <button onClick={save} disabled={saving || !username || !password || !displayName} className="btn-primary text-xs">
+          {saving ? 'Adding...' : 'Add Member'}
         </button>
-        <button onClick={onCancel} className="btn-secondary text-xs px-3 py-2">Cancel</button>
+        <button onClick={onCancel} className="btn-secondary text-xs">Cancel</button>
       </div>
     </div>
   );
