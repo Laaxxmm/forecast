@@ -29,6 +29,9 @@ import ExcelUploadsPage from './pages/vcfo/ExcelUploadsPage';
 import BudgetsPage from './pages/vcfo/BudgetsPage';
 import CFOReviewPage from './pages/vcfo/CFOReviewPage';
 import VcfoSettingsPage from './pages/vcfo/VcfoSettingsPage';
+import TableViewPage from './pages/vcfo/TableViewPage';
+import AdjustmentsPage from './pages/vcfo/AdjustmentsPage';
+import PublishCloudPage from './pages/vcfo/PublishCloudPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const [auth, setAuth] = useState<boolean | null>(null);
@@ -105,6 +108,9 @@ export default function App() {
           <Route path="/pharmacy" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><PharmacyDetailPage /></ModuleRoute></ClientRoute>} />
           {/* VCFO Portal — internal module */}
           <Route path="/vcfo" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><VcfoDashboardPage /></ModuleRoute></ClientRoute>} />
+          <Route path="/vcfo/table-view" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><TableViewPage /></ModuleRoute></ClientRoute>} />
+          <Route path="/vcfo/adjustments" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><AdjustmentsPage /></ModuleRoute></ClientRoute>} />
+          <Route path="/vcfo/publish" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><PublishCloudPage /></ModuleRoute></ClientRoute>} />
           <Route path="/vcfo/sync" element={<ClientRoute><ClientAdminRoute><ModuleRoute moduleKey="vcfo_portal"><TallySyncPage /></ModuleRoute></ClientAdminRoute></ClientRoute>} />
           <Route path="/vcfo/trial-balance" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><TrialBalancePage /></ModuleRoute></ClientRoute>} />
           <Route path="/vcfo/profit-loss" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><VcfoProfitLossPage /></ModuleRoute></ClientRoute>} />
@@ -118,7 +124,7 @@ export default function App() {
           <Route path="/vcfo/uploads" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><ExcelUploadsPage /></ModuleRoute></ClientRoute>} />
           <Route path="/vcfo/budgets" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><BudgetsPage /></ModuleRoute></ClientRoute>} />
           <Route path="/vcfo/cfo-review" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><CFOReviewPage /></ModuleRoute></ClientRoute>} />
-          <Route path="/vcfo/settings" element={<ClientRoute><ClientAdminRoute><ModuleRoute moduleKey="vcfo_portal"><VcfoSettingsPage /></ModuleRoute></ClientAdminRoute></ClientRoute>} />
+          <Route path="/vcfo/settings" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><VcfoSettingsPage /></ModuleRoute></ClientRoute>} />
           <Route path="/settings" element={<ClientRoute><ClientAdminRoute><SettingsPage /></ClientAdminRoute></ClientRoute>} />
           <Route path="/admin/*" element={<SuperAdminRoute><AdminPage /></SuperAdminRoute>} />
           <Route path="/" element={<DefaultRedirect />} />
