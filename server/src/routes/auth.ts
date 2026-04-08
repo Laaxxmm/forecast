@@ -73,6 +73,19 @@ router.post('/login', loginLimiter, async (req, res) => {
       clientName: clientUser.client_name,
     });
 
+    // Ensure default modules exist for this client
+    const defaultModules = [
+      { key: 'forecast_ops', enabled: 1 },
+      { key: 'vcfo_portal', enabled: 0 },
+      { key: 'audit_view', enabled: 0 },
+    ];
+    for (const m of defaultModules) {
+      platformDb.run(
+        'INSERT OR IGNORE INTO client_modules (client_id, module_key, is_enabled) VALUES (?, ?, ?)',
+        clientUser.cid, m.key, m.enabled
+      );
+    }
+
     // Get enabled modules for this client
     const enabledModules = platformDb.all(
       'SELECT module_key FROM client_modules WHERE client_id = ? AND is_enabled = 1',
