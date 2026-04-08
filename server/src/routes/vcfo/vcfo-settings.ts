@@ -16,7 +16,7 @@ router.get('/', (req, res) => {
     for (const r of rows) settings[r.key] = r.value;
     res.json(settings);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -31,7 +31,7 @@ router.post('/', (req, res) => {
     }
     res.json({ success: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -43,7 +43,7 @@ router.get('/companies/:id/modules', (req, res) => {
     if (!company) return res.status(404).json({ error: 'Company not found' });
     res.json(JSON.parse(company.sync_modules || '{}'));
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -56,7 +56,7 @@ router.post('/companies/:id/modules', (req, res) => {
       JSON.stringify(modules), Number(req.params.id));
     res.json({ success: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

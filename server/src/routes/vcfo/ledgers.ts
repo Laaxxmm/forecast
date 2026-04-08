@@ -15,14 +15,15 @@ router.get('/search', (req, res) => {
     if (!ids || !ids.length) return res.json([]);
     const q = String(req.query.q || '').trim();
     if (!q) return res.json([]);
+    const escapedQ = q.replace(/[%_]/g, '\\$&');
     const rows = db.all(
       `SELECT DISTINCT name, group_name FROM vcfo_ledgers
-       WHERE company_id IN (${idPh(ids)}) AND name LIKE ? ORDER BY name LIMIT 50`,
-      ...ids, `%${q}%`
+       WHERE company_id IN (${idPh(ids)}) AND name LIKE ? ESCAPE '\\' ORDER BY name LIMIT 50`,
+      ...ids, `%${escapedQ}%`
     );
     res.json(rows);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -56,7 +57,7 @@ router.get('/by-category', (req, res) => {
     }
     res.json(categories);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -76,12 +77,16 @@ router.get('/for-writeoff', (req, res) => {
     const q = String(req.query.q || '').trim();
     let sql = `SELECT DISTINCT name, group_name FROM vcfo_ledgers WHERE company_id IN (${idPh(memberIds)})`;
     const params: any[] = [...memberIds];
-    if (q) { sql += ' AND name LIKE ?'; params.push(`%${q}%`); }
+    if (q) {
+      const escapedQ = q.replace(/[%_]/g, '\\$&');
+      sql += " AND name LIKE ? ESCAPE '\\'";
+      params.push(`%${escapedQ}%`);
+    }
     sql += ' ORDER BY name LIMIT 100';
 
     res.json(db.all(sql, ...params));
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

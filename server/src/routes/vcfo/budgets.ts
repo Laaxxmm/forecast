@@ -5,7 +5,7 @@
 import { Router } from 'express';
 import { idPh, resolveIds } from '../../services/vcfo/company-resolver.js';
 import { computeKPIData } from '../../services/vcfo/kpi-engine.js';
-import { startOfMonth, endOfMonth } from '../../services/vcfo/company-resolver.js';
+
 
 const router = Router();
 
@@ -24,7 +24,7 @@ router.get('/', (req, res) => {
 
     res.json(db.all(q, ...params));
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -52,7 +52,7 @@ router.post('/', (req, res) => {
     res.json({ success: true, count });
   } catch (err: any) {
     try { (req as any).tenantDb.exec('ROLLBACK'); } catch {}
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -91,7 +91,7 @@ router.get('/variance', (req, res) => {
 
     res.json({ variance, actuals });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

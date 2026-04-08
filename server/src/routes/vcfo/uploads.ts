@@ -16,7 +16,7 @@ router.get('/categories', (req, res) => {
     );
     res.json(cats.map((c: any) => ({ ...c, expected_columns: JSON.parse(c.expected_columns || '[]') })));
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -27,6 +27,9 @@ router.post('/excel', (req, res) => {
     const { category, periodMonth, companyId, filename, rows, headers, sheetName } = req.body;
     if (!category || !periodMonth || !rows || !Array.isArray(rows)) {
       return res.status(400).json({ error: 'category, periodMonth, and rows are required' });
+    }
+    if (rows.length > 10000) {
+      return res.status(400).json({ error: 'Too many rows (max 10000)' });
     }
 
     // Validate category
@@ -85,7 +88,7 @@ router.post('/excel', (req, res) => {
       throw innerErr;
     }
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -106,7 +109,7 @@ router.get('/list', (req, res) => {
     q += ' ORDER BY u.period_month DESC, u.uploaded_at DESC';
     res.json(db.all(q, ...params));
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -137,7 +140,7 @@ router.get('/grid', (req, res) => {
     }
     res.json(grid);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -156,7 +159,7 @@ router.get('/data/:uploadId', (req, res) => {
       data: rows.map((r: any) => ({ row_num: r.row_num, ...JSON.parse(r.row_data) }))
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -178,7 +181,7 @@ router.delete('/:uploadId', (req, res) => {
     }
     res.json({ success: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -361,7 +364,7 @@ router.get('/analytics', (req, res) => {
       doctors
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

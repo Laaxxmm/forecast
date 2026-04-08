@@ -36,8 +36,12 @@ export class TallyConnector {
   private xmlParser: XMLParser;
 
   constructor(config: TallyConfig = {}) {
-    this.host = config.host || 'localhost';
-    this.port = config.port || 9000;
+    // SSRF protection: only allow localhost/127.0.0.1 and valid port range
+    const rawHost = (config.host || 'localhost').trim().toLowerCase();
+    const allowedHosts = ['localhost', '127.0.0.1', '::1'];
+    this.host = allowedHosts.includes(rawHost) ? rawHost : 'localhost';
+    const rawPort = config.port || 9000;
+    this.port = (rawPort >= 1024 && rawPort <= 65535) ? rawPort : 9000;
     this.timeout = config.timeout || 30000;
     this.xmlParser = new XMLParser({
       parseTagValue: false,

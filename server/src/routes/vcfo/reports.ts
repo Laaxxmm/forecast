@@ -33,6 +33,7 @@ function resolveCompanyIds(db: DbHelper, req: Request): number[] | null {
 // ── Profit & Loss Statement ──────────────────────────────────────────────────
 
 router.get('/profit-loss', (req: Request, res: Response) => {
+  try {
   const db = req.tenantDb!;
   const from = req.query.from as string;
   const to = req.query.to as string;
@@ -125,11 +126,15 @@ router.get('/profit-loss', (req: Request, res: Response) => {
       netProfitMargin: salesSection.total > 0 ? (netProfit / salesSection.total) * 100 : 0,
     },
   });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // ── Monthly P&L Comparison ───────────────────────────────────────────────────
 
 router.get('/profit-loss/monthly', (req: Request, res: Response) => {
+  try {
   const db = req.tenantDb!;
   const from = req.query.from as string;
   const to = req.query.to as string;
@@ -180,11 +185,15 @@ router.get('/profit-loss/monthly', (req: Request, res: Response) => {
   }));
 
   res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // ── Balance Sheet ────────────────────────────────────────────────────────────
 
 router.get('/balance-sheet', (req: Request, res: Response) => {
+  try {
   const db = req.tenantDb!;
   const asOnDate = req.query.date as string;
   if (!asOnDate) return res.status(400).json({ error: 'date required' });
@@ -193,11 +202,6 @@ router.get('/balance-sheet', (req: Request, res: Response) => {
   if (!ids || ids.length === 0) return res.json({ sections: [], noData: true });
 
   // Get BS group classifications
-  const allGroups = db.all(
-    `SELECT DISTINCT group_name, parent_group, bs_pl FROM vcfo_account_groups WHERE company_id IN (${idPh(ids)})`,
-    ...ids
-  );
-
   // Standard BS parent groups
   const assetGroups = new Set(getGroupTree(db, ids, 'Current Assets')
     .concat(getGroupTree(db, ids, 'Fixed Assets'))
@@ -222,11 +226,10 @@ router.get('/balance-sheet', (req: Request, res: Response) => {
   let bsRows = db.all(
     `SELECT ledger_name, group_name, SUM(closing_balance) as closing_balance
      FROM vcfo_balance_sheet
-     WHERE company_id IN (${idPh(ids)}) AND as_on_date <= ?
+     WHERE company_id IN (${idPh(ids)}) AND as_on_date = (SELECT MAX(as_on_date) FROM vcfo_balance_sheet WHERE company_id IN (${idPh(ids)}) AND as_on_date <= ?)
      GROUP BY ledger_name, group_name
-     HAVING as_on_date = (SELECT MAX(as_on_date) FROM vcfo_balance_sheet WHERE company_id IN (${idPh(ids)}) AND as_on_date <= ?)
      ORDER BY group_name, ledger_name`,
-    ...ids, asOnDate, ...ids, asOnDate
+    ...ids, ...ids, asOnDate
   );
 
   // If no BS data, fall back to TB closing balances
@@ -234,11 +237,10 @@ router.get('/balance-sheet', (req: Request, res: Response) => {
     bsRows = db.all(
       `SELECT ledger_name, group_name, SUM(closing_balance) as closing_balance
        FROM vcfo_trial_balance
-       WHERE company_id IN (${idPh(ids)}) AND period_to <= ?
+       WHERE company_id IN (${idPh(ids)}) AND period_to = (SELECT MAX(period_to) FROM vcfo_trial_balance WHERE company_id IN (${idPh(ids)}) AND period_to <= ?)
        GROUP BY ledger_name, group_name
-       HAVING period_to = (SELECT MAX(period_to) FROM vcfo_trial_balance WHERE company_id IN (${idPh(ids)}) AND period_to <= ?)
        ORDER BY group_name, ledger_name`,
-      ...ids, asOnDate, ...ids, asOnDate
+      ...ids, ...ids, asOnDate
     );
   }
 
@@ -271,11 +273,15 @@ router.get('/balance-sheet', (req: Request, res: Response) => {
       currentRatio: liabilities.total !== 0 ? assets.total / Math.abs(liabilities.total) : 0,
     },
   });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // ── Bills Outstanding (Receivables & Payables) ───────────────────────────────
 
 router.get('/bills-outstanding', (req: Request, res: Response) => {
+  try {
   const db = req.tenantDb!;
   const nature = (req.query.nature as string) || 'receivable';
 
@@ -335,6 +341,9 @@ router.get('/bills-outstanding', (req: Request, res: Response) => {
   );
 
   res.json({ summary, aging, parties, bills });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // ── CFO Performance Review ──────────────────────────────────────────────────
@@ -644,7 +653,8 @@ function buildComplianceCalendar() {
   for (let m = 0; m < 2; m++) {
     const d = new Date(now.getFullYear(), now.getMonth() + m, 1);
     for (const item of items) {
-      const dt = new Date(d.getFullYear(), d.getMonth(), item.day);
+      const maxDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+      const dt = new Date(d.getFullYear(), d.getMonth(), Math.min(item.day, maxDay));
       if (dt >= now && dt <= new Date(now.getTime() + 60 * 86400000)) {
         calendar.push({
           date: dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),

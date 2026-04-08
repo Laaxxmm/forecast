@@ -30,7 +30,7 @@ router.get('/', (req, res) => {
     }
     res.json(groups);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -47,7 +47,7 @@ router.post('/', (req, res) => {
     res.json({ id: result.lastInsertRowid, name, description: description || '' });
   } catch (err: any) {
     if (err.message?.includes('UNIQUE')) return res.status(409).json({ error: 'Group name already exists' });
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -62,7 +62,7 @@ router.put('/:id', (req, res) => {
     );
     res.json({ success: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -73,7 +73,7 @@ router.delete('/:id', (req, res) => {
     db.run('DELETE FROM vcfo_company_groups WHERE id = ?', Number(req.params.id));
     res.json({ success: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -94,7 +94,7 @@ router.put('/:id/members', (req, res) => {
     res.json({ success: true, count: companyIds.length });
   } catch (err: any) {
     try { (req as any).tenantDb.exec('ROLLBACK'); } catch {}
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -107,7 +107,7 @@ router.post('/:id/members/add', (req, res) => {
       Number(req.params.id), Number(companyId));
     res.json({ success: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -118,7 +118,7 @@ router.delete('/members/company/:companyId', (req, res) => {
     db.run('DELETE FROM vcfo_company_group_members WHERE company_id = ?', Number(req.params.companyId));
     res.json({ success: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

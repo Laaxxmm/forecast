@@ -373,7 +373,7 @@ export default function VcfoDashboardPage() {
             {/* LEFT: Hero cards stacked */}
             <div className="flex flex-col gap-4">
               {/* Total Revenue — hero */}
-              <div className="bg-dark-700 rounded-xl border border-dark-400/30 p-7 flex-1 flex flex-col justify-center cursor-pointer hover:-translate-y-0.5 hover:shadow-lg transition-all">
+              <div className="bg-dark-700 rounded-xl border border-dark-400/30 p-7 flex-1 flex flex-col justify-center hover:-translate-y-0.5 hover:shadow-lg transition-all">
                 <p className="text-[11px] font-bold uppercase tracking-widest text-theme-faint mb-3">Total Revenue</p>
                 <div className="flex items-center justify-between">
                   <p className="text-4xl font-extrabold text-theme-heading" style={{ letterSpacing: '-0.03em', lineHeight: 1 }}>{fmt(totalRevenue)}</p>
@@ -384,7 +384,7 @@ export default function VcfoDashboardPage() {
               </div>
 
               {/* Total Expenses — hero */}
-              <div className="bg-dark-700 rounded-xl border border-dark-400/30 p-7 flex-1 flex flex-col justify-center cursor-pointer hover:-translate-y-0.5 hover:shadow-lg transition-all" style={{ borderLeft: '4px solid #dc2626' }}>
+              <div className="bg-dark-700 rounded-xl border border-dark-400/30 p-7 flex-1 flex flex-col justify-center hover:-translate-y-0.5 hover:shadow-lg transition-all" style={{ borderLeft: '4px solid #dc2626' }}>
                 <p className="text-[11px] font-bold uppercase tracking-widest text-theme-faint mb-3">Total Expenses</p>
                 <div className="flex items-center justify-between">
                   <p className="text-4xl font-extrabold text-red-400" style={{ letterSpacing: '-0.03em', lineHeight: 1 }}>{fmt(totalExpenses)}</p>
@@ -398,14 +398,14 @@ export default function VcfoDashboardPage() {
             {/* RIGHT: 2×2 smaller cards */}
             <div className="grid grid-cols-2 gap-4">
               {/* Gross Profit */}
-              <div className="bg-dark-700 rounded-xl border border-dark-400/30 p-5 flex flex-col justify-center cursor-pointer hover:-translate-y-0.5 hover:shadow-md transition-all">
+              <div className="bg-dark-700 rounded-xl border border-dark-400/30 p-5 flex flex-col justify-center hover:-translate-y-0.5 hover:shadow-md transition-all">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-theme-faint mb-2">Gross Profit</p>
                 <p className="text-2xl font-extrabold text-theme-heading" style={{ letterSpacing: '-0.02em' }}>{fmt(k.grossProfit)}</p>
                 <p className="text-[11px] text-theme-faint mt-2">Margin: {gpMargin}%</p>
               </div>
 
               {/* Net Profit */}
-              <div className="bg-dark-700 rounded-xl border border-dark-400/30 p-5 flex flex-col justify-center cursor-pointer hover:-translate-y-0.5 hover:shadow-md transition-all">
+              <div className="bg-dark-700 rounded-xl border border-dark-400/30 p-5 flex flex-col justify-center hover:-translate-y-0.5 hover:shadow-md transition-all">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-theme-faint mb-2">Net Profit</p>
                 <p className={`text-2xl font-extrabold ${(k.netProfit || 0) >= 0 ? 'text-theme-heading' : 'text-red-400'}`} style={{ letterSpacing: '-0.02em' }}>{fmt(k.netProfit)}</p>
                 <div className="mt-2">
@@ -417,14 +417,14 @@ export default function VcfoDashboardPage() {
               </div>
 
               {/* Cash & Bank */}
-              <div className="bg-dark-700 rounded-xl border border-dark-400/30 p-5 flex flex-col justify-center cursor-pointer hover:-translate-y-0.5 hover:shadow-md transition-all">
+              <div className="bg-dark-700 rounded-xl border border-dark-400/30 p-5 flex flex-col justify-center hover:-translate-y-0.5 hover:shadow-md transition-all">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-theme-faint mb-2">Cash & Bank</p>
                 <p className="text-2xl font-extrabold text-theme-heading" style={{ letterSpacing: '-0.02em' }}>{fmt(k.cashBankBalance)}</p>
                 <div className="mt-2"><span className="text-[11px] font-semibold text-emerald-400">{'\u25CF'} Liquid Assets Stable</span></div>
               </div>
 
               {/* Closing Stock */}
-              <div className="bg-dark-700 rounded-xl border border-dark-400/30 p-5 flex flex-col justify-center cursor-pointer hover:-translate-y-0.5 hover:shadow-md transition-all">
+              <div className="bg-dark-700 rounded-xl border border-dark-400/30 p-5 flex flex-col justify-center hover:-translate-y-0.5 hover:shadow-md transition-all">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-theme-faint mb-2">Closing Stock</p>
                 <p className="text-2xl font-extrabold text-theme-heading" style={{ letterSpacing: '-0.02em' }}>{fmt(k.closingStock)}</p>
               </div>
@@ -545,7 +545,8 @@ export default function VcfoDashboardPage() {
             </div>
 
             {/* Inventory */}
-            <div className="bg-dark-700 rounded-xl border border-dark-400/30 px-5 py-4 cursor-pointer hover:shadow-md transition">
+            <div className="bg-dark-700 rounded-xl border border-dark-400/30 px-5 py-4 cursor-pointer hover:shadow-md transition"
+              onClick={() => navigate('/vcfo/table-view')}>
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-purple-500/10">
                   <svg width="18" height="18" fill="none" stroke="#7c3aed" strokeWidth="1.8" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>

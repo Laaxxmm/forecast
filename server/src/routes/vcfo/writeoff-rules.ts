@@ -22,7 +22,7 @@ router.get('/', (req, res) => {
     }
     res.json(rules);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -40,7 +40,7 @@ router.post('/', (req, res) => {
     );
     res.json({ id: result.lastInsertRowid });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -65,7 +65,7 @@ router.put('/:id', (req, res) => {
     );
     res.json({ success: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -76,7 +76,7 @@ router.put('/:id/toggle', (req, res) => {
       Number(req.params.id));
     res.json({ success: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -86,7 +86,7 @@ router.delete('/:id', (req, res) => {
     db.run('DELETE FROM vcfo_writeoff_rules WHERE id = ?', Number(req.params.id));
     res.json({ success: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

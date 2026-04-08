@@ -27,8 +27,8 @@ function getState(req: Request): SyncState {
 // Helper to get Tally host/port from tenant settings
 function getTallyConfig(req: Request): { host: string; port: number } {
   const db = req.tenantDb!;
-  const hostRow = db.get("SELECT value FROM app_settings WHERE key = 'tally_host'");
-  const portRow = db.get("SELECT value FROM app_settings WHERE key = 'tally_port'");
+  const hostRow = db.get("SELECT value FROM vcfo_app_settings WHERE key = 'tally_host'");
+  const portRow = db.get("SELECT value FROM vcfo_app_settings WHERE key = 'tally_port'");
   return {
     host: hostRow?.value || 'localhost',
     port: parseInt(portRow?.value || '9000'),
@@ -38,14 +38,18 @@ function getTallyConfig(req: Request): { host: string; port: number } {
 // ── Tally connection status ──────────────────────────────────────────────────
 
 router.get('/status', async (req: Request, res: Response) => {
-  const { host, port } = getTallyConfig(req);
-  const tally = new TallyConnector({ host, port });
-  const health = await tally.healthCheck();
-  const state = getState(req);
-  res.json({
-    tally: health,
-    sync: { inProgress: state.inProgress, progress: state.progress },
-  });
+  try {
+    const { host, port } = getTallyConfig(req);
+    const tally = new TallyConnector({ host, port });
+    const health = await tally.healthCheck();
+    const state = getState(req);
+    res.json({
+      tally: health,
+      sync: { inProgress: state.inProgress, progress: state.progress },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // ── List companies from live Tally ───────────────────────────────────────────
@@ -71,7 +75,7 @@ router.get('/companies', async (req: Request, res: Response) => {
     });
     res.json({ companies: enriched });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -113,7 +117,7 @@ router.post('/sync', async (req: Request, res: Response) => {
   const alive = await extractor.tally.ping();
   if (!alive) {
     state.inProgress = false;
-    return res.status(503).json({ error: `Tally is not reachable at ${host}:${port}` });
+    return res.status(503).json({ error: 'Tally is not reachable' });
   }
 
   // Run sync in background
@@ -137,38 +141,54 @@ router.post('/sync', async (req: Request, res: Response) => {
 // ── Poll sync progress ───────────────────────────────────────────────────────
 
 router.get('/sync/progress', (req: Request, res: Response) => {
-  const state = getState(req);
-  res.json({ inProgress: state.inProgress, progress: state.progress });
+  try {
+    const state = getState(req);
+    res.json({ inProgress: state.inProgress, progress: state.progress });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // ── Sync log ─────────────────────────────────────────────────────────────────
 
 router.get('/sync/log', (req: Request, res: Response) => {
-  const db = req.tenantDb!;
-  const companyId = req.query.companyId ? parseInt(req.query.companyId as string) : null;
-  let sql = 'SELECT * FROM vcfo_sync_log';
-  const params: any[] = [];
-  if (companyId) {
-    sql += ' WHERE company_id = ?';
-    params.push(companyId);
+  try {
+    const db = req.tenantDb!;
+    const companyId = req.query.companyId ? parseInt(req.query.companyId as string) : null;
+    let sql = 'SELECT * FROM vcfo_sync_log';
+    const params: any[] = [];
+    if (companyId) {
+      sql += ' WHERE company_id = ?';
+      params.push(companyId);
+    }
+    sql += ' ORDER BY id DESC LIMIT 100';
+    res.json(db.all(sql, ...params));
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal server error' });
   }
-  sql += ' ORDER BY id DESC LIMIT 100';
-  res.json(db.all(sql, ...params));
 });
 
 // ── Tally credentials (host/port) ────────────────────────────────────────────
 
 router.get('/credentials', (req: Request, res: Response) => {
-  const { host, port } = getTallyConfig(req);
-  res.json({ host, port });
+  try {
+    const { host, port } = getTallyConfig(req);
+    res.json({ host, port });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 router.put('/credentials', (req: Request, res: Response) => {
-  const db = req.tenantDb!;
-  const { host, port } = req.body;
-  if (host) db.run("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('tally_host', ?, datetime('now'))", host);
-  if (port) db.run("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('tally_port', ?, datetime('now'))", String(port));
-  res.json({ success: true });
+  try {
+    const db = req.tenantDb!;
+    const { host, port } = req.body;
+    if (host) db.run("INSERT OR REPLACE INTO vcfo_app_settings (key, value, updated_at) VALUES ('tally_host', ?, datetime('now'))", host);
+    if (port) db.run("INSERT OR REPLACE INTO vcfo_app_settings (key, value, updated_at) VALUES ('tally_port', ?, datetime('now'))", String(port));
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 export default router;
