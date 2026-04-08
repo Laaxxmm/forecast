@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, TrendingUp, Upload, Settings, LogOut, BarChart3, Building2, ArrowLeftRight,
@@ -19,9 +18,13 @@ const utilityLinks = [
   { to: '/settings', icon: Settings, label: 'Settings', clientAdminOnly: true },
 ];
 
-export default function Sidebar() {
+interface SidebarProps {
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
+}
+
+export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
   const navigate = useNavigate();
-  const [expanded, setExpanded] = useState(false);
   const userType = localStorage.getItem('user_type');
   const userRole = localStorage.getItem('user_role');
   const clientName = localStorage.getItem('client_name');
@@ -73,8 +76,8 @@ export default function Sidebar() {
   return (
     <aside
       className={`${w} bg-dark-800 text-white flex flex-col min-h-screen fixed left-0 top-0 z-40 border-r border-dark-400/30 transition-all duration-200 ease-in-out overflow-hidden`}
-      onMouseEnter={() => setExpanded(true)}
-      onMouseLeave={() => setExpanded(false)}
+      onMouseEnter={() => onExpandedChange(true)}
+      onMouseLeave={() => onExpandedChange(false)}
     >
       {/* Logo */}
       <div className="px-4 py-5 border-b border-dark-400/30">
