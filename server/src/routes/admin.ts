@@ -115,7 +115,7 @@ router.post('/clients', async (req: Request, res: Response) => {
 
 router.put('/clients/:slug', async (req: Request, res: Response) => {
   const db = await getPlatformHelper();
-  const { name, is_active } = req.body;
+  const { name, is_active, industry } = req.body;
 
   const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
   if (!client) return res.status(404).json({ error: 'Client not found' });
@@ -125,6 +125,9 @@ router.put('/clients/:slug', async (req: Request, res: Response) => {
   }
   if (is_active !== undefined) {
     db.run('UPDATE clients SET is_active = ?, updated_at = datetime(\'now\') WHERE id = ?', [is_active ? 1 : 0, client.id]);
+  }
+  if (industry !== undefined) {
+    db.run('UPDATE clients SET industry = ?, updated_at = datetime(\'now\') WHERE id = ?', [industry, client.id]);
   }
 
   res.json({ ok: true });

@@ -289,6 +289,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
   const [newStreamName, setNewStreamName] = useState('');
   const [newStreamColor, setNewStreamColor] = useState('accent');
   const [resetResult, setResetResult] = useState<{username: string; password: string} | null>(null);
+  const [industries, setIndustries] = useState<any[]>([]);
 
   const loadDetail = useCallback(() => {
     Promise.all([
@@ -303,6 +304,15 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
       setLoading(false);
     });
   }, [slug]);
+
+  useEffect(() => {
+    api.get('/admin/industries').then(res => setIndustries(res.data)).catch(() => {});
+  }, []);
+
+  const changeIndustry = async (newIndustry: string) => {
+    await api.put(`/admin/clients/${slug}`, { industry: newIndustry });
+    loadDetail();
+  };
 
   useEffect(() => { loadDetail(); }, [loadDetail]);
 
@@ -353,7 +363,19 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
             </div>
             <div>
               <h2 className="text-xl font-bold text-white">{client.name}</h2>
-              <p className="text-sm text-slate-500 font-mono">{client.slug} · <span className="text-slate-400 font-sans">{client.industry || 'Custom'}</span></p>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-slate-500 font-mono">{client.slug}</span>
+                <span className="text-slate-600">·</span>
+                <select
+                  value={client.industry || 'custom'}
+                  onChange={e => changeIndustry(e.target.value)}
+                  className="text-sm bg-dark-600 text-slate-300 border border-dark-400/30 rounded-lg px-2 py-0.5 cursor-pointer hover:border-accent-500/30 transition-colors"
+                >
+                  {industries.map((ind: any) => (
+                    <option key={ind.key} value={ind.key}>{ind.label}</option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-3">
