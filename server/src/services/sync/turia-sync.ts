@@ -110,10 +110,12 @@ export async function syncTuria(opts: TuriaSyncOptions): Promise<TuriaSyncResult
     const otpInputCount = await otpInputs.count();
 
     if (otpInputCount >= 4) {
-      // Fill individual digit inputs
+      // Fill individual digit inputs — use keyboard type to trigger React state updates
       for (let i = 0; i < otp.length && i < otpInputCount; i++) {
-        await otpInputs.nth(i).fill(otp[i]);
-        await page.waitForTimeout(100);
+        await otpInputs.nth(i).click();
+        await otpInputs.nth(i).fill('');
+        await otpInputs.nth(i).pressSequentially(otp[i], { delay: 50 });
+        await page.waitForTimeout(200);
       }
     } else {
       // Try a single OTP input field
@@ -121,13 +123,16 @@ export async function syncTuria(opts: TuriaSyncOptions): Promise<TuriaSyncResult
       await singleOtpInput.fill(otp);
     }
 
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(1500);
     await screenshot('otp-entered');
 
-    // Click Verify button
+    // Click Verify OTP button
     progress(opts, 'login', 'Verifying OTP...', 35);
-    const verifyBtn = page.locator('button:has-text("Verify"), button:has-text("verify"), button:has-text("Submit"), button:has-text("submit")').first();
-    await verifyBtn.click();
+    const verifyBtn = page.locator('button:has-text("Verify OTP"), button:has-text("Verify"), button:has-text("verify"), button:has-text("Submit"), button:has-text("submit"), button:has-text("Login"), button:has-text("login")').first();
+    // Wait for button to be enabled (it enables after OTP is fully entered)
+    await verifyBtn.waitFor({ state: 'visible', timeout: 10000 });
+    await page.waitForTimeout(500);
+    await verifyBtn.click({ force: true });
     await page.waitForTimeout(5000);
     await screenshot('post-verify');
 
