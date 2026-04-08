@@ -1,6 +1,6 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
-  LayoutDashboard, TrendingUp, Upload, Stethoscope, Pill, Settings, LogOut, BarChart3, Building2, ArrowLeftRight
+  LayoutDashboard, TrendingUp, Upload, Settings, LogOut, BarChart3, Building2, ArrowLeftRight
 } from 'lucide-react';
 import api from '../../api/client';
 
@@ -10,8 +10,6 @@ const clientLinks = [
   { to: '/forecast', icon: TrendingUp, label: 'Forecast', clientAdminOnly: false },
   { to: '/analysis', icon: BarChart3, label: 'Analysis', clientAdminOnly: false },
   { to: '/import', icon: Upload, label: 'Import Data', clientAdminOnly: true },
-  { to: '/clinic', icon: Stethoscope, label: 'Clinic Details', clientAdminOnly: false },
-  { to: '/pharmacy', icon: Pill, label: 'Pharmacy Details', clientAdminOnly: false },
   { to: '/settings', icon: Settings, label: 'Settings', clientAdminOnly: true },
 ];
 

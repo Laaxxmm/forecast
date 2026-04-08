@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, Area, AreaChart } from 'recharts';
 import api from '../api/client';
 import { formatINR, formatNumber, getMonthLabel } from '../utils/format';
@@ -13,8 +14,8 @@ interface OverviewData {
 
 const COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899'];
 
-function KPICard({ title, value, subtitle, icon: Icon, trend, color = 'accent' }: {
-  title: string; value: string; subtitle?: string; icon: any; trend?: number; color?: string;
+function KPICard({ title, value, subtitle, icon: Icon, trend, color = 'accent', onClick }: {
+  title: string; value: string; subtitle?: string; icon: any; trend?: number; color?: string; onClick?: () => void;
 }) {
   const colorMap: Record<string, { bg: string; icon: string; glow: string }> = {
     accent: { bg: 'bg-accent-500/10', icon: 'text-accent-400', glow: 'border-accent-500/20' },
@@ -25,7 +26,7 @@ function KPICard({ title, value, subtitle, icon: Icon, trend, color = 'accent' }
   const c = colorMap[color] || colorMap.accent;
 
   return (
-    <div className={`card border ${c.glow}`}>
+    <div className={`card border ${c.glow}${onClick ? ' cursor-pointer hover:scale-[1.02] transition-transform' : ''}`} onClick={onClick}>
       <div className="flex items-start justify-between mb-4">
         <div className={`p-2.5 rounded-xl ${c.bg}`}>
           <Icon size={20} className={c.icon} />
@@ -49,6 +50,7 @@ function KPICard({ title, value, subtitle, icon: Icon, trend, color = 'accent' }
 }
 
 export default function DashboardPage() {
+  const navigate = useNavigate();
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -126,6 +128,7 @@ export default function DashboardPage() {
           icon={Stethoscope}
           color="blue"
           trend={clinicBudgetVar}
+          onClick={() => navigate('/clinic')}
         />
         <KPICard
           title="Pharmacy Sales"
@@ -134,6 +137,7 @@ export default function DashboardPage() {
           icon={Pill}
           color="purple"
           trend={pharmaBudgetVar}
+          onClick={() => navigate('/pharmacy')}
         />
         <KPICard
           title="Unique Patients"
