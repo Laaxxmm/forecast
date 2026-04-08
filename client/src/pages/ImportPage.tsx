@@ -20,10 +20,10 @@ interface ImportLog {
   created_at: string;
 }
 
-const sources: { key: Source; label: string; desc: string; icon: any; endpoint: string }[] = [
-  { key: 'healthplix', label: 'Healthplix', desc: 'Clinic billing report', icon: Stethoscope, endpoint: '/import/healthplix' },
-  { key: 'oneglance-sales', label: 'Oneglance Sales', desc: 'Pharmacy sales report', icon: Pill, endpoint: '/import/oneglance-sales' },
-  { key: 'oneglance-purchase', label: 'Oneglance Purchase', desc: 'Pharmacy purchase report', icon: ShoppingCart, endpoint: '/import/oneglance-purchase' },
+const allSources: { key: Source; label: string; desc: string; icon: any; endpoint: string; integration: string }[] = [
+  { key: 'healthplix', label: 'Healthplix', desc: 'Clinic billing report', icon: Stethoscope, endpoint: '/import/healthplix', integration: 'healthplix' },
+  { key: 'oneglance-sales', label: 'Oneglance Sales', desc: 'Pharmacy sales report', icon: Pill, endpoint: '/import/oneglance-sales', integration: 'oneglance' },
+  { key: 'oneglance-purchase', label: 'Oneglance Purchase', desc: 'Pharmacy purchase report', icon: ShoppingCart, endpoint: '/import/oneglance-purchase', integration: 'oneglance' },
 ];
 
 function fmtDate(d: Date): string {
@@ -167,7 +167,15 @@ export default function ImportPage() {
   const [error, setError] = useState('');
   const [history, setHistory] = useState<ImportLog[]>([]);
   const [dragOver, setDragOver] = useState(false);
-  const [syncSource, setSyncSource] = useState<SyncSource>('healthplix');
+  // Filter sources by enabled integrations
+  const enabledIntegrations: string[] = (() => {
+    try { return JSON.parse(localStorage.getItem('enabled_integrations') || '[]'); } catch { return []; }
+  })();
+  const sources = allSources.filter(s => enabledIntegrations.includes(s.integration));
+  const showHpSync = enabledIntegrations.includes('healthplix');
+  const showOgSync = enabledIntegrations.includes('oneglance');
+
+  const [syncSource, setSyncSource] = useState<SyncSource>(showHpSync ? 'healthplix' : 'oneglance');
   const [syncDates, setSyncDates] = useState(getDefaultDates);
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<any>(null);
@@ -184,8 +192,12 @@ export default function ImportPage() {
   useEffect(() => { loadHistory(); }, [loadHistory]);
 
   useEffect(() => {
-    api.get('/sync/credentials/healthplix').then(res => setHasHpCreds(res.data.hasPassword && !!res.data.username)).catch(() => setHasHpCreds(false));
-    api.get('/sync/credentials/oneglance').then(res => setHasOgCreds(res.data.hasPassword && !!res.data.username)).catch(() => setHasOgCreds(false));
+    if (showHpSync) {
+      api.get('/sync/credentials/healthplix').then(res => setHasHpCreds(res.data.hasPassword && !!res.data.username)).catch(() => setHasHpCreds(false));
+    }
+    if (showOgSync) {
+      api.get('/sync/credentials/oneglance').then(res => setHasOgCreds(res.data.hasPassword && !!res.data.username)).catch(() => setHasOgCreds(false));
+    }
   }, []);
 
   const handleUpload = async () => {
@@ -250,7 +262,7 @@ export default function ImportPage() {
   return (
     <div className="animate-fade-in">
       <h1 className="text-2xl font-bold text-theme-heading mb-1">Import Data</h1>
-      <p className="text-theme-faint text-sm mb-6">Upload Excel reports or sync directly from Healthplix / Oneglance</p>
+      <p className="text-theme-faint text-sm mb-6">Upload Excel reports{(showHpSync || showOgSync) ? ' or sync directly from your integrations' : ''}</p>
 
       {/* Mode Toggle */}
       <div className="flex gap-2 mb-6">
@@ -264,16 +276,18 @@ export default function ImportPage() {
         >
           <Upload size={16} /> Upload File
         </button>
-        <button
-          onClick={() => { setMode('sync'); reset(); }}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            mode === 'sync'
-              ? 'bg-accent-500 text-white shadow-glow'
-              : 'bg-dark-700 text-theme-muted border border-dark-400/50 hover:border-dark-300'
-          }`}
-        >
-          <Cloud size={16} /> Auto Sync
-        </button>
+        {(showHpSync || showOgSync) && (
+          <button
+            onClick={() => { setMode('sync'); reset(); }}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
+              mode === 'sync'
+                ? 'bg-accent-500 text-white shadow-glow'
+                : 'bg-dark-700 text-theme-muted border border-dark-400/50 hover:border-dark-300'
+            }`}
+          >
+            <Cloud size={16} /> Auto Sync
+          </button>
+        )}
       </div>
 
       {/* UPLOAD MODE */}
@@ -343,32 +357,34 @@ export default function ImportPage() {
       {/* SYNC MODE */}
       {mode === 'sync' && !result && (
         <div className="card mb-8">
-          <div className="flex gap-3 mb-5">
-            <button
-              onClick={() => { setSyncSource('healthplix'); setSyncStatus(null); setError(''); }}
-              disabled={syncing}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex-1 ${
-                syncSource === 'healthplix'
-                  ? 'bg-accent-500/10 border-2 border-accent-500/50 text-accent-400'
-                  : 'bg-dark-600 border border-dark-400/50 text-theme-muted hover:border-dark-300'
-              }`}
-            >
-              <Stethoscope size={18} /> Healthplix
-              <span className="text-xs text-theme-faint ml-auto">Clinic</span>
-            </button>
-            <button
-              onClick={() => { setSyncSource('oneglance'); setSyncStatus(null); setError(''); }}
-              disabled={syncing}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex-1 ${
-                syncSource === 'oneglance'
-                  ? 'bg-purple-500/10 border-2 border-purple-500/50 text-purple-400'
-                  : 'bg-dark-600 border border-dark-400/50 text-theme-muted hover:border-dark-300'
-              }`}
-            >
-              <Pill size={18} /> Oneglance
-              <span className="text-xs text-theme-faint ml-auto">Pharmacy</span>
-            </button>
-          </div>
+          {(showHpSync && showOgSync) && (
+            <div className="flex gap-3 mb-5">
+              <button
+                onClick={() => { setSyncSource('healthplix'); setSyncStatus(null); setError(''); }}
+                disabled={syncing}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex-1 ${
+                  syncSource === 'healthplix'
+                    ? 'bg-accent-500/10 border-2 border-accent-500/50 text-accent-400'
+                    : 'bg-dark-600 border border-dark-400/50 text-theme-muted hover:border-dark-300'
+                }`}
+              >
+                <Stethoscope size={18} /> Healthplix
+                <span className="text-xs text-theme-faint ml-auto">Clinic</span>
+              </button>
+              <button
+                onClick={() => { setSyncSource('oneglance'); setSyncStatus(null); setError(''); }}
+                disabled={syncing}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex-1 ${
+                  syncSource === 'oneglance'
+                    ? 'bg-purple-500/10 border-2 border-purple-500/50 text-purple-400'
+                    : 'bg-dark-600 border border-dark-400/50 text-theme-muted hover:border-dark-300'
+                }`}
+              >
+                <Pill size={18} /> Oneglance
+                <span className="text-xs text-theme-faint ml-auto">Pharmacy</span>
+              </button>
+            </div>
+          )}
 
           <div className="flex items-center gap-3 mb-4">
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${

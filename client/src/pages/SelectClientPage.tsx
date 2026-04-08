@@ -28,13 +28,19 @@ export default function SelectClientPage() {
   const selectClient = async (client: Client) => {
     localStorage.setItem('client_slug', client.slug);
     localStorage.setItem('client_name', client.name);
-    // Fetch enabled modules for this client
+    // Fetch enabled modules and integrations for this client
     try {
-      const res = await api.get(`/admin/clients/${client.slug}/modules`);
-      const enabled = res.data.filter((m: any) => m.is_enabled).map((m: any) => m.module_key);
-      localStorage.setItem('enabled_modules', JSON.stringify(enabled));
+      const [modRes, intRes] = await Promise.all([
+        api.get(`/admin/clients/${client.slug}/modules`),
+        api.get(`/admin/clients/${client.slug}/integrations`),
+      ]);
+      const enabledMods = modRes.data.filter((m: any) => m.is_enabled).map((m: any) => m.module_key);
+      localStorage.setItem('enabled_modules', JSON.stringify(enabledMods));
+      const enabledInts = intRes.data.catalog?.filter((i: any) => i.enabled).map((i: any) => i.key) || [];
+      localStorage.setItem('enabled_integrations', JSON.stringify(enabledInts));
     } catch {
       localStorage.setItem('enabled_modules', JSON.stringify(['forecast_ops']));
+      localStorage.setItem('enabled_integrations', JSON.stringify([]));
     }
     navigate('/modules');
   };

@@ -93,6 +93,12 @@ router.post('/login', loginLimiter, async (req, res) => {
       clientUser.cid
     ).map((m: any) => m.module_key);
 
+    // Get enabled integrations for this client
+    const enabledIntegrations = platformDb.all(
+      'SELECT integration_key FROM client_integrations WHERE client_id = ? AND is_enabled = 1',
+      clientUser.cid
+    ).map((i: any) => i.integration_key);
+
     // Get branch info for multi-branch clients
     let branches: any[] = [];
     let defaultBranchId: number | null = null;
@@ -131,6 +137,7 @@ router.post('/login', loginLimiter, async (req, res) => {
       branches,
       defaultBranchId,
       enabledModules,
+      enabledIntegrations,
       token,
     });
   }
