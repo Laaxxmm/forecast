@@ -378,13 +378,14 @@ const TYPE_DEFS: Record<string, TypeDef> = {
       {
         key: 'cost',
         label: 'Purchase Cost',
-        question: 'What is the purchase cost of this asset?',
-        helpText: 'Enter the cost for each month you plan to purchase this asset. For a one-time purchase, enter the amount in the purchase month only.',
+        question: 'How much will you pay for this asset?',
+        helpText: 'Enter the expected purchase price and date. If this is an asset you already own as of the start of the forecast, don\'t enter it here — it will be part of the starting balances instead.',
         entryModes: [
-          { value: 'varying', label: 'Varying amounts over time (Rs)' },
+          { value: 'one_time', label: 'One-time amount (Rs)' },
           { value: 'constant', label: 'Constant amount (Rs)' },
+          { value: 'varying', label: 'Varying amounts over time (Rs)' },
         ],
-        defaultEntryMode: 'varying',
+        defaultEntryMode: 'one_time',
         unit: 'Rs',
       },
     ],
@@ -400,13 +401,14 @@ const TYPE_DEFS: Record<string, TypeDef> = {
       {
         key: 'amount',
         label: 'Asset Amount',
-        question: 'What is the monthly amount for this current asset?',
-        helpText: 'Enter the monthly cost or value of current assets like inventory, prepaid expenses, or short-term investments.',
+        question: 'How much will you pay for this asset?',
+        helpText: 'Enter the expected purchase price and date. For current assets, the value is expected to be consumed or converted to cash within 12 months.',
         entryModes: [
-          { value: 'varying', label: 'Varying amounts over time (Rs)' },
+          { value: 'one_time', label: 'One-time amount (Rs)' },
           { value: 'constant', label: 'Constant amount (Rs)' },
+          { value: 'varying', label: 'Varying amounts over time (Rs)' },
         ],
-        defaultEntryMode: 'varying',
+        defaultEntryMode: 'one_time',
         unit: 'Rs',
       },
     ],
@@ -562,6 +564,12 @@ export default function ItemEditForm({ item, category, months, values: initialVa
   // One-time entry mode state
   const [oneTimeMonth, setOneTimeMonth] = useState<string>(item.meta?.oneTimeMonth || months[0]);
   const [oneTimeAmount, setOneTimeAmount] = useState<number>(item.meta?.oneTimeAmount || 0);
+
+  // Asset-specific config
+  const isAssetCategory = category === 'assets';
+  const [assetUsefulLife, setAssetUsefulLife] = useState<string>(item.meta?.useful_life || 'forever');
+  const [assetCustomLife, setAssetCustomLife] = useState<number>(item.meta?.custom_life_value || 5);
+  const [assetPlanToSell, setAssetPlanToSell] = useState<boolean>(item.meta?.plan_to_sell || false);
 
   // Revenue items for the revenue stream selector
   const revenueItems = useMemo(() => (allItems || []).filter(i => i.category === 'revenue'), [allItems]);
@@ -733,6 +741,10 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           linked_revenue_id: pctLinkedRevenueId,
           oneTimeMonth,
           oneTimeAmount,
+          // Asset fields
+          useful_life: assetUsefulLife,
+          custom_life_value: assetCustomLife,
+          plan_to_sell: assetPlanToSell,
         },
       });
 
@@ -863,6 +875,19 @@ export default function ItemEditForm({ item, category, months, values: initialVa
               <option key={t.value} value={t.value}>{t.label}</option>
             ))}
           </select>
+        ) : isAssetCategory ? (
+          <select
+            value={itemType}
+            onChange={e => {
+              setItemType(e.target.value);
+              setAssetUsefulLife(e.target.value === 'long_term' ? 'forever' : 'full');
+              setAssetPlanToSell(false);
+            }}
+            className="input text-sm w-auto py-1.5"
+          >
+            <option value="long_term">Long-term asset</option>
+            <option value="current">Current asset</option>
+          </select>
         ) : (
           <div className="flex items-center gap-2 px-3 py-1.5 border border-dark-400/50 rounded-lg text-sm bg-dark-700">
             <span className="text-base">
@@ -914,6 +939,101 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                 <option value="contract">Contract worker</option>
               </select>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ──── Asset Config Bar ──── */}
+      {isAssetCategory && (
+        <div className="bg-dark-700 rounded-xl border border-dark-400/50 p-4 mb-5">
+          <div className={`grid ${itemType === 'long_term' ? 'grid-cols-3' : 'grid-cols-1'} gap-4`}>
+            <div>
+              <div className="flex items-center gap-1.5 mb-1">
+                <label className="text-xs font-medium text-theme-faint block">Useful Life</label>
+                <div className="group relative">
+                  <Info size={11} className="text-theme-faint cursor-help" />
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-52 bg-dark-800 border border-dark-400/50 rounded-lg p-2.5 text-xs text-theme-faint hidden group-hover:block shadow-lg z-10">
+                    {itemType === 'long_term'
+                      ? 'How long will this asset be used before it loses its value? Determines depreciation.'
+                      : 'How many months until this asset is fully consumed or expires?'}
+                  </div>
+                </div>
+              </div>
+              <select
+                value={assetUsefulLife}
+                onChange={e => setAssetUsefulLife(e.target.value)}
+                className="input text-sm"
+              >
+                {itemType === 'long_term' ? (
+                  <>
+                    <option value="3">3 years</option>
+                    <option value="5">5 years</option>
+                    <option value="7">7 years</option>
+                    <option value="10">10 years</option>
+                    <option value="15">15 years</option>
+                    <option value="20">20 years</option>
+                    <option value="25">25 years</option>
+                    <option value="27.5">27.5 years</option>
+                    <option value="39">39 years</option>
+                    <option value="custom">Custom (2–50 years)</option>
+                    <option value="forever">Forever (do not depreciate)</option>
+                  </>
+                ) : (
+                  <>
+                    {[1,2,3,4,5,6,7,8,9,10,11,12].map(n => (
+                      <option key={n} value={`${n}m`}>{n} month{n > 1 ? 's' : ''}</option>
+                    ))}
+                    <option value="full">Keep at full value</option>
+                  </>
+                )}
+              </select>
+              {assetUsefulLife === 'custom' && (
+                <div className="flex items-center gap-2 mt-2">
+                  <input
+                    type="number"
+                    min={2}
+                    max={50}
+                    value={assetCustomLife}
+                    onChange={e => setAssetCustomLife(Math.min(50, Math.max(2, parseInt(e.target.value) || 2)))}
+                    className="input w-20 text-sm"
+                  />
+                  <span className="text-xs text-theme-faint">years</span>
+                </div>
+              )}
+            </div>
+            {itemType === 'long_term' && (
+              <>
+                <div>
+                  <label className="text-xs font-medium text-theme-faint mb-1 block">Plan to Sell</label>
+                  <div className="flex gap-2 mt-1">
+                    <button
+                      onClick={() => setAssetPlanToSell(false)}
+                      className={`px-4 py-1.5 text-sm font-medium rounded-lg border transition-all ${
+                        !assetPlanToSell
+                          ? 'border-accent-500 bg-accent-500/15 text-accent-400'
+                          : 'border-dark-400/50 text-theme-faint hover:text-theme-secondary'
+                      }`}
+                    >No</button>
+                    <button
+                      onClick={() => setAssetPlanToSell(true)}
+                      className={`px-4 py-1.5 text-sm font-medium rounded-lg border transition-all ${
+                        assetPlanToSell
+                          ? 'border-accent-500 bg-accent-500/15 text-accent-400'
+                          : 'border-dark-400/50 text-theme-faint hover:text-theme-secondary'
+                      }`}
+                    >Yes</button>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-theme-faint mb-1 block">Depreciation</label>
+                  <div className="text-sm text-theme-secondary mt-1">
+                    {assetUsefulLife === 'forever' ? 'None (not depreciated)' :
+                     assetUsefulLife === 'custom' ? `Straight-line over ${assetCustomLife} years` :
+                     `Straight-line over ${assetUsefulLife} years`}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
