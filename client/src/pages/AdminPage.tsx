@@ -4,7 +4,7 @@ import api from '../api/client';
 import {
   Building2, Users, UserPlus, Plus, Power, ArrowLeft,
   Eye, EyeOff, CheckCircle, Plug, Shield, Trash2, Copy, KeyRound, BarChart3,
-  MapPin, GitBranch, Layers, Search, Activity, Globe, ChevronRight,
+  MapPin, GitBranch, Layers, Search, Activity, Globe, ChevronRight, ChevronDown,
 } from 'lucide-react';
 
 /* ─── Types ──────────────────────────────────────────────── */
@@ -599,7 +599,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
       {activeTab === 'modules' && <ModulesSection slug={slug} modules={modules} onReload={loadDetail} />}
       {activeTab === 'integrations' && <IntegrationsSection slug={slug} integrations={integrations} onReload={loadDetail} />}
       {activeTab === 'streams' && <StreamsSection slug={slug} streams={streams} onReload={loadDetail} />}
-      {activeTab === 'branches' && <BranchesSection slug={slug} client={client} branches={clientBranches} onReload={loadDetail} />}
+      {activeTab === 'branches' && <BranchesSection slug={slug} client={client} branches={clientBranches} users={users} onReload={loadDetail} />}
       {activeTab === 'assigned_team' && <TeamAssignmentSection slug={slug} />}
 
       {/* Password Reset Modal */}
@@ -1039,8 +1039,8 @@ function StreamsSection({ slug, streams, onReload }: {
 
 /* ─── Branches Section ───────────────────────────────────── */
 
-function BranchesSection({ slug, client, branches, onReload }: {
-  slug: string; client: any; branches: any[]; onReload: () => void;
+function BranchesSection({ slug, client, branches, users, onReload }: {
+  slug: string; client: any; branches: any[]; users: ClientUser[]; onReload: () => void;
 }) {
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState('');
@@ -1049,6 +1049,66 @@ function BranchesSection({ slug, client, branches, onReload }: {
   const [state, setState] = useState('');
   const [manager, setManager] = useState('');
   const [enabling, setEnabling] = useState(false);
+  const [branchAccess, setBranchAccess] = useState<Record<number, { is_restricted: boolean; user_ids: number[] }>>({});
+  const [expandedBranch, setExpandedBranch] = useState<number | null>(null);
+  const [savingBranch, setSavingBranch] = useState<number | null>(null);
+
+  const nonAdminUsers = users.filter(u => u.role !== 'admin' && u.is_active);
+
+  // Load access data for all active branches
+  const loadAccess = useCallback(() => {
+    const activeBranches = branches.filter(b => b.is_active);
+    if (!client?.is_multi_branch || activeBranches.length === 0) return;
+    Promise.all(
+      activeBranches.map(b =>
+        api.get(`/admin/clients/${slug}/branches/${b.id}/users`).then(res => ({ branchId: b.id, data: res.data }))
+      )
+    ).then(results => {
+      const map: Record<number, { is_restricted: boolean; user_ids: number[] }> = {};
+      for (const r of results) {
+        map[r.branchId] = { is_restricted: r.data.is_restricted, user_ids: r.data.user_ids };
+      }
+      setBranchAccess(map);
+    });
+  }, [slug, branches, client?.is_multi_branch]);
+
+  useEffect(() => { loadAccess(); }, [loadAccess]);
+
+  const handleToggleRestrict = async (branchId: number) => {
+    const current = branchAccess[branchId];
+    const newRestricted = !current?.is_restricted;
+    setSavingBranch(branchId);
+    try {
+      await api.put(`/admin/clients/${slug}/branches/${branchId}/users`, {
+        restrict_access: newRestricted,
+        user_ids: newRestricted ? [] : [],
+      });
+      const res = await api.get(`/admin/clients/${slug}/branches/${branchId}/users`);
+      setBranchAccess(prev => ({ ...prev, [branchId]: { is_restricted: res.data.is_restricted, user_ids: res.data.user_ids } }));
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to update access');
+    }
+    setSavingBranch(null);
+  };
+
+  const handleUserToggle = async (branchId: number, userId: number) => {
+    const current = branchAccess[branchId];
+    if (!current) return;
+    const newIds = current.user_ids.includes(userId)
+      ? current.user_ids.filter(id => id !== userId)
+      : [...current.user_ids, userId];
+    setSavingBranch(branchId);
+    try {
+      await api.put(`/admin/clients/${slug}/branches/${branchId}/users`, {
+        restrict_access: true,
+        user_ids: newIds,
+      });
+      setBranchAccess(prev => ({ ...prev, [branchId]: { is_restricted: true, user_ids: newIds } }));
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to update');
+    }
+    setSavingBranch(null);
+  };
 
   return (
     <div>
@@ -1138,48 +1198,119 @@ function BranchesSection({ slug, client, branches, onReload }: {
         </div>
       ) : (
         <div className="bg-dark-700/40 rounded-2xl border border-dark-400/20 overflow-hidden">
-          {branches.map((branch: any, i: number) => (
-            <div key={branch.id} className={`flex items-center justify-between px-5 py-3.5 ${i < branches.length - 1 ? 'border-b border-dark-400/15' : ''}`}>
-              <div className="flex items-center gap-3">
-                <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${
-                  branch.is_active ? 'bg-accent-500/10' : 'bg-dark-500'
-                }`}>
-                  <MapPin size={15} className={branch.is_active ? 'text-accent-400' : 'text-theme-faint'} />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-theme-heading">{branch.name}</span>
-                    <span className="text-[10px] font-mono text-theme-faint">{branch.code}</span>
+          {branches.map((branch: any, i: number) => {
+            const access = branchAccess[branch.id];
+            const isRestricted = access?.is_restricted ?? false;
+            const assignedIds = access?.user_ids ?? [];
+            const isSaving = savingBranch === branch.id;
+            const isExpanded = expandedBranch === branch.id;
+
+            return (
+              <div key={branch.id} className={`${i < branches.length - 1 ? 'border-b border-dark-400/15' : ''}`}>
+                <div className="flex items-center justify-between px-5 py-3.5">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${
+                      branch.is_active ? 'bg-accent-500/10' : 'bg-dark-500'
+                    }`}>
+                      <MapPin size={15} className={branch.is_active ? 'text-accent-400' : 'text-theme-faint'} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-theme-heading">{branch.name}</span>
+                        <span className="text-[10px] font-mono text-theme-faint">{branch.code}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px] text-theme-faint">
+                        {branch.state && <span>{branch.state}</span>}
+                        {branch.state && branch.city && <span className="text-dark-300">·</span>}
+                        {branch.city && <span>{branch.city}</span>}
+                        {branch.manager_name && <><span className="text-dark-300">·</span><span>{branch.manager_name}</span></>}
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 text-[11px] text-theme-faint">
-                    {branch.state && <span>{branch.state}</span>}
-                    {branch.state && branch.city && <span className="text-dark-300">·</span>}
-                    {branch.city && <span>{branch.city}</span>}
-                    {branch.manager_name && <><span className="text-dark-300">·</span><span>{branch.manager_name}</span></>}
+                  <div className="flex items-center gap-3">
+                    {/* Access toggle - only for active branches */}
+                    {branch.is_active && client?.is_multi_branch && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] text-theme-faint">Restrict Access</span>
+                        <button
+                          onClick={() => handleToggleRestrict(branch.id)}
+                          disabled={isSaving}
+                          className={`relative w-10 h-5.5 rounded-full transition-all ${isRestricted ? 'bg-amber-500' : 'bg-dark-400'} ${isSaving ? 'opacity-50' : ''}`}
+                          style={{ width: 40, height: 22 }}
+                        >
+                          <span className={`absolute top-[3px] w-4 h-4 rounded-full bg-white transition-all shadow-sm ${isRestricted ? 'left-[21px]' : 'left-[3px]'}`} />
+                        </button>
+                      </div>
+                    )}
+                    {/* User count badge when restricted */}
+                    {branch.is_active && isRestricted && (
+                      <button
+                        onClick={() => setExpandedBranch(isExpanded ? null : branch.id)}
+                        className="flex items-center gap-1 text-[11px] px-2.5 py-1.5 rounded-lg bg-amber-500/10 text-amber-400 hover:bg-amber-500/15 transition-all"
+                      >
+                        <Users size={11} />
+                        <span>{assignedIds.length} user{assignedIds.length !== 1 ? 's' : ''}</span>
+                        {isExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                      </button>
+                    )}
+                    <span className={`text-[10px] font-medium px-2.5 py-1 rounded-full ${
+                      branch.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
+                    }`}>
+                      {branch.is_active ? 'Active' : 'Inactive'}
+                    </span>
+                    {branch.is_active && (
+                      <button
+                        onClick={async () => {
+                          if (!confirm(`Deactivate branch "${branch.name}"?`)) return;
+                          await api.delete(`/admin/clients/${slug}/branches/${branch.id}`);
+                          onReload();
+                        }}
+                        className="text-theme-faint hover:text-red-400 p-1.5 hover:bg-red-500/10 rounded-lg transition-all"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className={`text-[10px] font-medium px-2.5 py-1 rounded-full ${
-                  branch.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
-                }`}>
-                  {branch.is_active ? 'Active' : 'Inactive'}
-                </span>
-                {branch.is_active && (
-                  <button
-                    onClick={async () => {
-                      if (!confirm(`Deactivate branch "${branch.name}"?`)) return;
-                      await api.delete(`/admin/clients/${slug}/branches/${branch.id}`);
-                      onReload();
-                    }}
-                    className="text-theme-faint hover:text-red-400 p-1.5 hover:bg-red-500/10 rounded-lg transition-all"
-                  >
-                    <Trash2 size={14} />
-                  </button>
+
+                {/* Expanded user dropdown */}
+                {isExpanded && isRestricted && branch.is_active && (
+                  <div className="px-5 pb-4 pt-0">
+                    <div className="ml-12 bg-dark-600/40 rounded-xl border border-dark-400/20 p-3">
+                      <p className="text-[11px] text-theme-faint mb-2">
+                        Select users who can access this branch <span className="text-theme-muted">(admins always have full access)</span>
+                      </p>
+                      {assignedIds.length === 0 && (
+                        <p className="text-[11px] text-amber-400/80 mb-2">No users have access to this branch</p>
+                      )}
+                      <div className="space-y-1 max-h-48 overflow-y-auto">
+                        {nonAdminUsers.map(user => {
+                          const isAssigned = assignedIds.includes(user.id);
+                          return (
+                            <label
+                              key={user.id}
+                              className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-all ${
+                                isAssigned ? 'bg-accent-500/10' : 'hover:bg-dark-500/50'
+                              } ${isSaving ? 'opacity-50 pointer-events-none' : ''}`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isAssigned}
+                                onChange={() => handleUserToggle(branch.id, user.id)}
+                                className="w-3.5 h-3.5 rounded border-dark-300 text-accent-500 focus:ring-accent-500/30"
+                              />
+                              <span className="text-sm text-theme-secondary">{user.display_name}</span>
+                              <span className="text-[10px] text-theme-faint">@{user.username}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
                 )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

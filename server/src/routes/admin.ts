@@ -316,12 +316,31 @@ router.post('/clients/:slug/users', async (req: Request, res: Response) => {
   if (existing) return res.status(409).json({ error: 'Username already exists for this client' });
 
   const hash = await bcrypt.hash(password, 12);
-  const result = db.run(
+  const userRole = role || 'user';
+  db.run(
     'INSERT INTO client_users (client_id, username, password_hash, display_name, role) VALUES (?, ?, ?, ?, ?)',
-    [client.id, username, hash, display_name, role || 'user']
+    [client.id, username, hash, display_name, userRole]
   );
+  const inserted = db.get('SELECT id FROM client_users WHERE client_id = ? AND username = ?', [client.id, username]);
+  const newUserId = inserted.id;
 
-  res.status(201).json({ id: result.lastInsertRowid, username, display_name, role: role || 'user' });
+  // Auto-grant access to all active branches for non-admin users
+  if (userRole !== 'admin') {
+    const activeBranches = db.all(
+      'SELECT id FROM branches WHERE client_id = ? AND is_active = 1', [client.id]
+    );
+    for (const branch of activeBranches) {
+      db.run('INSERT OR IGNORE INTO user_branch_access (user_id, branch_id, can_view_consolidated) VALUES (?, ?, 1)',
+        [newUserId, branch.id]);
+      const branchStreams = db.all('SELECT stream_id FROM branch_streams WHERE branch_id = ?', [branch.id]);
+      for (const bs of branchStreams) {
+        db.run('INSERT OR IGNORE INTO user_branch_stream_access (user_id, branch_id, stream_id, can_view_consolidated) VALUES (?, ?, ?, 1)',
+          [newUserId, branch.id, bs.stream_id]);
+      }
+    }
+  }
+
+  res.status(201).json({ id: newUserId, username, display_name, role: userRole });
 });
 
 router.put('/clients/:slug/users/:id', async (req: Request, res: Response) => {
@@ -569,6 +588,74 @@ router.put('/clients/:slug/branches/:branchId/streams', async (req: Request, res
     db.run('INSERT INTO branch_streams (branch_id, stream_id) VALUES (?, ?)', [branchId, sid]);
   }
   res.json({ ok: true, count: stream_ids.length });
+});
+
+// ─── Per-Branch User Access ─────────────────────────────────────────────────
+
+router.get('/clients/:slug/branches/:branchId/users', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+  const branchId = parseInt(req.params.branchId as string);
+
+  const assigned = db.all(
+    `SELECT uba.user_id FROM user_branch_access uba
+     JOIN branches b ON uba.branch_id = b.id
+     WHERE uba.branch_id = ? AND b.client_id = ?`,
+    [branchId, client.id]
+  );
+  const userIds = assigned.map((r: any) => r.user_id);
+
+  const nonAdminUsers = db.all(
+    `SELECT id FROM client_users WHERE client_id = ? AND role != 'admin' AND is_active = 1`,
+    [client.id]
+  );
+  const total = nonAdminUsers.length;
+  const isRestricted = userIds.length < total;
+
+  res.json({ user_ids: userIds, total_non_admin_users: total, is_restricted: isRestricted });
+});
+
+router.put('/clients/:slug/branches/:branchId/users', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+  const branchId = parseInt(req.params.branchId as string);
+
+  const branch = db.get('SELECT id FROM branches WHERE id = ? AND client_id = ?', [branchId, client.id]);
+  if (!branch) return res.status(404).json({ error: 'Branch not found' });
+
+  const { restrict_access, user_ids } = req.body;
+
+  // Get streams linked to this branch
+  const branchStreams = db.all('SELECT stream_id FROM branch_streams WHERE branch_id = ?', [branchId]);
+  const streamIds = branchStreams.map((r: any) => r.stream_id);
+
+  // Determine target users
+  let targetUserIds: number[];
+  if (!restrict_access) {
+    const allUsers = db.all(
+      `SELECT id FROM client_users WHERE client_id = ? AND role != 'admin' AND is_active = 1`,
+      [client.id]
+    );
+    targetUserIds = allUsers.map((r: any) => r.id);
+  } else {
+    targetUserIds = Array.isArray(user_ids) ? user_ids : [];
+  }
+
+  // Clear existing access for this branch
+  db.run('DELETE FROM user_branch_access WHERE branch_id = ?', [branchId]);
+  db.run('DELETE FROM user_branch_stream_access WHERE branch_id = ?', [branchId]);
+
+  // Insert new access
+  for (const uid of targetUserIds) {
+    db.run('INSERT OR IGNORE INTO user_branch_access (user_id, branch_id, can_view_consolidated) VALUES (?, ?, 1)', [uid, branchId]);
+    for (const sid of streamIds) {
+      db.run('INSERT OR IGNORE INTO user_branch_stream_access (user_id, branch_id, stream_id, can_view_consolidated) VALUES (?, ?, ?, 1)', [uid, branchId, sid]);
+    }
+  }
+
+  res.json({ ok: true, user_count: targetUserIds.length });
 });
 
 // ─── User Branch+Stream Access ─────────────────────────────────────────────
