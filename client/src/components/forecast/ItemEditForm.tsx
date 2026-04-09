@@ -38,9 +38,9 @@ const TYPE_DEFS: Record<string, TypeDef> = {
     steps: [
       {
         key: 'units',
-        label: 'Patient Counts',
-        question: 'How many patients do you expect?',
-        helpText: "Enter the number of patients you expect to see each month. This could be appointment visits, lab tests, or any patient interaction that generates revenue. You can vary the count over time to reflect seasonal patterns, marketing campaigns, or expected growth.",
+        label: 'Unit Count',
+        question: 'How many units do you expect?',
+        helpText: "Enter the number of units you expect each month. This could be products sold, services delivered, appointments, or any countable activity that generates revenue. You can vary the count over time to reflect seasonal patterns or expected growth.",
         entryModes: [
           { value: 'varying', label: 'Varying amounts over time' },
           { value: 'constant', label: 'Constant amount' },
@@ -49,9 +49,9 @@ const TYPE_DEFS: Record<string, TypeDef> = {
       },
       {
         key: 'prices',
-        label: 'Per Patient Revenue',
-        question: 'What is the average revenue per patient?',
-        helpText: 'Enter the average revenue you earn per patient visit (excluding GST). This includes consultation fees, procedure charges, lab tests, etc. You can vary the amount over time to reflect planned fee increases or changes in service mix.',
+        label: 'Revenue per Unit',
+        question: 'What is the average revenue per unit?',
+        helpText: 'Enter the average revenue you earn per unit (excluding GST). You can vary the amount over time to reflect planned price changes or shifts in service mix.',
         entryModes: [
           { value: 'constant', label: 'Constant amount (Rs)' },
           { value: 'varying', label: 'Varying amounts over time (Rs)' },
@@ -60,7 +60,7 @@ const TYPE_DEFS: Record<string, TypeDef> = {
         unit: 'Rs',
       },
     ],
-    formula: 'Revenue = Patient Counts × Per Patient Revenue',
+    formula: 'Revenue = Unit Count × Revenue per Unit',
     computeRevenue: (sv, months) => {
       const result: Record<string, number> = {};
       months.forEach(m => {

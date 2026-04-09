@@ -27,7 +27,7 @@ const CATEGORY_CONFIG: Record<string, { addLabel: string; itemTypes: { value: st
   revenue: {
     addLabel: 'Add Revenue Stream',
     itemTypes: [
-      { value: 'unit_sales', label: 'Patient-based revenue', description: 'Forecast revenue based on patient counts and per-patient revenue' },
+      { value: 'unit_sales', label: 'Unit-based revenue', description: 'Forecast revenue based on unit volumes and per-unit pricing' },
       { value: 'billable_hours', label: 'Billable hours', description: 'Best for services priced on a per-hour basis' },
       { value: 'recurring', label: 'Recurring charges', description: 'Best for subscriptions, memberships, rentals, or other periodic charges' },
       { value: 'revenue_only', label: 'Revenue only', description: 'Best for entering overall revenue values without any detail' },
