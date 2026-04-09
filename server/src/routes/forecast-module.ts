@@ -17,7 +17,7 @@ router.get('/consolidated', async (req, res) => {
   );
 
   if (scenarios.length === 0) {
-    return res.json({ items: [], values: {}, settings: {} });
+    return res.json({ items: [], values: {}, settings: {}, scenarioCount: 0 });
   }
 
   const scenarioIds = scenarios.map((s: any) => s.id);

@@ -47,14 +47,35 @@ router.post('/bulk', async (req, res) => {
   res.json({ success: true, count: entries.length });
 });
 
-// GET /api/dashboard-actuals/summary?scenario_id=1
+// GET /api/dashboard-actuals/summary?scenario_id=1 or ?fy_id=1 (consolidated)
 // Returns monthly category totals for actuals
 router.get('/summary', async (req, res) => {
   const db = req.tenantDb!;
-  const { scenario_id } = req.query;
+  const { scenario_id, fy_id } = req.query;
   const bf = branchFilter(req);
-  const sf = streamFilter(req);
+
+  if (fy_id && !scenario_id) {
+    // Consolidated mode: sum actuals across all scenarios for this FY
+    const scenarios = db.all(
+      `SELECT id FROM scenarios WHERE fy_id = ?${bf.where}`,
+      fy_id, ...bf.params
+    );
+    if (scenarios.length === 0) return res.json([]);
+    const ids = scenarios.map((s: any) => s.id);
+    const ph = ids.map(() => '?').join(',');
+    const rows = db.all(
+      `SELECT category, month, SUM(amount) as total
+       FROM dashboard_actuals
+       WHERE scenario_id IN (${ph})
+       GROUP BY category, month
+       ORDER BY category, month`,
+      ...ids
+    );
+    return res.json(rows);
+  }
+
   if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
+  const sf = streamFilter(req);
 
   const rows = db.all(
     `SELECT category, month, SUM(amount) as total

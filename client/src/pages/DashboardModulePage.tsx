@@ -46,16 +46,51 @@ export default function DashboardModulePage() {
     });
   }, []);
 
+  const isAllStreams = !localStorage.getItem('stream_id');
+
   useEffect(() => {
     if (!selectedFY) return;
-    api.post('/forecast-module/scenarios/ensure', { fy_id: selectedFY.id }).then(res => {
-      setScenario(res.data);
-      return api.get('/forecast-module/scenarios', { params: { fy_id: selectedFY.id } });
-    }).then(res => setScenarios(res.data));
-  }, [selectedFY]);
+
+    const loadNormalScenario = () => {
+      api.post('/forecast-module/scenarios/ensure', { fy_id: selectedFY.id }).then(res => {
+        setScenario(res.data);
+        return api.get('/forecast-module/scenarios', { params: { fy_id: selectedFY.id } });
+      }).then(res => setScenarios(res.data));
+    };
+
+    if (isAllStreams) {
+      // Try consolidated mode for multi-stream clients
+      api.get('/forecast-module/consolidated', { params: { fy_id: selectedFY.id } }).then(res => {
+        const { items: cItems, values: cValues, settings: cSettings, scenarioCount } = res.data;
+        if (scenarioCount && scenarioCount > 0) {
+          // Multi-stream: merge all per-stream scenario data
+          setScenario({ id: -1, fy_id: selectedFY.id, name: 'All Streams (Consolidated)', is_default: 1 } as Scenario);
+          setScenarios([]);
+          setItems(cItems || []);
+          setAllValues(cValues || {});
+          setSettings(cSettings || {});
+          // Load actuals separately (not scenario-dependent for consolidated)
+          api.get('/dashboard-actuals/summary', { params: { fy_id: selectedFY.id } }).then(aRes => {
+            const aLookup: Record<string, Record<string, number>> = {};
+            aRes.data.forEach((r: any) => {
+              if (!aLookup[r.category]) aLookup[r.category] = {};
+              aLookup[r.category][r.month] = (aLookup[r.category][r.month] || 0) + r.total;
+            });
+            setActuals(aLookup);
+          });
+        } else {
+          // No per-stream scenarios — client has no streams, load normally
+          loadNormalScenario();
+        }
+      });
+      return;
+    }
+
+    loadNormalScenario();
+  }, [selectedFY, isAllStreams]);
 
   const loadData = useCallback(async () => {
-    if (!scenario) return;
+    if (!scenario || scenario.id === -1) return;
     const [itemsRes, valuesRes, settingsRes, actualsRes] = await Promise.all([
       api.get('/forecast-module/items', { params: { scenario_id: scenario.id } }),
       api.get('/forecast-module/values', { params: { scenario_id: scenario.id } }),
