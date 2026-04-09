@@ -17,7 +17,7 @@ interface Props {
 
 const TYPE_ICONS: Record<string, string> = {
   // Revenue
-  unit_sales: '🏥',
+  unit_sales: '📦',
   billable_hours: '⏱',
   recurring: '🔄',
   revenue_only: '💰',

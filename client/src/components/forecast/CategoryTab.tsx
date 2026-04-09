@@ -122,7 +122,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
 
   const handleAdd = async (itemType: string) => {
     if (!scenario) {
-      console.error('No scenario available');
+      alert('No scenario available. Please ensure a financial year is selected and a scenario exists.');
       return;
     }
     const typeDef = config.itemTypes.find(t => t.value === itemType);
