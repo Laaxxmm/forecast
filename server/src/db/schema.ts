@@ -693,7 +693,7 @@ export function initializeSchema(db: DbHelper) {
       row_count INTEGER DEFAULT 0,
       branch_id INTEGER,
       uploaded_at TEXT DEFAULT (datetime('now')),
-      UNIQUE(COALESCE(company_id, 0), category, period_month)
+      UNIQUE(company_id, category, period_month)
     )
   `);
 
