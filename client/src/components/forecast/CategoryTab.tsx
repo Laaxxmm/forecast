@@ -9,6 +9,7 @@ import PersonnelTab from './PersonnelTab';
 import ExpensesTab from './ExpensesTab';
 import AssetsTab from './AssetsTab';
 import TaxesTab from './TaxesTab';
+import CashFlowAssumptionsTab from './CashFlowAssumptionsTab';
 import { exportTableCSV } from './csvExport';
 
 interface Props {
@@ -299,7 +300,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
 
   // Special pages
   if (category === 'cash_flow_assumptions') {
-    return <CashFlowAssumptionsTab items={items} months={months} allValues={allValues} />;
+    return <CashFlowAssumptionsTab scenario={scenario} items={items} allItems={allItems} allValues={allValues} settings={settings} onReload={onReload} readOnly={readOnly} />;
   }
   if (category === 'initial_balances') {
     return <InitialBalancesTab />;
@@ -490,38 +491,6 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
   );
 }
 
-// Simple placeholder for Cash Flow Assumptions
-function CashFlowAssumptionsTab({ items: _items, months: _months, allValues: _allValues }: { items: ForecastItem[]; months: string[]; allValues: Record<number, Record<string, number>> }) {
-  return (
-    <div>
-      <h2 className="text-xl font-bold text-theme-heading mb-4">Cash Flow Assumptions</h2>
-      <div className="card">
-        <h3 className="font-semibold text-theme-secondary mb-3">Accounts Receivable</h3>
-        <p className="text-sm text-theme-faint mb-4">Configure how quickly you collect payments from customers.</p>
-        <div className="grid grid-cols-3 gap-4 text-sm">
-          <div className="font-medium text-theme-muted">Revenue Stream</div>
-          <div className="font-medium text-theme-muted">Sales on Credit (%)</div>
-          <div className="font-medium text-theme-muted">Days to Get Paid</div>
-          <div className="text-theme-faint">Default</div>
-          <input type="number" defaultValue={0} className="input py-1.5 text-sm" />
-          <select className="input py-1.5 text-sm"><option>30 days</option><option>15 days</option><option>45 days</option><option>60 days</option><option>90 days</option></select>
-        </div>
-      </div>
-      <div className="card mt-4">
-        <h3 className="font-semibold text-theme-secondary mb-3">Accounts Payable</h3>
-        <p className="text-sm text-theme-faint mb-4">Configure how quickly you pay your vendors and suppliers.</p>
-        <div className="grid grid-cols-3 gap-4 text-sm">
-          <div className="font-medium text-theme-muted">Expense</div>
-          <div className="font-medium text-theme-muted">Purchases on Credit (%)</div>
-          <div className="font-medium text-theme-muted">Days to Pay</div>
-          <div className="text-theme-faint">Default</div>
-          <input type="number" defaultValue={0} className="input py-1.5 text-sm" />
-          <select className="input py-1.5 text-sm"><option>30 days</option><option>15 days</option><option>45 days</option><option>60 days</option><option>90 days</option></select>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // Simple placeholder for Initial Balances
 function InitialBalancesTab() {
