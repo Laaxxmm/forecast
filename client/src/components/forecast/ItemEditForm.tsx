@@ -470,11 +470,13 @@ const TYPE_DEFS: Record<string, TypeDef> = {
       {
         key: 'dividend',
         label: 'Dividend Amount',
-        question: 'How much will you distribute as dividends?',
-        helpText: 'Enter the dividend amounts by month. Dividends are typically distributed quarterly or annually.',
+        question: 'How much do you want to distribute?',
+        helpText: 'Enter the dividend amounts you plan to distribute to owners or shareholders. Dividends reduce retained earnings and cash but do not affect your profit and loss statement.',
         entryModes: [
-          { value: 'varying', label: 'Varying amounts over time (Rs)' },
+          { value: 'one_time', label: 'One-time amount (Rs)' },
           { value: 'constant', label: 'Constant amount (Rs)' },
+          { value: 'varying', label: 'Varying amounts over time (Rs)' },
+          { value: 'pct_net_profit', label: '% of net profit' },
         ],
         defaultEntryMode: 'varying',
         unit: 'Rs',
@@ -564,6 +566,10 @@ export default function ItemEditForm({ item, category, months, values: initialVa
   // One-time entry mode state
   const [oneTimeMonth, setOneTimeMonth] = useState<string>(item.meta?.oneTimeMonth || months[0]);
   const [oneTimeAmount, setOneTimeAmount] = useState<number>(item.meta?.oneTimeAmount || 0);
+
+  // Percent of net profit (for dividends)
+  const [pctNetProfit, setPctNetProfit] = useState<number>(item.meta?.pct_net_profit || 0);
+  const [pctNetProfitStartMonth, setPctNetProfitStartMonth] = useState<string>(item.meta?.pct_net_profit_start_month || months[0]);
 
   // Asset-specific config
   const isAssetCategory = category === 'assets';
@@ -692,6 +698,28 @@ export default function ItemEditForm({ item, category, months, values: initialVa
     });
   }, [stepEntryModes, oneTimeMonth, oneTimeAmount, months]);
 
+  // Compute pct_net_profit values (% of net profit — for dividends)
+  const costItems = useMemo(() => (allItems || []).filter(i =>
+    i.category === 'direct_costs' || i.category === 'personnel' || i.category === 'expenses'
+  ), [allItems]);
+
+  useEffect(() => {
+    steps.forEach(step => {
+      if (stepEntryModes[step.key] === 'pct_net_profit' && pctNetProfit > 0) {
+        const newVals: Record<string, number> = {};
+        months.forEach(m => {
+          if (m >= pctNetProfitStartMonth) {
+            const totalRevenue = revenueItems.reduce((sum, ri) => sum + (allValues?.[ri.id]?.[m] || 0), 0);
+            const totalCosts = costItems.reduce((sum, ci) => sum + (allValues?.[ci.id]?.[m] || 0), 0);
+            const netProfit = totalRevenue - totalCosts;
+            newVals[m] = netProfit > 0 ? Math.round(netProfit * pctNetProfit / 100) : 0;
+          }
+        });
+        setStepValues(prev => ({ ...prev, [step.key]: newVals }));
+      }
+    });
+  }, [stepEntryModes, pctNetProfit, pctNetProfitStartMonth, allValues, months, revenueItems, costItems]);
+
   // Compute final monthly values from all steps
   const computedValues = useMemo(() => {
     return typeDef.computeRevenue(stepValues, months);
@@ -741,6 +769,9 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           linked_revenue_id: pctLinkedRevenueId,
           oneTimeMonth,
           oneTimeAmount,
+          // Dividend % of net profit
+          pct_net_profit: pctNetProfit,
+          pct_net_profit_start_month: pctNetProfitStartMonth,
           // Asset fields
           useful_life: assetUsefulLife,
           custom_life_value: assetCustomLife,
@@ -1480,9 +1511,9 @@ export default function ItemEditForm({ item, category, months, values: initialVa
             <div className="flex items-start gap-6">
               <div className="flex-1">
                 <h3 className="text-lg font-bold text-theme-heading mb-2">
-                  When will this expense occur?
+                  {category === 'dividends' ? 'How much do you want to distribute and when?' : 'When will this expense occur?'}
                 </h3>
-                <p className="text-sm text-theme-faint">Select the month and enter the one-time amount.</p>
+                <p className="text-sm text-theme-faint">{category === 'dividends' ? 'Enter the amount and select the month for this one-time dividend.' : 'Select the month and enter the one-time amount.'}</p>
               </div>
               <div className="flex items-center gap-2">
                 <div className="relative">
@@ -1499,6 +1530,37 @@ export default function ItemEditForm({ item, category, months, values: initialVa
                 <select
                   value={oneTimeMonth}
                   onChange={e => setOneTimeMonth(e.target.value)}
+                  className="input text-sm w-36"
+                >
+                  {months.map(m => <option key={m} value={m}>{getMonthLabel(m)}</option>)}
+                </select>
+              </div>
+            </div>
+          )}
+
+          {/* ── % of net profit mode (dividends) ── */}
+          {stepEntryModes[activeStep.key] === 'pct_net_profit' && (
+            <div className="flex items-start gap-6">
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-theme-heading mb-2">
+                  How much do you want to distribute?
+                </h3>
+                <p className="text-sm text-theme-faint leading-relaxed">This dividend will be calculated as a percentage of your net profit (revenue minus all costs). Dividends are only distributed when the business is profitable.</p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <input
+                  type="number"
+                  value={pctNetProfit || ''}
+                  onChange={e => setPctNetProfit(parseFloat(e.target.value) || 0)}
+                  placeholder=""
+                  className="input text-sm w-28"
+                  step="0.5"
+                />
+                <span className="text-sm text-theme-faint font-medium">%</span>
+                <span className="text-sm text-theme-faint font-medium">starting</span>
+                <select
+                  value={pctNetProfitStartMonth}
+                  onChange={e => setPctNetProfitStartMonth(e.target.value)}
                   className="input text-sm w-36"
                 >
                   {months.map(m => <option key={m} value={m}>{getMonthLabel(m)}</option>)}

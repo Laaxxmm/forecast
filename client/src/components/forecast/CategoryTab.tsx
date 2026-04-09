@@ -10,6 +10,7 @@ import ExpensesTab from './ExpensesTab';
 import AssetsTab from './AssetsTab';
 import TaxesTab from './TaxesTab';
 import CashFlowAssumptionsTab from './CashFlowAssumptionsTab';
+import InitialBalancesTab from './InitialBalancesTab';
 import { exportTableCSV } from './csvExport';
 
 interface Props {
@@ -303,7 +304,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
     return <CashFlowAssumptionsTab scenario={scenario} items={items} allItems={allItems} allValues={allValues} settings={settings} onReload={onReload} readOnly={readOnly} />;
   }
   if (category === 'initial_balances') {
-    return <InitialBalancesTab />;
+    return <InitialBalancesTab scenario={scenario} months={months} settings={settings} onReload={onReload} readOnly={readOnly} />;
   }
 
   return (
@@ -492,34 +493,3 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
 }
 
 
-// Simple placeholder for Initial Balances
-function InitialBalancesTab() {
-  return (
-    <div>
-      <h2 className="text-xl font-bold text-theme-heading mb-2">Initial Balances</h2>
-      <p className="text-sm text-theme-faint mb-4">Set your starting financial position before the forecast begins.</p>
-      <div className="grid grid-cols-3 gap-4 mb-6">
-        <div className="card text-center">
-          <div className="text-xs text-theme-faint uppercase tracking-wider">Total Assets</div>
-          <div className="text-2xl font-bold text-theme-heading mt-1">Rs0</div>
-        </div>
-        <div className="card text-center">
-          <div className="text-xs text-theme-faint">= Total Liabilities +</div>
-          <div className="text-2xl font-bold text-theme-heading mt-1">Rs0</div>
-        </div>
-        <div className="card text-center">
-          <div className="text-xs text-theme-faint uppercase tracking-wider">Total Equity</div>
-          <div className="text-2xl font-bold text-theme-heading mt-1">Rs0</div>
-        </div>
-      </div>
-      <div className="flex gap-2 mb-4">
-        {['Initial Assets', 'Initial Liabilities', 'Total Equity'].map(tab => (
-          <button key={tab} className="px-4 py-2 text-sm font-medium rounded-lg border border-dark-400/50 hover:bg-dark-600">{tab}</button>
-        ))}
-      </div>
-      <div className="card">
-        <p className="text-sm text-theme-faint">Enter your initial asset, liability, and equity values to start your forecast from your current financial position.</p>
-      </div>
-    </div>
-  );
-}
