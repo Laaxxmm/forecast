@@ -279,7 +279,7 @@ export default function ForecastModulePage() {
             <FinancingEditor items={items} allValues={allValues} months={months} scenario={scenario} onReload={loadData} />
           } />
           <Route path="cash-flow" element={
-            <CashFlowReport items={items} allValues={allValues} months={months} viewMode={viewMode} settings={settings} />
+            <CashFlowReport items={items} allValues={allValues} months={months} viewMode={viewMode} settings={settings} scenario={scenario} onReload={loadData} readOnly={readOnly} />
           } />
         </Routes>
       </div>
