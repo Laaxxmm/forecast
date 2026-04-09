@@ -92,18 +92,61 @@ router.get('/overview', async (req, res) => {
     }
   }
 
-  if (clientStreams.length === 0) {
-    try {
-      const clinicTotal = db.get(
-        `SELECT COALESCE(SUM(item_price), 0) as total FROM clinic_actuals WHERE bill_month >= ? AND bill_month <= ?${bf.where}`,
-        startMonth, endMonth, ...bf.params
-      );
-      const pharmaTotal = db.get(
-        `SELECT COALESCE(SUM(sales_amount), 0) as total FROM pharmacy_sales_actuals WHERE bill_month >= ? AND bill_month <= ?${bf.where}`,
-        startMonth, endMonth, ...bf.params
-      );
-      totalRevenue = (clinicTotal?.total || 0) + (pharmaTotal?.total || 0);
-    } catch { /* tables may not exist */ }
+  // Fallback: if dashboard_actuals has no revenue data, read directly from import tables
+  // This handles cases where the auto-sync didn't run or data was lost
+  if (totalRevenue === 0) {
+    // Build a map of stream name → raw table for known integrations
+    const streamSourceMap: Record<string, { table: string; amountCol: string; monthCol: string }> = {};
+    for (const stream of clientStreams) {
+      const nameLower = stream.name.toLowerCase();
+      if (nameLower.includes('clinic') || nameLower.includes('health')) {
+        streamSourceMap[stream.id] = { table: 'clinic_actuals', amountCol: 'item_price', monthCol: 'bill_month' };
+      } else if (nameLower.includes('pharma')) {
+        streamSourceMap[stream.id] = { table: 'pharmacy_sales_actuals', amountCol: 'sales_amount', monthCol: 'bill_month' };
+      } else if (nameLower.includes('consult') || nameLower.includes('turia')) {
+        streamSourceMap[stream.id] = { table: 'turia_invoices', amountCol: 'total_amount', monthCol: 'invoice_month' };
+      }
+    }
+    // Fallback for no-stream clients
+    if (clientStreams.length === 0) {
+      try {
+        const clinicTotal = db.get(
+          `SELECT COALESCE(SUM(item_price), 0) as total FROM clinic_actuals WHERE bill_month >= ? AND bill_month <= ?${bf.where}`,
+          startMonth, endMonth, ...bf.params
+        );
+        const pharmaTotal = db.get(
+          `SELECT COALESCE(SUM(sales_amount), 0) as total FROM pharmacy_sales_actuals WHERE bill_month >= ? AND bill_month <= ?${bf.where}`,
+          startMonth, endMonth, ...bf.params
+        );
+        totalRevenue = (clinicTotal?.total || 0) + (pharmaTotal?.total || 0);
+      } catch { /* tables may not exist */ }
+    }
+    // Per-stream fallback from raw import tables
+    for (const stream of clientStreams) {
+      const src = streamSourceMap[stream.id];
+      if (!src) continue;
+      try {
+        const rawTotal = db.get(
+          `SELECT COALESCE(SUM(${src.amountCol}), 0) as total FROM ${src.table} WHERE ${src.monthCol} >= ? AND ${src.monthCol} <= ?${bf.where}`,
+          startMonth, endMonth, ...bf.params
+        );
+        const rawMonthly = db.all(
+          `SELECT ${src.monthCol} as month, COALESCE(SUM(${src.amountCol}), 0) as total
+           FROM ${src.table} WHERE ${src.monthCol} >= ? AND ${src.monthCol} <= ?${bf.where}
+           GROUP BY ${src.monthCol} ORDER BY ${src.monthCol}`,
+          startMonth, endMonth, ...bf.params
+        );
+        const rawRevenue = rawTotal?.total || 0;
+        if (rawRevenue > 0) {
+          totalRevenue += rawRevenue;
+          const sd = streamDataMap[stream.id];
+          if (sd) {
+            sd.total_revenue = rawRevenue;
+            sd.monthly = rawMonthly.map((r: any) => ({ month: r.month, category: 'revenue', total: r.total }));
+          }
+        }
+      } catch { /* table may not exist */ }
+    }
   }
 
   // Build cards array from dashboard_cards

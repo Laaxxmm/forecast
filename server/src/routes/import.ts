@@ -6,9 +6,32 @@ import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
 import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.js';
 import { parseTuriaInvoices } from '../services/parsers/turia.js';
 import { getBranchIdForInsert, branchFilter, getStreamIdForInsert } from '../utils/branch.js';
+import { getPlatformHelper } from '../db/platform-connection.js';
 import fs from 'fs';
 
 const isProd = process.env.NODE_ENV === 'production';
+
+/** Resolve the correct stream_id for an import based on integration type.
+ *  Falls back to getStreamIdForInsert if no match found. */
+async function resolveStreamId(req: any, integrationHint: 'clinic' | 'pharmacy' | 'consultancy'): Promise<number | null> {
+  const fromHeader = getStreamIdForInsert(req);
+  if (fromHeader) return fromHeader;
+  // If user is on "All" streams, determine the stream from the integration type
+  try {
+    const platformDb = await getPlatformHelper();
+    const streams = platformDb.all(
+      'SELECT id, name FROM business_streams WHERE client_id = ? AND is_active = 1 ORDER BY sort_order',
+      req.clientId
+    );
+    for (const s of streams) {
+      const n = s.name.toLowerCase();
+      if (integrationHint === 'clinic' && (n.includes('clinic') || n.includes('health'))) return s.id;
+      if (integrationHint === 'pharmacy' && n.includes('pharma')) return s.id;
+      if (integrationHint === 'consultancy' && (n.includes('consult') || n.includes('turia'))) return s.id;
+    }
+  } catch { /* platform DB may not be available */ }
+  return fromHeader;
+}
 
 const router = Router();
 
@@ -47,7 +70,7 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), uploa
 
     // Auto-sync clinic revenue to dashboard_actuals for active scenario
     const bf = branchFilter(req);
-    const streamId = getStreamIdForInsert(req);
+    const clinicStreamId = await resolveStreamId(req, 'clinic');
     const activeScenario = db.get(
       `SELECT s.id FROM scenarios s
        JOIN financial_years fy ON s.fy_id = fy.id
@@ -67,7 +90,7 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), uploa
            VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, ?, datetime('now'))
            ON CONFLICT(scenario_id, category, item_name, month)
            DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
-          activeScenario.id, row.month, row.total, branchId, streamId
+          activeScenario.id, row.month, row.total, branchId, clinicStreamId
         );
       }
     }
@@ -108,7 +131,7 @@ router.post('/oneglance-sales', requireAdmin, requireIntegration('oneglance'), u
 
     // Auto-sync pharmacy sales revenue to dashboard_actuals for active scenario
     const bf = branchFilter(req);
-    const streamId = getStreamIdForInsert(req);
+    const pharmaStreamId = await resolveStreamId(req, 'pharmacy');
     const activeScenario = db.get(
       `SELECT s.id FROM scenarios s
        JOIN financial_years fy ON s.fy_id = fy.id
@@ -128,7 +151,7 @@ router.post('/oneglance-sales', requireAdmin, requireIntegration('oneglance'), u
            VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?, ?, datetime('now'))
            ON CONFLICT(scenario_id, category, item_name, month)
            DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
-          activeScenario.id, row.month, row.total, branchId, streamId
+          activeScenario.id, row.month, row.total, branchId, pharmaStreamId
         );
       }
     }
@@ -205,7 +228,7 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), upload.single('
 
     // Auto-sync consultancy revenue to dashboard_actuals
     const bf = branchFilter(req);
-    const streamId = getStreamIdForInsert(req);
+    const consultStreamId = await resolveStreamId(req, 'consultancy');
     const activeScenario = db.get(
       `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
        WHERE fy.is_active = 1 AND s.is_default = 1${bf.where} LIMIT 1`,
@@ -225,7 +248,7 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), upload.single('
            VALUES (?, 'revenue', 'Consultancy Revenue', ?, ?, ?, ?, datetime('now'))
            ON CONFLICT(scenario_id, category, item_name, month)
            DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
-          activeScenario.id, row.month, row.total, branchId, streamId
+          activeScenario.id, row.month, row.total, branchId, consultStreamId
         );
       }
     }
