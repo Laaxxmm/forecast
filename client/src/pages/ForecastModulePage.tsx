@@ -5,6 +5,7 @@ import ForecastOverview from '../components/forecast/ForecastOverview';
 import FinancialTables from '../components/forecast/FinancialTables';
 import ProfitAndLoss from '../components/forecast/ProfitAndLoss';
 import BalanceSheet from '../components/forecast/BalanceSheet';
+import FinancingEditor from '../components/forecast/FinancingEditor';
 import CashFlowReport from '../components/forecast/CashFlowReport';
 import {
   BarChart3, Table2, FileText, Building2, Banknote, ChevronLeft, ChevronRight, Calendar, Download, Printer, FileDown
@@ -272,7 +273,10 @@ export default function ForecastModulePage() {
             <ProfitAndLoss items={items} allValues={allValues} months={months} viewMode={viewMode} settings={settings} scenario={scenario} onReload={loadData} readOnly={readOnly} />
           } />
           <Route path="balance-sheet" element={
-            <BalanceSheet items={items} allValues={allValues} months={months} viewMode={viewMode} settings={settings} />
+            <BalanceSheet items={items} allValues={allValues} months={months} viewMode={viewMode} settings={settings} scenario={scenario} onReload={loadData} readOnly={readOnly} />
+          } />
+          <Route path="balance-sheet/financing/:itemId/:finType" element={
+            <FinancingEditor items={items} allValues={allValues} months={months} scenario={scenario} onReload={loadData} />
           } />
           <Route path="cash-flow" element={
             <CashFlowReport items={items} allValues={allValues} months={months} viewMode={viewMode} settings={settings} />
