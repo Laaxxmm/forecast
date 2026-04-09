@@ -269,7 +269,7 @@ export default function ForecastModulePage() {
             />
           } />
           <Route path="pnl" element={
-            <ProfitAndLoss items={items} allValues={allValues} months={months} viewMode={viewMode} settings={settings} />
+            <ProfitAndLoss items={items} allValues={allValues} months={months} viewMode={viewMode} settings={settings} scenario={scenario} onReload={loadData} readOnly={readOnly} />
           } />
           <Route path="balance-sheet" element={
             <BalanceSheet items={items} allValues={allValues} months={months} viewMode={viewMode} settings={settings} />
