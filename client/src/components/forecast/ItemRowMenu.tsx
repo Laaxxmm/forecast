@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   MoreVertical, ExternalLink, StickyNote, Trash2, Copy,
   ArrowRightLeft, GitMerge, ChevronRight, X
@@ -103,7 +104,7 @@ export default function ItemRowMenu({ item, items, category, allValues, onEdit, 
         <MoreVertical size={14} />
       </button>
 
-      {open && (
+      {open && createPortal(
         <>
           <div className="fixed inset-0 z-[49]" onClick={closeMenu} />
           <div
@@ -162,11 +163,12 @@ export default function ItemRowMenu({ item, items, category, allValues, onEdit, 
               </button>
             )}
           </div>
-        </>
+        </>,
+        document.body
       )}
 
       {/* Note Dialog */}
-      {noteOpen && (
+      {noteOpen && createPortal(
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60]" onClick={() => setNoteOpen(false)}>
           <div className="bg-dark-700 border border-dark-400/50 rounded-xl p-5 w-96 shadow-2xl" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3">
@@ -185,11 +187,12 @@ export default function ItemRowMenu({ item, items, category, allValues, onEdit, 
               <button onClick={handleNoteSave} className="btn-primary text-sm px-4 py-1.5">Save Note</button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Merge Dialog */}
-      {mergeOpen && (
+      {mergeOpen && createPortal(
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60]" onClick={() => setMergeOpen(false)}>
           <div className="bg-dark-700 border border-dark-400/50 rounded-xl p-5 w-96 shadow-2xl" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3">
@@ -215,7 +218,8 @@ export default function ItemRowMenu({ item, items, category, allValues, onEdit, 
               <button onClick={handleMerge} disabled={!mergeTarget} className="btn-primary text-sm px-4 py-1.5 disabled:opacity-50">Merge</button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );
