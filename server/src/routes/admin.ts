@@ -598,22 +598,55 @@ router.get('/clients/:slug/branches/:branchId/users', async (req: Request, res: 
   if (!client) return res.status(404).json({ error: 'Client not found' });
   const branchId = parseInt(req.params.branchId as string);
 
-  const assigned = db.all(
-    `SELECT uba.user_id FROM user_branch_access uba
-     JOIN branches b ON uba.branch_id = b.id
-     WHERE uba.branch_id = ? AND b.client_id = ?`,
-    [branchId, client.id]
-  );
-  const userIds = assigned.map((r: any) => r.user_id);
-
   const nonAdminUsers = db.all(
     `SELECT id FROM client_users WHERE client_id = ? AND role != 'admin' AND is_active = 1`,
     [client.id]
   );
   const total = nonAdminUsers.length;
+
+  // Get streams linked to this branch
+  const branchStreams = db.all(
+    `SELECT bs.stream_id, s.name as stream_name
+     FROM branch_streams bs
+     JOIN business_streams s ON bs.stream_id = s.id
+     WHERE bs.branch_id = ? AND s.is_active = 1
+     ORDER BY s.name`,
+    [branchId]
+  );
+
+  // Get per-stream user assignments
+  const streamAccess = db.all(
+    `SELECT ubsa.stream_id, ubsa.user_id
+     FROM user_branch_stream_access ubsa
+     JOIN branches b ON ubsa.branch_id = b.id
+     WHERE ubsa.branch_id = ? AND b.client_id = ?`,
+    [branchId, client.id]
+  );
+
+  // Build per-stream user map
+  const streamUserMap: Record<number, number[]> = {};
+  for (const sa of streamAccess) {
+    if (!streamUserMap[sa.stream_id]) streamUserMap[sa.stream_id] = [];
+    streamUserMap[sa.stream_id].push(sa.user_id);
+  }
+
+  const streams = branchStreams.map((bs: any) => ({
+    id: bs.stream_id,
+    name: bs.stream_name,
+    user_ids: streamUserMap[bs.stream_id] || [],
+  }));
+
+  // Branch-level user access (for the toggle state)
+  const branchUsers = db.all(
+    `SELECT uba.user_id FROM user_branch_access uba
+     JOIN branches b ON uba.branch_id = b.id
+     WHERE uba.branch_id = ? AND b.client_id = ?`,
+    [branchId, client.id]
+  );
+  const userIds = branchUsers.map((r: any) => r.user_id);
   const isRestricted = userIds.length < total;
 
-  res.json({ user_ids: userIds, total_non_admin_users: total, is_restricted: isRestricted });
+  res.json({ user_ids: userIds, streams, total_non_admin_users: total, is_restricted: isRestricted });
 });
 
 router.put('/clients/:slug/branches/:branchId/users', async (req: Request, res: Response) => {
@@ -625,37 +658,54 @@ router.put('/clients/:slug/branches/:branchId/users', async (req: Request, res: 
   const branch = db.get('SELECT id FROM branches WHERE id = ? AND client_id = ?', [branchId, client.id]);
   if (!branch) return res.status(404).json({ error: 'Branch not found' });
 
-  const { restrict_access, user_ids } = req.body;
+  const { restrict_access, stream_users } = req.body;
 
   // Get streams linked to this branch
   const branchStreams = db.all('SELECT stream_id FROM branch_streams WHERE branch_id = ?', [branchId]);
   const streamIds = branchStreams.map((r: any) => r.stream_id);
 
-  // Determine target users
-  let targetUserIds: number[];
-  if (!restrict_access) {
-    const allUsers = db.all(
-      `SELECT id FROM client_users WHERE client_id = ? AND role != 'admin' AND is_active = 1`,
-      [client.id]
-    );
-    targetUserIds = allUsers.map((r: any) => r.id);
-  } else {
-    targetUserIds = Array.isArray(user_ids) ? user_ids : [];
-  }
-
   // Clear existing access for this branch
   db.run('DELETE FROM user_branch_access WHERE branch_id = ?', [branchId]);
   db.run('DELETE FROM user_branch_stream_access WHERE branch_id = ?', [branchId]);
 
-  // Insert new access
-  for (const uid of targetUserIds) {
+  if (!restrict_access) {
+    // Grant all non-admin users access to all streams
+    const allUsers = db.all(
+      `SELECT id FROM client_users WHERE client_id = ? AND role != 'admin' AND is_active = 1`,
+      [client.id]
+    );
+    for (const user of allUsers) {
+      db.run('INSERT OR IGNORE INTO user_branch_access (user_id, branch_id, can_view_consolidated) VALUES (?, ?, 1)', [user.id, branchId]);
+      for (const sid of streamIds) {
+        db.run('INSERT OR IGNORE INTO user_branch_stream_access (user_id, branch_id, stream_id, can_view_consolidated) VALUES (?, ?, ?, 1)', [user.id, branchId, sid]);
+      }
+    }
+    return res.json({ ok: true });
+  }
+
+  // Restricted: per-stream user assignments
+  // stream_users: [{ stream_id: number, user_ids: number[] }]
+  const perStreamUsers: { stream_id: number; user_ids: number[] }[] = Array.isArray(stream_users) ? stream_users : [];
+
+  // Collect all unique user IDs across all streams for branch-level access
+  const allUserIds = new Set<number>();
+  for (const su of perStreamUsers) {
+    for (const uid of su.user_ids) allUserIds.add(uid);
+  }
+
+  // Insert branch-level access for all users who have at least one stream
+  for (const uid of allUserIds) {
     db.run('INSERT OR IGNORE INTO user_branch_access (user_id, branch_id, can_view_consolidated) VALUES (?, ?, 1)', [uid, branchId]);
-    for (const sid of streamIds) {
-      db.run('INSERT OR IGNORE INTO user_branch_stream_access (user_id, branch_id, stream_id, can_view_consolidated) VALUES (?, ?, ?, 1)', [uid, branchId, sid]);
+  }
+
+  // Insert per-stream access
+  for (const su of perStreamUsers) {
+    for (const uid of su.user_ids) {
+      db.run('INSERT OR IGNORE INTO user_branch_stream_access (user_id, branch_id, stream_id, can_view_consolidated) VALUES (?, ?, ?, 1)', [uid, branchId, su.stream_id]);
     }
   }
 
-  res.json({ ok: true, user_count: targetUserIds.length });
+  res.json({ ok: true });
 });
 
 // ─── User Branch+Stream Access ─────────────────────────────────────────────

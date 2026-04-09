@@ -1049,7 +1049,9 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
   const [state, setState] = useState('');
   const [manager, setManager] = useState('');
   const [enabling, setEnabling] = useState(false);
-  const [branchAccess, setBranchAccess] = useState<Record<number, { is_restricted: boolean; user_ids: number[] }>>({});
+  interface StreamAccess { id: number; name: string; user_ids: number[] }
+  interface BranchAccessData { is_restricted: boolean; user_ids: number[]; streams: StreamAccess[] }
+  const [branchAccess, setBranchAccess] = useState<Record<number, BranchAccessData>>({});
   const [expandedBranch, setExpandedBranch] = useState<number | null>(null);
   const [savingBranch, setSavingBranch] = useState<number | null>(null);
 
@@ -1064,9 +1066,9 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
         api.get(`/admin/clients/${slug}/branches/${b.id}/users`).then(res => ({ branchId: b.id, data: res.data }))
       )
     ).then(results => {
-      const map: Record<number, { is_restricted: boolean; user_ids: number[] }> = {};
+      const map: Record<number, BranchAccessData> = {};
       for (const r of results) {
-        map[r.branchId] = { is_restricted: r.data.is_restricted, user_ids: r.data.user_ids };
+        map[r.branchId] = { is_restricted: r.data.is_restricted, user_ids: r.data.user_ids, streams: r.data.streams || [] };
       }
       setBranchAccess(map);
     });
@@ -1081,31 +1083,49 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
     try {
       await api.put(`/admin/clients/${slug}/branches/${branchId}/users`, {
         restrict_access: newRestricted,
-        user_ids: newRestricted ? [] : [],
+        stream_users: [],
       });
       const res = await api.get(`/admin/clients/${slug}/branches/${branchId}/users`);
-      setBranchAccess(prev => ({ ...prev, [branchId]: { is_restricted: res.data.is_restricted, user_ids: res.data.user_ids } }));
+      setBranchAccess(prev => ({ ...prev, [branchId]: { is_restricted: res.data.is_restricted, user_ids: res.data.user_ids, streams: res.data.streams || [] } }));
     } catch (err: any) {
       alert(err.response?.data?.error || 'Failed to update access');
     }
     setSavingBranch(null);
   };
 
-  const handleUserToggle = async (branchId: number, userId: number) => {
+  const handleStreamUserToggle = async (branchId: number, streamId: number, userId: number) => {
     const current = branchAccess[branchId];
     if (!current) return;
-    const newIds = current.user_ids.includes(userId)
-      ? current.user_ids.filter(id => id !== userId)
-      : [...current.user_ids, userId];
+    // Build updated stream_users from current state
+    const updatedStreams = current.streams.map(s => {
+      if (s.id !== streamId) return { stream_id: s.id, user_ids: s.user_ids };
+      const newIds = s.user_ids.includes(userId)
+        ? s.user_ids.filter(id => id !== userId)
+        : [...s.user_ids, userId];
+      return { stream_id: s.id, user_ids: newIds };
+    });
+    // Optimistic update
+    const optimisticStreams = current.streams.map(s => {
+      if (s.id !== streamId) return s;
+      const newIds = s.user_ids.includes(userId)
+        ? s.user_ids.filter(id => id !== userId)
+        : [...s.user_ids, userId];
+      return { ...s, user_ids: newIds };
+    });
+    const allUserIds = [...new Set(optimisticStreams.flatMap(s => s.user_ids))];
+    setBranchAccess(prev => ({ ...prev, [branchId]: { is_restricted: true, user_ids: allUserIds, streams: optimisticStreams } }));
+
     setSavingBranch(branchId);
     try {
       await api.put(`/admin/clients/${slug}/branches/${branchId}/users`, {
         restrict_access: true,
-        user_ids: newIds,
+        stream_users: updatedStreams,
       });
-      setBranchAccess(prev => ({ ...prev, [branchId]: { is_restricted: true, user_ids: newIds } }));
     } catch (err: any) {
       alert(err.response?.data?.error || 'Failed to update');
+      // Revert on error
+      const res = await api.get(`/admin/clients/${slug}/branches/${branchId}/users`);
+      setBranchAccess(prev => ({ ...prev, [branchId]: { is_restricted: res.data.is_restricted, user_ids: res.data.user_ids, streams: res.data.streams || [] } }));
     }
     setSavingBranch(null);
   };
@@ -1273,38 +1293,54 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
                   </div>
                 </div>
 
-                {/* Expanded user dropdown */}
+                {/* Expanded per-stream user assignments */}
                 {isExpanded && isRestricted && branch.is_active && (
                   <div className="px-5 pb-4 pt-0">
-                    <div className="ml-12 bg-dark-600/40 rounded-xl border border-dark-400/20 p-3">
-                      <p className="text-[11px] text-theme-faint mb-2">
-                        Select users who can access this branch <span className="text-theme-muted">(admins always have full access)</span>
+                    <div className="ml-12">
+                      <p className="text-[11px] text-theme-faint mb-3">
+                        Assign users to each revenue stream <span className="text-theme-muted">(admins always have full access)</span>
                       </p>
-                      {assignedIds.length === 0 && (
-                        <p className="text-[11px] text-amber-400/80 mb-2">No users have access to this branch</p>
+                      {(access?.streams ?? []).length === 0 ? (
+                        <div className="bg-dark-600/40 rounded-xl border border-dark-400/20 p-3">
+                          <p className="text-[11px] text-amber-400/80">No revenue streams configured for this branch. Add streams in the Revenue Streams tab first.</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2.5">
+                          {(access?.streams ?? []).map(stream => (
+                            <div key={stream.id} className="bg-dark-600/40 rounded-xl border border-dark-400/20 overflow-hidden">
+                              <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-dark-400/15">
+                                <div className="flex items-center gap-2">
+                                  <Layers size={13} className="text-accent-400" />
+                                  <span className="text-xs font-semibold text-theme-heading">{stream.name}</span>
+                                </div>
+                                <span className="text-[10px] text-theme-faint">{stream.user_ids.length} of {nonAdminUsers.length} users</span>
+                              </div>
+                              <div className="p-2.5 space-y-0.5 max-h-40 overflow-y-auto">
+                                {nonAdminUsers.map(user => {
+                                  const isAssigned = stream.user_ids.includes(user.id);
+                                  return (
+                                    <label
+                                      key={user.id}
+                                      className={`flex items-center gap-2.5 px-3 py-1.5 rounded-lg cursor-pointer transition-all ${
+                                        isAssigned ? 'bg-accent-500/10' : 'hover:bg-dark-500/50'
+                                      } ${isSaving ? 'opacity-50 pointer-events-none' : ''}`}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={isAssigned}
+                                        onChange={() => handleStreamUserToggle(branch.id, stream.id, user.id)}
+                                        className="w-3.5 h-3.5 rounded border-dark-300 text-accent-500 focus:ring-accent-500/30"
+                                      />
+                                      <span className="text-sm text-theme-secondary">{user.display_name}</span>
+                                      <span className="text-[10px] text-theme-faint">@{user.username}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       )}
-                      <div className="space-y-1 max-h-48 overflow-y-auto">
-                        {nonAdminUsers.map(user => {
-                          const isAssigned = assignedIds.includes(user.id);
-                          return (
-                            <label
-                              key={user.id}
-                              className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-all ${
-                                isAssigned ? 'bg-accent-500/10' : 'hover:bg-dark-500/50'
-                              } ${isSaving ? 'opacity-50 pointer-events-none' : ''}`}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={isAssigned}
-                                onChange={() => handleUserToggle(branch.id, user.id)}
-                                className="w-3.5 h-3.5 rounded border-dark-300 text-accent-500 focus:ring-accent-500/30"
-                              />
-                              <span className="text-sm text-theme-secondary">{user.display_name}</span>
-                              <span className="text-[10px] text-theme-faint">@{user.username}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
                     </div>
                   </div>
                 )}
