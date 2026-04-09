@@ -73,7 +73,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
   }, [showBranchDropdown]);
 
   useEffect(() => {
-    if (!isMultiBranch || isSuperAdmin) return;
+    if (!isMultiBranch || (isSuperAdmin && isOwner)) return;
     api.get('/branches').then(res => {
       if (res.data.isMultiBranch) {
         setBranches(res.data.branches || []);
@@ -259,7 +259,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
       )}
 
       {/* Branch selector — multi-branch clients only */}
-      {isMultiBranch && !isSuperAdmin && branches.length > 0 && expanded && (
+      {isMultiBranch && !(isSuperAdmin && isOwner) && branches.length > 0 && expanded && (
         <div className="px-3 py-2 border-b border-dark-400/30">
           <div className="relative" ref={branchDropdownRef}>
             <button
@@ -319,7 +319,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
       )}
 
       {/* Stream selector — shows when branch is selected and has streams */}
-      {isMultiBranch && !isSuperAdmin && expanded && getBranchStreams().length > 0 && selectedBranchId !== 'all' && (
+      {isMultiBranch && !(isSuperAdmin && isOwner) && expanded && getBranchStreams().length > 0 && selectedBranchId !== 'all' && (
         <div className="px-3 py-2 border-b border-dark-400/30">
           <div className="flex gap-1 flex-wrap">
             <button
@@ -350,7 +350,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
       )}
 
       {/* Collapsed branch icon */}
-      {isMultiBranch && !isSuperAdmin && branches.length > 0 && !expanded && (
+      {isMultiBranch && !(isSuperAdmin && isOwner) && branches.length > 0 && !expanded && (
         <div className="px-3 py-2 border-b border-dark-400/30 flex justify-center">
           <div className="w-9 h-9 rounded-lg bg-dark-600 flex items-center justify-center" title={selectedBranchName}>
             <MapPin size={13} className="text-accent-400" />
