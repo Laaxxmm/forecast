@@ -145,9 +145,35 @@ router.get('/overview', async (req, res) => {
     });
   }
 
+  // Filter cards based on selected stream
+  let filteredCards = cards;
+  let combinedRevenue = totalRevenue;
+  let combinedBudget = totalBudget;
+
+  if (req.streamMode === 'specific' && req.streamId) {
+    filteredCards = cards.filter(c =>
+      c.card_type === 'total' ||
+      (c.card_type === 'stream' && c.stream_id === req.streamId)
+    );
+    const selectedStream = streamDataMap[req.streamId];
+    if (selectedStream) {
+      combinedRevenue = selectedStream.total_revenue;
+      combinedBudget = selectedStream.budget_total;
+      for (const c of filteredCards) {
+        if (c.card_type === 'total') {
+          c.value = combinedRevenue;
+          c.budget = combinedBudget;
+          c.trend = combinedBudget > 0
+            ? ((combinedRevenue - combinedBudget) / combinedBudget) * 100
+            : undefined;
+        }
+      }
+    }
+  }
+
   res.json({
-    fy, streams, cards,
-    combined: { total_revenue: totalRevenue, total_budget: totalBudget },
+    fy, streams, cards: filteredCards,
+    combined: { total_revenue: combinedRevenue, total_budget: combinedBudget },
   });
 });
 
