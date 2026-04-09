@@ -642,8 +642,14 @@ router.delete('/clients/:slug/branches/:id', async (req: Request, res: Response)
   const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
-  // Soft delete — deactivate instead of removing
-  db.run('UPDATE branches SET is_active = 0 WHERE id = ? AND client_id = ?', [branchId, client.id]);
+  const branch = db.get('SELECT id FROM branches WHERE id = ? AND client_id = ?', [branchId, client.id]);
+  if (!branch) return res.status(404).json({ error: 'Branch not found' });
+
+  // Hard delete — remove branch and all related records
+  db.run('DELETE FROM user_branch_stream_access WHERE branch_id = ?', branchId);
+  db.run('DELETE FROM user_branch_access WHERE branch_id = ?', branchId);
+  db.run('DELETE FROM branch_streams WHERE branch_id = ?', branchId);
+  db.run('DELETE FROM branches WHERE id = ? AND client_id = ?', [branchId, client.id]);
   res.json({ ok: true });
 });
 

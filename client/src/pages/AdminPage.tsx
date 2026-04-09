@@ -5,7 +5,7 @@ import {
   Building2, Users, UserPlus, Plus, Power, ArrowLeft,
   Eye, EyeOff, CheckCircle, Plug, Shield, Trash2, Copy, KeyRound, BarChart3,
   MapPin, GitBranch, Layers, Search, Activity, Globe, ChevronRight, ChevronDown,
-  ChevronUp, LayoutDashboard,
+  ChevronUp, LayoutDashboard, Edit2,
 } from 'lucide-react';
 
 /* ─── Types ──────────────────────────────────────────────── */
@@ -1231,8 +1231,8 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
   const [code, setCode] = useState('');
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
-  const [manager, setManager] = useState('');
   const [enabling, setEnabling] = useState(false);
+  const [editingBranch, setEditingBranch] = useState<any>(null);
   interface StreamAccess { id: number; name: string; user_ids: number[] }
   interface BranchAccessData { is_restricted: boolean; user_ids: number[]; streams: StreamAccess[] }
   const [branchAccess, setBranchAccess] = useState<Record<number, BranchAccessData>>({});
@@ -1370,19 +1370,15 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
               <label className="block text-xs font-medium text-theme-muted mb-1">City</label>
               <input type="text" value={city} onChange={e => setCity(e.target.value)} placeholder="optional" className="input text-sm" />
             </div>
-            <div>
-              <label className="block text-xs font-medium text-theme-muted mb-1">Manager</label>
-              <input type="text" value={manager} onChange={e => setManager(e.target.value)} placeholder="optional" className="input text-sm" />
-            </div>
           </div>
           <div className="flex gap-2">
             <button
               onClick={async () => {
                 if (!name || !code) return;
                 await api.post(`/admin/clients/${slug}/branches`, {
-                  name, code, state: state || undefined, city: city || undefined, manager_name: manager || undefined,
+                  name, code, state: state || undefined, city: city || undefined,
                 });
-                setName(''); setCode(''); setState(''); setCity(''); setManager('');
+                setName(''); setCode(''); setState(''); setCity('');
                 setShowAdd(false); onReload();
               }}
               disabled={!name || !code}
@@ -1413,10 +1409,8 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
               <div key={branch.id} className={`${i < branches.length - 1 ? 'border-b border-dark-400/15' : ''}`}>
                 <div className="flex items-center justify-between px-5 py-3.5">
                   <div className="flex items-center gap-3">
-                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${
-                      branch.is_active ? 'bg-accent-500/10' : 'bg-dark-500'
-                    }`}>
-                      <MapPin size={15} className={branch.is_active ? 'text-accent-400' : 'text-theme-faint'} />
+                    <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-accent-500/10">
+                      <MapPin size={15} className="text-accent-400" />
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
@@ -1427,13 +1421,11 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
                         {branch.state && <span>{branch.state}</span>}
                         {branch.state && branch.city && <span className="text-dark-300">·</span>}
                         {branch.city && <span>{branch.city}</span>}
-                        {branch.manager_name && <><span className="text-dark-300">·</span><span>{branch.manager_name}</span></>}
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    {/* Access toggle - only for active branches */}
-                    {branch.is_active && client?.is_multi_branch && (
+                    {client?.is_multi_branch && (
                       <div className="flex items-center gap-2">
                         <span className="text-[11px] text-theme-faint">Restrict Access</span>
                         <button
@@ -1446,8 +1438,7 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
                         </button>
                       </div>
                     )}
-                    {/* User count badge when restricted */}
-                    {branch.is_active && isRestricted && (
+                    {isRestricted && (
                       <button
                         onClick={() => setExpandedBranch(isExpanded ? null : branch.id)}
                         className="flex items-center gap-1 text-[11px] px-2.5 py-1.5 rounded-lg bg-amber-500/10 text-amber-400 hover:bg-amber-500/15 transition-all"
@@ -1457,25 +1448,64 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
                         {isExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                       </button>
                     )}
-                    <span className={`text-[10px] font-medium px-2.5 py-1 rounded-full ${
-                      branch.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
-                    }`}>
-                      {branch.is_active ? 'Active' : 'Inactive'}
-                    </span>
-                    {branch.is_active && (
-                      <button
-                        onClick={async () => {
-                          if (!confirm(`Deactivate branch "${branch.name}"?`)) return;
-                          await api.delete(`/admin/clients/${slug}/branches/${branch.id}`);
-                          onReload();
-                        }}
-                        className="text-theme-faint hover:text-red-400 p-1.5 hover:bg-red-500/10 rounded-lg transition-all"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
+                    <button
+                      onClick={() => setEditingBranch({ ...branch })}
+                      className="text-theme-faint hover:text-blue-400 p-1.5 hover:bg-blue-500/10 rounded-lg transition-all"
+                    >
+                      <Edit2 size={14} />
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (!confirm(`Permanently delete branch "${branch.name}"? This cannot be undone.`)) return;
+                        await api.delete(`/admin/clients/${slug}/branches/${branch.id}`);
+                        onReload();
+                      }}
+                      className="text-theme-faint hover:text-red-400 p-1.5 hover:bg-red-500/10 rounded-lg transition-all"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
                 </div>
+
+                {/* Edit branch inline form */}
+                {editingBranch?.id === branch.id && (
+                  <div className="px-5 pb-4 pt-0">
+                    <div className="bg-dark-600/40 rounded-xl border border-dark-400/20 p-4">
+                      <div className="grid grid-cols-2 gap-3 mb-3">
+                        <div>
+                          <label className="block text-xs font-medium text-theme-muted mb-1">Name</label>
+                          <input type="text" value={editingBranch.name} onChange={e => setEditingBranch({ ...editingBranch, name: e.target.value })} className="input text-sm" />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-theme-muted mb-1">Code</label>
+                          <input type="text" value={editingBranch.code} onChange={e => setEditingBranch({ ...editingBranch, code: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })} className="input text-sm" />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-theme-muted mb-1">State</label>
+                          <input type="text" value={editingBranch.state || ''} onChange={e => setEditingBranch({ ...editingBranch, state: e.target.value })} className="input text-sm" />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-theme-muted mb-1">City</label>
+                          <input type="text" value={editingBranch.city || ''} onChange={e => setEditingBranch({ ...editingBranch, city: e.target.value })} className="input text-sm" />
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={async () => {
+                            await api.put(`/admin/clients/${slug}/branches/${editingBranch.id}`, {
+                              name: editingBranch.name, code: editingBranch.code,
+                              state: editingBranch.state || '', city: editingBranch.city || '',
+                            });
+                            setEditingBranch(null); onReload();
+                          }}
+                          disabled={!editingBranch.name || !editingBranch.code}
+                          className="btn-primary text-xs"
+                        >Save</button>
+                        <button onClick={() => setEditingBranch(null)} className="btn-secondary text-xs">Cancel</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Expanded per-stream user assignments */}
                 {isExpanded && isRestricted && branch.is_active && (
