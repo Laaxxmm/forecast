@@ -1223,16 +1223,53 @@ function DashboardCardsSection({ slug }: { slug: string }) {
 
 /* ─── Branches Section ───────────────────────────────────── */
 
+const INDIAN_STATES_CITIES: Record<string, string[]> = {
+  'Andhra Pradesh': ['Visakhapatnam', 'Vijayawada', 'Guntur', 'Nellore', 'Kurnool', 'Tirupati', 'Kakinada', 'Rajahmundry', 'Anantapur', 'Eluru'],
+  'Arunachal Pradesh': ['Itanagar', 'Naharlagun', 'Pasighat', 'Tawang', 'Ziro'],
+  'Assam': ['Guwahati', 'Silchar', 'Dibrugarh', 'Jorhat', 'Nagaon', 'Tinsukia', 'Tezpur'],
+  'Bihar': ['Patna', 'Gaya', 'Bhagalpur', 'Muzaffarpur', 'Darbhanga', 'Purnia', 'Arrah'],
+  'Chhattisgarh': ['Raipur', 'Bhilai', 'Bilaspur', 'Korba', 'Durg', 'Rajnandgaon'],
+  'Goa': ['Panaji', 'Margao', 'Vasco da Gama', 'Mapusa', 'Ponda'],
+  'Gujarat': ['Ahmedabad', 'Surat', 'Vadodara', 'Rajkot', 'Bhavnagar', 'Jamnagar', 'Junagadh', 'Gandhinagar', 'Anand', 'Nadiad'],
+  'Haryana': ['Gurugram', 'Faridabad', 'Panipat', 'Ambala', 'Karnal', 'Hisar', 'Rohtak', 'Sonipat'],
+  'Himachal Pradesh': ['Shimla', 'Manali', 'Dharamshala', 'Solan', 'Mandi', 'Kullu'],
+  'Jharkhand': ['Ranchi', 'Jamshedpur', 'Dhanbad', 'Bokaro', 'Hazaribagh', 'Deoghar'],
+  'Karnataka': ['Bangalore', 'Mysore', 'Hubli', 'Mangalore', 'Belgaum', 'Davangere', 'Gulbarga', 'Shimoga', 'Tumkur', 'Udupi'],
+  'Kerala': ['Thiruvananthapuram', 'Kochi', 'Kozhikode', 'Thrissur', 'Kollam', 'Palakkad', 'Alappuzha', 'Kannur', 'Kottayam'],
+  'Madhya Pradesh': ['Bhopal', 'Indore', 'Jabalpur', 'Gwalior', 'Ujjain', 'Sagar', 'Dewas', 'Satna', 'Ratlam'],
+  'Maharashtra': ['Mumbai', 'Pune', 'Nagpur', 'Thane', 'Nashik', 'Aurangabad', 'Solapur', 'Kolhapur', 'Amravati', 'Navi Mumbai'],
+  'Manipur': ['Imphal', 'Thoubal', 'Bishnupur', 'Churachandpur'],
+  'Meghalaya': ['Shillong', 'Tura', 'Jowai', 'Nongstoin'],
+  'Mizoram': ['Aizawl', 'Lunglei', 'Champhai', 'Serchhip'],
+  'Nagaland': ['Kohima', 'Dimapur', 'Mokokchung', 'Tuensang', 'Wokha'],
+  'Odisha': ['Bhubaneswar', 'Cuttack', 'Rourkela', 'Brahmapur', 'Sambalpur', 'Puri'],
+  'Punjab': ['Chandigarh', 'Ludhiana', 'Amritsar', 'Jalandhar', 'Patiala', 'Bathinda', 'Mohali'],
+  'Rajasthan': ['Jaipur', 'Jodhpur', 'Udaipur', 'Kota', 'Ajmer', 'Bikaner', 'Alwar', 'Bhilwara'],
+  'Sikkim': ['Gangtok', 'Namchi', 'Gyalshing', 'Mangan'],
+  'Tamil Nadu': ['Chennai', 'Coimbatore', 'Madurai', 'Tiruchirappalli', 'Salem', 'Tirunelveli', 'Erode', 'Vellore', 'Thoothukudi'],
+  'Telangana': ['Hyderabad', 'Warangal', 'Nizamabad', 'Karimnagar', 'Khammam', 'Mahbubnagar', 'Secunderabad'],
+  'Tripura': ['Agartala', 'Udaipur', 'Dharmanagar', 'Kailasahar'],
+  'Uttar Pradesh': ['Lucknow', 'Kanpur', 'Agra', 'Varanasi', 'Meerut', 'Allahabad', 'Ghaziabad', 'Noida', 'Bareilly', 'Aligarh'],
+  'Uttarakhand': ['Dehradun', 'Haridwar', 'Rishikesh', 'Haldwani', 'Roorkee', 'Nainital'],
+  'West Bengal': ['Kolkata', 'Howrah', 'Durgapur', 'Asansol', 'Siliguri', 'Kharagpur', 'Darjeeling'],
+  'Delhi': ['New Delhi', 'Delhi'],
+  'Chandigarh': ['Chandigarh'],
+  'Puducherry': ['Puducherry', 'Karaikal', 'Mahe', 'Yanam'],
+  'Jammu & Kashmir': ['Srinagar', 'Jammu', 'Anantnag', 'Baramulla', 'Udhampur'],
+  'Ladakh': ['Leh', 'Kargil'],
+};
+
 function BranchesSection({ slug, client, branches, users, onReload }: {
   slug: string; client: any; branches: any[]; users: ClientUser[]; onReload: () => void;
 }) {
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState('');
-  const [code, setCode] = useState('');
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
   const [enabling, setEnabling] = useState(false);
   const [editingBranch, setEditingBranch] = useState<any>(null);
+
+  const autoCode = (n: string) => n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 20);
   interface StreamAccess { id: number; name: string; user_ids: number[] }
   interface BranchAccessData { is_restricted: boolean; user_ids: number[]; streams: StreamAccess[] }
   const [branchAccess, setBranchAccess] = useState<Record<number, BranchAccessData>>({});
@@ -1353,35 +1390,37 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
       {showAdd && (
         <div className="bg-dark-700/60 rounded-2xl p-5 mb-4 border border-dark-400/20">
           <h4 className="text-sm font-semibold text-theme-heading mb-3">New Branch</h4>
-          <div className="grid grid-cols-2 gap-3 mb-3">
+          <div className="grid grid-cols-3 gap-3 mb-3">
             <div>
-              <label className="block text-xs font-medium text-theme-muted mb-1">Name</label>
-              <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Bangalore" className="input text-sm" />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-theme-muted mb-1">Code</label>
-              <input type="text" value={code} onChange={e => setCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} placeholder="e.g. blr" className="input text-sm" />
+              <label className="block text-xs font-medium text-theme-muted mb-1">Branch Name</label>
+              <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Koramangala Clinic" className="input text-sm" />
             </div>
             <div>
               <label className="block text-xs font-medium text-theme-muted mb-1">State</label>
-              <input type="text" value={state} onChange={e => setState(e.target.value)} placeholder="e.g. Karnataka" className="input text-sm" />
+              <select value={state} onChange={e => { setState(e.target.value); setCity(''); }} className="input text-sm">
+                <option value="">Select state</option>
+                {Object.keys(INDIAN_STATES_CITIES).map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
             </div>
             <div>
               <label className="block text-xs font-medium text-theme-muted mb-1">City</label>
-              <input type="text" value={city} onChange={e => setCity(e.target.value)} placeholder="optional" className="input text-sm" />
+              <select value={city} onChange={e => setCity(e.target.value)} className="input text-sm" disabled={!state}>
+                <option value="">Select city</option>
+                {(INDIAN_STATES_CITIES[state] || []).map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
             </div>
           </div>
           <div className="flex gap-2">
             <button
               onClick={async () => {
-                if (!name || !code) return;
+                if (!name) return;
                 await api.post(`/admin/clients/${slug}/branches`, {
-                  name, code, state: state || undefined, city: city || undefined,
+                  name, code: autoCode(name), state: state || undefined, city: city || undefined,
                 });
-                setName(''); setCode(''); setState(''); setCity('');
+                setName(''); setState(''); setCity('');
                 setShowAdd(false); onReload();
               }}
-              disabled={!name || !code}
+              disabled={!name}
               className="btn-primary text-xs"
             >Add Branch</button>
             <button onClick={() => setShowAdd(false)} className="btn-secondary text-xs">Cancel</button>
@@ -1471,34 +1510,36 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
                 {editingBranch?.id === branch.id && (
                   <div className="px-5 pb-4 pt-0">
                     <div className="bg-dark-600/40 rounded-xl border border-dark-400/20 p-4">
-                      <div className="grid grid-cols-2 gap-3 mb-3">
+                      <div className="grid grid-cols-3 gap-3 mb-3">
                         <div>
-                          <label className="block text-xs font-medium text-theme-muted mb-1">Name</label>
+                          <label className="block text-xs font-medium text-theme-muted mb-1">Branch Name</label>
                           <input type="text" value={editingBranch.name} onChange={e => setEditingBranch({ ...editingBranch, name: e.target.value })} className="input text-sm" />
                         </div>
                         <div>
-                          <label className="block text-xs font-medium text-theme-muted mb-1">Code</label>
-                          <input type="text" value={editingBranch.code} onChange={e => setEditingBranch({ ...editingBranch, code: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })} className="input text-sm" />
-                        </div>
-                        <div>
                           <label className="block text-xs font-medium text-theme-muted mb-1">State</label>
-                          <input type="text" value={editingBranch.state || ''} onChange={e => setEditingBranch({ ...editingBranch, state: e.target.value })} className="input text-sm" />
+                          <select value={editingBranch.state || ''} onChange={e => setEditingBranch({ ...editingBranch, state: e.target.value, city: '' })} className="input text-sm">
+                            <option value="">Select state</option>
+                            {Object.keys(INDIAN_STATES_CITIES).map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
                         </div>
                         <div>
                           <label className="block text-xs font-medium text-theme-muted mb-1">City</label>
-                          <input type="text" value={editingBranch.city || ''} onChange={e => setEditingBranch({ ...editingBranch, city: e.target.value })} className="input text-sm" />
+                          <select value={editingBranch.city || ''} onChange={e => setEditingBranch({ ...editingBranch, city: e.target.value })} className="input text-sm" disabled={!editingBranch.state}>
+                            <option value="">Select city</option>
+                            {(INDIAN_STATES_CITIES[editingBranch.state] || []).map((c: string) => <option key={c} value={c}>{c}</option>)}
+                          </select>
                         </div>
                       </div>
                       <div className="flex gap-2">
                         <button
                           onClick={async () => {
                             await api.put(`/admin/clients/${slug}/branches/${editingBranch.id}`, {
-                              name: editingBranch.name, code: editingBranch.code,
+                              name: editingBranch.name, code: autoCode(editingBranch.name),
                               state: editingBranch.state || '', city: editingBranch.city || '',
                             });
                             setEditingBranch(null); onReload();
                           }}
-                          disabled={!editingBranch.name || !editingBranch.code}
+                          disabled={!editingBranch.name}
                           className="btn-primary text-xs"
                         >Save</button>
                         <button onClick={() => setEditingBranch(null)} className="btn-secondary text-xs">Cancel</button>
