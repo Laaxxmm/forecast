@@ -13,30 +13,35 @@ router.get('/overview', async (req, res) => {
     ? db.get('SELECT * FROM financial_years WHERE id = ?', fy_id)
     : db.get('SELECT * FROM financial_years WHERE is_active = 1');
 
-  if (!fy) return res.json({ fy: null, streams: [], combined: { total_revenue: 0, total_budget: 0 } });
+  if (!fy) return res.json({ fy: null, streams: [], cards: [], combined: { total_revenue: 0, total_budget: 0 } });
 
   const startMonth = fy.start_date.slice(0, 7);
   const endMonth = fy.end_date.slice(0, 7);
 
-  // Get client streams from platform DB
   const platformDb = await getPlatformHelper();
   const clientStreams = platformDb.all(
     'SELECT id, name, icon, color FROM business_streams WHERE client_id = ? AND is_active = 1 ORDER BY sort_order',
     req.clientId
   );
 
-  // Get revenue actuals per stream from dashboard_actuals (the generic aggregation table)
+  // Get dashboard cards (visible ones, ordered)
+  const dashboardCards = platformDb.all(
+    'SELECT * FROM dashboard_cards WHERE client_id = ? AND is_visible = 1 ORDER BY sort_order, id',
+    req.clientId
+  );
+
   const scenario = db.get(
     `SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where} LIMIT 1`,
     fy.id, ...bf.params
   );
 
+  // Build per-stream revenue data (used by both cards and charts)
   const streams: any[] = [];
   let totalRevenue = 0;
   let totalBudget = 0;
+  const streamDataMap: Record<number, any> = {};
 
   for (const stream of clientStreams) {
-    // Revenue from dashboard_actuals
     const revenue = scenario ? db.get(
       `SELECT COALESCE(SUM(amount), 0) as total
        FROM dashboard_actuals
@@ -45,7 +50,6 @@ router.get('/overview', async (req, res) => {
       scenario.id, startMonth, endMonth, ...bf.params, stream.id
     ) : { total: 0 };
 
-    // Monthly breakdown
     const monthly = scenario ? db.all(
       `SELECT month, category, COALESCE(SUM(amount), 0) as total
        FROM dashboard_actuals
@@ -55,7 +59,6 @@ router.get('/overview', async (req, res) => {
       scenario.id, startMonth, endMonth, ...bf.params, stream.id
     ) : [];
 
-    // Budget from budgets table
     const budget = db.get(
       `SELECT COALESCE(SUM(amount), 0) as total FROM budgets
        WHERE fy_id = ? AND business_unit = ? AND metric = 'revenue'${bf.where}`,
@@ -67,18 +70,15 @@ router.get('/overview', async (req, res) => {
     totalRevenue += streamTotal;
     totalBudget += budgetTotal;
 
-    streams.push({
-      id: stream.id,
-      name: stream.name,
-      icon: stream.icon,
-      color: stream.color,
-      total_revenue: streamTotal,
-      budget_total: budgetTotal,
-      monthly,
-    });
+    const streamData = {
+      id: stream.id, name: stream.name, icon: stream.icon, color: stream.color,
+      total_revenue: streamTotal, budget_total: budgetTotal, monthly,
+    };
+    streams.push(streamData);
+    streamDataMap[stream.id] = streamData;
   }
 
-  // Also include untagged revenue (stream_id IS NULL) — legacy data
+  // Legacy untagged revenue
   if (scenario) {
     const untagged = db.get(
       `SELECT COALESCE(SUM(amount), 0) as total
@@ -92,7 +92,6 @@ router.get('/overview', async (req, res) => {
     }
   }
 
-  // Legacy support: if no streams configured, fall back to raw table queries
   if (clientStreams.length === 0) {
     try {
       const clinicTotal = db.get(
@@ -107,9 +106,47 @@ router.get('/overview', async (req, res) => {
     } catch { /* tables may not exist */ }
   }
 
+  // Build cards array from dashboard_cards
+  const cards: any[] = [];
+  for (const card of dashboardCards) {
+    let value = 0, budget = 0, trend: number | undefined;
+    let subtitle = '';
+
+    if (card.card_type === 'total') {
+      value = totalRevenue;
+      budget = totalBudget;
+      subtitle = 'All streams';
+    } else if (card.card_type === 'stream' && card.stream_id) {
+      const sd = streamDataMap[card.stream_id];
+      if (sd) {
+        value = sd.total_revenue;
+        budget = sd.budget_total;
+        subtitle = value > 0 ? `vs ${budget} budget` : 'No data yet';
+      }
+    } else if (card.card_type === 'custom' && scenario) {
+      const catData = db.get(
+        `SELECT COALESCE(SUM(amount), 0) as total
+         FROM dashboard_actuals
+         WHERE scenario_id = ? AND category = ? AND month >= ? AND month <= ?${bf.where}`,
+        scenario.id, card.category, startMonth, endMonth, ...bf.params
+      );
+      value = catData?.total || 0;
+      subtitle = card.category.replace(/_/g, ' ');
+    }
+
+    if (budget > 0) {
+      trend = ((value - budget) / budget) * 100;
+    }
+
+    cards.push({
+      id: card.id, card_type: card.card_type, title: card.title,
+      icon: card.icon, color: card.color, stream_id: card.stream_id,
+      value, budget, trend, subtitle,
+    });
+  }
+
   res.json({
-    fy,
-    streams,
+    fy, streams, cards,
     combined: { total_revenue: totalRevenue, total_budget: totalBudget },
   });
 });

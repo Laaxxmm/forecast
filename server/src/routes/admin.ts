@@ -124,6 +124,15 @@ router.post('/clients', async (req: Request, res: Response) => {
     });
   }
 
+  // Create dashboard cards: Total Revenue + one per stream
+  db.run('INSERT INTO dashboard_cards (client_id, card_type, title, icon, color, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+    [clientId, 'total', 'Total Revenue', 'IndianRupee', 'accent', 0]);
+  const newStreams = db.all('SELECT * FROM business_streams WHERE client_id = ? ORDER BY sort_order', clientId);
+  newStreams.forEach((s: any, i: number) => {
+    db.run('INSERT INTO dashboard_cards (client_id, card_type, stream_id, title, icon, color, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [clientId, 'stream', s.id, s.name, s.icon, s.color, i + 1]);
+  });
+
   // Enable manual upload by default
   db.run(
     'INSERT INTO client_integrations (client_id, integration_key, is_enabled) VALUES (?, ?, ?)',
@@ -450,6 +459,11 @@ router.post('/clients/:slug/streams', async (req: Request, res: Response) => {
     'INSERT INTO business_streams (client_id, name, icon, color, sort_order) VALUES (?, ?, ?, ?, ?)',
     [client.id, name, icon || 'BarChart3', color || 'accent', sortOrder]
   );
+  // Auto-create dashboard card for this stream
+  const maxCardOrder = db.get('SELECT MAX(sort_order) as m FROM dashboard_cards WHERE client_id = ?', client.id);
+  db.run('INSERT OR IGNORE INTO dashboard_cards (client_id, card_type, stream_id, title, icon, color, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [client.id, 'stream', result.lastInsertRowid, name, icon || 'BarChart3', color || 'accent', (maxCardOrder?.m || 0) + 1]);
+
   res.status(201).json({ id: result.lastInsertRowid, name, icon: icon || 'BarChart3', color: color || 'accent', sort_order: sortOrder });
 });
 
@@ -466,6 +480,10 @@ router.put('/clients/:slug/streams/:id', async (req: Request, res: Response) => 
   if (color !== undefined) db.run('UPDATE business_streams SET color = ? WHERE id = ? AND client_id = ?', [color, streamId, client.id]);
   if (sort_order !== undefined) db.run('UPDATE business_streams SET sort_order = ? WHERE id = ? AND client_id = ?', [sort_order, streamId, client.id]);
   if (is_active !== undefined) db.run('UPDATE business_streams SET is_active = ? WHERE id = ? AND client_id = ?', [is_active ? 1 : 0, streamId, client.id]);
+  // Sync dashboard card
+  if (name !== undefined) db.run('UPDATE dashboard_cards SET title = ? WHERE stream_id = ? AND client_id = ?', [name, streamId, client.id]);
+  if (icon !== undefined) db.run('UPDATE dashboard_cards SET icon = ? WHERE stream_id = ? AND client_id = ?', [icon, streamId, client.id]);
+  if (color !== undefined) db.run('UPDATE dashboard_cards SET color = ? WHERE stream_id = ? AND client_id = ?', [color, streamId, client.id]);
 
   res.json({ ok: true });
 });
@@ -478,6 +496,80 @@ router.delete('/clients/:slug/streams/:id', async (req: Request, res: Response) 
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
   db.run('DELETE FROM business_streams WHERE id = ? AND client_id = ?', [streamId, client.id]);
+  res.json({ ok: true });
+});
+
+// ─── Dashboard Cards Management ──────────────────────────────────────────────
+
+router.get('/clients/:slug/dashboard-cards', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+  const cards = db.all('SELECT * FROM dashboard_cards WHERE client_id = ? ORDER BY sort_order, id', client.id);
+  res.json(cards);
+});
+
+router.post('/clients/:slug/dashboard-cards', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const { title, category, icon, color } = req.body;
+  if (!title) return res.status(400).json({ error: 'title is required' });
+
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  const maxOrder = db.get('SELECT MAX(sort_order) as m FROM dashboard_cards WHERE client_id = ?', client.id);
+  const result = db.run(
+    'INSERT INTO dashboard_cards (client_id, card_type, title, category, icon, color, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [client.id, 'custom', title, category || 'revenue', icon || 'BarChart3', color || 'accent', (maxOrder?.m || 0) + 1]
+  );
+  res.status(201).json({ id: result.lastInsertRowid, title, card_type: 'custom' });
+});
+
+router.put('/clients/:slug/dashboard-cards/reorder', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const { card_ids } = req.body;
+  if (!Array.isArray(card_ids)) return res.status(400).json({ error: 'card_ids array required' });
+
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  card_ids.forEach((id: number, idx: number) => {
+    db.run('UPDATE dashboard_cards SET sort_order = ? WHERE id = ? AND client_id = ?', [idx, id, client.id]);
+  });
+  res.json({ ok: true });
+});
+
+router.put('/clients/:slug/dashboard-cards/:id', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const cardId = parseInt(req.params.id);
+  const { is_visible, title, icon, color } = req.body;
+
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  const card = db.get('SELECT * FROM dashboard_cards WHERE id = ? AND client_id = ?', [cardId, client.id]);
+  if (!card) return res.status(404).json({ error: 'Card not found' });
+
+  if (is_visible !== undefined) db.run('UPDATE dashboard_cards SET is_visible = ? WHERE id = ?', [is_visible ? 1 : 0, cardId]);
+  if (title !== undefined && card.card_type === 'custom') db.run('UPDATE dashboard_cards SET title = ? WHERE id = ?', [title, cardId]);
+  if (icon !== undefined) db.run('UPDATE dashboard_cards SET icon = ? WHERE id = ?', [icon, cardId]);
+  if (color !== undefined) db.run('UPDATE dashboard_cards SET color = ? WHERE id = ?', [color, cardId]);
+
+  res.json({ ok: true });
+});
+
+router.delete('/clients/:slug/dashboard-cards/:id', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const cardId = parseInt(req.params.id);
+
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  const card = db.get('SELECT * FROM dashboard_cards WHERE id = ? AND client_id = ?', [cardId, client.id]);
+  if (!card) return res.status(404).json({ error: 'Card not found' });
+  if (card.card_type !== 'custom') return res.status(400).json({ error: 'Only custom cards can be deleted' });
+
+  db.run('DELETE FROM dashboard_cards WHERE id = ?', cardId);
   res.json({ ok: true });
 });
 

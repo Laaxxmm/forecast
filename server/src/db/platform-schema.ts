@@ -120,6 +120,22 @@ export function initializePlatformSchema(db: DbHelper) {
       can_view_consolidated INTEGER DEFAULT 0,
       UNIQUE(user_id, branch_id, stream_id)
     );
+
+    -- Dashboard KPI cards per client
+    CREATE TABLE IF NOT EXISTS dashboard_cards (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id INTEGER NOT NULL REFERENCES clients(id),
+      card_type TEXT NOT NULL DEFAULT 'stream',
+      stream_id INTEGER REFERENCES business_streams(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      category TEXT DEFAULT 'revenue',
+      icon TEXT DEFAULT 'BarChart3',
+      color TEXT DEFAULT 'accent',
+      is_visible INTEGER DEFAULT 1,
+      sort_order INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(client_id, card_type, stream_id)
+    );
   `);
 
   // Safe migrations for existing DBs
@@ -141,5 +157,20 @@ export function initializePlatformSchema(db: DbHelper) {
     if (first) {
       db.run('UPDATE team_members SET is_owner = 1 WHERE id = ?', first.id);
     }
+  }
+
+  // Backfill dashboard_cards for existing clients that have streams but no cards
+  const clientsNeedingCards = db.all(
+    `SELECT DISTINCT client_id FROM business_streams
+     WHERE client_id NOT IN (SELECT DISTINCT client_id FROM dashboard_cards)`
+  );
+  for (const c of clientsNeedingCards) {
+    db.run('INSERT OR IGNORE INTO dashboard_cards (client_id, card_type, title, icon, color, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+      [c.client_id, 'total', 'Total Revenue', 'IndianRupee', 'accent', 0]);
+    const streams = db.all('SELECT * FROM business_streams WHERE client_id = ? ORDER BY sort_order', c.client_id);
+    streams.forEach((s: any, i: number) => {
+      db.run('INSERT OR IGNORE INTO dashboard_cards (client_id, card_type, stream_id, title, icon, color, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [c.client_id, 'stream', s.id, s.name, s.icon, s.color, i + 1]);
+    });
   }
 }

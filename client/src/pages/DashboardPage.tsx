@@ -111,40 +111,60 @@ export default function DashboardPage() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
-        <KPICard
-          title="Total Revenue"
-          value={formatINR(data.combined.total_revenue)}
-          subtitle="All streams"
-          icon={IndianRupee}
-          color="accent"
-          trend={data.combined.total_budget > 0
-            ? ((data.combined.total_revenue - data.combined.total_budget) / data.combined.total_budget) * 100
-            : undefined}
-        />
-
-        {streams.map((stream: any) => {
-          const StreamIcon = ICON_MAP[stream.icon] || BarChart3;
-          const trend = stream.budget_total > 0
-            ? ((stream.total_revenue - stream.budget_total) / stream.budget_total) * 100
-            : undefined;
-          return (
+        {data.cards && data.cards.length > 0 ? (
+          data.cards.map((card: any) => {
+            const CardIcon = ICON_MAP[card.icon] || BarChart3;
+            return (
+              <KPICard
+                key={card.id}
+                title={card.title}
+                value={formatINR(card.value)}
+                subtitle={card.subtitle === 'No data yet' ? card.subtitle :
+                  card.budget > 0 ? `vs ${formatINR(card.budget)} budget` :
+                  card.subtitle || undefined}
+                icon={CardIcon}
+                color={card.color || 'accent'}
+                trend={card.trend}
+                onClick={card.stream_id ? () => navigate(`/stream/${card.stream_id}`) : undefined}
+              />
+            );
+          })
+        ) : (
+          <>
             <KPICard
-              key={stream.id}
-              title={`${stream.name} Revenue`}
-              value={formatINR(stream.total_revenue)}
-              subtitle={stream.total_revenue > 0 ? `vs ${formatINR(stream.budget_total)} budget` : 'No data yet'}
-              icon={StreamIcon}
-              color={stream.color || 'blue'}
-              trend={trend}
-              onClick={() => navigate(`/stream/${stream.id}`)}
+              title="Total Revenue"
+              value={formatINR(data.combined.total_revenue)}
+              subtitle="All streams"
+              icon={IndianRupee}
+              color="accent"
+              trend={data.combined.total_budget > 0
+                ? ((data.combined.total_revenue - data.combined.total_budget) / data.combined.total_budget) * 100
+                : undefined}
             />
-          );
-        })}
-
-        {streams.length === 0 && (
-          <div className="card border border-dashed border-slate-700 flex items-center justify-center">
-            <p className="text-sm text-theme-faint text-center">Configure revenue streams in Admin Panel</p>
-          </div>
+            {streams.map((stream: any) => {
+              const StreamIcon = ICON_MAP[stream.icon] || BarChart3;
+              const trend = stream.budget_total > 0
+                ? ((stream.total_revenue - stream.budget_total) / stream.budget_total) * 100
+                : undefined;
+              return (
+                <KPICard
+                  key={stream.id}
+                  title={`${stream.name} Revenue`}
+                  value={formatINR(stream.total_revenue)}
+                  subtitle={stream.total_revenue > 0 ? `vs ${formatINR(stream.budget_total)} budget` : 'No data yet'}
+                  icon={StreamIcon}
+                  color={stream.color || 'blue'}
+                  trend={trend}
+                  onClick={() => navigate(`/stream/${stream.id}`)}
+                />
+              );
+            })}
+            {streams.length === 0 && (
+              <div className="card border border-dashed border-slate-700 flex items-center justify-center">
+                <p className="text-sm text-theme-faint text-center">Configure revenue streams in Admin Panel</p>
+              </div>
+            )}
+          </>
         )}
       </div>
 

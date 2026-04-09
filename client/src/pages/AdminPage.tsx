@@ -5,6 +5,7 @@ import {
   Building2, Users, UserPlus, Plus, Power, ArrowLeft,
   Eye, EyeOff, CheckCircle, Plug, Shield, Trash2, Copy, KeyRound, BarChart3,
   MapPin, GitBranch, Layers, Search, Activity, Globe, ChevronRight, ChevronDown,
+  ChevronUp, LayoutDashboard,
 } from 'lucide-react';
 
 /* ─── Types ──────────────────────────────────────────────── */
@@ -27,7 +28,7 @@ interface Integration {
 }
 
 type Tab = 'clients' | 'team';
-type ClientDetailTab = 'users' | 'modules' | 'integrations' | 'streams' | 'branches' | 'assigned_team';
+type ClientDetailTab = 'users' | 'modules' | 'integrations' | 'streams' | 'dashboard_cards' | 'branches' | 'assigned_team';
 
 /* ─── Main Page ──────────────────────────────────────────── */
 
@@ -489,6 +490,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
     { key: 'modules' as ClientDetailTab, label: 'Modules', icon: Layers },
     { key: 'integrations' as ClientDetailTab, label: 'Integrations', icon: Plug },
     { key: 'streams' as ClientDetailTab, label: 'Revenue Streams', icon: BarChart3, count: streams.length },
+    { key: 'dashboard_cards' as ClientDetailTab, label: 'Dashboard', icon: LayoutDashboard },
     { key: 'branches' as ClientDetailTab, label: 'Branches', icon: GitBranch, count: clientBranches.length },
     ...(isOwnerUser ? [{ key: 'assigned_team' as ClientDetailTab, label: 'Team', icon: Shield }] : []),
   ];
@@ -599,6 +601,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
       {activeTab === 'modules' && <ModulesSection slug={slug} modules={modules} onReload={loadDetail} />}
       {activeTab === 'integrations' && <IntegrationsSection slug={slug} integrations={integrations} onReload={loadDetail} />}
       {activeTab === 'streams' && <StreamsSection slug={slug} streams={streams} onReload={loadDetail} />}
+      {activeTab === 'dashboard_cards' && <DashboardCardsSection slug={slug} />}
       {activeTab === 'branches' && <BranchesSection slug={slug} client={client} branches={clientBranches} users={users} onReload={loadDetail} />}
       {activeTab === 'assigned_team' && <TeamAssignmentSection slug={slug} />}
 
@@ -1029,6 +1032,187 @@ function StreamsSection({ slug, streams, onReload }: {
               >
                 <Trash2 size={14} />
               </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Dashboard Cards Section ───────────────────────────────── */
+
+const CARD_CATEGORIES = [
+  { value: 'revenue', label: 'Revenue' },
+  { value: 'direct_costs', label: 'Direct Costs' },
+  { value: 'operating_expenses', label: 'Operating Expenses' },
+  { value: 'other_income', label: 'Other Income' },
+];
+
+const CARD_ICONS = [
+  'IndianRupee', 'BarChart3', 'TrendingUp', 'Activity', 'Briefcase',
+  'Store', 'Stethoscope', 'Pill', 'FlaskConical', 'ShoppingBag',
+  'UtensilsCrossed', 'Truck', 'Warehouse', 'Globe', 'Users',
+];
+
+function DashboardCardsSection({ slug }: { slug: string }) {
+  const [cards, setCards] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [title, setTitle] = useState('');
+  const [category, setCategory] = useState('revenue');
+  const [icon, setIcon] = useState('BarChart3');
+  const [color, setColor] = useState('accent');
+  const [saving, setSaving] = useState<number | null>(null);
+
+  const loadCards = useCallback(() => {
+    api.get(`/admin/clients/${slug}/dashboard-cards`).then(res => {
+      setCards(res.data);
+      setLoading(false);
+    });
+  }, [slug]);
+
+  useEffect(() => { loadCards(); }, [loadCards]);
+
+  const toggleVisibility = async (card: any) => {
+    setSaving(card.id);
+    await api.put(`/admin/clients/${slug}/dashboard-cards/${card.id}`, { is_visible: !card.is_visible });
+    setCards(prev => prev.map(c => c.id === card.id ? { ...c, is_visible: c.is_visible ? 0 : 1 } : c));
+    setSaving(null);
+  };
+
+  const moveCard = async (idx: number, dir: -1 | 1) => {
+    const newCards = [...cards];
+    const swapIdx = idx + dir;
+    if (swapIdx < 0 || swapIdx >= newCards.length) return;
+    [newCards[idx], newCards[swapIdx]] = [newCards[swapIdx], newCards[idx]];
+    setCards(newCards);
+    await api.put(`/admin/clients/${slug}/dashboard-cards/reorder`, { card_ids: newCards.map(c => c.id) });
+  };
+
+  const addCard = async () => {
+    if (!title) return;
+    await api.post(`/admin/clients/${slug}/dashboard-cards`, { title, category, icon, color });
+    setTitle(''); setCategory('revenue'); setIcon('BarChart3'); setColor('accent');
+    setShowAdd(false); loadCards();
+  };
+
+  const deleteCard = async (card: any) => {
+    if (!confirm(`Delete card "${card.title}"?`)) return;
+    await api.delete(`/admin/clients/${slug}/dashboard-cards/${card.id}`);
+    loadCards();
+  };
+
+  if (loading) return <div className="text-center py-8 text-theme-faint text-sm">Loading cards...</div>;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-theme-faint">Configure which KPI cards appear on the Actuals dashboard</p>
+        <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2 text-sm">
+          <Plus size={14} /> Add Custom Card
+        </button>
+      </div>
+
+      {showAdd && (
+        <div className="bg-dark-700/60 rounded-2xl p-5 mb-4 border border-dark-400/20">
+          <h4 className="text-sm font-semibold text-theme-heading mb-3">New Custom Card</h4>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div>
+              <label className="block text-xs font-medium text-theme-muted mb-1">Title</label>
+              <input type="text" value={title} onChange={e => setTitle(e.target.value)}
+                placeholder="e.g. Total Expenses" className="input text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-theme-muted mb-1">Data Category</label>
+              <select value={category} onChange={e => setCategory(e.target.value)} className="input text-sm">
+                {CARD_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-theme-muted mb-1">Icon</label>
+              <select value={icon} onChange={e => setIcon(e.target.value)} className="input text-sm">
+                {CARD_ICONS.map(i => <option key={i} value={i}>{i}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-theme-muted mb-1">Color</label>
+              <select value={color} onChange={e => setColor(e.target.value)} className="input text-sm">
+                <option value="accent">Green</option>
+                <option value="blue">Blue</option>
+                <option value="purple">Purple</option>
+                <option value="amber">Amber</option>
+              </select>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={addCard} disabled={!title} className="btn-primary text-xs">Add</button>
+            <button onClick={() => setShowAdd(false)} className="btn-secondary text-xs">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {cards.length === 0 ? (
+        <div className="text-center py-12 bg-dark-700/30 rounded-2xl border border-dark-400/20">
+          <LayoutDashboard size={28} className="text-theme-faint mx-auto mb-2" />
+          <p className="text-theme-muted text-sm">No dashboard cards configured</p>
+        </div>
+      ) : (
+        <div className="bg-dark-700/40 rounded-2xl border border-dark-400/20 overflow-hidden">
+          {cards.map((card: any, i: number) => (
+            <div key={card.id} className={`flex items-center justify-between px-5 py-3.5 ${i < cards.length - 1 ? 'border-b border-dark-400/15' : ''}`}>
+              <div className="flex items-center gap-3">
+                {/* Reorder arrows */}
+                <div className="flex flex-col gap-0.5">
+                  <button
+                    onClick={() => moveCard(i, -1)}
+                    disabled={i === 0}
+                    className="p-0.5 text-theme-faint hover:text-theme-secondary disabled:opacity-20 transition-colors"
+                  ><ChevronUp size={12} /></button>
+                  <button
+                    onClick={() => moveCard(i, 1)}
+                    disabled={i === cards.length - 1}
+                    className="p-0.5 text-theme-faint hover:text-theme-secondary disabled:opacity-20 transition-colors"
+                  ><ChevronDown size={12} /></button>
+                </div>
+
+                {/* Visibility toggle */}
+                <button
+                  onClick={() => toggleVisibility(card)}
+                  disabled={saving === card.id}
+                  className={`p-1.5 rounded-lg transition-all ${
+                    card.is_visible
+                      ? 'text-accent-400 bg-accent-500/10 hover:bg-accent-500/20'
+                      : 'text-theme-faint bg-dark-500 hover:bg-dark-400'
+                  } ${saving === card.id ? 'opacity-50' : ''}`}
+                >
+                  {card.is_visible ? <Eye size={14} /> : <EyeOff size={14} />}
+                </button>
+
+                {/* Card info */}
+                <div>
+                  <span className="text-sm font-medium text-theme-heading">{card.title}</span>
+                  <span className={`ml-2 text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                    card.card_type === 'total' ? 'bg-accent-500/10 text-accent-400' :
+                    card.card_type === 'stream' ? 'bg-blue-500/10 text-blue-400' :
+                    'bg-purple-500/10 text-purple-400'
+                  }`}>
+                    {card.card_type === 'total' ? 'System' : card.card_type === 'stream' ? 'Auto' : 'Custom'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Delete button — only for custom cards */}
+              {card.card_type === 'custom' ? (
+                <button
+                  onClick={() => deleteCard(card)}
+                  className="text-theme-faint hover:text-red-400 p-1.5 hover:bg-red-500/10 rounded-lg transition-all"
+                >
+                  <Trash2 size={14} />
+                </button>
+              ) : (
+                <div className="w-8" />
+              )}
             </div>
           ))}
         </div>
