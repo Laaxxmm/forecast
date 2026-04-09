@@ -547,6 +547,24 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
               <Power size={14} />
               {client.is_active ? 'Deactivate' : 'Activate'}
             </button>
+            {isOwnerUser && (
+              <button
+                onClick={async () => {
+                  if (!confirm(`DELETE "${client.name}"?\n\nThis will permanently remove the client, all users, and all data. This cannot be undone.`)) return;
+                  if (!confirm(`Are you absolutely sure? Type the client slug to confirm.\n\nThis deletes: ${slug}`)) return;
+                  try {
+                    await api.delete(`/admin/clients/${slug}`);
+                    onBack();
+                  } catch (err: any) {
+                    alert(err.response?.data?.error || 'Failed to delete');
+                  }
+                }}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-medium text-red-400 hover:bg-red-500/10 border border-red-500/20 transition-all"
+              >
+                <Trash2 size={14} />
+                Delete
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -679,6 +697,16 @@ function UsersSection({ slug, users, onReload, resetPassword }: {
                   }`}
                 >
                   {user.is_active ? 'Active' : 'Disabled'}
+                </button>
+                <button
+                  onClick={async () => {
+                    if (!confirm(`Delete user "${user.display_name}" (@${user.username})? This cannot be undone.`)) return;
+                    await api.delete(`/admin/clients/${slug}/users/${user.id}`);
+                    onReload();
+                  }}
+                  className="text-xs p-1.5 rounded-lg text-theme-faint hover:text-red-400 hover:bg-red-500/10 transition-all"
+                >
+                  <Trash2 size={13} />
                 </button>
               </div>
             </div>

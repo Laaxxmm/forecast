@@ -185,6 +185,57 @@ router.put('/clients/:slug', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+// ─── Delete Client (owner only — removes all data) ─────────────────────────
+
+router.delete('/clients/:slug', async (req: Request, res: Response) => {
+  if (!req.isOwner) return res.status(403).json({ error: 'Only the owner can delete clients' });
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id, db_filename FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  // Delete all related platform data
+  db.run('DELETE FROM user_branch_stream_access WHERE user_id IN (SELECT id FROM client_users WHERE client_id = ?)', client.id);
+  db.run('DELETE FROM user_branch_access WHERE user_id IN (SELECT id FROM client_users WHERE client_id = ?)', client.id);
+  db.run('DELETE FROM team_member_clients WHERE client_id = ?', client.id);
+  db.run('DELETE FROM branch_streams WHERE branch_id IN (SELECT id FROM branches WHERE client_id = ?)', client.id);
+  db.run('DELETE FROM client_users WHERE client_id = ?', client.id);
+  db.run('DELETE FROM client_integrations WHERE client_id = ?', client.id);
+  db.run('DELETE FROM business_streams WHERE client_id = ?', client.id);
+  db.run('DELETE FROM branches WHERE client_id = ?', client.id);
+  db.run('DELETE FROM client_modules WHERE client_id = ?', client.id);
+  db.run('DELETE FROM clients WHERE id = ?', client.id);
+
+  // Delete the client database file
+  try {
+    const dbPath = path.join(getClientsDir(), client.db_filename);
+    if (fs.existsSync(dbPath)) {
+      fs.unlinkSync(dbPath);
+      console.log(`[Admin] Deleted client DB file: ${dbPath}`);
+    }
+  } catch (err) {
+    console.error('[Admin] Failed to delete DB file:', err);
+  }
+
+  console.log(`[Admin] Deleted client "${req.params.slug}" and all associated data`);
+  res.json({ ok: true, message: `Client "${req.params.slug}" deleted` });
+});
+
+// ─── Delete Client User ────────────────────────────────────────────────────
+
+router.delete('/clients/:slug/users/:id', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+  const userId = parseInt(req.params.id);
+
+  // Clean up access records
+  db.run('DELETE FROM user_branch_stream_access WHERE user_id = ?', userId);
+  db.run('DELETE FROM user_branch_access WHERE user_id = ?', userId);
+  db.run('DELETE FROM client_users WHERE id = ? AND client_id = ?', [userId, client.id]);
+
+  res.json({ ok: true });
+});
+
 // ─── Client Modules ─────────────────────────────────────────────────────────
 
 router.get('/clients/:slug/modules', async (req: Request, res: Response) => {
