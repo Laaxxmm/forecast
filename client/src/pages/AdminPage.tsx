@@ -1711,7 +1711,6 @@ function AddUserForm({ slug, onAdded, onCancel }: { slug: string; onAdded: () =>
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState('user');
   const [showPw, setShowPw] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -1720,7 +1719,7 @@ function AddUserForm({ slug, onAdded, onCancel }: { slug: string; onAdded: () =>
   const save = async () => {
     setSaving(true); setError('');
     try {
-      await api.post(`/admin/clients/${slug}/users`, { username, password, display_name: displayName, role });
+      await api.post(`/admin/clients/${slug}/users`, { username, password, display_name: displayName, role: 'user' });
       setCreated({ username, password });
     } catch (err: any) { setError(err.response?.data?.error || 'Failed'); }
     setSaving(false);
@@ -1766,13 +1765,6 @@ function AddUserForm({ slug, onAdded, onCancel }: { slug: string; onAdded: () =>
               {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
           </div>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-theme-muted mb-1">Role</label>
-          <select value={role} onChange={e => setRole(e.target.value)} className="input text-sm">
-            <option value="user">User</option>
-            <option value="admin">Admin</option>
-          </select>
         </div>
       </div>
       {error && <p className="text-red-400 text-xs mb-2">{error}</p>}
