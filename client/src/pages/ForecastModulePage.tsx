@@ -70,9 +70,10 @@ export default function ForecastModulePage() {
   const [showDownloadPanel, setShowDownloadPanel] = useState(false);
   const navigate = useNavigate();
 
-  // Role-based access: only client admins can edit forecast
+  // Role-based access: client admins and team members (super_admin) can edit forecast
   const userRole = localStorage.getItem('user_role');
-  const readOnly = userRole !== 'admin';
+  const userType = localStorage.getItem('user_type');
+  const readOnly = userRole !== 'admin' && userType !== 'super_admin';
 
   useEffect(() => {
     api.get('/settings/fy').then(res => {

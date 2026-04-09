@@ -28,16 +28,37 @@ export default function SelectClientPage() {
   const selectClient = async (client: Client) => {
     localStorage.setItem('client_slug', client.slug);
     localStorage.setItem('client_name', client.name);
-    // Fetch enabled modules and integrations for this client
+    // Fetch client context: modules, integrations, branches, streams
     try {
-      const [modRes, intRes] = await Promise.all([
+      const [modRes, intRes, clientRes, branchRes, streamRes] = await Promise.all([
         api.get(`/admin/clients/${client.slug}/modules`),
         api.get(`/admin/clients/${client.slug}/integrations`),
+        api.get(`/admin/clients/${client.slug}`),
+        api.get(`/admin/clients/${client.slug}/branches`),
+        api.get(`/admin/clients/${client.slug}/streams`),
       ]);
       const enabledMods = modRes.data.filter((m: any) => m.is_enabled).map((m: any) => m.module_key);
       localStorage.setItem('enabled_modules', JSON.stringify(enabledMods));
       const enabledInts = intRes.data.catalog?.filter((i: any) => i.enabled).map((i: any) => i.key) || [];
       localStorage.setItem('enabled_integrations', JSON.stringify(enabledInts));
+      // Set multi-branch context
+      const clientData = clientRes.data;
+      if (clientData.is_multi_branch) {
+        localStorage.setItem('is_multi_branch', '1');
+        const activeBranches = branchRes.data.filter((b: any) => b.is_active);
+        if (activeBranches.length > 0) {
+          localStorage.setItem('branch_id', String(activeBranches[0].id));
+          localStorage.setItem('branch_name', activeBranches[0].name);
+        }
+      } else {
+        localStorage.removeItem('is_multi_branch');
+        localStorage.removeItem('branch_id');
+        localStorage.removeItem('branch_name');
+      }
+      // Set streams
+      if (streamRes.data?.length > 0) {
+        localStorage.setItem('streams', JSON.stringify(streamRes.data));
+      }
     } catch {
       localStorage.setItem('enabled_modules', JSON.stringify(['forecast_ops']));
       localStorage.setItem('enabled_integrations', JSON.stringify([]));
