@@ -266,6 +266,7 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
   const [industries, setIndustries] = useState<any[]>([]);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [selectedMembers, setSelectedMembers] = useState<Set<number>>(new Set());
+  const [showMemberDropdown, setShowMemberDropdown] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<any>(null);
@@ -362,33 +363,42 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
         </div>
       </div>
 
-      {/* Team Member Assignment */}
+      {/* Team Member Assignment — Dropdown */}
       {teamMembers.filter(m => !m.is_owner).length > 0 && (
         <div className="mb-5">
-          <label className="block text-xs font-medium text-theme-muted mb-2">Assign Team Members</label>
-          <p className="text-[11px] text-theme-faint mb-2">Select team members who will manage this client</p>
-          <div className="space-y-1.5">
-            {teamMembers.filter(m => !m.is_owner && m.is_active).map(member => (
-              <label
-                key={member.id}
-                className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl cursor-pointer transition-all ${
-                  selectedMembers.has(member.id)
-                    ? 'bg-accent-500/10 border border-accent-500/20'
-                    : 'bg-dark-600/50 border border-transparent hover:bg-dark-600'
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedMembers.has(member.id)}
-                  onChange={() => toggleMember(member.id)}
-                  className="w-3.5 h-3.5 rounded border-dark-300 text-accent-500 focus:ring-accent-500 bg-dark-800"
-                />
-                <div>
-                  <span className="text-sm font-medium text-theme-heading">{member.display_name}</span>
-                  <span className="text-[11px] font-mono text-theme-faint ml-2">@{member.username}</span>
-                </div>
-              </label>
-            ))}
+          <label className="block text-xs font-medium text-theme-muted mb-1.5">Assign Team Members</label>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowMemberDropdown(!showMemberDropdown)}
+              className="w-full flex items-center justify-between input text-sm cursor-pointer"
+            >
+              <span className={selectedMembers.size > 0 ? 'text-theme-heading' : 'text-theme-faint'}>
+                {selectedMembers.size > 0
+                  ? teamMembers.filter(m => selectedMembers.has(m.id)).map(m => m.display_name).join(', ')
+                  : 'Select team members...'}
+              </span>
+              <ChevronRight size={14} className={`text-theme-faint transition-transform ${showMemberDropdown ? 'rotate-90' : ''}`} />
+            </button>
+            {showMemberDropdown && (
+              <div className="absolute left-0 right-0 top-full mt-1 bg-dark-700 border border-dark-400/30 rounded-xl shadow-xl z-50 max-h-48 overflow-y-auto">
+                {teamMembers.filter(m => !m.is_owner && m.is_active).map(member => (
+                  <label
+                    key={member.id}
+                    className="flex items-center gap-3 px-3.5 py-2.5 cursor-pointer hover:bg-dark-600/70 transition-colors"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedMembers.has(member.id)}
+                      onChange={() => toggleMember(member.id)}
+                      className="w-3.5 h-3.5 rounded border-dark-300 text-accent-500 focus:ring-accent-500 bg-dark-800"
+                    />
+                    <span className="text-sm font-medium text-theme-heading">{member.display_name}</span>
+                    <span className="text-[11px] font-mono text-theme-faint">@{member.username}</span>
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
