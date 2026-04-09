@@ -4,9 +4,10 @@ import {
 } from 'recharts';
 import {
   Plus, FileDown, BarChart3, X, ChevronDown, ChevronRight, Info,
-  ArrowLeft, RotateCcw, GripVertical, MoreVertical, Lightbulb
+  ArrowLeft, RotateCcw, GripVertical, MoreVertical, Lightbulb, StickyNote
 } from 'lucide-react';
 import api from '../../api/client';
+import ItemRowMenu from './ItemRowMenu';
 import { Scenario, ForecastItem, getMonthLabel, formatRs } from '../../pages/ForecastModulePage';
 import { exportTableCSV } from './csvExport';
 
@@ -489,8 +490,6 @@ export default function FinancingTab({ category, label, scenario, months, viewMo
   const [editingItem, setEditingItem] = useState<ForecastItem | null>(null);
   const [showChart, setShowChart] = useState(true);
   const [chartView, setChartView] = useState<'flow' | 'balance'>('flow');
-  const [menuOpenId, setMenuOpenId] = useState<number | null>(null);
-  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
 
   // Totals per month
@@ -590,13 +589,6 @@ export default function FinancingTab({ category, label, scenario, months, viewMo
     await onReload();
   };
 
-  const handleDelete = async (id: number) => {
-    if (!confirm('Delete this item?')) return;
-    await api.delete(`/forecast-module/items/${id}`);
-    setMenuOpenId(null);
-    await onReload();
-  };
-
   const handleDuplicate = async (item: ForecastItem) => {
     if (!scenario) return;
     const res = await api.post('/forecast-module/items', {
@@ -607,7 +599,6 @@ export default function FinancingTab({ category, label, scenario, months, viewMo
     if (vals && Object.keys(vals).length > 0) {
       await api.post('/forecast-module/values', { item_id: res.data.id, values: Object.entries(vals).map(([month, amount]) => ({ month, amount })) });
     }
-    setMenuOpenId(null);
     await onReload();
   };
 
@@ -759,18 +750,20 @@ export default function FinancingTab({ category, label, scenario, months, viewMo
                       <span className="text-[10px] text-theme-faint bg-dark-500 px-1.5 py-0.5 rounded">
                         {item.item_type === 'loan' ? 'Loan' : item.item_type === 'line_of_credit' ? 'LOC' : item.item_type === 'investment' ? 'Inv' : 'Other'}
                       </span>
+                      {item.meta?.note && (
+                        <span title={item.meta.note}><StickyNote size={12} className="text-amber-400 shrink-0" /></span>
+                      )}
                       {!readOnly && (
                         <div className="relative ml-auto">
-                          <button onClick={e => {
-                            e.stopPropagation();
-                            if (menuOpenId === item.id) { setMenuOpenId(null); } else {
-                              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                              setMenuPos({ top: rect.bottom + 4, left: rect.right - 160 });
-                              setMenuOpenId(item.id);
-                            }
-                          }} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-dark-400 rounded">
-                            <MoreVertical size={14} />
-                          </button>
+                          <ItemRowMenu
+                            item={item}
+                            items={items}
+                            category={category}
+                            allValues={allValues}
+                            onEdit={() => setEditingItem(item)}
+                            onDuplicate={() => handleDuplicate(item)}
+                            onReload={onReload}
+                          />
                         </div>
                       )}
                     </div>
@@ -806,18 +799,6 @@ export default function FinancingTab({ category, label, scenario, months, viewMo
           </tbody>
         </table>
       </div>
-
-      {/* Kebab menu */}
-      {menuOpenId !== null && (
-        <>
-          <div className="fixed inset-0 z-[49]" onClick={() => setMenuOpenId(null)} />
-          <div className="fixed bg-dark-700 border border-dark-400/50 rounded-lg shadow-lg z-50 w-40" style={{ top: menuPos.top, left: menuPos.left }}>
-            <button onClick={() => { const it = items.find(i => i.id === menuOpenId); if (it) { setEditingItem(it); setMenuOpenId(null); } }} className="w-full text-left px-3 py-2 text-sm hover:bg-dark-600 rounded-t-lg">Edit</button>
-            <button onClick={() => { const it = items.find(i => i.id === menuOpenId); if (it) handleDuplicate(it); }} className="w-full text-left px-3 py-2 text-sm hover:bg-dark-600">Duplicate</button>
-            <button onClick={() => { if (menuOpenId) handleDelete(menuOpenId); }} className="w-full text-left px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 rounded-b-lg">Delete</button>
-          </div>
-        </>
-      )}
 
       {/* Create Financing Modal */}
       {showModal && (

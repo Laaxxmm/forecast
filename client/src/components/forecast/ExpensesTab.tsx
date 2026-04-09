@@ -1,9 +1,10 @@
 import { useState, useMemo } from 'react';
-import { MoreVertical, Plus, GripVertical } from 'lucide-react';
+import { Plus, GripVertical, X, StickyNote } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import api from '../../api/client';
 import { Scenario, ForecastItem, getMonthLabel, formatRs } from '../../pages/ForecastModulePage';
 import ItemEditForm from './ItemEditForm';
+import ItemRowMenu from './ItemRowMenu';
 
 interface Props {
   category: string;
@@ -21,8 +22,8 @@ interface Props {
 
 export default function ExpensesTab({ category, label, scenario, months, items, allItems, allValues, onReload, readOnly }: Props) {
   const [editingItem, setEditingItem] = useState<ForecastItem | null>(null);
-  const [menuOpenId, setMenuOpenId] = useState<number | null>(null);
-  const [menuPos, setMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [showInlineAdd, setShowInlineAdd] = useState(false);
+  const [inlineAddName, setInlineAddName] = useState('');
 
   // Calculate totals per month
   const monthlyTotals = useMemo(() => {
@@ -61,11 +62,20 @@ export default function ExpensesTab({ category, label, scenario, months, items, 
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (!confirm('Delete this item?')) return;
-    await api.delete(`/forecast-module/items/${id}`);
-    setMenuOpenId(null);
+  const handleInlineAdd = async () => {
+    if (!inlineAddName.trim() || !scenario) return;
+    const res = await api.post('/forecast-module/items', {
+      scenario_id: scenario.id,
+      category,
+      name: inlineAddName.trim(),
+      item_type: 'other',
+      entry_mode: 'varying',
+      start_month: months[0],
+    });
+    setShowInlineAdd(false);
+    setInlineAddName('');
     await onReload();
+    if (res.data?.id) setEditingItem(res.data);
   };
 
   const handleDuplicate = async (item: ForecastItem) => {
@@ -89,7 +99,6 @@ export default function ExpensesTab({ category, label, scenario, months, items, 
         values: Object.entries(vals).map(([month, amount]) => ({ month, amount })),
       });
     }
-    setMenuOpenId(null);
     await onReload();
   };
 
@@ -202,23 +211,20 @@ export default function ExpensesTab({ category, label, scenario, months, items, 
                           {item.name}
                         </button>
                       )}
+                      {item.meta?.note && (
+                        <span title={item.meta.note}><StickyNote size={12} className="text-amber-400 shrink-0" /></span>
+                      )}
                       {!readOnly && (
                         <div className="relative ml-auto">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (menuOpenId === item.id) {
-                                setMenuOpenId(null);
-                              } else {
-                                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                setMenuPos({ top: rect.bottom + 4, left: rect.right - 160 });
-                                setMenuOpenId(item.id);
-                              }
-                            }}
-                            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-dark-400 rounded"
-                          >
-                            <MoreVertical size={14} />
-                          </button>
+                          <ItemRowMenu
+                            item={item}
+                            items={items}
+                            category={category}
+                            allValues={allValues}
+                            onEdit={() => setEditingItem(item)}
+                            onDuplicate={() => handleDuplicate(item)}
+                            onReload={onReload}
+                          />
                         </div>
                       )}
                     </div>
@@ -239,13 +245,40 @@ export default function ExpensesTab({ category, label, scenario, months, items, 
             {!readOnly && (
               <tr className="border-b border-dark-400/30">
                 <td className="py-2.5 px-4 sticky left-0 bg-dark-700 z-10" colSpan={months.length + 2}>
-                  <button
-                    onClick={handleAdd}
-                    className="flex items-center gap-2 text-sm text-accent-400 hover:text-accent-300"
-                  >
-                    <Plus size={14} />
-                    Add new expense
-                  </button>
+                  {showInlineAdd ? (
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center border border-dark-400 rounded-lg overflow-hidden">
+                        <input
+                          autoFocus
+                          value={inlineAddName}
+                          onChange={e => setInlineAddName(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter' && inlineAddName.trim()) handleInlineAdd();
+                            if (e.key === 'Escape') { setShowInlineAdd(false); setInlineAddName(''); }
+                          }}
+                          placeholder="Enter a new forecast item"
+                          className="bg-transparent px-3 py-1.5 text-sm text-theme-secondary placeholder:text-theme-faint outline-none w-64"
+                        />
+                        <button
+                          onClick={() => inlineAddName.trim() && handleInlineAdd()}
+                          className="px-3 py-1.5 text-xs font-medium text-theme-muted border-l border-dark-400 hover:bg-dark-600 whitespace-nowrap"
+                        >
+                          Enter to Add
+                        </button>
+                      </div>
+                      <button onClick={() => { setShowInlineAdd(false); setInlineAddName(''); }} className="p-1 text-theme-faint hover:text-theme-secondary">
+                        <X size={16} />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setShowInlineAdd(true)}
+                      className="flex items-center gap-2 text-sm text-accent-400 hover:text-accent-300"
+                    >
+                      <Plus size={14} />
+                      Add new expense
+                    </button>
+                  )}
                 </td>
               </tr>
             )}
@@ -266,20 +299,6 @@ export default function ExpensesTab({ category, label, scenario, months, items, 
         </table>
       </div>
 
-      {/* Fixed-position kebab menu */}
-      {menuOpenId !== null && (
-        <>
-          <div className="fixed inset-0 z-[49]" onClick={() => setMenuOpenId(null)} />
-          <div
-            className="fixed bg-dark-700 border border-dark-400/50 rounded-lg shadow-lg z-50 w-40"
-            style={{ top: menuPos.top, left: menuPos.left }}
-          >
-            <button onClick={() => { const item = items.find(i => i.id === menuOpenId); if (item) { setEditingItem(item); setMenuOpenId(null); } }} className="w-full text-left px-3 py-2 text-sm hover:bg-dark-600 rounded-t-lg">Edit</button>
-            <button onClick={() => { const item = items.find(i => i.id === menuOpenId); if (item) handleDuplicate(item); }} className="w-full text-left px-3 py-2 text-sm hover:bg-dark-600">Duplicate</button>
-            <button onClick={() => { if (menuOpenId) handleDelete(menuOpenId); }} className="w-full text-left px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 rounded-b-lg">Delete</button>
-          </div>
-        </>
-      )}
     </div>
   );
 }

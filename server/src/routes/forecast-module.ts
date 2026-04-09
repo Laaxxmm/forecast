@@ -160,10 +160,11 @@ router.put('/items/reorder', async (req, res) => {
 
 router.put('/items/:id', async (req, res) => {
   const db = req.tenantDb!;
-  const { name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta } = req.body;
+  const { name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta, category } = req.body;
   const fields: string[] = [];
   const values: any[] = [];
 
+  if (category !== undefined) { fields.push('category = ?'); values.push(category); }
   if (name !== undefined) { fields.push('name = ?'); values.push(name); }
   if (item_type !== undefined) { fields.push('item_type = ?'); values.push(item_type); }
   if (entry_mode !== undefined) { fields.push('entry_mode = ?'); values.push(entry_mode); }
