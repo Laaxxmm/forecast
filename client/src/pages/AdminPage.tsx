@@ -27,7 +27,7 @@ interface Integration {
 }
 
 type Tab = 'clients' | 'team';
-type ClientDetailTab = 'users' | 'modules' | 'integrations' | 'streams' | 'branches';
+type ClientDetailTab = 'users' | 'modules' | 'integrations' | 'streams' | 'branches' | 'assigned_team';
 
 /* ─── Main Page ──────────────────────────────────────────── */
 
@@ -264,21 +264,38 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
   const [slug, setSlug] = useState('');
   const [industry, setIndustry] = useState('custom');
   const [industries, setIndustries] = useState<any[]>([]);
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  const [selectedMembers, setSelectedMembers] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<any>(null);
 
-  useEffect(() => { api.get('/admin/industries').then(res => setIndustries(res.data)); }, []);
+  useEffect(() => {
+    api.get('/admin/industries').then(res => setIndustries(res.data));
+    api.get('/admin/team').then(res => setTeamMembers(res.data));
+  }, []);
 
   const autoSlug = (n: string) => {
     setName(n);
     setSlug(n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
   };
 
+  const toggleMember = (id: number) => {
+    setSelectedMembers(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   const create = async () => {
     setSaving(true); setError('');
     try {
-      const res = await api.post('/admin/clients', { slug, name, industry });
+      const res = await api.post('/admin/clients', {
+        slug, name, industry,
+        team_member_ids: Array.from(selectedMembers),
+      });
       setResult(res.data);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to create client');
@@ -344,6 +361,38 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
           </div>
         </div>
       </div>
+
+      {/* Team Member Assignment */}
+      {teamMembers.filter(m => !m.is_owner).length > 0 && (
+        <div className="mb-5">
+          <label className="block text-xs font-medium text-theme-muted mb-2">Assign Team Members</label>
+          <p className="text-[11px] text-theme-faint mb-2">Select team members who will manage this client</p>
+          <div className="space-y-1.5">
+            {teamMembers.filter(m => !m.is_owner && m.is_active).map(member => (
+              <label
+                key={member.id}
+                className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl cursor-pointer transition-all ${
+                  selectedMembers.has(member.id)
+                    ? 'bg-accent-500/10 border border-accent-500/20'
+                    : 'bg-dark-600/50 border border-transparent hover:bg-dark-600'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedMembers.has(member.id)}
+                  onChange={() => toggleMember(member.id)}
+                  className="w-3.5 h-3.5 rounded border-dark-300 text-accent-500 focus:ring-accent-500 bg-dark-800"
+                />
+                <div>
+                  <span className="text-sm font-medium text-theme-heading">{member.display_name}</span>
+                  <span className="text-[11px] font-mono text-theme-faint ml-2">@{member.username}</span>
+                </div>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-2.5 rounded-xl mb-4 text-sm">{error}</div>
       )}
@@ -424,12 +473,14 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
     </div>
   );
 
+  const isOwnerUser = localStorage.getItem('is_owner') === '1';
   const detailTabs = [
     { key: 'users' as ClientDetailTab, label: 'Users', icon: Users, count: users.length },
     { key: 'modules' as ClientDetailTab, label: 'Modules', icon: Layers },
     { key: 'integrations' as ClientDetailTab, label: 'Integrations', icon: Plug },
     { key: 'streams' as ClientDetailTab, label: 'Revenue Streams', icon: BarChart3, count: streams.length },
     { key: 'branches' as ClientDetailTab, label: 'Branches', icon: GitBranch, count: clientBranches.length },
+    ...(isOwnerUser ? [{ key: 'assigned_team' as ClientDetailTab, label: 'Team', icon: Shield }] : []),
   ];
 
   return (
@@ -521,6 +572,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
       {activeTab === 'integrations' && <IntegrationsSection slug={slug} integrations={integrations} onReload={loadDetail} />}
       {activeTab === 'streams' && <StreamsSection slug={slug} streams={streams} onReload={loadDetail} />}
       {activeTab === 'branches' && <BranchesSection slug={slug} client={client} branches={clientBranches} onReload={loadDetail} />}
+      {activeTab === 'assigned_team' && <TeamAssignmentSection slug={slug} />}
 
       {/* Password Reset Modal */}
       {resetResult && (
@@ -920,6 +972,144 @@ function BranchesSection({ slug, client, branches, onReload }: {
                   </button>
                 )}
               </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Team Assignment Section (Client Detail) ──────────── */
+
+function TeamAssignmentSection({ slug }: { slug: string }) {
+  const [assigned, setAssigned] = useState<any[]>([]);
+  const [allTeam, setAllTeam] = useState<TeamMember[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(() => {
+    Promise.all([
+      api.get(`/admin/clients/${slug}/team`),
+      api.get('/admin/team'),
+    ]).then(([assignedRes, teamRes]) => {
+      setAssigned(assignedRes.data);
+      setAllTeam(teamRes.data);
+      setSelectedIds(new Set(assignedRes.data.map((m: any) => m.id)));
+      setLoading(false);
+    });
+  }, [slug]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const toggleMember = (id: number) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.put(`/admin/clients/${slug}/team`, { team_member_ids: Array.from(selectedIds) });
+      setEditing(false);
+      load();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to save');
+    }
+    setSaving(false);
+  };
+
+  if (loading) return (
+    <div className="text-center py-16">
+      <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
+    </div>
+  );
+
+  const nonOwnerTeam = allTeam.filter(m => !m.is_owner && m.is_active);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-theme-faint">Team members assigned to manage this client</p>
+        {!editing && (
+          <button onClick={() => setEditing(true)} className="btn-primary flex items-center gap-2 text-sm">
+            <Users size={14} /> Edit Assignments
+          </button>
+        )}
+      </div>
+
+      {editing ? (
+        <div className="bg-dark-700/60 rounded-2xl border border-dark-400/20 p-5 mb-4">
+          <h4 className="text-sm font-semibold text-theme-heading mb-3">Select Team Members</h4>
+          {nonOwnerTeam.length === 0 ? (
+            <p className="text-sm text-theme-faint py-4">No team members available. Add team members in the Team tab first.</p>
+          ) : (
+            <div className="space-y-1.5 mb-4">
+              {nonOwnerTeam.map(member => (
+                <label
+                  key={member.id}
+                  className={`flex items-center gap-3 px-4 py-3 rounded-xl cursor-pointer transition-all ${
+                    selectedIds.has(member.id)
+                      ? 'bg-accent-500/10 border border-accent-500/20'
+                      : 'bg-dark-600/50 border border-transparent hover:bg-dark-600'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(member.id)}
+                    onChange={() => toggleMember(member.id)}
+                    className="w-4 h-4 rounded border-dark-300 text-accent-500 focus:ring-accent-500 bg-dark-800"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-theme-heading">{member.display_name}</span>
+                    <span className="text-[11px] font-mono text-theme-faint ml-2">@{member.username}</span>
+                  </div>
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center justify-between pt-3 border-t border-dark-400/30">
+            <span className="text-xs text-theme-faint">{selectedIds.size} selected</span>
+            <div className="flex gap-2">
+              <button onClick={() => { setEditing(false); setSelectedIds(new Set(assigned.map((m: any) => m.id))); }} className="btn-secondary text-xs">Cancel</button>
+              <button onClick={save} disabled={saving} className="btn-primary text-xs">
+                {saving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : assigned.length === 0 ? (
+        <div className="text-center py-12 bg-dark-700/30 rounded-2xl border border-dark-400/20">
+          <Shield size={28} className="text-theme-faint mx-auto mb-2" />
+          <p className="text-theme-muted text-sm">No team members assigned</p>
+          <p className="text-theme-faint text-xs mt-1">Click "Edit Assignments" to assign team members</p>
+        </div>
+      ) : (
+        <div className="bg-dark-700/40 rounded-2xl border border-dark-400/20 overflow-hidden">
+          {assigned.map((member: any, i: number) => (
+            <div key={member.id} className={`flex items-center justify-between px-5 py-3.5 ${i < assigned.length - 1 ? 'border-b border-dark-400/15' : ''}`}>
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-purple-500/10 flex items-center justify-center">
+                  <Shield size={15} className="text-purple-400" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-theme-heading">{member.display_name}</span>
+                    <span className="text-[11px] font-mono text-theme-faint">@{member.username}</span>
+                  </div>
+                </div>
+              </div>
+              <span className={`text-[10px] font-medium px-2.5 py-1 rounded-full ${
+                member.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
+              }`}>
+                {member.is_active ? 'Active' : 'Disabled'}
+              </span>
             </div>
           ))}
         </div>

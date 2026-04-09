@@ -136,12 +136,24 @@ router.post('/clients', async (req: Request, res: Response) => {
   db.run('INSERT INTO client_modules (client_id, module_key, is_enabled) VALUES (?, ?, ?)', [clientId, 'audit_view', 0]);
   db.run('INSERT INTO client_modules (client_id, module_key, is_enabled) VALUES (?, ?, ?)', [clientId, 'litigation_tool', 0]);
 
+  // Assign team members to this client
+  const teamMemberIds: number[] = req.body.team_member_ids || [];
+  for (const tmId of teamMemberIds) {
+    const member = db.get('SELECT id, is_owner FROM team_members WHERE id = ?', tmId);
+    if (member && !member.is_owner) {
+      db.run(
+        'INSERT OR IGNORE INTO team_member_clients (team_member_id, client_id) VALUES (?, ?)',
+        [tmId, clientId]
+      );
+    }
+  }
+
   // Initialize client database
   const clientDb = await getClientHelper(slug);
   initializeSchema(clientDb);
   await seedDatabase(clientDb);
 
-  console.log(`[Admin] Created client "${slug}" with DB ${dbFilename}`);
+  console.log(`[Admin] Created client "${slug}" with DB ${dbFilename}, assigned ${teamMemberIds.length} team members`);
 
   res.status(201).json({
     id: clientId,
@@ -677,6 +689,51 @@ router.put('/team/:id/clients', async (req: Request, res: Response) => {
   }
 
   res.json({ ok: true, count: client_ids.length });
+});
+
+// ─── Client → Team Member Assignments (from client side) ───────────────────
+
+router.get('/clients/:slug/team', async (req: Request, res: Response) => {
+  if (!req.isOwner) return res.status(403).json({ error: 'Only the owner can view team assignments' });
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  const assigned = db.all(
+    `SELECT tm.id, tm.username, tm.display_name, tm.is_owner, tm.is_active, tmc.assigned_at
+     FROM team_member_clients tmc
+     JOIN team_members tm ON tmc.team_member_id = tm.id
+     WHERE tmc.client_id = ?
+     ORDER BY tm.display_name`,
+    client.id
+  );
+  res.json(assigned);
+});
+
+router.put('/clients/:slug/team', async (req: Request, res: Response) => {
+  if (!req.isOwner) return res.status(403).json({ error: 'Only the owner can assign team members' });
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  const { team_member_ids } = req.body;
+  if (!Array.isArray(team_member_ids)) {
+    return res.status(400).json({ error: 'team_member_ids must be an array' });
+  }
+
+  // Clear existing assignments for this client and set new ones
+  db.run('DELETE FROM team_member_clients WHERE client_id = ?', client.id);
+  for (const tmId of team_member_ids) {
+    const member = db.get('SELECT id, is_owner FROM team_members WHERE id = ?', tmId);
+    if (member && !member.is_owner) {
+      db.run(
+        'INSERT INTO team_member_clients (team_member_id, client_id) VALUES (?, ?)',
+        [tmId, client.id]
+      );
+    }
+  }
+
+  res.json({ ok: true, count: team_member_ids.length });
 });
 
 export default router;
