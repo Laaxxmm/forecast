@@ -5,7 +5,7 @@ import { parseHealthplix } from '../services/parsers/healthplix.js';
 import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
 import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.js';
 import { parseTuriaInvoices } from '../services/parsers/turia.js';
-import { getBranchIdForInsert, branchFilter } from '../utils/branch.js';
+import { getBranchIdForInsert, branchFilter, getStreamIdForInsert } from '../utils/branch.js';
 import fs from 'fs';
 
 const isProd = process.env.NODE_ENV === 'production';
@@ -47,6 +47,7 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), uploa
 
     // Auto-sync clinic revenue to dashboard_actuals for active scenario
     const bf = branchFilter(req);
+    const streamId = getStreamIdForInsert(req);
     const activeScenario = db.get(
       `SELECT s.id FROM scenarios s
        JOIN financial_years fy ON s.fy_id = fy.id
@@ -62,11 +63,11 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), uploa
       for (const row of clinicMonthly) {
         if (!row.month) continue;
         db.run(
-          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
-           VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, datetime('now'))
+          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+           VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, ?, datetime('now'))
            ON CONFLICT(scenario_id, category, item_name, month)
-           DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-          activeScenario.id, row.month, row.total, branchId
+           DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
+          activeScenario.id, row.month, row.total, branchId, streamId
         );
       }
     }
@@ -103,6 +104,33 @@ router.post('/oneglance-sales', requireAdmin, requireIntegration('oneglance'), u
         r.batch_no, r.hsn_code, r.tax_pct, r.patient_id, r.patient_name, r.referred_by,
         r.qty, r.sales_amount, r.purchase_amount, r.purchase_tax, r.sales_tax, r.profit
       );
+    }
+
+    // Auto-sync pharmacy sales revenue to dashboard_actuals for active scenario
+    const bf = branchFilter(req);
+    const streamId = getStreamIdForInsert(req);
+    const activeScenario = db.get(
+      `SELECT s.id FROM scenarios s
+       JOIN financial_years fy ON s.fy_id = fy.id
+       WHERE fy.is_active = 1 AND s.is_default = 1${bf.where} LIMIT 1`,
+      ...bf.params
+    );
+    if (activeScenario) {
+      const pharmaMonthly = db.all(
+        `SELECT bill_month as month, COALESCE(SUM(sales_amount), 0) as total
+         FROM pharmacy_sales_actuals WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where} GROUP BY bill_month`,
+        ...bf.params
+      );
+      for (const row of pharmaMonthly) {
+        if (!row.month) continue;
+        db.run(
+          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+           VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?, ?, datetime('now'))
+           ON CONFLICT(scenario_id, category, item_name, month)
+           DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
+          activeScenario.id, row.month, row.total, branchId, streamId
+        );
+      }
     }
 
     fs.unlinkSync(req.file.path);
@@ -177,9 +205,11 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), upload.single('
 
     // Auto-sync consultancy revenue to dashboard_actuals
     const bf = branchFilter(req);
+    const streamId = getStreamIdForInsert(req);
     const activeScenario = db.get(
       `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
-       WHERE fy.is_active = 1 AND s.is_default = 1 LIMIT 1`
+       WHERE fy.is_active = 1 AND s.is_default = 1${bf.where} LIMIT 1`,
+      ...bf.params
     );
     if (activeScenario) {
       const turiaMonthly = db.all(
@@ -191,11 +221,11 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), upload.single('
       for (const row of turiaMonthly) {
         if (!row.month) continue;
         db.run(
-          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
-           VALUES (?, 'revenue', 'Consultancy Revenue', ?, ?, ?, datetime('now'))
+          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+           VALUES (?, 'revenue', 'Consultancy Revenue', ?, ?, ?, ?, datetime('now'))
            ON CONFLICT(scenario_id, category, item_name, month)
-           DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-          activeScenario.id, row.month, row.total, branchId
+           DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
+          activeScenario.id, row.month, row.total, branchId, streamId
         );
       }
     }
