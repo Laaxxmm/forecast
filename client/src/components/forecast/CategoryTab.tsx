@@ -8,6 +8,7 @@ import TypeSelectionScreen from './TypeSelectionScreen';
 import PersonnelTab from './PersonnelTab';
 import ExpensesTab from './ExpensesTab';
 import AssetsTab from './AssetsTab';
+import TaxesTab from './TaxesTab';
 import { exportTableCSV } from './csvExport';
 
 interface Props {
@@ -203,6 +204,25 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
   if (category === 'expenses') {
     return (
       <ExpensesTab
+        category={category}
+        label={label}
+        scenario={scenario}
+        months={months}
+        viewMode={viewMode}
+        items={items}
+        allItems={allItems}
+        allValues={allValues}
+        settings={settings}
+        onReload={onReload}
+        readOnly={readOnly}
+      />
+    );
+  }
+
+  // Delegate taxes to TaxesTab
+  if (category === 'taxes') {
+    return (
+      <TaxesTab
         category={category}
         label={label}
         scenario={scenario}
