@@ -45,6 +45,52 @@ export function getBranchIdForInsert(req: Request): number | null {
 }
 
 /**
+ * Returns a SQL WHERE fragment and params for stream filtering.
+ * Similar to branchFilter but for stream_id column.
+ */
+export function streamFilter(
+  req: Request,
+  alias?: string
+): { where: string; params: any[] } {
+  const col = alias ? `${alias}.stream_id` : 'stream_id';
+
+  if (!req.streamMode || req.streamMode === 'none') {
+    return { where: '', params: [] };
+  }
+
+  if (req.streamMode === 'specific' && req.streamId) {
+    return { where: ` AND ${col} = ?`, params: [req.streamId] };
+  }
+
+  // 'all' mode — no additional filtering (show data for all allowed streams)
+  return { where: '', params: [] };
+}
+
+/**
+ * Returns the stream_id value to use when inserting new records.
+ * Returns null if no specific stream is selected.
+ */
+export function getStreamIdForInsert(req: Request): number | null {
+  if (!req.streamMode || req.streamMode !== 'specific') return null;
+  return req.streamId || null;
+}
+
+/**
+ * Combined branch + stream filter for convenience.
+ */
+export function branchStreamFilter(
+  req: Request,
+  alias?: string
+): { where: string; params: any[] } {
+  const bf = branchFilter(req, alias);
+  const sf = streamFilter(req, alias);
+  return {
+    where: bf.where + sf.where,
+    params: [...bf.params, ...sf.params],
+  };
+}
+
+/**
  * Returns a branch-prefixed settings key for multi-branch credential storage.
  * Single-branch clients use the base key as-is.
  */

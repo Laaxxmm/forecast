@@ -21,6 +21,11 @@ api.interceptors.request.use(config => {
   if (branchId) {
     config.headers['X-Branch-Id'] = branchId;
   }
+  // Attach stream context
+  const streamId = localStorage.getItem('stream_id');
+  if (streamId) {
+    config.headers['X-Stream-Id'] = streamId;
+  }
   return config;
 });
 
@@ -57,6 +62,13 @@ api.interceptors.response.use(
       if (res.data.enabledIntegrations) {
         localStorage.setItem('enabled_integrations', JSON.stringify(res.data.enabledIntegrations));
       }
+      // Store streams
+      if (res.data.streams) {
+        localStorage.setItem('streams', JSON.stringify(res.data.streams));
+      }
+      if (res.data.streamAccess) {
+        localStorage.setItem('stream_access', JSON.stringify(res.data.streamAccess));
+      }
     }
     return res;
   },
@@ -74,6 +86,10 @@ api.interceptors.response.use(
       localStorage.removeItem('enabled_modules');
       localStorage.removeItem('enabled_integrations');
       localStorage.removeItem('active_module');
+      localStorage.removeItem('streams');
+      localStorage.removeItem('stream_access');
+      localStorage.removeItem('stream_id');
+      localStorage.removeItem('stream_name');
       window.location.href = '/login';
     }
     return Promise.reject(err);

@@ -117,12 +117,12 @@ router.post('/login', loginLimiter, async (req, res) => {
     if (isMultiBranch) {
       if (clientUser.role === 'admin') {
         branches = platformDb.all(
-          'SELECT id, name, code, city FROM branches WHERE client_id = ? AND is_active = 1 ORDER BY sort_order, name',
+          'SELECT id, name, code, city, state FROM branches WHERE client_id = ? AND is_active = 1 ORDER BY sort_order, name',
           clientUser.cid
         );
       } else {
         branches = platformDb.all(
-          `SELECT b.id, b.name, b.code, b.city, uba.can_view_consolidated
+          `SELECT b.id, b.name, b.code, b.city, b.state, uba.can_view_consolidated
            FROM branches b
            JOIN user_branch_access uba ON uba.branch_id = b.id
            WHERE b.client_id = ? AND b.is_active = 1 AND uba.user_id = ?
@@ -133,6 +133,35 @@ router.post('/login', loginLimiter, async (req, res) => {
       if (branches.length > 0) {
         defaultBranchId = branches[0].id;
       }
+
+      // Attach branch streams to each branch
+      for (const branch of branches) {
+        const branchStreams = platformDb.all(
+          `SELECT bs.id, bs.name FROM branch_streams bst
+           JOIN business_streams bs ON bst.stream_id = bs.id
+           WHERE bst.branch_id = ? AND bs.is_active = 1`,
+          branch.id
+        );
+        branch.streams = branchStreams;
+      }
+    }
+
+    // Get client streams
+    const streams = platformDb.all(
+      'SELECT id, name, icon, color FROM business_streams WHERE client_id = ? AND is_active = 1 ORDER BY sort_order',
+      clientUser.cid
+    );
+
+    // Get stream access for non-admin users
+    let streamAccess: any[] = [];
+    if (clientUser.role !== 'admin') {
+      streamAccess = platformDb.all(
+        `SELECT ubsa.branch_id, ubsa.stream_id
+         FROM user_branch_stream_access ubsa
+         JOIN branches b ON ubsa.branch_id = b.id
+         WHERE ubsa.user_id = ? AND b.client_id = ?`,
+        clientUser.id, clientUser.cid
+      );
     }
 
     return res.json({
@@ -146,6 +175,8 @@ router.post('/login', loginLimiter, async (req, res) => {
       isMultiBranch,
       branches,
       defaultBranchId,
+      streams,
+      streamAccess,
       enabledModules,
       enabledIntegrations,
       token,

@@ -101,6 +101,25 @@ export function initializePlatformSchema(db: DbHelper) {
       assigned_at TEXT DEFAULT (datetime('now')),
       UNIQUE(team_member_id, client_id)
     );
+
+    -- Branch → stream mapping (which streams a branch operates)
+    CREATE TABLE IF NOT EXISTS branch_streams (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+      stream_id INTEGER NOT NULL REFERENCES business_streams(id) ON DELETE CASCADE,
+      is_active INTEGER DEFAULT 1,
+      UNIQUE(branch_id, stream_id)
+    );
+
+    -- User branch+stream access (fine-grained per-stream control)
+    CREATE TABLE IF NOT EXISTS user_branch_stream_access (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES client_users(id) ON DELETE CASCADE,
+      branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+      stream_id INTEGER NOT NULL REFERENCES business_streams(id) ON DELETE CASCADE,
+      can_view_consolidated INTEGER DEFAULT 0,
+      UNIQUE(user_id, branch_id, stream_id)
+    );
   `);
 
   // Safe migrations for existing DBs
@@ -109,6 +128,7 @@ export function initializePlatformSchema(db: DbHelper) {
     "ALTER TABLE clients ADD COLUMN is_multi_branch INTEGER DEFAULT 0",
     "ALTER TABLE client_integrations ADD COLUMN branch_id INTEGER REFERENCES branches(id)",
     "ALTER TABLE team_members ADD COLUMN is_owner INTEGER DEFAULT 0",
+    "ALTER TABLE branches ADD COLUMN state TEXT DEFAULT ''",
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch { /* column already exists */ }

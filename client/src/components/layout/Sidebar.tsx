@@ -89,12 +89,38 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
     }).catch(() => {});
   }, [isMultiBranch, isSuperAdmin]);
 
+  const [selectedStreamId, setSelectedStreamId] = useState<string>(localStorage.getItem('stream_id') || 'all');
+
   const selectBranch = (id: string, name: string) => {
     setSelectedBranchId(id);
     localStorage.setItem('branch_id', id);
     localStorage.setItem('branch_name', name);
+    // Reset stream when branch changes
+    localStorage.removeItem('stream_id');
+    localStorage.removeItem('stream_name');
+    setSelectedStreamId('all');
     setShowBranchDropdown(false);
     window.location.reload();
+  };
+
+  const selectStream = (id: string, name: string) => {
+    setSelectedStreamId(id);
+    if (id === 'all') {
+      localStorage.removeItem('stream_id');
+      localStorage.removeItem('stream_name');
+    } else {
+      localStorage.setItem('stream_id', id);
+      localStorage.setItem('stream_name', name);
+    }
+    window.location.reload();
+  };
+
+  // Get streams for current branch
+  const getBranchStreams = (): any[] => {
+    const currentBranch = branches.find(b => String(b.id) === selectedBranchId);
+    if (currentBranch?.streams) return currentBranch.streams;
+    // Fallback to stored streams
+    try { return JSON.parse(localStorage.getItem('streams') || '[]'); } catch { return []; }
   };
 
   const activeModule = localStorage.getItem('active_module') || 'forecast_ops';
@@ -127,6 +153,10 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
     localStorage.removeItem('is_multi_branch');
     localStorage.removeItem('branch_id');
     localStorage.removeItem('branch_name');
+    localStorage.removeItem('stream_id');
+    localStorage.removeItem('stream_name');
+    localStorage.removeItem('streams');
+    localStorage.removeItem('stream_access');
     localStorage.removeItem('enabled_modules');
     localStorage.removeItem('enabled_integrations');
     localStorage.removeItem('active_module');
@@ -139,6 +169,10 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
     localStorage.removeItem('is_multi_branch');
     localStorage.removeItem('branch_id');
     localStorage.removeItem('branch_name');
+    localStorage.removeItem('stream_id');
+    localStorage.removeItem('stream_name');
+    localStorage.removeItem('streams');
+    localStorage.removeItem('stream_access');
     localStorage.removeItem('enabled_modules');
     localStorage.removeItem('enabled_integrations');
     localStorage.removeItem('active_module');
@@ -248,20 +282,69 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
                     All Branches
                   </button>
                 )}
-                {branches.map((branch: any) => (
-                  <button
-                    key={branch.id}
-                    onClick={() => selectBranch(String(branch.id), branch.name)}
-                    className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors ${
-                      selectedBranchId === String(branch.id) ? 'text-accent-400 bg-accent-500/10' : 'text-theme-secondary hover:bg-dark-600'
-                    }`}
-                  >
-                    <span>{branch.name}</span>
-                    {branch.city && <span className="text-theme-faint ml-1">· {branch.city}</span>}
-                  </button>
-                ))}
+                {(() => {
+                  // Group branches by state
+                  const states = new Map<string, any[]>();
+                  for (const b of branches) {
+                    const st = b.state || '';
+                    if (!states.has(st)) states.set(st, []);
+                    states.get(st)!.push(b);
+                  }
+                  const stateEntries = Array.from(states.entries());
+                  const hasMultipleStates = stateEntries.filter(([s]) => s).length > 1;
+                  return stateEntries.map(([state, stateBranches]) => (
+                    <div key={state || '__none'}>
+                      {hasMultipleStates && state && (
+                        <div className="px-3 py-1.5 text-[10px] font-semibold text-theme-faint uppercase tracking-wider">{state}</div>
+                      )}
+                      {stateBranches.map((branch: any) => (
+                        <button
+                          key={branch.id}
+                          onClick={() => selectBranch(String(branch.id), branch.name)}
+                          className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors ${
+                            selectedBranchId === String(branch.id) ? 'text-accent-400 bg-accent-500/10' : 'text-theme-secondary hover:bg-dark-600'
+                          } ${hasMultipleStates && state ? 'pl-5' : ''}`}
+                        >
+                          <span>{branch.name}</span>
+                          {branch.city && <span className="text-theme-faint ml-1">· {branch.city}</span>}
+                        </button>
+                      ))}
+                    </div>
+                  ));
+                })()}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Stream selector — shows when branch is selected and has streams */}
+      {isMultiBranch && !isSuperAdmin && expanded && getBranchStreams().length > 0 && selectedBranchId !== 'all' && (
+        <div className="px-3 py-2 border-b border-dark-400/30">
+          <div className="flex gap-1 flex-wrap">
+            <button
+              onClick={() => selectStream('all', 'All Streams')}
+              className={`text-[10px] px-2 py-1 rounded-lg font-medium transition-all ${
+                selectedStreamId === 'all'
+                  ? 'bg-accent-500/15 text-accent-400'
+                  : 'bg-dark-600 text-theme-faint hover:text-theme-secondary'
+              }`}
+            >
+              All
+            </button>
+            {getBranchStreams().map((stream: any) => (
+              <button
+                key={stream.id}
+                onClick={() => selectStream(String(stream.id), stream.name)}
+                className={`text-[10px] px-2 py-1 rounded-lg font-medium transition-all ${
+                  selectedStreamId === String(stream.id)
+                    ? 'bg-accent-500/15 text-accent-400'
+                    : 'bg-dark-600 text-theme-faint hover:text-theme-secondary'
+                }`}
+              >
+                {stream.name}
+              </button>
+            ))}
           </div>
         </div>
       )}

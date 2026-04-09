@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { branchFilter, getBranchIdForInsert } from '../utils/branch.js';
+import { branchFilter, getBranchIdForInsert, streamFilter, getStreamIdForInsert } from '../utils/branch.js';
 
 const router = Router();
 
@@ -9,6 +9,7 @@ router.get('/', async (req, res) => {
   const db = req.tenantDb!;
   const { scenario_id, month, category } = req.query;
   const bf = branchFilter(req);
+  const sf = streamFilter(req);
   if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
 
   let sql = 'SELECT * FROM dashboard_actuals WHERE scenario_id = ?';
@@ -18,6 +19,8 @@ router.get('/', async (req, res) => {
   if (category) { sql += ' AND category = ?'; params.push(category); }
   sql += bf.where;
   params.push(...bf.params);
+  sql += sf.where;
+  params.push(...sf.params);
 
   sql += ' ORDER BY category, item_name, month';
   const rows = db.all(sql, ...params);
@@ -49,15 +52,16 @@ router.get('/summary', async (req, res) => {
   const db = req.tenantDb!;
   const { scenario_id } = req.query;
   const bf = branchFilter(req);
+  const sf = streamFilter(req);
   if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
 
   const rows = db.all(
     `SELECT category, month, SUM(amount) as total
      FROM dashboard_actuals
-     WHERE scenario_id = ?${bf.where}
+     WHERE scenario_id = ?${bf.where}${sf.where}
      GROUP BY category, month
      ORDER BY category, month`,
-    scenario_id, ...bf.params
+    scenario_id, ...bf.params, ...sf.params
   );
   res.json(rows);
 });
@@ -73,6 +77,7 @@ router.post('/sync-from-imports', async (req, res) => {
 
     const bf = branchFilter(req);
     const branchId = getBranchIdForInsert(req);
+    const streamId = getStreamIdForInsert(req);
     let count = 0;
 
     // Aggregate clinic revenue by month (sum of item_price)
@@ -88,11 +93,11 @@ router.post('/sync-from-imports', async (req, res) => {
     for (const row of clinicMonthly) {
       if (!row.month) continue;
       db.run(
-        `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
-         VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, datetime('now'))
+        `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+         VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, ?, datetime('now'))
          ON CONFLICT(scenario_id, category, item_name, month)
          DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-        scenario_id, row.month, row.total, branchId
+        scenario_id, row.month, row.total, branchId, streamId
       );
       count++;
     }
@@ -110,18 +115,18 @@ router.post('/sync-from-imports', async (req, res) => {
       for (const row of pharmacyMonthly) {
         if (!row.month) continue;
         db.run(
-          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
-           VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?, datetime('now'))
+          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+           VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?, ?, datetime('now'))
            ON CONFLICT(scenario_id, category, item_name, month)
            DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-          scenario_id, row.month, row.revenue, branchId
+          scenario_id, row.month, row.revenue, branchId, streamId
         );
         db.run(
-          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
-           VALUES (?, 'direct_costs', 'Pharmacy COGS', ?, ?, ?, datetime('now'))
+          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+           VALUES (?, 'direct_costs', 'Pharmacy COGS', ?, ?, ?, ?, datetime('now'))
            ON CONFLICT(scenario_id, category, item_name, month)
            DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-          scenario_id, row.month, row.cogs, branchId
+          scenario_id, row.month, row.cogs, branchId, streamId
         );
         count += 2;
       }

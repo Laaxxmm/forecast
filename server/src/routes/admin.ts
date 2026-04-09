@@ -423,7 +423,7 @@ router.get('/clients/:slug/branches', async (req: Request, res: Response) => {
 
 router.post('/clients/:slug/branches', async (req: Request, res: Response) => {
   const db = await getPlatformHelper();
-  const { name, code, city, manager_name } = req.body;
+  const { name, code, city, manager_name, state } = req.body;
   if (!name || !code) return res.status(400).json({ error: 'name and code are required' });
 
   const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
@@ -441,16 +441,22 @@ router.post('/clients/:slug/branches', async (req: Request, res: Response) => {
   const sortOrder = (maxOrder?.max_order || 0) + 1;
 
   const result = db.run(
-    'INSERT INTO branches (client_id, name, code, city, manager_name, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
-    [client.id, name, code, city || null, manager_name || null, sortOrder]
+    'INSERT INTO branches (client_id, name, code, city, manager_name, state, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [client.id, name, code, city || null, manager_name || null, state || '', sortOrder]
   );
 
-  res.status(201).json({ id: result.lastInsertRowid, name, code, city, manager_name, sort_order: sortOrder });
+  // If stream_ids provided, create branch_streams mappings
+  const streamIds: number[] = req.body.stream_ids || [];
+  for (const sid of streamIds) {
+    db.run('INSERT OR IGNORE INTO branch_streams (branch_id, stream_id) VALUES (?, ?)', [result.lastInsertRowid, sid]);
+  }
+
+  res.status(201).json({ id: result.lastInsertRowid, name, code, city, state: state || '', manager_name, sort_order: sortOrder });
 });
 
 router.put('/clients/:slug/branches/:id', async (req: Request, res: Response) => {
   const db = await getPlatformHelper();
-  const { name, code, city, manager_name, sort_order, is_active } = req.body;
+  const { name, code, city, manager_name, state, sort_order, is_active } = req.body;
   const branchId = parseInt(req.params.id as string);
 
   const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
@@ -460,6 +466,7 @@ router.put('/clients/:slug/branches/:id', async (req: Request, res: Response) =>
   if (code !== undefined) db.run('UPDATE branches SET code = ? WHERE id = ? AND client_id = ?', [code, branchId, client.id]);
   if (city !== undefined) db.run('UPDATE branches SET city = ? WHERE id = ? AND client_id = ?', [city, branchId, client.id]);
   if (manager_name !== undefined) db.run('UPDATE branches SET manager_name = ? WHERE id = ? AND client_id = ?', [manager_name, branchId, client.id]);
+  if (state !== undefined) db.run('UPDATE branches SET state = ? WHERE id = ? AND client_id = ?', [state, branchId, client.id]);
   if (sort_order !== undefined) db.run('UPDATE branches SET sort_order = ? WHERE id = ? AND client_id = ?', [sort_order, branchId, client.id]);
   if (is_active !== undefined) db.run('UPDATE branches SET is_active = ? WHERE id = ? AND client_id = ?', [is_active ? 1 : 0, branchId, client.id]);
 
@@ -476,6 +483,107 @@ router.delete('/clients/:slug/branches/:id', async (req: Request, res: Response)
   // Soft delete — deactivate instead of removing
   db.run('UPDATE branches SET is_active = 0 WHERE id = ? AND client_id = ?', [branchId, client.id]);
   res.json({ ok: true });
+});
+
+// ─── Branch-Stream Mapping ─────────────────────────────────────────────────
+
+router.get('/clients/:slug/branches/:branchId/streams', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+  const branchId = parseInt(req.params.branchId as string);
+
+  const streams = db.all(
+    `SELECT bs.id, bs.name, bs.icon, bs.color,
+            CASE WHEN bst.id IS NOT NULL THEN 1 ELSE 0 END as assigned
+     FROM business_streams bs
+     LEFT JOIN branch_streams bst ON bst.stream_id = bs.id AND bst.branch_id = ?
+     WHERE bs.client_id = ? AND bs.is_active = 1
+     ORDER BY bs.sort_order, bs.name`,
+    branchId, client.id
+  );
+  res.json(streams);
+});
+
+router.put('/clients/:slug/branches/:branchId/streams', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+  const branchId = parseInt(req.params.branchId as string);
+  const { stream_ids } = req.body;
+  if (!Array.isArray(stream_ids)) return res.status(400).json({ error: 'stream_ids must be an array' });
+
+  db.run('DELETE FROM branch_streams WHERE branch_id = ?', branchId);
+  for (const sid of stream_ids) {
+    db.run('INSERT INTO branch_streams (branch_id, stream_id) VALUES (?, ?)', [branchId, sid]);
+  }
+  res.json({ ok: true, count: stream_ids.length });
+});
+
+// ─── User Branch+Stream Access ─────────────────────────────────────────────
+
+router.get('/clients/:slug/users/:userId/access', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+  const userId = parseInt(req.params.userId as string);
+
+  const access = db.all(
+    `SELECT ubsa.branch_id, ubsa.stream_id, ubsa.can_view_consolidated,
+            b.name as branch_name, b.code as branch_code, b.state,
+            bs.name as stream_name
+     FROM user_branch_stream_access ubsa
+     JOIN branches b ON ubsa.branch_id = b.id
+     JOIN business_streams bs ON ubsa.stream_id = bs.id
+     WHERE ubsa.user_id = ? AND b.client_id = ?
+     ORDER BY b.name, bs.name`,
+    userId, client.id
+  );
+  res.json(access);
+});
+
+router.put('/clients/:slug/users/:userId/access', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+  const userId = parseInt(req.params.userId as string);
+  const { access } = req.body;
+  if (!Array.isArray(access)) return res.status(400).json({ error: 'access must be an array' });
+
+  // Clear existing access for this user's client branches
+  db.run(
+    `DELETE FROM user_branch_stream_access WHERE user_id = ? AND branch_id IN (
+      SELECT id FROM branches WHERE client_id = ?
+    )`,
+    userId, client.id
+  );
+
+  // Also sync user_branch_access (legacy table) — clear and rebuild from unique branches
+  db.run(
+    `DELETE FROM user_branch_access WHERE user_id = ? AND branch_id IN (
+      SELECT id FROM branches WHERE client_id = ?
+    )`,
+    userId, client.id
+  );
+
+  const branchSet = new Set<number>();
+  for (const entry of access) {
+    const { branch_id, stream_id, can_view_consolidated } = entry;
+    db.run(
+      'INSERT OR IGNORE INTO user_branch_stream_access (user_id, branch_id, stream_id, can_view_consolidated) VALUES (?, ?, ?, ?)',
+      [userId, branch_id, stream_id, can_view_consolidated ? 1 : 0]
+    );
+    branchSet.add(branch_id);
+  }
+  // Keep legacy user_branch_access in sync
+  for (const bid of branchSet) {
+    db.run(
+      'INSERT OR IGNORE INTO user_branch_access (user_id, branch_id, can_view_consolidated) VALUES (?, ?, ?)',
+      [userId, bid, access.some((a: any) => a.branch_id === bid && a.can_view_consolidated) ? 1 : 0]
+    );
+  }
+
+  res.json({ ok: true, count: access.length });
 });
 
 // Enable multi-branch for a client (migrates existing data to a default branch)
@@ -525,6 +633,19 @@ router.post('/clients/:slug/enable-multi-branch', async (req: Request, res: Resp
       'INSERT OR IGNORE INTO user_branch_access (user_id, branch_id, can_view_consolidated) VALUES (?, ?, 1)',
       [user.id, defaultBranchId]
     );
+  }
+
+  // Link all client streams to the default branch
+  const clientStreams = db.all('SELECT id FROM business_streams WHERE client_id = ? AND is_active = 1', client.id);
+  for (const stream of clientStreams) {
+    db.run('INSERT OR IGNORE INTO branch_streams (branch_id, stream_id) VALUES (?, ?)', [defaultBranchId, stream.id]);
+    // Also give all users stream-level access
+    for (const user of users) {
+      db.run(
+        'INSERT OR IGNORE INTO user_branch_stream_access (user_id, branch_id, stream_id, can_view_consolidated) VALUES (?, ?, ?, 1)',
+        [user.id, defaultBranchId, stream.id]
+      );
+    }
   }
 
   res.json({ ok: true, defaultBranchId, message: 'Multi-branch enabled. Existing data migrated to default branch.' });

@@ -784,6 +784,10 @@ export function initializeSchema(db: DbHelper) {
     'ALTER TABLE scenarios ADD COLUMN branch_id INTEGER',
     'ALTER TABLE dashboard_actuals ADD COLUMN branch_id INTEGER',
     'ALTER TABLE budgets ADD COLUMN branch_id INTEGER',
+    // Stream scoping
+    'ALTER TABLE scenarios ADD COLUMN stream_id INTEGER',
+    'ALTER TABLE dashboard_actuals ADD COLUMN stream_id INTEGER',
+    'ALTER TABLE vcfo_companies ADD COLUMN stream_id INTEGER',
   ];
   for (const sql of branchMigrations) {
     try { db.exec(sql); } catch { /* column already exists */ }

@@ -602,6 +602,7 @@ function UsersSection({ slug, users, onReload, resetPassword }: {
   resetPassword: (id: number, username: string) => void;
 }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [accessUser, setAccessUser] = useState<ClientUser | null>(null);
 
   const toggleUserActive = async (userId: number, isActive: number) => {
     await api.put(`/admin/clients/${slug}/users/${userId}`, { is_active: !isActive });
@@ -648,6 +649,12 @@ function UsersSection({ slug, users, onReload, resetPassword }: {
               </div>
               <div className="flex items-center gap-2">
                 <button
+                  onClick={() => setAccessUser(user)}
+                  className="text-xs px-2.5 py-1.5 rounded-lg text-accent-400 hover:text-accent-300 bg-accent-500/10 hover:bg-accent-500/15 transition-all flex items-center gap-1"
+                >
+                  <MapPin size={11} /> Access
+                </button>
+                <button
                   onClick={() => resetPassword(user.id, user.username)}
                   className="text-xs px-2.5 py-1.5 rounded-lg text-theme-muted hover:text-theme-secondary bg-dark-600 hover:bg-dark-500 transition-all flex items-center gap-1"
                 >
@@ -668,6 +675,160 @@ function UsersSection({ slug, users, onReload, resetPassword }: {
           ))}
         </div>
       )}
+
+      {/* User Access Modal */}
+      {accessUser && (
+        <UserAccessModal
+          slug={slug}
+          user={accessUser}
+          onClose={() => { setAccessUser(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ─── User Access Modal ─────────────────────────────────── */
+
+function UserAccessModal({ slug, user, onClose }: { slug: string; user: ClientUser; onClose: () => void }) {
+  const [branches, setBranches] = useState<any[]>([]);
+  const [streams, setStreams] = useState<any[]>([]);
+  const [access, setAccess] = useState<Set<string>>(new Set()); // "branchId-streamId"
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    Promise.all([
+      api.get(`/admin/clients/${slug}/branches`),
+      api.get(`/admin/clients/${slug}/streams`),
+      api.get(`/admin/clients/${slug}/users/${user.id}/access`),
+    ]).then(([branchRes, streamRes, accessRes]) => {
+      setBranches(branchRes.data.filter((b: any) => b.is_active));
+      setStreams(streamRes.data);
+      const accessSet = new Set<string>();
+      for (const a of accessRes.data) {
+        accessSet.add(`${a.branch_id}-${a.stream_id}`);
+      }
+      setAccess(accessSet);
+      setLoading(false);
+    });
+  }, [slug, user.id]);
+
+  const toggleAccess = (branchId: number, streamId: number) => {
+    const key = `${branchId}-${streamId}`;
+    setAccess(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleBranch = (branchId: number) => {
+    const branchKeys = streams.map((s: any) => `${branchId}-${s.id}`);
+    const allSelected = branchKeys.every(k => access.has(k));
+    setAccess(prev => {
+      const next = new Set(prev);
+      for (const k of branchKeys) {
+        if (allSelected) next.delete(k);
+        else next.add(k);
+      }
+      return next;
+    });
+  };
+
+  const save = async () => {
+    setSaving(true);
+    const entries = Array.from(access).map(key => {
+      const [bid, sid] = key.split('-').map(Number);
+      return { branch_id: bid, stream_id: sid, can_view_consolidated: false };
+    });
+    try {
+      await api.put(`/admin/clients/${slug}/users/${user.id}/access`, { access: entries });
+      onClose();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to save');
+      setSaving(false);
+    }
+  };
+
+  // Group branches by state
+  const stateGroups = new Map<string, any[]>();
+  for (const b of branches) {
+    const st = b.state || '';
+    if (!stateGroups.has(st)) stateGroups.set(st, []);
+    stateGroups.get(st)!.push(b);
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-dark-700 rounded-2xl p-6 max-w-lg w-full mx-4 border border-dark-400/30 shadow-2xl max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <h3 className="font-semibold text-theme-heading mb-1">Branch & Stream Access</h3>
+        <p className="text-sm text-theme-faint mb-4">
+          Configure access for <span className="text-accent-400 font-medium">{user.display_name}</span>
+        </p>
+
+        {loading ? (
+          <div className="text-center py-8">
+            <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
+          </div>
+        ) : streams.length === 0 ? (
+          <p className="text-sm text-theme-faint py-4">No streams configured. Add streams to the client first.</p>
+        ) : (
+          <div className="flex-1 overflow-y-auto mb-4">
+            {/* Header row */}
+            <div className="flex items-center gap-2 mb-2 px-1">
+              <div className="w-28 text-[10px] font-semibold text-theme-faint uppercase">Branch</div>
+              {streams.map((s: any) => (
+                <div key={s.id} className="flex-1 text-center text-[10px] font-semibold text-theme-faint uppercase truncate">{s.name}</div>
+              ))}
+            </div>
+            {/* Branch rows grouped by state */}
+            {Array.from(stateGroups.entries()).map(([stateName, stateBranches]) => (
+              <div key={stateName || '__none'}>
+                {stateName && (
+                  <div className="text-[10px] font-bold text-theme-faint uppercase tracking-wider px-1 pt-2 pb-1">{stateName}</div>
+                )}
+                {stateBranches.map((branch: any) => {
+                  const branchKeys = streams.map((s: any) => `${branch.id}-${s.id}`);
+                  const allChecked = branchKeys.every(k => access.has(k));
+                  return (
+                    <div key={branch.id} className="flex items-center gap-2 py-1.5 px-1 rounded-lg hover:bg-dark-600/50">
+                      <button
+                        onClick={() => toggleBranch(branch.id)}
+                        className={`w-28 text-left text-xs font-medium truncate ${allChecked ? 'text-accent-400' : 'text-theme-secondary'}`}
+                        title="Toggle all streams"
+                      >
+                        {branch.name}
+                      </button>
+                      {streams.map((stream: any) => (
+                        <div key={stream.id} className="flex-1 flex justify-center">
+                          <input
+                            type="checkbox"
+                            checked={access.has(`${branch.id}-${stream.id}`)}
+                            onChange={() => toggleAccess(branch.id, stream.id)}
+                            className="w-4 h-4 rounded border-dark-300 text-accent-500 focus:ring-accent-500 bg-dark-800"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between pt-3 border-t border-dark-400/30">
+          <span className="text-xs text-theme-faint">{access.size} permissions</span>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="btn-secondary text-sm">Cancel</button>
+            <button onClick={save} disabled={saving} className="btn-primary text-sm">
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -847,6 +1008,7 @@ function BranchesSection({ slug, client, branches, onReload }: {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [city, setCity] = useState('');
+  const [state, setState] = useState('');
   const [manager, setManager] = useState('');
   const [enabling, setEnabling] = useState(false);
 
@@ -899,6 +1061,10 @@ function BranchesSection({ slug, client, branches, onReload }: {
               <input type="text" value={code} onChange={e => setCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} placeholder="e.g. blr" className="input text-sm" />
             </div>
             <div>
+              <label className="block text-xs font-medium text-theme-muted mb-1">State</label>
+              <input type="text" value={state} onChange={e => setState(e.target.value)} placeholder="e.g. Karnataka" className="input text-sm" />
+            </div>
+            <div>
               <label className="block text-xs font-medium text-theme-muted mb-1">City</label>
               <input type="text" value={city} onChange={e => setCity(e.target.value)} placeholder="optional" className="input text-sm" />
             </div>
@@ -912,9 +1078,9 @@ function BranchesSection({ slug, client, branches, onReload }: {
               onClick={async () => {
                 if (!name || !code) return;
                 await api.post(`/admin/clients/${slug}/branches`, {
-                  name, code, city: city || undefined, manager_name: manager || undefined,
+                  name, code, state: state || undefined, city: city || undefined, manager_name: manager || undefined,
                 });
-                setName(''); setCode(''); setCity(''); setManager('');
+                setName(''); setCode(''); setState(''); setCity(''); setManager('');
                 setShowAdd(false); onReload();
               }}
               disabled={!name || !code}
@@ -948,6 +1114,8 @@ function BranchesSection({ slug, client, branches, onReload }: {
                     <span className="text-[10px] font-mono text-theme-faint">{branch.code}</span>
                   </div>
                   <div className="flex items-center gap-2 text-[11px] text-theme-faint">
+                    {branch.state && <span>{branch.state}</span>}
+                    {branch.state && branch.city && <span className="text-dark-300">·</span>}
                     {branch.city && <span>{branch.city}</span>}
                     {branch.manager_name && <><span className="text-dark-300">·</span><span>{branch.manager_name}</span></>}
                   </div>

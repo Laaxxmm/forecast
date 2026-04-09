@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { getPlatformHelper } from '../db/platform-connection.js';
 
-// Extend Express Request with branch context
+// Extend Express Request with branch + stream context
 declare global {
   namespace Express {
     interface Request {
@@ -9,6 +9,9 @@ declare global {
       branchMode?: 'single' | 'specific' | 'consolidated';
       allowedBranchIds?: number[];
       isMultiBranch?: boolean;
+      streamId?: number | null;
+      streamMode?: 'none' | 'specific' | 'all';
+      allowedStreamIds?: number[];
     }
   }
 }
@@ -103,6 +106,67 @@ export async function resolveBranch(req: Request, res: Response, next: NextFunct
 
       req.branchMode = 'specific';
       req.branchId = branchId;
+    }
+
+    // ─── Stream Resolution ────────────────────────────────────────
+    // Check if this client has any streams configured
+    const clientStreams = platformDb.all(
+      'SELECT id FROM business_streams WHERE client_id = ? AND is_active = 1',
+      req.clientId
+    );
+
+    if (clientStreams.length === 0) {
+      // No streams configured — skip stream filtering
+      req.streamMode = 'none';
+      req.streamId = null;
+      req.allowedStreamIds = [];
+      return next();
+    }
+
+    // Determine which streams the user can access
+    let allowedStreamIds: number[] = [];
+
+    if (req.userType === 'super_admin' || req.session?.role === 'admin') {
+      // Admins can access all streams
+      allowedStreamIds = clientStreams.map((s: any) => s.id);
+    } else {
+      // Regular users — check user_branch_stream_access first
+      const userId = req.session?.userId;
+      if (userId) {
+        const streamAccess = platformDb.all(
+          `SELECT DISTINCT ubsa.stream_id
+           FROM user_branch_stream_access ubsa
+           JOIN branches b ON ubsa.branch_id = b.id
+           WHERE ubsa.user_id = ? AND b.client_id = ?`,
+          userId, req.clientId
+        );
+        if (streamAccess.length > 0) {
+          allowedStreamIds = streamAccess.map((a: any) => a.stream_id);
+        } else {
+          // Fallback: if no stream-level access rows, user gets all streams in their branches
+          allowedStreamIds = clientStreams.map((s: any) => s.id);
+        }
+      }
+    }
+
+    req.allowedStreamIds = allowedStreamIds;
+
+    // Read stream selection from header or query
+    const streamHeader = (req.headers['x-stream-id'] as string) || (req.query.stream as string);
+
+    if (!streamHeader || streamHeader === 'all') {
+      req.streamMode = 'all';
+      req.streamId = null;
+    } else {
+      const streamId = parseInt(streamHeader);
+      if (isNaN(streamId)) {
+        return res.status(400).json({ error: 'Invalid stream ID' });
+      }
+      if (!allowedStreamIds.includes(streamId)) {
+        return res.status(403).json({ error: 'Access denied to this stream' });
+      }
+      req.streamMode = 'specific';
+      req.streamId = streamId;
     }
 
     next();
