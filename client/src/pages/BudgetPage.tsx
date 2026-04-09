@@ -18,8 +18,9 @@ type GridData = Record<string, Record<string, number>>;
 export default function BudgetPage() {
   const [fys, setFYs] = useState<FY[]>([]);
   const [depts, setDepts] = useState<Dept[]>([]);
+  const [streams, setStreams] = useState<any[]>([]);
   const [selectedFY, setSelectedFY] = useState<number | null>(null);
-  const [unit, setUnit] = useState<'CLINIC' | 'PHARMACY'>('CLINIC');
+  const [unit, setUnit] = useState('');
   const [grid, setGrid] = useState<GridData>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -29,11 +30,14 @@ export default function BudgetPage() {
     Promise.all([
       api.get('/settings/fy'),
       api.get('/settings/departments'),
-    ]).then(([fyRes, deptRes]) => {
+      api.get('/streams'),
+    ]).then(([fyRes, deptRes, streamRes]) => {
       setFYs(fyRes.data);
       setDepts(deptRes.data);
+      setStreams(streamRes.data);
       const active = fyRes.data.find((f: FY) => f.is_active);
       if (active) setSelectedFY(active.id);
+      if (streamRes.data.length > 0) setUnit(streamRes.data[0].name);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -52,19 +56,20 @@ export default function BudgetPage() {
 
   const activeFY = fys.find(f => f.id === selectedFY);
   const months = activeFY ? getFYMonths(activeFY.start_date) : [];
-  const clinicDepts = depts.filter(d => d.business_unit === 'CLINIC');
+  // Get departments for the current stream/unit
+  const unitDepts = depts.filter(d => d.business_unit === unit);
 
-  const rows = unit === 'CLINIC'
-    ? clinicDepts.flatMap(d => [
+  // Build rows: if departments exist for this stream, use them; otherwise generic rows
+  const rows = unitDepts.length > 0
+    ? unitDepts.flatMap(d => [
         { key: `${d.id}_revenue`, label: `${d.display_name} - Revenue`, deptId: d.id, metric: 'revenue' },
-        { key: `${d.id}_footfall`, label: `${d.display_name} - Footfall`, deptId: d.id, metric: 'footfall' },
+        { key: `${d.id}_volume`, label: `${d.display_name} - Volume`, deptId: d.id, metric: 'volume' },
       ])
     : [
-        { key: 'sales_amount', label: 'Sales Amount', deptId: null, metric: 'sales_amount' },
-        { key: 'purchase_cost', label: 'Purchase Cost (COGS)', deptId: null, metric: 'purchase_cost' },
-        { key: 'profit', label: 'Gross Profit', deptId: null, metric: 'profit' },
-        { key: 'qty_sold', label: 'Qty Sold', deptId: null, metric: 'qty_sold' },
-        { key: 'transactions', label: 'Transactions', deptId: null, metric: 'transactions' },
+        { key: 'revenue', label: `${unit} - Revenue`, deptId: null, metric: 'revenue' },
+        { key: 'direct_costs', label: `${unit} - Direct Costs`, deptId: null, metric: 'direct_costs' },
+        { key: 'gross_profit', label: `${unit} - Gross Profit`, deptId: null, metric: 'gross_profit' },
+        { key: 'volume', label: `${unit} - Volume`, deptId: null, metric: 'volume' },
       ];
 
   const updateCell = (rowKey: string, month: string, value: string) => {
@@ -125,20 +130,13 @@ export default function BudgetPage() {
           >
             {fys.map(fy => <option key={fy.id} value={fy.id}>{fy.label}</option>)}
           </select>
-          <div className="flex bg-dark-600 rounded-xl p-1 border border-dark-400/50">
-            <button
-              onClick={() => setUnit('CLINIC')}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                unit === 'CLINIC' ? 'bg-accent-500/15 text-accent-400' : 'text-theme-faint'
-              }`}
-            >Clinic</button>
-            <button
-              onClick={() => setUnit('PHARMACY')}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                unit === 'PHARMACY' ? 'bg-accent-500/15 text-accent-400' : 'text-theme-faint'
-              }`}
-            >Pharmacy</button>
-          </div>
+          {streams.length > 1 && (
+            <div className="flex bg-dark-600 rounded-xl p-1 border border-dark-400/50">
+              {streams.map((s: any) => (
+                <button key={s.id} onClick={() => setUnit(s.name)} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${unit === s.name ? 'bg-accent-500/15 text-accent-400' : 'text-theme-faint'}`}>{s.name}</button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

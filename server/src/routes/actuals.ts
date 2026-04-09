@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { branchFilter } from '../utils/branch.js';
+import { branchFilter, streamFilter } from '../utils/branch.js';
 
 const router = Router();
 
@@ -129,6 +129,44 @@ router.get('/pharmacy/purchases', async (req, res) => {
     GROUP BY invoice_month ORDER BY invoice_month`,
     ...bf.params
   ));
+});
+
+// Generic stream summary — returns monthly actuals from dashboard_actuals for any stream
+router.get('/stream/:streamId/summary', async (req, res) => {
+  const db = req.tenantDb!;
+  const { fy_id, scenario_id } = req.query;
+  const bf = branchFilter(req);
+  const sid = parseInt(req.params.streamId);
+
+  let scenarioId = scenario_id;
+  if (!scenarioId && fy_id) {
+    const scenario = db.get(
+      `SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where} LIMIT 1`,
+      fy_id, ...bf.params
+    );
+    scenarioId = scenario?.id;
+  }
+  if (!scenarioId) return res.json({ monthly: [], totals: {} });
+
+  const monthly = db.all(
+    `SELECT month, category, item_name, COALESCE(SUM(amount), 0) as total
+     FROM dashboard_actuals
+     WHERE scenario_id = ? AND (stream_id = ? OR stream_id IS NULL)${bf.where}
+     GROUP BY month, category, item_name
+     ORDER BY month`,
+    scenarioId, sid, ...bf.params
+  );
+
+  const totals = db.get(
+    `SELECT COALESCE(SUM(CASE WHEN category = 'revenue' THEN amount ELSE 0 END), 0) as total_revenue,
+            COALESCE(SUM(CASE WHEN category = 'direct_costs' THEN amount ELSE 0 END), 0) as total_costs,
+            COUNT(DISTINCT month) as months_with_data
+     FROM dashboard_actuals
+     WHERE scenario_id = ? AND (stream_id = ? OR stream_id IS NULL)${bf.where}`,
+    scenarioId, sid, ...bf.params
+  );
+
+  res.json({ monthly, totals });
 });
 
 export default router;

@@ -333,7 +333,7 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
         <div>
           <label className="block text-xs font-medium text-theme-muted mb-1.5">Client Name</label>
           <input type="text" value={name} onChange={e => autoSlug(e.target.value)}
-            placeholder="e.g. Apollo Healthcare" className="input" />
+            placeholder="e.g. Acme Corp" className="input" />
         </div>
         <div>
           <label className="block text-xs font-medium text-theme-muted mb-1.5">Slug (URL identifier)</label>

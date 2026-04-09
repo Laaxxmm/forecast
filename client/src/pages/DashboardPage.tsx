@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, Area, AreaChart } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import api from '../api/client';
 import { formatINR, formatNumber, getMonthLabel } from '../utils/format';
 import {
-  TrendingUp, TrendingDown, Users, IndianRupee, Pill, Stethoscope, Activity,
+  TrendingUp, TrendingDown, IndianRupee, Activity,
   BarChart3, Briefcase, RefreshCcw, GraduationCap, Store, Globe, Warehouse,
-  UtensilsCrossed, Truck, ChefHat, ShoppingBag, FlaskConical
+  UtensilsCrossed, Truck, ChefHat, ShoppingBag, FlaskConical, Stethoscope, Pill, Users
 } from 'lucide-react';
 
 const ICON_MAP: Record<string, any> = {
@@ -15,14 +15,8 @@ const ICON_MAP: Record<string, any> = {
   FlaskConical, TrendingUp, Users, IndianRupee, Activity,
 };
 
-interface OverviewData {
-  fy: any;
-  clinic: any;
-  pharmacy: any;
-  combined: any;
-}
-
 const COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899'];
+const BAR_COLORS = ['#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#10b981'];
 
 function KPICard({ title, value, subtitle, icon: Icon, trend, color = 'accent', onClick }: {
   title: string; value: string; subtitle?: string; icon: any; trend?: number; color?: string; onClick?: () => void;
@@ -59,46 +53,9 @@ function KPICard({ title, value, subtitle, icon: Icon, trend, color = 'accent', 
   );
 }
 
-function getStreamData(streamName: string, data: OverviewData): {
-  revenue: number; subtitle: string; trend?: number; detailPath?: string;
-} {
-  const lower = streamName.toLowerCase();
-
-  if (lower === 'clinic') {
-    return {
-      revenue: data.clinic.total_revenue || 0,
-      subtitle: `${formatNumber(data.clinic.total_transactions || 0)} transactions`,
-      trend: data.clinic.budget_total > 0
-        ? ((data.clinic.total_revenue - data.clinic.budget_total) / data.clinic.budget_total) * 100
-        : undefined,
-      detailPath: '/clinic',
-    };
-  }
-
-  if (lower === 'pharmacy') {
-    return {
-      revenue: data.pharmacy.total_sales || 0,
-      subtitle: `${formatNumber(data.pharmacy.total_transactions || 0)} transactions`,
-      trend: data.pharmacy.budget_total > 0
-        ? ((data.pharmacy.total_sales - data.pharmacy.budget_total) / data.pharmacy.budget_total) * 100
-        : undefined,
-      detailPath: '/pharmacy',
-    };
-  }
-
-  // For streams without actual data yet, show placeholder
-  return {
-    revenue: 0,
-    subtitle: 'No data imported yet',
-    trend: undefined,
-    detailPath: undefined,
-  };
-}
-
 export default function DashboardPage() {
   const navigate = useNavigate();
-  const [data, setData] = useState<OverviewData | null>(null);
-  const [streams, setStreams] = useState<any[]>([]);
+  const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -106,7 +63,6 @@ export default function DashboardPage() {
       setData(res.data);
       setLoading(false);
     }).catch(() => setLoading(false));
-    api.get('/streams').then(res => setStreams(res.data)).catch(() => {});
   }, []);
 
   if (loading) return (
@@ -125,25 +81,26 @@ export default function DashboardPage() {
     </div>
   );
 
-  // Build monthly trend data
-  const monthlyMap: Record<string, any> = {};
-  (data.clinic.monthly || []).forEach((r: any) => {
-    if (!monthlyMap[r.bill_month]) monthlyMap[r.bill_month] = { month: r.bill_month, clinic: 0, pharmacy: 0 };
-    monthlyMap[r.bill_month].clinic += r.total_revenue;
-  });
-  (data.pharmacy.monthly || []).forEach((r: any) => {
-    if (!monthlyMap[r.bill_month]) monthlyMap[r.bill_month] = { month: r.bill_month, clinic: 0, pharmacy: 0 };
-    monthlyMap[r.bill_month].pharmacy = r.total_sales;
-  });
-  const trendData = Object.values(monthlyMap).sort((a: any, b: any) => a.month.localeCompare(b.month))
-    .map((d: any) => ({ ...d, label: getMonthLabel(d.month), total: d.clinic + d.pharmacy }));
+  const streams: any[] = data.streams || [];
 
-  // Dept pie data
-  const deptMap: Record<string, number> = {};
-  (data.clinic.monthly || []).forEach((r: any) => {
-    deptMap[r.department] = (deptMap[r.department] || 0) + r.total_revenue;
-  });
-  const pieData = Object.entries(deptMap).map(([name, value]) => ({ name, value }));
+  // Build monthly trend data from stream monthly breakdowns
+  const monthlyMap: Record<string, any> = {};
+  for (const stream of streams) {
+    for (const entry of (stream.monthly || [])) {
+      if (entry.category !== 'revenue') continue;
+      if (!monthlyMap[entry.month]) monthlyMap[entry.month] = { month: entry.month };
+      const key = stream.name.toLowerCase().replace(/\s+/g, '_');
+      monthlyMap[entry.month][key] = (monthlyMap[entry.month][key] || 0) + entry.total;
+    }
+  }
+  const trendData = Object.values(monthlyMap)
+    .sort((a: any, b: any) => a.month.localeCompare(b.month))
+    .map((d: any) => ({ ...d, label: getMonthLabel(d.month) }));
+
+  // Pie data — revenue per stream
+  const pieData = streams
+    .filter(s => s.total_revenue > 0)
+    .map(s => ({ name: s.name, value: s.total_revenue }));
 
   return (
     <div className="animate-fade-in">
@@ -154,7 +111,6 @@ export default function DashboardPage() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
-        {/* Total Revenue card - always shown */}
         <KPICard
           title="Total Revenue"
           value={formatINR(data.combined.total_revenue)}
@@ -166,26 +122,27 @@ export default function DashboardPage() {
             : undefined}
         />
 
-        {/* Dynamic stream cards */}
-        {streams.length > 0 ? (
-          streams.map((stream: any) => {
-            const streamData = getStreamData(stream.name, data);
-            const StreamIcon = ICON_MAP[stream.icon] || BarChart3;
-            return (
-              <KPICard
-                key={stream.id}
-                title={`${stream.name} Revenue`}
-                value={formatINR(streamData.revenue)}
-                subtitle={streamData.subtitle}
-                icon={StreamIcon}
-                color={stream.color}
-                trend={streamData.trend}
-                onClick={streamData.detailPath ? () => navigate(streamData.detailPath!) : undefined}
-              />
-            );
-          })
-        ) : (
-          <div className="card border border-dashed border-slate-700 flex items-center justify-center col-span-1 md:col-span-1">
+        {streams.map((stream: any) => {
+          const StreamIcon = ICON_MAP[stream.icon] || BarChart3;
+          const trend = stream.budget_total > 0
+            ? ((stream.total_revenue - stream.budget_total) / stream.budget_total) * 100
+            : undefined;
+          return (
+            <KPICard
+              key={stream.id}
+              title={`${stream.name} Revenue`}
+              value={formatINR(stream.total_revenue)}
+              subtitle={stream.total_revenue > 0 ? `vs ${formatINR(stream.budget_total)} budget` : 'No data yet'}
+              icon={StreamIcon}
+              color={stream.color || 'blue'}
+              trend={trend}
+              onClick={() => navigate(`/stream/${stream.id}`)}
+            />
+          );
+        })}
+
+        {streams.length === 0 && (
+          <div className="card border border-dashed border-slate-700 flex items-center justify-center">
             <p className="text-sm text-theme-faint text-center">Configure revenue streams in Admin Panel</p>
           </div>
         )}
@@ -193,10 +150,9 @@ export default function DashboardPage() {
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-6">
-        {/* Monthly Revenue Trend */}
         <div className="card lg:col-span-2">
           <h3 className="text-sm font-semibold text-theme-heading mb-1">Monthly Revenue Trend</h3>
-          <p className="text-xs text-theme-faint mb-6">Clinic vs Pharmacy revenue breakdown</p>
+          <p className="text-xs text-theme-faint mb-6">Revenue breakdown by stream</p>
           {trendData.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={trendData} barGap={2}>
@@ -209,8 +165,12 @@ export default function DashboardPage() {
                   labelStyle={{ color: '#94a3b8' }}
                 />
                 <Legend />
-                <Bar dataKey="clinic" name="Clinic" fill="#3b82f6" radius={[6, 6, 0, 0]} />
-                <Bar dataKey="pharmacy" name="Pharmacy" fill="#8b5cf6" radius={[6, 6, 0, 0]} />
+                {streams.map((stream: any, i: number) => {
+                  const key = stream.name.toLowerCase().replace(/\s+/g, '_');
+                  return (
+                    <Bar key={stream.id} dataKey={key} name={stream.name} fill={BAR_COLORS[i % BAR_COLORS.length]} radius={[6, 6, 0, 0]} />
+                  );
+                })}
               </BarChart>
             </ResponsiveContainer>
           ) : (
@@ -223,10 +183,9 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Clinic Revenue Split */}
         <div className="card">
           <h3 className="text-sm font-semibold text-theme-heading mb-1">Revenue Split</h3>
-          <p className="text-xs text-theme-faint mb-6">By department</p>
+          <p className="text-xs text-theme-faint mb-6">By stream</p>
           {pieData.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
               <PieChart>
@@ -255,43 +214,6 @@ export default function DashboardPage() {
           )}
         </div>
       </div>
-
-      {/* Pharmacy Profit Trend */}
-      {data.pharmacy.monthly?.length > 0 && (
-        <div className="card">
-          <h3 className="text-sm font-semibold text-theme-heading mb-1">Pharmacy Profit Trend</h3>
-          <p className="text-xs text-theme-faint mb-6">Sales, COGS & Profit over time</p>
-          <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={data.pharmacy.monthly.map((r: any) => ({
-              ...r,
-              label: getMonthLabel(r.bill_month),
-            }))}>
-              <defs>
-                <linearGradient id="salesGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15} />
-                  <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="profitGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.15} />
-                  <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" vertical={false} />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-              <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-              <Tooltip
-                formatter={(v: number) => formatINR(v)}
-                contentStyle={{ backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '12px' }}
-                labelStyle={{ color: '#94a3b8' }}
-              />
-              <Legend />
-              <Area type="monotone" dataKey="total_sales" name="Sales" stroke="#3b82f6" strokeWidth={2} fill="url(#salesGrad)" />
-              <Area type="monotone" dataKey="total_profit" name="Profit" stroke="#10b981" strokeWidth={2} fill="url(#profitGrad)" />
-              <Line type="monotone" dataKey="total_purchase_cost" name="COGS" stroke="#f59e0b" strokeWidth={2} dot={false} strokeDasharray="5 5" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      )}
     </div>
   );
 }

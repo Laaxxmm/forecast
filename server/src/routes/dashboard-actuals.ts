@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { branchFilter, getBranchIdForInsert, streamFilter, getStreamIdForInsert } from '../utils/branch.js';
+import { getPlatformHelper } from '../db/platform-connection.js';
 
 const router = Router();
 
@@ -67,8 +68,9 @@ router.get('/summary', async (req, res) => {
 });
 
 // POST /api/dashboard-actuals/sync-from-imports
-// Auto-populate revenue actuals from clinic_actuals + pharmacy_sales_actuals
-// into dashboard_actuals for the given scenario
+// Auto-populate revenue actuals from integration-specific tables
+// into dashboard_actuals for the given scenario.
+// Uses stream names from business_streams config instead of hardcoded values.
 router.post('/sync-from-imports', async (req, res) => {
   try {
     const db = req.tenantDb!;
@@ -80,57 +82,69 @@ router.post('/sync-from-imports', async (req, res) => {
     const streamId = getStreamIdForInsert(req);
     let count = 0;
 
-    // Aggregate clinic revenue by month (sum of item_price)
-    const clinicMonthly = db.all(
-      `SELECT bill_month as month, COALESCE(SUM(item_price), 0) as total
-       FROM clinic_actuals
-       WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where}
-       GROUP BY bill_month
-       ORDER BY bill_month`,
-      ...bf.params
+    // Get stream names from platform config to use as item_name labels
+    const platformDb = await getPlatformHelper();
+    const streams = platformDb.all(
+      'SELECT id, name FROM business_streams WHERE client_id = ? AND is_active = 1 ORDER BY sort_order',
+      req.clientId
     );
 
-    for (const row of clinicMonthly) {
-      if (!row.month) continue;
-      db.run(
-        `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
-         VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, ?, datetime('now'))
-         ON CONFLICT(scenario_id, category, item_name, month)
-         DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-        scenario_id, row.month, row.total, branchId, streamId
-      );
-      count++;
-    }
+    // Map integration tables to stream names (first stream = clinic-like, second = pharmacy-like)
+    // This is a convention: integrations tag their data with the stream they belong to
+    const clinicStreamName = streams.find((s: any) => s.id === streamId)?.name
+      || streams[0]?.name || 'Revenue';
+    const pharmacyStreamName = streams.length > 1 ? streams[1].name : streams[0]?.name || 'Revenue';
 
-    // Aggregate pharmacy revenue + COGS by month
+    // Aggregate clinic-type data by month (from clinic_actuals if it exists)
+    try {
+      const clinicMonthly = db.all(
+        `SELECT bill_month as month, COALESCE(SUM(item_price), 0) as total
+         FROM clinic_actuals
+         WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where}
+         GROUP BY bill_month ORDER BY bill_month`,
+        ...bf.params
+      );
+      for (const row of clinicMonthly) {
+        if (!row.month) continue;
+        db.run(
+          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+           VALUES (?, 'revenue', ?, ?, ?, ?, ?, datetime('now'))
+           ON CONFLICT(scenario_id, category, item_name, month)
+           DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
+          scenario_id, `${clinicStreamName} Revenue`, row.month, row.total, branchId, streams[0]?.id || streamId
+        );
+        count++;
+      }
+    } catch { /* clinic_actuals table may not exist */ }
+
+    // Aggregate pharmacy-type data by month (from pharmacy_sales_actuals if it exists)
     try {
       const pharmacyMonthly = db.all(
         `SELECT bill_month as month, COALESCE(SUM(sales_amount), 0) as revenue, COALESCE(SUM(purchase_amount), 0) as cogs
          FROM pharmacy_sales_actuals
          WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where}
-         GROUP BY bill_month
-         ORDER BY bill_month`,
+         GROUP BY bill_month ORDER BY bill_month`,
         ...bf.params
       );
       for (const row of pharmacyMonthly) {
         if (!row.month) continue;
         db.run(
           `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
-           VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?, ?, datetime('now'))
+           VALUES (?, 'revenue', ?, ?, ?, ?, ?, datetime('now'))
            ON CONFLICT(scenario_id, category, item_name, month)
            DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-          scenario_id, row.month, row.revenue, branchId, streamId
+          scenario_id, `${pharmacyStreamName} Revenue`, row.month, row.revenue, branchId, streams[1]?.id || streamId
         );
         db.run(
           `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
-           VALUES (?, 'direct_costs', 'Pharmacy COGS', ?, ?, ?, ?, datetime('now'))
+           VALUES (?, 'direct_costs', ?, ?, ?, ?, ?, datetime('now'))
            ON CONFLICT(scenario_id, category, item_name, month)
            DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-          scenario_id, row.month, row.cogs, branchId, streamId
+          scenario_id, `${pharmacyStreamName} COGS`, row.month, row.cogs, branchId, streams[1]?.id || streamId
         );
         count += 2;
       }
-    } catch { /* pharmacy tables may not have data yet */ }
+    } catch { /* pharmacy tables may not exist */ }
 
     res.json({ success: true, count });
   } catch (err: any) {

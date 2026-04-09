@@ -23,7 +23,7 @@ export function initializeSchema(db: DbHelper) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT UNIQUE NOT NULL,
       display_name TEXT NOT NULL,
-      business_unit TEXT NOT NULL CHECK(business_unit IN ('CLINIC', 'PHARMACY')),
+      business_unit TEXT NOT NULL DEFAULT '',
       sort_order INTEGER DEFAULT 0
     );
 

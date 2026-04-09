@@ -17,22 +17,28 @@ type GridData = Record<string, Record<string, { amount: number; source: string }
 export default function ForecastPage() {
   const [fys, setFYs] = useState<FY[]>([]);
   const [selectedFY, setSelectedFY] = useState<number | null>(null);
-  const [unit, setUnit] = useState<'CLINIC' | 'PHARMACY'>('CLINIC');
+  const [streams, setStreams] = useState<any[]>([]);
+  const [unit, setUnit] = useState('');
   const [grid, setGrid] = useState<GridData>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get('/settings/fy').then(res => {
-      setFYs(res.data);
-      const active = res.data.find((f: FY) => f.is_active);
+    Promise.all([
+      api.get('/settings/fy'),
+      api.get('/streams'),
+    ]).then(([fyRes, streamRes]) => {
+      setFYs(fyRes.data);
+      const active = fyRes.data.find((f: FY) => f.is_active);
       if (active) setSelectedFY(active.id);
+      setStreams(streamRes.data);
+      if (streamRes.data.length > 0) setUnit(streamRes.data[0].name);
     }).finally(() => setLoading(false));
   }, []);
 
   const loadForecast = useCallback(async () => {
-    if (!selectedFY) return;
+    if (!selectedFY || !unit) return;
     const fcRes = await api.get('/forecasts', { params: { fy_id: selectedFY, business_unit: unit } });
     if (fcRes.data.length > 0) {
       const newGrid: GridData = {};
@@ -60,21 +66,13 @@ export default function ForecastPage() {
   const months = activeFY ? getFYMonths(activeFY.start_date) : [];
   const currentMonth = new Date().toISOString().slice(0, 7);
 
-  const rows = unit === 'CLINIC'
-    ? [
-        { key: '1_revenue', label: 'Appointments - Revenue', deptId: 1, metric: 'revenue' },
-        { key: '1_footfall', label: 'Appointments - Footfall', deptId: 1, metric: 'footfall' },
-        { key: '2_revenue', label: 'Lab Tests - Revenue', deptId: 2, metric: 'revenue' },
-        { key: '2_footfall', label: 'Lab Tests - Footfall', deptId: 2, metric: 'footfall' },
-        { key: '3_revenue', label: 'Other Services - Revenue', deptId: 3, metric: 'revenue' },
-        { key: '3_footfall', label: 'Other Services - Footfall', deptId: 3, metric: 'footfall' },
-      ]
-    : [
-        { key: 'sales_amount', label: 'Sales Amount', deptId: null, metric: 'sales_amount' },
-        { key: 'purchase_cost', label: 'Purchase Cost', deptId: null, metric: 'purchase_cost' },
-        { key: 'profit', label: 'Gross Profit', deptId: null, metric: 'profit' },
-        { key: 'transactions', label: 'Transactions', deptId: null, metric: 'transactions' },
-      ];
+  // Generic rows — revenue and volume metrics for any stream
+  const rows = [
+    { key: 'revenue', label: `${unit} - Revenue`, deptId: null, metric: 'revenue' },
+    { key: 'volume', label: `${unit} - Volume`, deptId: null, metric: 'volume' },
+    { key: 'direct_costs', label: `${unit} - Direct Costs`, deptId: null, metric: 'direct_costs' },
+    { key: 'gross_profit', label: `${unit} - Gross Profit`, deptId: null, metric: 'gross_profit' },
+  ];
 
   const updateCell = (rowKey: string, month: string, value: string) => {
     const num = parseFloat(value) || 0;
@@ -133,10 +131,13 @@ export default function ForecastPage() {
           <select value={selectedFY || ''} onChange={e => setSelectedFY(Number(e.target.value))} className="input w-48">
             {fys.map(fy => <option key={fy.id} value={fy.id}>{fy.label}</option>)}
           </select>
-          <div className="flex bg-dark-600 rounded-xl p-1 border border-dark-400/50">
-            <button onClick={() => setUnit('CLINIC')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${unit === 'CLINIC' ? 'bg-accent-500/15 text-accent-400' : 'text-theme-faint'}`}>Clinic</button>
-            <button onClick={() => setUnit('PHARMACY')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${unit === 'PHARMACY' ? 'bg-accent-500/15 text-accent-400' : 'text-theme-faint'}`}>Pharmacy</button>
-          </div>
+          {streams.length > 1 && (
+            <div className="flex bg-dark-600 rounded-xl p-1 border border-dark-400/50">
+              {streams.map((s: any) => (
+                <button key={s.id} onClick={() => setUnit(s.name)} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${unit === s.name ? 'bg-accent-500/15 text-accent-400' : 'text-theme-faint'}`}>{s.name}</button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

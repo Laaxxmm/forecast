@@ -2,10 +2,8 @@ import { DbHelper } from './connection.js';
 import bcrypt from 'bcryptjs';
 
 export async function seedDatabase(db: DbHelper) {
-  // Seed departments
-  db.run('INSERT OR IGNORE INTO departments (name, display_name, business_unit, sort_order) VALUES (?, ?, ?, ?)', 'APPOINTMENT', 'Appointments', 'CLINIC', 1);
-  db.run('INSERT OR IGNORE INTO departments (name, display_name, business_unit, sort_order) VALUES (?, ?, ?, ?)', 'LAB TEST', 'Lab Tests', 'CLINIC', 2);
-  db.run('INSERT OR IGNORE INTO departments (name, display_name, business_unit, sort_order) VALUES (?, ?, ?, ?)', 'OTHER SERVICES', 'Other Services', 'CLINIC', 3);
+  // Departments are now industry-specific and created via admin panel.
+  // Legacy healthcare departments are kept for backward compatibility if they already exist.
 
   // Seed default FYs
   const fyCount = db.get('SELECT COUNT(*) as cnt FROM financial_years');

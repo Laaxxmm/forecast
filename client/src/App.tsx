@@ -8,8 +8,7 @@ import DashboardModulePage from './pages/DashboardModulePage';
 import DashboardPage from './pages/DashboardPage';
 import ForecastModulePage from './pages/ForecastModulePage';
 import ImportPage from './pages/ImportPage';
-import ClinicDetailPage from './pages/ClinicDetailPage';
-import PharmacyDetailPage from './pages/PharmacyDetailPage';
+import StreamDetailPage from './pages/StreamDetailPage';
 import SettingsPage from './pages/SettingsPage';
 import SelectClientPage from './pages/SelectClientPage';
 import AdminPage from './pages/AdminPage';
@@ -112,8 +111,7 @@ export default function App() {
           <Route path="/forecast/*" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><ForecastModulePage /></ModuleRoute></ClientRoute>} />
           <Route path="/analysis/*" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><DashboardModulePage /></ModuleRoute></ClientRoute>} />
           <Route path="/import" element={<ClientRoute><ClientAdminRoute><ModuleRoute moduleKey="forecast_ops"><ImportPage /></ModuleRoute></ClientAdminRoute></ClientRoute>} />
-          <Route path="/clinic" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><ClinicDetailPage /></ModuleRoute></ClientRoute>} />
-          <Route path="/pharmacy" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><PharmacyDetailPage /></ModuleRoute></ClientRoute>} />
+          <Route path="/stream/:streamId" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><StreamDetailPage /></ModuleRoute></ClientRoute>} />
           {/* VCFO Portal — internal module */}
           <Route path="/vcfo" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><VcfoDashboardPage /></ModuleRoute></ClientRoute>} />
           <Route path="/vcfo/table-view" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><TableViewPage /></ModuleRoute></ClientRoute>} />
