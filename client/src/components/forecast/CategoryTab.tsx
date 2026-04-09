@@ -11,6 +11,7 @@ import AssetsTab from './AssetsTab';
 import TaxesTab from './TaxesTab';
 import CashFlowAssumptionsTab from './CashFlowAssumptionsTab';
 import InitialBalancesTab from './InitialBalancesTab';
+import FinancingTab from './FinancingTab';
 import { exportTableCSV } from './csvExport';
 
 interface Props {
@@ -244,6 +245,25 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
   if (category === 'assets') {
     return (
       <AssetsTab
+        category={category}
+        label={label}
+        scenario={scenario}
+        months={months}
+        viewMode={viewMode}
+        items={items}
+        allItems={allItems}
+        allValues={allValues}
+        settings={settings}
+        onReload={onReload}
+        readOnly={readOnly}
+      />
+    );
+  }
+
+  // Delegate financing to FinancingTab
+  if (category === 'financing') {
+    return (
+      <FinancingTab
         category={category}
         label={label}
         scenario={scenario}
