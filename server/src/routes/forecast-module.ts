@@ -3,6 +3,57 @@ import { branchFilter, getBranchIdForInsert, streamFilter, getStreamIdForInsert 
 
 const router = Router();
 
+// === CONSOLIDATED VIEW (All Streams) ===
+router.get('/consolidated', async (req, res) => {
+  const db = req.tenantDb!;
+  const { fy_id } = req.query;
+  const bf = branchFilter(req);
+  if (!fy_id) return res.status(400).json({ error: 'fy_id required' });
+
+  // Find ALL per-stream scenarios for this FY + branch
+  const scenarios = db.all(
+    `SELECT * FROM scenarios WHERE fy_id = ? AND stream_id IS NOT NULL${bf.where}`,
+    fy_id, ...bf.params
+  );
+
+  if (scenarios.length === 0) {
+    return res.json({ items: [], values: {}, settings: {} });
+  }
+
+  const scenarioIds = scenarios.map((s: any) => s.id);
+  const placeholders = scenarioIds.map(() => '?').join(',');
+
+  // Get all items from all stream scenarios
+  const items = db.all(
+    `SELECT * FROM forecast_items WHERE scenario_id IN (${placeholders}) ORDER BY category, sort_order, id`,
+    ...scenarioIds
+  ).map((item: any) => ({ ...item, meta: item.meta ? JSON.parse(item.meta) : {} }));
+
+  // Get all values
+  const rawValues = db.all(
+    `SELECT fv.* FROM forecast_values fv
+     JOIN forecast_items fi ON fv.item_id = fi.id
+     WHERE fi.scenario_id IN (${placeholders})`,
+    ...scenarioIds
+  );
+
+  // Build values lookup: { item_id: { month: amount } }
+  const values: Record<number, Record<string, number>> = {};
+  for (const v of rawValues) {
+    if (!values[v.item_id]) values[v.item_id] = {};
+    values[v.item_id][v.month] = v.amount;
+  }
+
+  // Merge settings from first scenario
+  const settingsObj: Record<string, any> = {};
+  const rawSettings = db.all('SELECT * FROM forecast_settings WHERE scenario_id = ?', scenarios[0].id);
+  for (const s of rawSettings) {
+    try { settingsObj[s.setting_key] = JSON.parse(s.setting_value); } catch { settingsObj[s.setting_key] = s.setting_value; }
+  }
+
+  res.json({ items, values, settings: settingsObj, scenarioCount: scenarios.length });
+});
+
 // === SCENARIOS ===
 router.get('/scenarios', async (req, res) => {
   const db = req.tenantDb!;
@@ -36,6 +87,13 @@ router.post('/scenarios/ensure', async (req, res) => {
   const branchId = getBranchIdForInsert(req);
   const streamId = getStreamIdForInsert(req);
   if (!fy_id) return res.status(400).json({ error: 'fy_id required' });
+
+  // Don't create scenarios for "all" stream mode — use /consolidated instead
+  if (req.streamMode === 'all' || req.streamMode === 'none') {
+    const scenario = db.get(`SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}`, fy_id, ...bf.params);
+    return res.json(scenario || null);
+  }
+
   let scenario = db.get(`SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where}`, fy_id, ...bf.params, ...sf.params);
   if (!scenario) {
     scenario = db.get(`SELECT * FROM scenarios WHERE fy_id = ?${bf.where}${sf.where}`, fy_id, ...bf.params, ...sf.params);

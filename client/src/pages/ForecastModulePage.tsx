@@ -73,7 +73,9 @@ export default function ForecastModulePage() {
   // Role-based access: client admins and team members (super_admin) can edit forecast
   const userRole = localStorage.getItem('user_role');
   const userType = localStorage.getItem('user_type');
-  const readOnly = userRole !== 'admin' && userType !== 'super_admin';
+  const isAllStreams = !localStorage.getItem('stream_id');
+  const streamName = localStorage.getItem('stream_name');
+  const readOnly = (userRole !== 'admin' && userType !== 'super_admin') || isAllStreams;
 
   useEffect(() => {
     api.get('/settings/fy').then(res => {
@@ -86,16 +88,31 @@ export default function ForecastModulePage() {
 
   useEffect(() => {
     if (!selectedFY) return;
+
+    if (isAllStreams) {
+      // Consolidated mode: fetch merged data from all per-stream scenarios
+      api.get('/forecast-module/consolidated', { params: { fy_id: selectedFY.id } }).then(res => {
+        const { items: cItems, values: cValues, settings: cSettings } = res.data;
+        // Set a dummy scenario so the rest of the UI can render
+        setScenario({ id: -1, fy_id: selectedFY.id, name: 'All Streams (Consolidated)', is_default: 1 } as Scenario);
+        setScenarios([]);
+        setItems(cItems || []);
+        setAllValues(cValues || {});
+        setSettings(cSettings || {});
+      });
+      return;
+    }
+
     api.post('/forecast-module/scenarios/ensure', { fy_id: selectedFY.id }).then(res => {
       setScenario(res.data);
       return api.get('/forecast-module/scenarios', { params: { fy_id: selectedFY.id } });
     }).then(res => {
       setScenarios(res.data);
     });
-  }, [selectedFY]);
+  }, [selectedFY, isAllStreams]);
 
   const loadData = useCallback(async () => {
-    if (!scenario) return;
+    if (!scenario || scenario.id === -1) return;
     const [itemsRes, valuesRes, settingsRes] = await Promise.all([
       api.get('/forecast-module/items', { params: { scenario_id: scenario.id } }),
       api.get('/forecast-module/values', { params: { scenario_id: scenario.id } }),
@@ -140,6 +157,16 @@ export default function ForecastModulePage() {
             ))}
           </div>
           <div className="flex items-center gap-3">
+            {isAllStreams && (
+              <span className="text-xs font-medium text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-lg">
+                Consolidated View (Read-only)
+              </span>
+            )}
+            {streamName && !isAllStreams && (
+              <span className="text-xs font-medium text-accent-400 bg-accent-500/10 px-2.5 py-1 rounded-lg">
+                {streamName}
+              </span>
+            )}
             <button
               onClick={() => setShowDownloadPanel(true)}
               className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-theme-muted hover:text-accent-400 hover:bg-accent-500/10 rounded-xl transition-all"
@@ -148,6 +175,7 @@ export default function ForecastModulePage() {
               <Printer size={16} />
               <span className="hidden lg:inline">Print</span>
             </button>
+            {!isAllStreams && <>
             <div className="h-6 w-px bg-dark-400" />
             <select
               value={scenario?.id || ''}
@@ -159,6 +187,7 @@ export default function ForecastModulePage() {
             >
               {scenarios.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
+            </>}
             <select
               value={selectedFY?.id || ''}
               onChange={e => {
