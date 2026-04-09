@@ -75,7 +75,8 @@ export default function ForecastModulePage() {
   const userType = localStorage.getItem('user_type');
   const isAllStreams = !localStorage.getItem('stream_id');
   const streamName = localStorage.getItem('stream_name');
-  const readOnly = (userRole !== 'admin' && userType !== 'super_admin') || isAllStreams;
+  const [isConsolidated, setIsConsolidated] = useState(false);
+  const readOnly = (userRole !== 'admin' && userType !== 'super_admin') || isConsolidated;
 
   useEffect(() => {
     api.get('/settings/fy').then(res => {
@@ -89,26 +90,37 @@ export default function ForecastModulePage() {
   useEffect(() => {
     if (!selectedFY) return;
 
+    const loadNormalScenario = () => {
+      setIsConsolidated(false);
+      api.post('/forecast-module/scenarios/ensure', { fy_id: selectedFY.id }).then(res => {
+        setScenario(res.data);
+        return api.get('/forecast-module/scenarios', { params: { fy_id: selectedFY.id } });
+      }).then(res => {
+        setScenarios(res.data);
+      });
+    };
+
     if (isAllStreams) {
-      // Consolidated mode: fetch merged data from all per-stream scenarios
+      // Try consolidated mode: fetch merged data from all per-stream scenarios
       api.get('/forecast-module/consolidated', { params: { fy_id: selectedFY.id } }).then(res => {
-        const { items: cItems, values: cValues, settings: cSettings } = res.data;
-        // Set a dummy scenario so the rest of the UI can render
-        setScenario({ id: -1, fy_id: selectedFY.id, name: 'All Streams (Consolidated)', is_default: 1 } as Scenario);
-        setScenarios([]);
-        setItems(cItems || []);
-        setAllValues(cValues || {});
-        setSettings(cSettings || {});
+        const { items: cItems, values: cValues, settings: cSettings, scenarioCount } = res.data;
+        if (scenarioCount && scenarioCount > 0) {
+          // Multiple per-stream scenarios exist — show consolidated read-only view
+          setIsConsolidated(true);
+          setScenario({ id: -1, fy_id: selectedFY.id, name: 'All Streams (Consolidated)', is_default: 1 } as Scenario);
+          setScenarios([]);
+          setItems(cItems || []);
+          setAllValues(cValues || {});
+          setSettings(cSettings || {});
+        } else {
+          // No per-stream scenarios — client has no streams, load default scenario normally
+          loadNormalScenario();
+        }
       });
       return;
     }
 
-    api.post('/forecast-module/scenarios/ensure', { fy_id: selectedFY.id }).then(res => {
-      setScenario(res.data);
-      return api.get('/forecast-module/scenarios', { params: { fy_id: selectedFY.id } });
-    }).then(res => {
-      setScenarios(res.data);
-    });
+    loadNormalScenario();
   }, [selectedFY, isAllStreams]);
 
   const loadData = useCallback(async () => {
@@ -157,7 +169,7 @@ export default function ForecastModulePage() {
             ))}
           </div>
           <div className="flex items-center gap-3">
-            {isAllStreams && (
+            {isConsolidated && (
               <span className="text-xs font-medium text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-lg">
                 Consolidated View (Read-only)
               </span>
@@ -175,7 +187,7 @@ export default function ForecastModulePage() {
               <Printer size={16} />
               <span className="hidden lg:inline">Print</span>
             </button>
-            {!isAllStreams && <>
+            {!isConsolidated && <>
             <div className="h-6 w-px bg-dark-400" />
             <select
               value={scenario?.id || ''}
