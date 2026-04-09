@@ -59,10 +59,11 @@ function SuperAdminRoute({ children }: { children: React.ReactNode }) {
   return userType === 'super_admin' ? <>{children}</> : <Navigate to="/actuals" replace />;
 }
 
-// Client admins (client_user with role=admin) can access import, settings, etc.
+// Client admins and team members (super_admin) can access import, settings, etc.
 function ClientAdminRoute({ children }: { children: React.ReactNode }) {
   const userRole = localStorage.getItem('user_role');
-  return userRole === 'admin' ? <>{children}</> : <Navigate to="/actuals" replace />;
+  const userType = localStorage.getItem('user_type');
+  return (userRole === 'admin' || userType === 'super_admin') ? <>{children}</> : <Navigate to="/actuals" replace />;
 }
 
 // Block owner super_admin from client working routes — non-owner admins can work in client context
