@@ -226,6 +226,157 @@ router.get('/overview', async (req, res) => {
   });
 });
 
+// ─── Clinic Analytics (Healthplix) ───────────────────────────────────────────
+
+router.get('/clinic-analytics', async (req, res) => {
+  const db = req.tenantDb!;
+  const { fy_id } = req.query;
+  const bf = branchFilter(req);
+
+  const fy = fy_id
+    ? db.get('SELECT * FROM financial_years WHERE id = ?', fy_id)
+    : db.get('SELECT * FROM financial_years WHERE is_active = 1');
+  if (!fy) return res.json({ error: 'No FY found' });
+
+  const startMonth = fy.start_date.slice(0, 7);
+  const endMonth = fy.end_date.slice(0, 7);
+
+  // Check table exists
+  try { db.get('SELECT 1 FROM clinic_actuals LIMIT 1'); } catch {
+    return res.json({ hasData: false });
+  }
+
+  // Patient-level aggregation
+  const patients = db.all(
+    `SELECT patient_id, patient_name,
+      GROUP_CONCAT(DISTINCT department) as departments,
+      COUNT(DISTINCT department) as dept_count,
+      COALESCE(SUM(item_price), 0) as total_revenue,
+      COALESCE(SUM(billed), 0) as total_billed,
+      COALESCE(SUM(paid), 0) as total_paid,
+      COALESCE(SUM(discount), 0) as total_discount,
+      COUNT(DISTINCT order_number) as visits
+     FROM clinic_actuals
+     WHERE bill_month >= ? AND bill_month <= ?
+       AND patient_id IS NOT NULL AND patient_id != ''${bf.where}
+     GROUP BY patient_id`,
+    startMonth, endMonth, ...bf.params
+  );
+
+  if (patients.length === 0) return res.json({ hasData: false });
+
+  // Department sets per patient
+  const deptSets = patients.map((p: any) => ({
+    ...p,
+    deptSet: new Set((p.departments || '').split(',').map((d: string) => d.trim()).filter(Boolean)),
+  }));
+
+  const APPT = 'APPOINTMENT';
+  const LAB = 'LAB TEST';
+  const OTHER = 'OTHER SERVICES';
+
+  // KPI counts
+  const totalUnique = patients.length;
+  const apptPatients = deptSets.filter((p: any) => p.deptSet.has(APPT)).length;
+  const labPatients = deptSets.filter((p: any) => p.deptSet.has(LAB)).length;
+  const otherPatients = deptSets.filter((p: any) => p.deptSet.has(OTHER)).length;
+  const directLabWalkins = deptSets.filter((p: any) => p.deptSet.has(LAB) && !p.deptSet.has(APPT)).length;
+  const directOtherWalkins = deptSets.filter((p: any) => p.deptSet.has(OTHER) && !p.deptSet.has(APPT)).length;
+
+  // Department overlap counts
+  const in1 = deptSets.filter((p: any) => p.dept_count === 1).length;
+  const in2 = deptSets.filter((p: any) => p.dept_count === 2).length;
+  const in3 = deptSets.filter((p: any) => p.dept_count >= 3).length;
+
+  // Department combination breakdown
+  const comboCounts: Record<string, number> = {};
+  for (const p of deptSets) {
+    const sorted = [...(p as any).deptSet].sort().join(' + ');
+    comboCounts[sorted] = (comboCounts[sorted] || 0) + 1;
+  }
+  const combinations = Object.entries(comboCounts)
+    .map(([combo, count]) => ({ combo, count }))
+    .sort((a, b) => b.count - a.count);
+
+  // Revenue per patient by dept count
+  const revByDeptCount = [1, 2, 3].map(n => {
+    const group = deptSets.filter((p: any) => n === 3 ? p.dept_count >= 3 : p.dept_count === n);
+    const total = group.reduce((s: number, p: any) => s + p.total_revenue, 0);
+    return { deptCount: n, patients: group.length, totalRevenue: total, avgRevenue: group.length ? total / group.length : 0 };
+  });
+
+  // Cross-sell funnel (from appointment patients)
+  const apptSet = deptSets.filter((p: any) => p.deptSet.has(APPT));
+  const crossToOther = apptSet.filter((p: any) => p.deptSet.has(OTHER) && !p.deptSet.has(LAB)).length;
+  const crossToLab = apptSet.filter((p: any) => p.deptSet.has(LAB) && !p.deptSet.has(OTHER)).length;
+  const crossToBoth = apptSet.filter((p: any) => p.deptSet.has(LAB) && p.deptSet.has(OTHER)).length;
+  const apptOnly = apptSet.filter((p: any) => p.dept_count === 1).length;
+
+  // Patient flow from appointment
+  const patientFlow = {
+    totalAppointment: apptPatients,
+    crossToOther, crossToLab, crossToBoth, apptOnly,
+  };
+
+  // Doctor cross-sell analysis
+  const doctorRows = db.all(
+    `SELECT billed_doctor, patient_id, department
+     FROM clinic_actuals
+     WHERE bill_month >= ? AND bill_month <= ?
+       AND billed_doctor IS NOT NULL AND billed_doctor != '-' AND billed_doctor != ''${bf.where}
+     GROUP BY billed_doctor, patient_id, department`,
+    startMonth, endMonth, ...bf.params
+  );
+
+  // Build per-doctor patient sets
+  const doctorPatients: Record<string, Set<string>> = {};
+  for (const r of doctorRows as any[]) {
+    if (r.department !== APPT) continue;
+    if (!doctorPatients[r.billed_doctor]) doctorPatients[r.billed_doctor] = new Set();
+    doctorPatients[r.billed_doctor].add(r.patient_id);
+  }
+
+  // For each doctor, find which of their appointment patients also got lab/other
+  const patientDeptLookup = new Map(deptSets.map((p: any) => [p.patient_id, p.deptSet]));
+  const doctorCrossSell = Object.entries(doctorPatients)
+    .map(([doctor, pids]) => {
+      const total = pids.size;
+      let crossSold = 0;
+      for (const pid of pids) {
+        const depts = patientDeptLookup.get(pid);
+        if (depts && (depts.has(LAB) || depts.has(OTHER))) crossSold++;
+      }
+      return { doctor, totalPatients: total, crossSold, apptOnly: total - crossSold, crossSellRate: total > 0 ? (crossSold / total) * 100 : 0 };
+    })
+    .filter(d => d.totalPatients >= 1)
+    .sort((a, b) => b.crossSellRate - a.crossSellRate);
+
+  // Patient table data (top 200 for initial load)
+  const patientTable = patients
+    .map((p: any) => ({
+      patient_id: p.patient_id,
+      patient_name: p.patient_name,
+      departments: p.departments,
+      total_billed: p.total_billed,
+      total_paid: p.total_paid,
+      total_discount: p.total_discount,
+      visits: p.visits,
+    }))
+    .sort((a: any, b: any) => b.total_billed - a.total_billed);
+
+  res.json({
+    hasData: true,
+    kpi: { totalUnique, apptPatients, labPatients, otherPatients, directLabWalkins, directOtherWalkins },
+    departmentOverlap: { in1, in2, in3 },
+    combinations,
+    revenueByDeptCount: revByDeptCount,
+    patientFlow,
+    crossSellFunnel: { totalAppointment: apptPatients, crossToOther, crossToLab, crossToBoth, apptOnly },
+    doctorCrossSell,
+    patientTable,
+  });
+});
+
 router.get('/variance', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id } = req.query;

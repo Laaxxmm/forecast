@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import api from '../api/client';
 import { formatINR, formatNumber, getMonthLabel } from '../utils/format';
+import ClinicAnalytics from '../components/dashboard/ClinicAnalytics';
 import {
   TrendingUp, TrendingDown, IndianRupee, Activity,
   BarChart3, Briefcase, RefreshCcw, GraduationCap, Store, Globe, Warehouse,
@@ -91,6 +92,18 @@ export default function DashboardPage() {
   };
   const showTrend = isChartVisible('monthly_revenue_trend');
   const showPie = isChartVisible('revenue_split');
+
+  // Clinic stream visibility helper
+  const clinicStream = streams.find((s: any) => {
+    const n = (s.name || '').toLowerCase();
+    return n.includes('clinic') || n.includes('health');
+  });
+  const clinicStreamId = clinicStream ? String(clinicStream.id) : null;
+  const isClinicVisible = (key: string) => {
+    if (!clinicStreamId) return false;
+    const entry = chartVis.find((v: any) => v.element_key === key && v.scope === clinicStreamId);
+    return entry ? !!entry.is_visible : false;
+  };
 
   // Build monthly trend data from stream monthly breakdowns
   const monthlyMap: Record<string, any> = {};
@@ -249,6 +262,9 @@ export default function DashboardPage() {
           )}
         </div>
       )}
+
+      {/* Clinic Analytics */}
+      {clinicStreamId && <ClinicAnalytics isVisible={isClinicVisible} />}
     </div>
   );
 }
