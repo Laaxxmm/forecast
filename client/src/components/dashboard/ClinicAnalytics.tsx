@@ -100,8 +100,11 @@ export default function ClinicAnalytics({ isVisible }: ClinicAnalyticsProps) {
       </div>
 
       {/* Section A — Patient Count KPI Cards */}
-      {anyCardVisible && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+      {anyCardVisible && (() => {
+        const visibleCount = ['total_unique_patients', 'appointment_patients', 'lab_test_patients', 'other_services_patients', 'direct_lab_walkins', 'direct_other_walkins'].filter(isVisible).length;
+        const lgColsClass: Record<number, string> = { 1: '', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6' };
+        return (
+        <div className={`grid grid-cols-2 md:grid-cols-3 ${lgColsClass[visibleCount] || 'lg:grid-cols-6'} gap-4 mb-6`}>
           {isVisible('total_unique_patients') && (
             <MiniKPI label="Total Patients" value={formatNumber(kpi.totalUnique)} icon={Users} color="teal" />
           )}
@@ -121,11 +124,12 @@ export default function ClinicAnalytics({ isVisible }: ClinicAnalyticsProps) {
             <MiniKPI label="Direct Other Walk-ins" value={formatNumber(kpi.directOtherWalkins)} icon={ArrowRight} color="amber" sub="No appointment" />
           )}
         </div>
-      )}
+        );
+      })()}
 
       {/* Section B — Department Analysis Charts */}
       {(isVisible('department_overlap') || isVisible('patient_dept_donut')) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
+        <div className={`grid grid-cols-1 ${isVisible('department_overlap') && isVisible('patient_dept_donut') ? 'lg:grid-cols-2' : ''} gap-5 mb-6`}>
           {isVisible('department_overlap') && (
             <div className="card">
               <h3 className="text-sm font-semibold text-theme-heading mb-1">Department Overlap</h3>
@@ -161,7 +165,7 @@ export default function ClinicAnalytics({ isVisible }: ClinicAnalyticsProps) {
       )}
 
       {(isVisible('dept_combination_bars') || isVisible('revenue_per_patient')) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
+        <div className={`grid grid-cols-1 ${isVisible('dept_combination_bars') && isVisible('revenue_per_patient') ? 'lg:grid-cols-2' : ''} gap-5 mb-6`}>
           {isVisible('dept_combination_bars') && (
             <div className="card">
               <h3 className="text-sm font-semibold text-theme-heading mb-1">Department Combinations</h3>
@@ -205,7 +209,7 @@ export default function ClinicAnalytics({ isVisible }: ClinicAnalyticsProps) {
 
       {/* Section C — Cross-Sell Analysis */}
       {(isVisible('cross_sell_funnel') || isVisible('patient_flow_sankey')) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
+        <div className={`grid grid-cols-1 ${isVisible('cross_sell_funnel') && isVisible('patient_flow_sankey') ? 'lg:grid-cols-2' : ''} gap-5 mb-6`}>
           {isVisible('cross_sell_funnel') && (
             <div className="card">
               <h3 className="text-sm font-semibold text-theme-heading mb-1">Cross-Sell Funnel</h3>
@@ -261,7 +265,7 @@ export default function ClinicAnalytics({ isVisible }: ClinicAnalyticsProps) {
 
       {/* Doctor Cross-Sell */}
       {(isVisible('doctor_cross_sell_rate') || isVisible('doctor_stacked_bar')) && doctorCrossSell.length > 0 && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
+        <div className={`grid grid-cols-1 ${isVisible('doctor_cross_sell_rate') && isVisible('doctor_stacked_bar') ? 'lg:grid-cols-2' : ''} gap-5 mb-6`}>
           {isVisible('doctor_cross_sell_rate') && (
             <div className="card">
               <h3 className="text-sm font-semibold text-theme-heading mb-1">Doctor Cross-Sell Rate</h3>
