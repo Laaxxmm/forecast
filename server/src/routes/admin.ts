@@ -605,6 +605,55 @@ router.delete('/clients/:slug/dashboard-cards/:id', async (req: Request, res: Re
   res.json({ ok: true });
 });
 
+// ─── Dashboard Visibility (Charts/Tables) ───────────────────────────────────
+
+router.get('/clients/:slug/dashboard-visibility', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  const cards = db.all('SELECT * FROM dashboard_cards WHERE client_id = ? ORDER BY sort_order, id', client.id);
+  const chartElements = db.all('SELECT * FROM dashboard_chart_visibility WHERE client_id = ? ORDER BY sort_order, id', client.id);
+  const streams = db.all('SELECT id, name FROM business_streams WHERE client_id = ? AND is_active = 1 ORDER BY sort_order', client.id);
+
+  // Build scoped response
+  const scopes: Record<string, { cards: any[]; charts: any[]; tables: any[] }> = {};
+
+  // Total scope
+  scopes['total'] = {
+    cards: cards.filter(c => c.card_type === 'total' || c.card_type === 'custom'),
+    charts: chartElements.filter(e => e.scope === 'total' && e.section === 'charts'),
+    tables: chartElements.filter(e => e.scope === 'total' && e.section === 'tables'),
+  };
+
+  // Per-stream scopes
+  for (const stream of streams) {
+    const sid = String(stream.id);
+    scopes[sid] = {
+      cards: cards.filter(c => c.card_type === 'stream' && c.stream_id === stream.id),
+      charts: chartElements.filter(e => e.scope === sid && e.section === 'charts'),
+      tables: chartElements.filter(e => e.scope === sid && e.section === 'tables'),
+    };
+  }
+
+  res.json({ scopes, streams });
+});
+
+router.put('/clients/:slug/dashboard-visibility/charts/:id', async (req: Request, res: Response) => {
+  const db = await getPlatformHelper();
+  const elementId = parseInt(req.params.id);
+  const { is_visible } = req.body;
+
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  const element = db.get('SELECT * FROM dashboard_chart_visibility WHERE id = ? AND client_id = ?', [elementId, client.id]);
+  if (!element) return res.status(404).json({ error: 'Element not found' });
+
+  db.run('UPDATE dashboard_chart_visibility SET is_visible = ? WHERE id = ?', [is_visible ? 1 : 0, elementId]);
+  res.json({ ok: true });
+});
+
 // ─── Branch Management ────────────────────────────────────────────────────────
 
 router.get('/clients/:slug/branches', async (req: Request, res: Response) => {

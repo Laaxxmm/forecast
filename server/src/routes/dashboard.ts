@@ -30,6 +30,12 @@ router.get('/overview', async (req, res) => {
     req.clientId
   );
 
+  // Get chart visibility settings
+  const chartVisibility = platformDb.all(
+    'SELECT scope, element_key, is_visible FROM dashboard_chart_visibility WHERE client_id = ?',
+    req.clientId
+  );
+
   const scenario = db.get(
     `SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where} LIMIT 1`,
     fy.id, ...bf.params
@@ -215,7 +221,7 @@ router.get('/overview', async (req, res) => {
   }
 
   res.json({
-    fy, streams, cards: filteredCards,
+    fy, streams, cards: filteredCards, chartVisibility,
     combined: { total_revenue: combinedRevenue, total_budget: combinedBudget },
   });
 });

@@ -83,6 +83,15 @@ export default function DashboardPage() {
 
   const streams: any[] = data.streams || [];
 
+  // Chart visibility helper
+  const chartVis = data.chartVisibility || [];
+  const isChartVisible = (key: string) => {
+    const entry = chartVis.find((v: any) => v.element_key === key && v.scope === 'total');
+    return entry ? !!entry.is_visible : true; // default visible if no config
+  };
+  const showTrend = isChartVisible('monthly_revenue_trend');
+  const showPie = isChartVisible('revenue_split');
+
   // Build monthly trend data from stream monthly breakdowns
   const monthlyMap: Record<string, any> = {};
   for (const stream of streams) {
@@ -169,71 +178,77 @@ export default function DashboardPage() {
       </div>
 
       {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-6">
-        <div className="card lg:col-span-2">
-          <h3 className="text-sm font-semibold text-theme-heading mb-1">Monthly Revenue Trend</h3>
-          <p className="text-xs text-theme-faint mb-6">Revenue breakdown by stream</p>
-          {trendData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={trendData} barGap={2}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" vertical={false} />
-                <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                <Tooltip
-                  formatter={(v: number) => formatINR(v)}
-                  contentStyle={{ backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '12px' }}
-                  labelStyle={{ color: '#94a3b8' }}
-                />
-                <Legend />
-                {streams.map((stream: any, i: number) => {
-                  const key = stream.name.toLowerCase().replace(/\s+/g, '_');
-                  return (
-                    <Bar key={stream.id} dataKey={key} name={stream.name} fill={BAR_COLORS[i % BAR_COLORS.length]} radius={[6, 6, 0, 0]} />
-                  );
-                })}
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="flex items-center justify-center h-[300px] text-theme-faint">
-              <div className="text-center">
-                <Activity size={32} className="mx-auto mb-2" />
-                <p className="text-sm">Import data to see trends</p>
-              </div>
+      {(showTrend || showPie) && (
+        <div className={`grid grid-cols-1 ${showTrend && showPie ? 'lg:grid-cols-3' : ''} gap-5 mb-6`}>
+          {showTrend && (
+            <div className={`card ${showPie ? 'lg:col-span-2' : ''}`}>
+              <h3 className="text-sm font-semibold text-theme-heading mb-1">Monthly Revenue Trend</h3>
+              <p className="text-xs text-theme-faint mb-6">Revenue breakdown by stream</p>
+              {trendData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={trendData} barGap={2}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                    <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                    <Tooltip
+                      formatter={(v: number) => formatINR(v)}
+                      contentStyle={{ backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '12px' }}
+                      labelStyle={{ color: '#94a3b8' }}
+                    />
+                    <Legend />
+                    {streams.map((stream: any, i: number) => {
+                      const key = stream.name.toLowerCase().replace(/\s+/g, '_');
+                      return (
+                        <Bar key={stream.id} dataKey={key} name={stream.name} fill={BAR_COLORS[i % BAR_COLORS.length]} radius={[6, 6, 0, 0]} />
+                      );
+                    })}
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex items-center justify-center h-[300px] text-theme-faint">
+                  <div className="text-center">
+                    <Activity size={32} className="mx-auto mb-2" />
+                    <p className="text-sm">Import data to see trends</p>
+                  </div>
+                </div>
+              )}
             </div>
           )}
-        </div>
 
-        <div className="card">
-          <h3 className="text-sm font-semibold text-theme-heading mb-1">Revenue Split</h3>
-          <p className="text-xs text-theme-faint mb-6">By stream</p>
-          {pieData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={95}
-                  dataKey="value"
-                  strokeWidth={0}
-                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                >
-                  {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                </Pie>
-                <Tooltip
-                  formatter={(v: number) => formatINR(v)}
-                  contentStyle={{ backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '12px' }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="flex items-center justify-center h-[300px] text-theme-faint">
-              <p className="text-sm">No data</p>
+          {showPie && (
+            <div className="card">
+              <h3 className="text-sm font-semibold text-theme-heading mb-1">Revenue Split</h3>
+              <p className="text-xs text-theme-faint mb-6">By stream</p>
+              {pieData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie
+                      data={pieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={95}
+                      dataKey="value"
+                      strokeWidth={0}
+                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                    >
+                      {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                    </Pie>
+                    <Tooltip
+                      formatter={(v: number) => formatINR(v)}
+                      contentStyle={{ backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '12px' }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex items-center justify-center h-[300px] text-theme-faint">
+                  <p className="text-sm">No data</p>
+                </div>
+              )}
             </div>
           )}
         </div>
-      </div>
+      )}
     </div>
   );
 }

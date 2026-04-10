@@ -136,6 +136,19 @@ export function initializePlatformSchema(db: DbHelper) {
       created_at TEXT DEFAULT (datetime('now')),
       UNIQUE(client_id, card_type, stream_id)
     );
+
+    -- Dashboard chart/table visibility per client
+    CREATE TABLE IF NOT EXISTS dashboard_chart_visibility (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id INTEGER NOT NULL REFERENCES clients(id),
+      scope TEXT NOT NULL,
+      section TEXT NOT NULL DEFAULT 'charts',
+      element_key TEXT NOT NULL,
+      element_label TEXT NOT NULL,
+      is_visible INTEGER DEFAULT 1,
+      sort_order INTEGER DEFAULT 0,
+      UNIQUE(client_id, scope, section, element_key)
+    );
   `);
 
   // Safe migrations for existing DBs
@@ -171,6 +184,22 @@ export function initializePlatformSchema(db: DbHelper) {
     streams.forEach((s: any, i: number) => {
       db.run('INSERT OR IGNORE INTO dashboard_cards (client_id, card_type, stream_id, title, icon, color, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
         [c.client_id, 'stream', s.id, s.name, s.icon, s.color, i + 1]);
+    });
+  }
+
+  // Backfill dashboard_chart_visibility for existing clients
+  const allClients = db.all('SELECT id FROM clients');
+  for (const c of allClients) {
+    // Total scope charts
+    db.run('INSERT OR IGNORE INTO dashboard_chart_visibility (client_id, scope, section, element_key, element_label, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+      [c.id, 'total', 'charts', 'monthly_revenue_trend', 'Monthly Revenue Trend', 0]);
+    db.run('INSERT OR IGNORE INTO dashboard_chart_visibility (client_id, scope, section, element_key, element_label, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+      [c.id, 'total', 'charts', 'revenue_split', 'Revenue Split', 1]);
+    // Per-stream charts
+    const streams = db.all('SELECT * FROM business_streams WHERE client_id = ? ORDER BY sort_order', c.id);
+    streams.forEach((s: any, i: number) => {
+      db.run('INSERT OR IGNORE INTO dashboard_chart_visibility (client_id, scope, section, element_key, element_label, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+        [c.id, String(s.id), 'charts', 'stream_in_trend', `${s.name} in Trend Chart`, i]);
     });
   }
 }
