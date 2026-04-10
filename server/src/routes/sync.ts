@@ -196,6 +196,11 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async
     if (activeScenario) {
       // Aggregate clinic revenue into dashboard_actuals (branch-scoped)
       const bf = branchFilter(req);
+      // Clear old Clinic Revenue entries before re-syncing (prevents stale month data)
+      db.run(
+        `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Clinic Revenue'${bf.where}`,
+        activeScenario.id, ...bf.params
+      );
       const clinicMonthly = db.all(
         `SELECT bill_month as month, COALESCE(SUM(item_price), 0) as total
          FROM clinic_actuals WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where} GROUP BY bill_month`,
@@ -399,6 +404,15 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
          WHERE fy.is_active = 1 AND s.is_default = 1 LIMIT 1`
       );
       if (activeScenario) {
+        // Clear old Pharmacy Revenue/COGS entries before re-syncing (prevents stale month data)
+        db.run(
+          `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Pharmacy Revenue'${bf.where}`,
+          activeScenario.id, ...bf.params
+        );
+        db.run(
+          `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'direct_costs' AND item_name = 'Pharmacy COGS'${bf.where}`,
+          activeScenario.id, ...bf.params
+        );
         const pharmaMonthly = db.all(
           `SELECT bill_month as month, COALESCE(SUM(sales_amount), 0) as revenue,
                   COALESCE(SUM(purchase_amount), 0) as cogs

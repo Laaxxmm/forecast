@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { parseExcelDate, dateToMonth } from '../../utils/fy.js';
+import { parseExcelDate, dateToMonth, detectDateFormat } from '../../utils/fy.js';
 
 export interface TuriaInvoiceRow {
   invoice_id: string | null;
@@ -91,9 +91,16 @@ export function parseTuriaInvoices(filePath: string): {
   }
 
   const warnings: string[] = [];
-  if (!headerMap[Object.keys(headerMap).find(k => headerMap[k] === 'invoice_date') || '']) {
+  const dateHeaderKey = Object.keys(headerMap).find(k => headerMap[k] === 'invoice_date');
+  if (!dateHeaderKey) {
     warnings.push('Invoice date column not found — months may be incorrect');
   }
+
+  // Detect date format from all dates in the file (DD/MM vs MM/DD)
+  const allRawDates = dateHeaderKey
+    ? (rawRows as Record<string, any>[]).map(r => r[dateHeaderKey]).filter(Boolean)
+    : [];
+  const dateFormat = detectDateFormat(allRawDates);
 
   const rows: TuriaInvoiceRow[] = [];
   let minDate: string | null = null;
@@ -106,8 +113,8 @@ export function parseTuriaInvoices(filePath: string): {
       mapped[dbKey] = raw[origKey];
     }
 
-    const invoiceDate = parseExcelDate(mapped.invoice_date);
-    const invoiceMonth = dateToMonth(mapped.invoice_date) || '';
+    const invoiceDate = parseExcelDate(mapped.invoice_date, dateFormat);
+    const invoiceMonth = dateToMonth(mapped.invoice_date, dateFormat) || '';
 
     if (!invoiceMonth && !mapped.client_name && !mapped.invoice_id) {
       continue; // Skip empty rows
@@ -125,7 +132,7 @@ export function parseTuriaInvoices(filePath: string): {
       sac_code: str(mapped.sac_code),
       invoice_date: invoiceDate,
       invoice_month: invoiceMonth,
-      due_date: parseExcelDate(mapped.due_date),
+      due_date: parseExcelDate(mapped.due_date, dateFormat),
       total_amount: amount,
       status: str(mapped.status),
     };

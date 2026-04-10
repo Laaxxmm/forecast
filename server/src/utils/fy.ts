@@ -19,7 +19,27 @@ export function monthToFY(month: string): { startYear: number; label: string } {
   return { startYear, label: getFYLabel(startYear) };
 }
 
-export function parseExcelDate(raw: any): string | null {
+/**
+ * Scan an array of raw date values from a file and detect whether the format
+ * is DD/MM/YYYY ('dmy') or MM/DD/YYYY ('mdy'). Works by finding any date
+ * where one number is unambiguously > 12 (must be a day).
+ * Falls back to 'dmy' (Indian standard) when all dates are ambiguous.
+ */
+export function detectDateFormat(rawDates: any[]): 'dmy' | 'mdy' {
+  for (const raw of rawDates) {
+    if (raw == null || raw === '' || typeof raw === 'number' || raw instanceof Date) continue;
+    const str = String(raw).trim();
+    const match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+    if (!match) continue;
+    const a = parseInt(match[1]);
+    const b = parseInt(match[2]);
+    if (a > 12 && b <= 12) return 'dmy'; // First > 12 must be day → DD/MM/YYYY
+    if (b > 12 && a <= 12) return 'mdy'; // Second > 12 must be day → MM/DD/YYYY
+  }
+  return 'dmy'; // Default: DD/MM/YYYY (Indian standard)
+}
+
+export function parseExcelDate(raw: any, format: 'dmy' | 'mdy' = 'dmy'): string | null {
   if (raw == null || raw === '') return null;
 
   // Handle JavaScript Date objects (e.g. from XLSX cellDates option)
@@ -42,31 +62,33 @@ export function parseExcelDate(raw: any): string | null {
   }
 
   // Two-part date: A/B/YYYY or A-B-YYYY
-  // Could be DD/MM/YYYY (Indian) or MM/DD/YYYY (US Excel default)
-  // Disambiguate using value ranges
+  // Disambiguate using value ranges first, then fall back to file-level format
   const match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
   if (match) {
     const [, a, b, y] = match;
     const numA = parseInt(a);
     const numB = parseInt(b);
 
-    // If first number > 12, it MUST be a day → DD/MM/YYYY
+    // If unambiguous from this single value, override file format
     if (numA > 12 && numB <= 12) {
-      return `${y}-${b.padStart(2, '0')}-${a.padStart(2, '0')}`;
+      return `${y}-${b.padStart(2, '0')}-${a.padStart(2, '0')}`; // DD/MM
     }
-    // If second number > 12, it MUST be a day → MM/DD/YYYY
     if (numB > 12 && numA <= 12) {
-      return `${y}-${a.padStart(2, '0')}-${b.padStart(2, '0')}`;
+      return `${y}-${a.padStart(2, '0')}-${b.padStart(2, '0')}`; // MM/DD
     }
-    // Both ≤ 12: ambiguous — default to DD/MM/YYYY (Indian standard)
-    return `${y}-${b.padStart(2, '0')}-${a.padStart(2, '0')}`;
+
+    // Both ≤ 12: use file-level detected format
+    if (format === 'mdy') {
+      return `${y}-${a.padStart(2, '0')}-${b.padStart(2, '0')}`; // MM/DD/YYYY
+    }
+    return `${y}-${b.padStart(2, '0')}-${a.padStart(2, '0')}`; // DD/MM/YYYY
   }
 
   return null;
 }
 
-export function dateToMonth(raw: any): string | null {
-  const date = parseExcelDate(raw);
+export function dateToMonth(raw: any, format: 'dmy' | 'mdy' = 'dmy'): string | null {
+  const date = parseExcelDate(raw, format);
   if (!date) return null;
   return date.slice(0, 7);
 }

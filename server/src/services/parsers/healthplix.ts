@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { parseExcelDate, dateToMonth } from '../../utils/fy.js';
+import { parseExcelDate, dateToMonth, detectDateFormat } from '../../utils/fy.js';
 
 interface HealthplixRow {
   bill_date: string | null;
@@ -77,6 +77,14 @@ export function parseHealthplix(filePath: string) {
 
   const rows: HealthplixRow[] = [];
   const warnings: string[] = [];
+
+  // Detect date format from all dates in the file (DD/MM vs MM/DD)
+  const dateColIdx = Object.entries(colMapping).find(([_, v]) => v === 'bill_date')?.[0];
+  const allRawDates = dateColIdx
+    ? rawData.slice(headerRowIdx + 1).map(r => r ? r[parseInt(dateColIdx)] : null).filter(Boolean)
+    : [];
+  const dateFormat = detectDateFormat(allRawDates);
+
   let lastDate: string | null = null;
   let lastMonth: string | null = null;
   let lastPatientId: string | null = null;
@@ -95,8 +103,8 @@ export function parseHealthplix(filePath: string) {
     };
 
     const billDateRaw = get('bill_date');
-    const billDate = parseExcelDate(billDateRaw);
-    const billMonth = dateToMonth(billDateRaw);
+    const billDate = parseExcelDate(billDateRaw, dateFormat);
+    const billMonth = dateToMonth(billDateRaw, dateFormat);
 
     // Carry forward date/patient for multi-row bills
     const currentDate = billDate || lastDate;

@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { parseExcelDate, dateToMonth } from '../../utils/fy.js';
+import { parseExcelDate, dateToMonth, detectDateFormat } from '../../utils/fy.js';
 
 interface SalesRow {
   bill_no: string | null;
@@ -75,6 +75,13 @@ export function parseOneglanceSales(filePath: string) {
   const rows: SalesRow[] = [];
   const warnings: string[] = [];
 
+  // Detect date format from all dates in the file (DD/MM vs MM/DD)
+  const dateColIdx = Object.entries(colMapping).find(([_, v]) => v === 'bill_date')?.[0];
+  const allRawDates = dateColIdx
+    ? rawData.slice(headerRowIdx + 1).map(r => r ? r[parseInt(dateColIdx)] : null).filter(Boolean)
+    : [];
+  const dateFormat = detectDateFormat(allRawDates);
+
   for (let i = headerRowIdx + 1; i < rawData.length; i++) {
     const raw = rawData[i];
     if (!raw || raw.every((c: any) => c == null || c === '')) continue;
@@ -86,7 +93,7 @@ export function parseOneglanceSales(filePath: string) {
       return null;
     };
 
-    const billMonth = dateToMonth(get('bill_date'));
+    const billMonth = dateToMonth(get('bill_date'), dateFormat);
     if (!billMonth) {
       warnings.push(`Row ${i + 1}: Could not determine month, skipping`);
       continue;
@@ -100,7 +107,7 @@ export function parseOneglanceSales(filePath: string) {
 
     rows.push({
       bill_no: get('bill_no') != null ? String(get('bill_no')) : null,
-      bill_date: parseExcelDate(get('bill_date')),
+      bill_date: parseExcelDate(get('bill_date'), dateFormat),
       bill_month: billMonth,
       drug_name: get('drug_name') ? String(get('drug_name')) : null,
       batch_no: get('batch_no') ? String(get('batch_no')) : null,

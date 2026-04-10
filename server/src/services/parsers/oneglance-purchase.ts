@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { parseExcelDate, dateToMonth } from '../../utils/fy.js';
+import { parseExcelDate, dateToMonth, detectDateFormat } from '../../utils/fy.js';
 
 interface PurchaseRow {
   invoice_no: string | null;
@@ -85,6 +85,13 @@ export function parseOneglancePurchase(filePath: string) {
   const rows: PurchaseRow[] = [];
   const warnings: string[] = [];
 
+  // Detect date format from all dates in the file (DD/MM vs MM/DD)
+  const dateColIdx = Object.entries(colMapping).find(([_, v]) => v === 'invoice_date')?.[0];
+  const allRawDates = dateColIdx
+    ? rawData.slice(headerRowIdx + 1).map(r => r ? r[parseInt(dateColIdx)] : null).filter(Boolean)
+    : [];
+  const dateFormat = detectDateFormat(allRawDates);
+
   for (let i = headerRowIdx + 1; i < rawData.length; i++) {
     const raw = rawData[i];
     if (!raw || raw.every((c: any) => c == null || c === '')) continue;
@@ -96,7 +103,7 @@ export function parseOneglancePurchase(filePath: string) {
       return null;
     };
 
-    const invoiceMonth = dateToMonth(get('invoice_date'));
+    const invoiceMonth = dateToMonth(get('invoice_date'), dateFormat);
     if (!invoiceMonth) {
       warnings.push(`Row ${i + 1}: Could not determine month, skipping`);
       continue;
@@ -110,7 +117,7 @@ export function parseOneglancePurchase(filePath: string) {
 
     rows.push({
       invoice_no: get('invoice_no') != null ? String(get('invoice_no')) : null,
-      invoice_date: parseExcelDate(get('invoice_date')),
+      invoice_date: parseExcelDate(get('invoice_date'), dateFormat),
       invoice_month: invoiceMonth,
       stockiest_name: get('stockiest_name') ? String(get('stockiest_name')) : null,
       mfg_name: get('mfg_name') ? String(get('mfg_name')) : null,
