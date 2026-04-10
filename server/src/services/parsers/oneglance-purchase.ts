@@ -55,7 +55,7 @@ export function parseOneglancePurchase(filePath: string) {
   const workbook = XLSX.readFile(filePath);
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
-  const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null }) as any[][];
+  const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true }) as any[][];
 
   let headerRowIdx = -1;
   let colMapping: Record<number, string> = {};

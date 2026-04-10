@@ -78,6 +78,11 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), uploa
       ...bf.params
     );
     if (activeScenario) {
+      // Clear old Clinic Revenue entries before re-syncing (prevents stale month data)
+      db.run(
+        `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Clinic Revenue'${bf.where}`,
+        activeScenario.id, ...bf.params
+      );
       const clinicMonthly = db.all(
         `SELECT bill_month as month, COALESCE(SUM(item_price), 0) as total
          FROM clinic_actuals WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where} GROUP BY bill_month`,
@@ -139,6 +144,11 @@ router.post('/oneglance-sales', requireAdmin, requireIntegration('oneglance'), u
       ...bf.params
     );
     if (activeScenario) {
+      // Clear old Pharmacy Revenue entries before re-syncing (prevents stale month data)
+      db.run(
+        `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Pharmacy Revenue'${bf.where}`,
+        activeScenario.id, ...bf.params
+      );
       const pharmaMonthly = db.all(
         `SELECT bill_month as month, COALESCE(SUM(sales_amount), 0) as total
          FROM pharmacy_sales_actuals WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where} GROUP BY bill_month`,
@@ -235,6 +245,11 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), upload.single('
       ...bf.params
     );
     if (activeScenario) {
+      // Clear old Consultancy Revenue entries before re-syncing (prevents stale month data)
+      db.run(
+        `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Consultancy Revenue'${bf.where}`,
+        activeScenario.id, ...bf.params
+      );
       const turiaMonthly = db.all(
         `SELECT invoice_month as month, COALESCE(SUM(total_amount), 0) as total
          FROM turia_invoices WHERE invoice_month IS NOT NULL AND invoice_month != ''${bf.where}
@@ -269,11 +284,79 @@ router.get('/history', async (req, res) => {
 
 router.delete('/:id', requireAdmin, async (req, res) => {
   const db = req.tenantDb!;
+  const bf = branchFilter(req);
+
+  // Delete source rows for this import
   db.run('DELETE FROM clinic_actuals WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM pharmacy_sales_actuals WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM pharmacy_purchase_actuals WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM turia_invoices WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM import_logs WHERE id = ?', req.params.id);
+
+  // Re-sync dashboard_actuals from remaining source data
+  const activeScenario = db.get(
+    `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
+     WHERE fy.is_active = 1 AND s.is_default = 1${bf.where} LIMIT 1`,
+    ...bf.params
+  );
+  if (activeScenario) {
+    const branchId = getBranchIdForInsert(req);
+
+    // Clear all revenue entries then rebuild from remaining source data
+    db.run(
+      `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue'${bf.where}`,
+      activeScenario.id, ...bf.params
+    );
+
+    // Re-sync Clinic Revenue from remaining data
+    const clinicStreamId = await resolveStreamId(req, 'clinic');
+    const clinicMonthly = db.all(
+      `SELECT bill_month as month, COALESCE(SUM(item_price), 0) as total
+       FROM clinic_actuals WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where} GROUP BY bill_month`,
+      ...bf.params
+    );
+    for (const row of clinicMonthly) {
+      if (!row.month) continue;
+      db.run(
+        `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+         VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, ?, datetime('now'))`,
+        activeScenario.id, row.month, row.total, branchId, clinicStreamId
+      );
+    }
+
+    // Re-sync Pharmacy Revenue from remaining data
+    const pharmaStreamId = await resolveStreamId(req, 'pharmacy');
+    const pharmaMonthly = db.all(
+      `SELECT bill_month as month, COALESCE(SUM(sales_amount), 0) as total
+       FROM pharmacy_sales_actuals WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where} GROUP BY bill_month`,
+      ...bf.params
+    );
+    for (const row of pharmaMonthly) {
+      if (!row.month) continue;
+      db.run(
+        `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+         VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?, ?, datetime('now'))`,
+        activeScenario.id, row.month, row.total, branchId, pharmaStreamId
+      );
+    }
+
+    // Re-sync Consultancy Revenue from remaining data
+    const consultStreamId = await resolveStreamId(req, 'consultancy');
+    const turiaMonthly = db.all(
+      `SELECT invoice_month as month, COALESCE(SUM(total_amount), 0) as total
+       FROM turia_invoices WHERE invoice_month IS NOT NULL AND invoice_month != ''${bf.where} GROUP BY invoice_month`,
+      ...bf.params
+    );
+    for (const row of turiaMonthly) {
+      if (!row.month) continue;
+      db.run(
+        `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+         VALUES (?, 'revenue', 'Consultancy Revenue', ?, ?, ?, ?, datetime('now'))`,
+        activeScenario.id, row.month, row.total, branchId, consultStreamId
+      );
+    }
+  }
+
   res.json({ ok: true });
 });
 

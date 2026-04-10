@@ -22,7 +22,13 @@ export function monthToFY(month: string): { startYear: number; label: string } {
 export function parseExcelDate(raw: any): string | null {
   if (raw == null || raw === '') return null;
 
-  // Excel serial number
+  // Handle JavaScript Date objects (e.g. from XLSX cellDates option)
+  if (raw instanceof Date) {
+    if (isNaN(raw.getTime())) return null;
+    return formatDate(raw);
+  }
+
+  // Excel serial number — unambiguous, always correct
   if (typeof raw === 'number') {
     const date = new Date((raw - 25569) * 86400 * 1000);
     return formatDate(date);
@@ -30,16 +36,30 @@ export function parseExcelDate(raw: any): string | null {
 
   const str = String(raw).trim();
 
-  // ISO format or Date object string
+  // ISO format: YYYY-MM-DD...
   if (str.match(/^\d{4}-\d{2}-\d{2}/)) {
     return str.slice(0, 10);
   }
 
-  // DD-MM-YYYY or DD/MM/YYYY
+  // Two-part date: A/B/YYYY or A-B-YYYY
+  // Could be DD/MM/YYYY (Indian) or MM/DD/YYYY (US Excel default)
+  // Disambiguate using value ranges
   const match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
   if (match) {
-    const [, d, m, y] = match;
-    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    const [, a, b, y] = match;
+    const numA = parseInt(a);
+    const numB = parseInt(b);
+
+    // If first number > 12, it MUST be a day → DD/MM/YYYY
+    if (numA > 12 && numB <= 12) {
+      return `${y}-${b.padStart(2, '0')}-${a.padStart(2, '0')}`;
+    }
+    // If second number > 12, it MUST be a day → MM/DD/YYYY
+    if (numB > 12 && numA <= 12) {
+      return `${y}-${a.padStart(2, '0')}-${b.padStart(2, '0')}`;
+    }
+    // Both ≤ 12: ambiguous — default to DD/MM/YYYY (Indian standard)
+    return `${y}-${b.padStart(2, '0')}-${a.padStart(2, '0')}`;
   }
 
   return null;

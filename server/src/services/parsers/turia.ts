@@ -74,7 +74,7 @@ export function parseTuriaInvoices(filePath: string): {
   const workbook = XLSX.readFile(filePath);
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
-  const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: true });
 
   if (rawRows.length === 0) {
     throw new Error('No data found in the uploaded file');
