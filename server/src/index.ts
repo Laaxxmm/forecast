@@ -76,6 +76,11 @@ app.use(session({
   },
 }));
 
+// ─── Health check (no auth, always responds) ──────────────────────────────────
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true, uptime: process.uptime(), ts: new Date().toISOString() });
+});
+
 // ─── Auth (no tenant needed — login determines tenant) ──────────────────────
 app.use('/api/auth', authRoutes);
 
