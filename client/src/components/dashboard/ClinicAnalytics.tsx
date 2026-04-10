@@ -192,7 +192,8 @@ export default function ClinicAnalytics({ isVisible }: ClinicAnalyticsProps) {
                       const mult = baseAvg > 0 ? (value / baseAvg).toFixed(1) : '1.0';
                       return mult !== '1.0' ? (
                         <text x={x + width / 2} y={y - 8} textAnchor="middle" fill="#f59e0b" fontSize={11} fontWeight="bold">{mult}x</text>
-                      ) : null;
+                      ) : <></>;
+
                     }}
                   />
                 </BarChart>
