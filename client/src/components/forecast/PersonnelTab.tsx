@@ -159,10 +159,12 @@ export default function PersonnelTab({ category, label, scenario, months, items,
   const handleAddWithType = async (itemType: string) => {
     if (!scenario) return;
     try {
+      const itemName = pendingInlineName.current || 'New Employee';
+      pendingInlineName.current = '';
       const res = await api.post('/forecast-module/items', {
         scenario_id: scenario.id,
         category,
-        name: 'New Employee',
+        name: itemName,
         item_type: itemType,
         entry_mode: 'varying',
         start_month: months[0],
@@ -205,22 +207,17 @@ export default function PersonnelTab({ category, label, scenario, months, items,
     await onReload();
   };
 
-  const handleInlineAdd = async () => {
-    if (!inlineAddName.trim() || !scenario) return;
-    const res = await api.post('/forecast-module/items', {
-      scenario_id: scenario.id,
-      category,
-      name: inlineAddName.trim(),
-      item_type: 'individual',
-      entry_mode: 'varying',
-      start_month: months[0],
-      meta: { labor_type: 'regular_labor', staffing_type: 'on_staff' },
-    });
+  const handleInlineAdd = () => {
+    if (!inlineAddName.trim()) return;
+    // Route through type selection instead of defaulting to individual
+    pendingLaborType.current = 'direct_labor';
+    pendingInlineName.current = inlineAddName.trim();
     setShowInlineAdd(false);
     setInlineAddName('');
-    await onReload();
-    if (res.data?.id) setEditingItem(res.data);
+    setShowTypeSelection(true);
   };
+
+  const pendingInlineName = useRef('');
 
   // Type selection for individual vs group
   if (showTypeSelection) {

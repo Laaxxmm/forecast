@@ -935,7 +935,24 @@ export default function ItemEditForm({ item, category, months, values: initialVa
         ) : isExpense ? (
           <select
             value={itemType}
-            onChange={e => setItemType(e.target.value)}
+            onChange={e => {
+              const newType = e.target.value;
+              setItemType(newType);
+              // Reset step values when switching expense type since step keys change
+              const newTypeDef = TYPE_DEFS[newType] || TYPE_DEFS.other;
+              const newModes: Record<string, string> = {};
+              const newConstants: Record<string, { amount: number; period: string; startMonth: string }> = {};
+              const newValues: Record<string, Record<string, number>> = {};
+              newTypeDef.steps.forEach(s => {
+                newModes[s.key] = s.defaultEntryMode;
+                newConstants[s.key] = { amount: 0, period: 'month', startMonth: months[0] };
+                newValues[s.key] = {};
+              });
+              setStepEntryModes(newModes);
+              setStepConstants(newConstants);
+              setStepValues(newValues);
+              setActiveStepIdx(0);
+            }}
             className="input text-sm w-auto py-1.5"
           >
             {expenseTypes.map(t => (
@@ -946,8 +963,23 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           <select
             value={itemType}
             onChange={e => {
-              setItemType(e.target.value);
-              setAssetUsefulLife(e.target.value === 'long_term' ? 'forever' : 'full');
+              const newType = e.target.value;
+              setItemType(newType);
+              // Reset step values when switching asset type since step keys change
+              const newTypeDef = TYPE_DEFS[newType] || TYPE_DEFS.long_term;
+              const newModes: Record<string, string> = {};
+              const newConstants: Record<string, { amount: number; period: string; startMonth: string }> = {};
+              const newValues: Record<string, Record<string, number>> = {};
+              newTypeDef.steps.forEach(s => {
+                newModes[s.key] = s.defaultEntryMode;
+                newConstants[s.key] = { amount: 0, period: 'month', startMonth: months[0] };
+                newValues[s.key] = {};
+              });
+              setStepEntryModes(newModes);
+              setStepConstants(newConstants);
+              setStepValues(newValues);
+              setActiveStepIdx(0);
+              setAssetUsefulLife(newType === 'long_term' ? 'forever' : 'full');
               setAssetPlanToSell(false);
             }}
             className="input text-sm w-auto py-1.5"
@@ -977,7 +1009,24 @@ export default function ItemEditForm({ item, category, months, values: initialVa
               <label className="text-xs font-medium text-theme-faint mb-1 block">Personnel Type</label>
               <select
                 value={itemType}
-                onChange={e => setItemType(e.target.value)}
+                onChange={e => {
+                  const newType = e.target.value;
+                  setItemType(newType);
+                  // Reset step values when switching personnel type since step keys change
+                  const newTypeDef = TYPE_DEFS[newType] || TYPE_DEFS.individual;
+                  const newModes: Record<string, string> = {};
+                  const newConstants: Record<string, { amount: number; period: string; startMonth: string }> = {};
+                  const newValues: Record<string, Record<string, number>> = {};
+                  newTypeDef.steps.forEach(s => {
+                    newModes[s.key] = s.defaultEntryMode;
+                    newConstants[s.key] = { amount: 0, period: 'month', startMonth: months[0] };
+                    newValues[s.key] = {};
+                  });
+                  setStepEntryModes(newModes);
+                  setStepConstants(newConstants);
+                  setStepValues(newValues);
+                  setActiveStepIdx(0);
+                }}
                 className="input text-sm"
               >
                 <option value="individual">Individual</option>

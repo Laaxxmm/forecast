@@ -4,6 +4,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import api from '../../api/client';
 import { Scenario, ForecastItem, getMonthLabel, formatRs } from '../../pages/ForecastModulePage';
 import ItemEditForm from './ItemEditForm';
+import TypeSelectionScreen from './TypeSelectionScreen';
 import ItemRowMenu from './ItemRowMenu';
 
 interface Props {
@@ -20,10 +21,18 @@ interface Props {
   readOnly?: boolean;
 }
 
+const EXPENSE_TYPES = [
+  { value: 'rent', label: 'Rent or Lease', description: 'Office rent, facility lease, or other lease payments' },
+  { value: 'marketing', label: 'Marketing', description: 'Advertising, promotions, and marketing spend' },
+  { value: 'other', label: 'Other Expense', description: 'Utilities, insurance, office supplies, professional services, and other overhead costs' },
+];
+
 export default function ExpensesTab({ category, label, scenario, months, items, allItems, allValues, onReload, readOnly }: Props) {
   const [editingItem, setEditingItem] = useState<ForecastItem | null>(null);
+  const [showTypeSelection, setShowTypeSelection] = useState(false);
   const [showInlineAdd, setShowInlineAdd] = useState(false);
   const [inlineAddName, setInlineAddName] = useState('');
+  const [pendingName, setPendingName] = useState('');
 
   // Calculate totals per month
   const monthlyTotals = useMemo(() => {
@@ -42,17 +51,24 @@ export default function ExpensesTab({ category, label, scenario, months, items, 
     total: monthlyTotals[m] || 0,
   })), [monthlyTotals, months]);
 
-  const handleAdd = async () => {
+  const handleAdd = () => {
+    setPendingName('New Expense');
+    setShowTypeSelection(true);
+  };
+
+  const handleAddWithType = async (expenseType: string) => {
     if (!scenario) return;
     try {
       const res = await api.post('/forecast-module/items', {
         scenario_id: scenario.id,
         category,
-        name: 'New Expense',
-        item_type: 'other',
+        name: pendingName || 'New Expense',
+        item_type: expenseType,
         entry_mode: 'varying',
         start_month: months[0],
       });
+      setShowTypeSelection(false);
+      setPendingName('');
       await onReload();
       if (res.data?.id) {
         setEditingItem(res.data);
@@ -62,20 +78,12 @@ export default function ExpensesTab({ category, label, scenario, months, items, 
     }
   };
 
-  const handleInlineAdd = async () => {
-    if (!inlineAddName.trim() || !scenario) return;
-    const res = await api.post('/forecast-module/items', {
-      scenario_id: scenario.id,
-      category,
-      name: inlineAddName.trim(),
-      item_type: 'other',
-      entry_mode: 'varying',
-      start_month: months[0],
-    });
+  const handleInlineAdd = () => {
+    if (!inlineAddName.trim()) return;
+    setPendingName(inlineAddName.trim());
     setShowInlineAdd(false);
     setInlineAddName('');
-    await onReload();
-    if (res.data?.id) setEditingItem(res.data);
+    setShowTypeSelection(true);
   };
 
   const handleDuplicate = async (item: ForecastItem) => {
@@ -101,6 +109,19 @@ export default function ExpensesTab({ category, label, scenario, months, items, 
     }
     await onReload();
   };
+
+  // Type selection for new expenses
+  if (showTypeSelection) {
+    return (
+      <TypeSelectionScreen
+        title="Add Expense"
+        question="What type of expense?"
+        types={EXPENSE_TYPES}
+        onSelect={handleAddWithType}
+        onBack={() => { setShowTypeSelection(false); setPendingName(''); }}
+      />
+    );
+  }
 
   if (editingItem && !readOnly) {
     return (
