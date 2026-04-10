@@ -85,12 +85,11 @@ app.get('/api/health', async (_req, res) => {
     for (const c of clients) {
       try {
         const db = await getClientHelper(c.slug);
-        const fyCount = db.all('SELECT COUNT(*) as n FROM financial_years')[0]?.n || 0;
-        const scenCount = db.all('SELECT COUNT(*) as n FROM scenarios')[0]?.n || 0;
-        const budgetCount = db.all('SELECT COUNT(*) as n FROM budget_items')[0]?.n || 0;
-        const importCount = db.all('SELECT COUNT(*) as n FROM import_logs')[0]?.n || 0;
-        const dashCount = db.all('SELECT COUNT(*) as n FROM dashboard_actuals')[0]?.n || 0;
-        clientInfo.push({ slug: c.slug, fyCount, scenCount, budgetCount, importCount, dashCount });
+        const tables: Record<string, number> = {};
+        for (const t of ['financial_years','scenarios','budgets','forecast_items','import_logs','dashboard_actuals','clinic_actuals','pharmacy_sales_actuals','pharmacy_purchase_actuals','pharmacy_stock_actuals']) {
+          try { tables[t] = db.all(`SELECT COUNT(*) as n FROM ${t}`)[0]?.n || 0; } catch { tables[t] = -1; }
+        }
+        clientInfo.push({ slug: c.slug, tables });
       } catch (e: any) {
         clientInfo.push({ slug: c.slug, error: e.message });
       }
