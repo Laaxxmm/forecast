@@ -531,11 +531,12 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
       result: { totalRows },
     };
   } catch (err: any) {
+    console.error('[oneglance-sync] Error:', err.message || err);
     ogState.progress = {
       step: 'error',
-      message: isProd ? 'Sync failed' : (err.message || 'Sync failed'),
+      message: err.message || 'Sync failed',
       pct: 0,
-      error: isProd ? 'Sync failed' : err.message,
+      error: err.message || 'Sync failed',
     };
     ogState.activeSyncId = null;
   } finally {

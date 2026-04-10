@@ -294,56 +294,126 @@ async function downloadStockReport(
   const filePath = path.join(downloadDir, filename);
   let saved = false;
 
-  // Inspect the CSV button to understand its type and attributes
-  const csvBtnInfo = await page.evaluate(() => {
-    const allEls = document.querySelectorAll('a, button, input, span, div');
-    for (const el of allEls) {
-      const text = (el.textContent?.trim() || '').toLowerCase();
-      const val = (el as HTMLInputElement).value?.toLowerCase() || '';
-      // Match "csv" but exclude elements inside the data table
-      if ((text === 'csv' || val === 'csv') && !el.closest('table') && el.tagName !== 'SCRIPT') {
-        return {
-          tag: el.tagName.toLowerCase(),
-          href: (el as HTMLAnchorElement).href || '',
-          target: el.getAttribute('target') || '',
-          outerHTML: el.outerHTML.slice(0, 500),
-        };
+  // Log page diagnostic info for debugging
+  const pageInfo = await page.evaluate(() => {
+    const tables = document.querySelectorAll('table');
+    const hasJQuery = !!(window as any).jQuery || !!(window as any).$;
+    const hasDataTables = hasJQuery && typeof (window as any).jQuery?.fn?.dataTable === 'function';
+    const dtTables = hasDataTables ? (window as any).jQuery('table.dataTable').length : 0;
+    const allBtns: string[] = [];
+    document.querySelectorAll('a, button, input, span').forEach(el => {
+      const t = (el.textContent?.trim() || '').toLowerCase();
+      const v = (el as HTMLInputElement).value?.toLowerCase() || '';
+      if ((t === 'csv' || v === 'csv' || t.includes('export') || t.includes('download')) && !el.closest('table')) {
+        allBtns.push(`<${el.tagName.toLowerCase()} class="${el.className}">${t || v}`);
       }
-    }
-    return null;
+    });
+    return { tableCount: tables.length, hasJQuery, hasDataTables, dtTables, csvButtons: allBtns };
   });
-  console.log('[oneglance-sync] CSV button info:', JSON.stringify(csvBtnInfo));
+  console.log('[oneglance-sync] Page info:', JSON.stringify(pageInfo));
 
-  if (!csvBtnInfo) {
-    await debugScreenshot(page, '14-FAILED-csv-not-found');
-    throw new Error('CSV button not found on stock report page');
-  }
+  // ── Strategy A: DataTables API extraction (most reliable) ──
+  // DataTables stores ALL data in memory even when paginated — extract directly via API
+  if (!saved && pageInfo.hasDataTables && pageInfo.dtTables > 0) {
+    console.log('[oneglance-sync] Strategy A: extracting data via DataTables API...');
+    progress(opts, 'stock', 'Extracting data from table...', 82);
 
-  // ── Strategy 1: Direct fetch via href (most reliable) ──
-  if (!saved && csvBtnInfo.tag === 'a' && csvBtnInfo.href && !csvBtnInfo.href.endsWith('#') && !csvBtnInfo.href.startsWith('javascript:')) {
-    console.log('[oneglance-sync] Strategy 1: fetching CSV via href:', csvBtnInfo.href);
-    progress(opts, 'stock', 'Downloading stock CSV (direct)...', 82);
     try {
-      const content = await page.evaluate(async (url: string) => {
-        const resp = await fetch(url, { credentials: 'include' });
-        return resp.text();
-      }, csvBtnInfo.href);
-      if (content && content.trim().length > 10) {
-        fs.writeFileSync(filePath, content, 'utf-8');
+      const csvContent = await page.evaluate(() => {
+        try {
+          const $ = (window as any).jQuery;
+          if (!$ || !$.fn.dataTable) return null;
+
+          // Find the DataTable instance — try multiple selectors
+          let dt: any = null;
+          const selectors = ['table.dataTable', 'table.display', 'table.table', '#DataTables_Table_0', 'table'];
+          for (const sel of selectors) {
+            try {
+              const $t = $(sel).first();
+              if ($t.length && $.fn.dataTable.isDataTable($t)) {
+                dt = $t.DataTable();
+                break;
+              }
+            } catch {}
+          }
+          if (!dt) return null;
+
+          // Get headers from the DataTable columns
+          const headers: string[] = [];
+          dt.columns().every(function(this: any) {
+            const hdr = $(this.header()).text().trim();
+            headers.push(hdr);
+          });
+
+          // Get ALL data rows (across all pages, unfiltered)
+          const rows: string[][] = [];
+          dt.rows({ search: 'none' }).every(function(this: any) {
+            const data = this.data();
+            const row: string[] = [];
+            for (let i = 0; i < headers.length; i++) {
+              let val = String(data[i] ?? '').trim();
+              // Strip any HTML tags from cell values
+              val = val.replace(/<[^>]*>/g, '').trim();
+              // CSV-escape values containing comma, quote, or newline
+              if (val.includes(',') || val.includes('"') || val.includes('\n')) {
+                val = '"' + val.replace(/"/g, '""') + '"';
+              }
+              row.push(val);
+            }
+            rows.push(row);
+          });
+
+          if (rows.length === 0) return null;
+
+          let csv = headers.join(',') + '\n';
+          csv += rows.map(r => r.join(',')).join('\n');
+          return csv;
+        } catch (e: any) {
+          return null;
+        }
+      });
+
+      if (csvContent && csvContent.trim().length > 50) {
+        fs.writeFileSync(filePath, csvContent, 'utf-8');
         saved = true;
-        console.log('[oneglance-sync] Strategy 1 succeeded — CSV fetched directly');
+        const rowCount = csvContent.split('\n').length - 1;
+        console.log(`[oneglance-sync] Strategy A succeeded — extracted ${rowCount} rows via DataTables API`);
+      } else {
+        console.log('[oneglance-sync] Strategy A: no data returned from DataTables API');
       }
     } catch (e: any) {
-      console.log('[oneglance-sync] Strategy 1 failed:', e.message);
+      console.log('[oneglance-sync] Strategy A failed:', e.message);
     }
   }
 
-  // ── Strategy 2: Click + intercept response / download / new tab ──
+  // ── Strategy B: Blob interception — monkey-patch URL.createObjectURL before clicking CSV ──
+  // DataTables Buttons extension generates a Blob in JS and creates a temp <a> with blob URL
+  // In headless mode, blob downloads often don't trigger Playwright's download event
   if (!saved) {
-    console.log('[oneglance-sync] Strategy 2: click + intercept response...');
+    console.log('[oneglance-sync] Strategy B: blob interception + click CSV...');
     progress(opts, 'stock', 'Downloading stock CSV...', 82);
 
-    // Capture any network response that looks like CSV
+    // Install blob interceptor BEFORE clicking the CSV button
+    await page.evaluate(() => {
+      (window as any).__capturedBlobCSV = null;
+      const origCreateObjectURL = URL.createObjectURL.bind(URL);
+      URL.createObjectURL = function(obj: Blob | MediaSource) {
+        // Intercept blob creation — read its content
+        if (obj instanceof Blob) {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const text = reader.result as string;
+            if (text && text.length > 10 && (text.includes(',') || text.includes('\t'))) {
+              (window as any).__capturedBlobCSV = text;
+            }
+          };
+          reader.readAsText(obj);
+        }
+        return origCreateObjectURL(obj);
+      };
+    });
+
+    // Also set up download event + response listeners as secondary catches
     let capturedCSV: string | null = null;
     const responseListener = async (resp: any) => {
       try {
@@ -360,87 +430,120 @@ async function downloadStockReport(
     };
     page.on('response', responseListener);
 
-    // Also listen for download event and new page
-    const dlHandler = page.waitForEvent('download', { timeout: 20_000 })
+    const dlHandler = page.waitForEvent('download', { timeout: 15_000 })
       .then(async (dl) => { await dl.saveAs(filePath); return 'download' as const; })
       .catch(() => null);
-    const npHandler = context.waitForEvent('page', { timeout: 20_000 })
-      .then(async (np) => {
-        await np.waitForLoadState('load', { timeout: 15_000 });
-        const c = await np.evaluate(() => document.body.innerText || document.body.textContent || '');
-        if (c && c.trim().length > 10) {
-          fs.writeFileSync(filePath, c, 'utf-8');
-          await np.close();
-          return 'newpage' as const;
-        }
-        await np.close();
-        return null;
-      })
-      .catch(() => null);
 
-    // Click the csv button via evaluate (more reliable than locator for custom buttons)
+    // Click the CSV button
     await page.evaluate(() => {
       const allEls = document.querySelectorAll('a, button, input, span, div');
       for (const el of allEls) {
         const text = (el.textContent?.trim() || '').toLowerCase();
         const val = (el as HTMLInputElement).value?.toLowerCase() || '';
-        if ((text === 'csv' || val === 'csv') && !el.closest('table')) {
+        if ((text === 'csv' || val === 'csv') && !el.closest('table') && el.tagName !== 'SCRIPT') {
           (el as HTMLElement).click();
           return;
         }
       }
     });
 
-    // Wait for any mechanism to fire (20s timeout)
-    const result = await Promise.race([
+    // Wait for blob interception or download event (up to 10s)
+    const dlResult = await Promise.race([
       dlHandler,
-      npHandler,
-      new Promise<null>(r => setTimeout(() => r(null), 20_000)),
+      new Promise<null>(r => setTimeout(() => r(null), 10_000)),
     ]);
 
-    // Small extra wait for response interception
-    if (!result && !capturedCSV) {
-      await page.waitForTimeout(3000);
-    }
+    // Check blob interceptor result
+    const blobCSV = await page.evaluate(() => (window as any).__capturedBlobCSV);
 
     page.off('response', responseListener);
 
-    if (result === 'download') {
+    if (dlResult === 'download') {
       saved = true;
-      console.log('[oneglance-sync] Strategy 2 succeeded via download event');
-    } else if (result === 'newpage') {
+      console.log('[oneglance-sync] Strategy B succeeded via download event');
+    } else if (blobCSV && blobCSV.trim().length > 50) {
+      fs.writeFileSync(filePath, blobCSV, 'utf-8');
       saved = true;
-      console.log('[oneglance-sync] Strategy 2 succeeded via new tab');
+      const rowCount = blobCSV.split('\n').length - 1;
+      console.log(`[oneglance-sync] Strategy B succeeded via blob interception — ${rowCount} rows`);
     } else if (capturedCSV) {
       fs.writeFileSync(filePath, capturedCSV, 'utf-8');
       saved = true;
-      console.log('[oneglance-sync] Strategy 2 succeeded via response interception');
+      console.log('[oneglance-sync] Strategy B succeeded via response interception');
+    } else {
+      console.log('[oneglance-sync] Strategy B: no data captured (blob:', !!blobCSV, 'download:', !!dlResult, 'response:', !!capturedCSV, ')');
     }
   }
 
-  // ── Strategy 3: Scrape the HTML table directly (ultimate fallback) ──
+  // ── Strategy C: Direct fetch via href (for anchor-based CSV buttons) ──
   if (!saved) {
-    console.log('[oneglance-sync] Strategy 3: scraping table data from page...');
-    progress(opts, 'stock', 'Extracting table data...', 82);
+    const csvBtnInfo = await page.evaluate(() => {
+      const allEls = document.querySelectorAll('a, button, input, span, div');
+      for (const el of allEls) {
+        const text = (el.textContent?.trim() || '').toLowerCase();
+        const val = (el as HTMLInputElement).value?.toLowerCase() || '';
+        if ((text === 'csv' || val === 'csv') && !el.closest('table') && el.tagName !== 'SCRIPT') {
+          return {
+            tag: el.tagName.toLowerCase(),
+            href: (el as HTMLAnchorElement).href || '',
+          };
+        }
+      }
+      return null;
+    });
+
+    if (csvBtnInfo?.tag === 'a' && csvBtnInfo.href && !csvBtnInfo.href.endsWith('#') && !csvBtnInfo.href.startsWith('javascript:') && !csvBtnInfo.href.startsWith('blob:')) {
+      console.log('[oneglance-sync] Strategy C: fetching CSV via href...');
+      progress(opts, 'stock', 'Downloading stock CSV (direct)...', 83);
+      try {
+        const content = await page.evaluate(async (url: string) => {
+          const resp = await fetch(url, { credentials: 'include' });
+          return resp.text();
+        }, csvBtnInfo.href);
+        if (content && content.trim().length > 50) {
+          fs.writeFileSync(filePath, content, 'utf-8');
+          saved = true;
+          console.log('[oneglance-sync] Strategy C succeeded — CSV fetched directly');
+        }
+      } catch (e: any) {
+        console.log('[oneglance-sync] Strategy C failed:', e.message);
+      }
+    }
+  }
+
+  // ── Strategy D: Scrape the visible HTML table directly (ultimate fallback) ──
+  if (!saved) {
+    console.log('[oneglance-sync] Strategy D: scraping table data from page...');
+    progress(opts, 'stock', 'Extracting table data...', 83);
     await debugScreenshot(page, '15-scrape-fallback');
 
     // Try to show ALL rows by changing DataTables page length
     await page.evaluate(() => {
-      const sel = document.querySelector('select[name$="_length"]') as HTMLSelectElement;
-      if (sel) {
-        const allOpt = Array.from(sel.options).find(o => o.value === '-1' || o.textContent?.trim().toLowerCase() === 'all');
-        if (allOpt) { sel.value = allOpt.value; sel.dispatchEvent(new Event('change', { bubbles: true })); }
-        else {
-          // Use largest available option
-          const largest = Array.from(sel.options).reduce((a, b) => parseInt(a.value) > parseInt(b.value) ? a : b);
-          if (largest) { sel.value = largest.value; sel.dispatchEvent(new Event('change', { bubbles: true })); }
+      // Try multiple selector patterns for the page length dropdown
+      const selectors = ['select[name$="_length"]', 'select.form-control', '.dataTables_length select'];
+      for (const sel of selectors) {
+        const dropdown = document.querySelector(sel) as HTMLSelectElement;
+        if (!dropdown) continue;
+        const allOpt = Array.from(dropdown.options).find(o => o.value === '-1' || o.textContent?.trim().toLowerCase() === 'all');
+        if (allOpt) {
+          dropdown.value = allOpt.value;
+          dropdown.dispatchEvent(new Event('change', { bubbles: true }));
+          return;
+        }
+        // Use largest available option
+        const nums = Array.from(dropdown.options).filter(o => parseInt(o.value) > 0);
+        if (nums.length > 0) {
+          const largest = nums.reduce((a, b) => parseInt(a.value) > parseInt(b.value) ? a : b);
+          dropdown.value = largest.value;
+          dropdown.dispatchEvent(new Event('change', { bubbles: true }));
+          return;
         }
       }
     });
     await page.waitForTimeout(3000);
     await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
 
-    // Scrape all pages of the table
+    // Scrape all pages of the table — try multiple table selectors
     const allRows: string[][] = [];
     let headers: string[] = [];
     let pageNum = 0;
@@ -448,8 +551,15 @@ async function downloadStockReport(
 
     while (pageNum < MAX_PAGES) {
       const tableData = await page.evaluate(() => {
-        const table = document.querySelector('table');
+        // Try multiple selectors for the data table
+        const selectors = ['table.dataTable', 'table.display', 'table.table-bordered', '#DataTables_Table_0', 'table'];
+        let table: HTMLTableElement | null = null;
+        for (const sel of selectors) {
+          const t = document.querySelector(sel) as HTMLTableElement;
+          if (t && t.querySelector('tbody tr')) { table = t; break; }
+        }
         if (!table) return { headers: [] as string[], rows: [] as string[][], hasNext: false };
+
         const ths: string[] = [];
         table.querySelectorAll('thead th').forEach(th => ths.push((th as HTMLElement).innerText?.trim() || ''));
         const rows: string[][] = [];
@@ -462,7 +572,10 @@ async function downloadStockReport(
           });
           if (cells.length > 0 && cells.some(c => c.length > 0)) rows.push(cells);
         });
-        const nextBtn = document.querySelector('.paginate_button.next:not(.disabled), a.next:not(.disabled)');
+        // Check for DataTables next page button (both standard and custom selectors)
+        const nextBtn = document.querySelector(
+          '.paginate_button.next:not(.disabled), a.next:not(.disabled), .pagination .next:not(.disabled), [class*="paginate"] .next:not(.disabled)'
+        );
         return { headers: ths, rows, hasNext: !!nextBtn };
       });
 
@@ -473,7 +586,7 @@ async function downloadStockReport(
       if (!tableData.hasNext || tableData.rows.length === 0) break;
 
       // Click next page
-      await page.locator('.paginate_button.next, a.next').first().click({ timeout: 5_000 }).catch(() => {});
+      await page.locator('.paginate_button.next, a.next, .pagination .next').first().click({ timeout: 5_000 }).catch(() => {});
       await page.waitForTimeout(1500);
       await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {});
     }
@@ -484,13 +597,15 @@ async function downloadStockReport(
       for (const row of allRows) csvLines.push(row.join(','));
       fs.writeFileSync(filePath, csvLines.join('\n'), 'utf-8');
       saved = true;
-      console.log(`[oneglance-sync] Strategy 3 succeeded — scraped ${allRows.length} rows from ${pageNum} pages`);
+      console.log(`[oneglance-sync] Strategy D succeeded — scraped ${allRows.length} rows from ${pageNum} pages`);
     }
   }
 
   if (!saved) {
     await debugScreenshot(page, '16-FAILED-all-strategies');
-    throw new Error('All CSV download strategies failed (direct fetch, click+intercept, table scraping)');
+    const debugInfo = await getPageDebugInfo(page);
+    console.log('[oneglance-sync] All strategies failed. Page debug:\n', debugInfo);
+    throw new Error('All CSV download strategies failed for stock report');
   }
 
   progress(opts, 'stock', 'Stock CSV downloaded', 84);
