@@ -240,11 +240,12 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async
       },
     };
   } catch (err: any) {
+    console.error(`[HP Sync] Failed for ${tenantSlug}:`, err.message);
     state.progress = {
       step: 'error',
-      message: isProd ? 'Sync failed' : (err.message || 'Sync failed'),
+      message: err.message || 'Sync failed',
       pct: 0,
-      error: isProd ? 'Sync failed' : err.message,
+      error: err.message || 'Sync failed',
     };
     // Clear lock immediately on error so user can retry
     state.activeSyncId = null;

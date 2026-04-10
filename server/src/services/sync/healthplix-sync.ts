@@ -190,9 +190,22 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
   const dataDir = process.env.DATA_DIR || (isProd ? '/data' : '.');
   const downloadDir = path.join(dataDir, 'uploads');
   if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
+
+  // Verify Chromium path exists
   const chromiumPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium';
+  if (isProd && !fs.existsSync(chromiumPath)) {
+    // Try common alternative paths
+    const alternatives = ['/usr/bin/chromium-browser', '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable'];
+    const found = alternatives.find(p => fs.existsSync(p));
+    if (!found) {
+      throw new Error(`Chromium not found at ${chromiumPath} or alternatives: ${alternatives.join(', ')}`);
+    }
+    console.log(`[HP Sync] Using alternative Chromium path: ${found}`);
+  }
+
+  progress(opts, 'login', 'Launching browser...', 2);
   const browser = await chromium.launch({
-    ...(isProd ? { executablePath: chromiumPath } : { channel: 'chrome' }),
+    ...(isProd ? { executablePath: fs.existsSync(chromiumPath) ? chromiumPath : '/usr/bin/chromium-browser' } : { channel: 'chrome' }),
     headless: isProd ? true : false,
     args: [
       '--disable-blink-features=AutomationControlled',
@@ -205,32 +218,89 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
   });
   const page = await context.newPage();
 
+  // Helper: save debug screenshot on failure
+  const saveDebugScreenshot = async (label: string) => {
+    try {
+      const ssPath = path.join(downloadDir, `hp-debug-${label}-${Date.now()}.png`);
+      await page.screenshot({ path: ssPath, fullPage: true });
+      console.log(`[HP Sync] Debug screenshot saved: ${ssPath}`);
+    } catch (e) {
+      console.log(`[HP Sync] Could not save screenshot: ${e}`);
+    }
+  };
+
   try {
     // ── Step 1: Go directly to the report page URL ──
-    // This will redirect to login if not authenticated, then back to the report
     const REPORT_URL = 'https://md.healthplix.com/report/viewFDBillingReport.php';
-    progress(opts, 'login', 'Opening Healthplix report page...', 5);
-    await page.goto(REPORT_URL, { waitUntil: 'networkidle', timeout: TIMEOUT });
+    progress(opts, 'login', 'Opening Healthplix...', 5);
+    await page.goto(REPORT_URL, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
+    // Wait a bit for JS to load, but don't require full networkidle (can be slow)
+    await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {
+      console.log('[HP Sync] networkidle timed out after 30s, continuing...');
+    });
     await page.waitForTimeout(2000);
 
     // ── Step 2: Login if redirected to login page ──
-    // Check the URL pathname (not query string) to detect login redirect
     const currentUrl = new URL(page.url());
+    const pageUrl = page.url();
+    console.log(`[HP Sync] Current URL: ${pageUrl}`);
     const isOnReportPage = currentUrl.pathname.includes('viewFDBillingReport');
     if (!isOnReportPage) {
       progress(opts, 'login', 'Entering credentials...', 10);
 
-      const usernameInput = page.locator('input[type="text"], input[type="email"], input[name="username"], input[name="email"], input[placeholder*="mail"], input[placeholder*="user"], input[placeholder*="phone"]').first();
-      await usernameInput.fill(opts.username, { timeout: TIMEOUT });
+      // Wait for either a username input or a phone input (Healthplix may use phone login)
+      const usernameInput = page.locator('input[type="text"], input[type="email"], input[type="tel"], input[name="username"], input[name="email"], input[name="phone"], input[placeholder*="mail"], input[placeholder*="user"], input[placeholder*="phone"], input[placeholder*="mobile"]').first();
+      const usernameVisible = await usernameInput.isVisible({ timeout: 15_000 }).catch(() => false);
+      if (!usernameVisible) {
+        await saveDebugScreenshot('no-username-input');
+        throw new Error(`Login page did not show username/email input. URL: ${pageUrl}`);
+      }
+      await usernameInput.fill(opts.username);
+      console.log(`[HP Sync] Username entered`);
 
       const passwordInput = page.locator('input[type="password"]').first();
-      await passwordInput.fill(opts.password, { timeout: TIMEOUT });
+      const pwdVisible = await passwordInput.isVisible({ timeout: 10_000 }).catch(() => false);
+      if (!pwdVisible) {
+        await saveDebugScreenshot('no-password-input');
+        throw new Error('Password field not found on login page');
+      }
+      await passwordInput.fill(opts.password);
+      console.log(`[HP Sync] Password entered`);
 
-      const loginBtn = page.locator('button[type="submit"], button:has-text("Login"), button:has-text("Sign In"), button:has-text("Log In")').first();
-      await loginBtn.click({ timeout: TIMEOUT });
+      // Find and click login button
+      const loginBtn = page.locator('button[type="submit"], button:has-text("Login"), button:has-text("Sign In"), button:has-text("Log In"), input[type="submit"]').first();
+      const btnVisible = await loginBtn.isVisible({ timeout: 5_000 }).catch(() => false);
+      if (!btnVisible) {
+        await saveDebugScreenshot('no-login-btn');
+        throw new Error('Login button not found');
+      }
+      await loginBtn.click();
+      console.log(`[HP Sync] Login button clicked`);
 
+      // Wait for navigation after login
       await page.waitForTimeout(3000);
-      await page.waitForLoadState('networkidle', { timeout: TIMEOUT });
+      await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => {
+        console.log('[HP Sync] Post-login networkidle timed out, continuing...');
+      });
+
+      // Check if login succeeded
+      const postLoginUrl = page.url();
+      console.log(`[HP Sync] Post-login URL: ${postLoginUrl}`);
+
+      // Check for login error messages
+      const errorText = await page.evaluate(() => {
+        const els = document.querySelectorAll('.alert-danger, .error, [class*="error"], [class*="alert"], .text-danger');
+        for (const el of els) {
+          const text = (el as HTMLElement).innerText?.trim();
+          if (text && text.length > 3 && text.length < 200) return text;
+        }
+        return '';
+      });
+      if (errorText) {
+        await saveDebugScreenshot('login-error');
+        throw new Error(`Login failed: ${errorText}`);
+      }
+
       progress(opts, 'login', 'Logged in successfully', 20);
     } else {
       progress(opts, 'login', 'Already authenticated', 20);
@@ -390,6 +460,13 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     await browser.close();
     return { filePath, filename };
   } catch (err: any) {
+    // Save debug screenshot before closing
+    try {
+      const ssPath = path.join(downloadDir, `hp-error-${Date.now()}.png`);
+      await page.screenshot({ path: ssPath, fullPage: true });
+      console.error(`[HP Sync] Error screenshot saved: ${ssPath}`);
+    } catch {}
+    console.error(`[HP Sync] Error:`, err.message);
     await browser.close();
     throw new Error(`Healthplix sync failed: ${err.message}`);
   }
