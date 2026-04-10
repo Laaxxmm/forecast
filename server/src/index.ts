@@ -77,8 +77,32 @@ app.use(session({
 }));
 
 // ─── Health check (no auth, always responds) ──────────────────────────────────
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, uptime: process.uptime(), ts: new Date().toISOString() });
+app.get('/api/health', async (_req, res) => {
+  try {
+    const platformDb = await getPlatformHelper();
+    const clients = platformDb.all('SELECT slug FROM clients WHERE is_active = 1');
+    const clientInfo: any[] = [];
+    for (const c of clients) {
+      try {
+        const db = await getClientHelper(c.slug);
+        const fyCount = db.all('SELECT COUNT(*) as n FROM financial_years')[0]?.n || 0;
+        const scenCount = db.all('SELECT COUNT(*) as n FROM scenarios')[0]?.n || 0;
+        const budgetCount = db.all('SELECT COUNT(*) as n FROM budget_items')[0]?.n || 0;
+        const importCount = db.all('SELECT COUNT(*) as n FROM import_logs')[0]?.n || 0;
+        const dashCount = db.all('SELECT COUNT(*) as n FROM dashboard_actuals')[0]?.n || 0;
+        clientInfo.push({ slug: c.slug, fyCount, scenCount, budgetCount, importCount, dashCount });
+      } catch (e: any) {
+        clientInfo.push({ slug: c.slug, error: e.message });
+      }
+    }
+    res.json({
+      ok: true, uptime: process.uptime(), ts: new Date().toISOString(),
+      dataDir: process.env.DATA_DIR || '/data',
+      clients: clientInfo,
+    });
+  } catch (e: any) {
+    res.json({ ok: false, error: e.message, uptime: process.uptime() });
+  }
 });
 
 // ─── Auth (no tenant needed — login determines tenant) ──────────────────────
