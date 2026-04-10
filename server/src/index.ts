@@ -212,6 +212,19 @@ app.get('/api/branches', requireAuth, resolveTenant, resolveBranch, async (req, 
   res.json({ isMultiBranch: true, branches, canViewConsolidated });
 });
 
+// ─── Debug screenshots (for diagnosing sync issues) ─────────────────────────
+const debugDir = path.join(process.env.DATA_DIR || '.', 'uploads', 'debug');
+app.get('/api/debug/screenshots', requireSuperAdmin, (_req, res) => {
+  if (!fs.existsSync(debugDir)) return res.json([]);
+  const files = fs.readdirSync(debugDir).filter(f => f.endsWith('.png')).sort();
+  res.json(files);
+});
+app.get('/api/debug/screenshots/:name', requireSuperAdmin, (req, res) => {
+  const filePath = path.join(debugDir, req.params.name);
+  if (!fs.existsSync(filePath)) return res.status(404).send('Not found');
+  res.sendFile(filePath);
+});
+
 // ─── Static files ───────────────────────────────────────────────────────────
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
 app.use(express.static(clientDist));
