@@ -1072,9 +1072,16 @@ function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[
   const [saving, setSaving] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
+  const STREAM_SOURCES: Record<string, string> = {};
+  for (const s of streams) {
+    const n = (s.name as string).toLowerCase();
+    if (n.includes('clinic') || n.includes('health')) STREAM_SOURCES[String(s.id)] = 'healthplix';
+    else if (n.includes('pharma')) STREAM_SOURCES[String(s.id)] = 'oneglance';
+  }
+
   const scopeTabs = [
-    { key: 'total', label: 'Total Revenue' },
-    ...streams.map((s: any) => ({ key: String(s.id), label: s.name })),
+    { key: 'total', label: 'Total Revenue', source: '' },
+    ...streams.map((s: any) => ({ key: String(s.id), label: s.name, source: STREAM_SOURCES[String(s.id)] || '' })),
   ];
 
   const loadVisibility = useCallback(() => {
@@ -1087,14 +1094,22 @@ function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[
   useEffect(() => { loadVisibility(); }, [loadVisibility]);
 
   const toggleCard = async (card: any) => {
-    setSaving(`card-${card.id}`);
-    await api.put(`/admin/clients/${slug}/dashboard-cards/${card.id}`, { is_visible: !card.is_visible });
+    const isVisCard = card._source === 'chart_visibility';
+    const saveKey = isVisCard ? `chart-${card.id}` : `card-${card.id}`;
+    setSaving(saveKey);
+    if (isVisCard) {
+      await api.put(`/admin/clients/${slug}/dashboard-visibility/charts/${card.id}`, { is_visible: !card.is_visible });
+    } else {
+      await api.put(`/admin/clients/${slug}/dashboard-cards/${card.id}`, { is_visible: !card.is_visible });
+    }
     setScopes(prev => {
       const updated = { ...prev };
       for (const key of Object.keys(updated)) {
         updated[key] = {
           ...updated[key],
-          cards: updated[key].cards.map(c => c.id === card.id ? { ...c, is_visible: c.is_visible ? 0 : 1 } : c),
+          cards: updated[key].cards.map(c =>
+            (c.id === card.id && c._source === card._source) ? { ...c, is_visible: c.is_visible ? 0 : 1 } : c
+          ),
         };
       }
       return updated;
@@ -1127,20 +1142,28 @@ function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[
 
   const currentScope = scopes[activeScope] || { cards: [], charts: [], tables: [] };
 
+  const SOURCE_LABELS: Record<string, { label: string; color: string }> = {
+    healthplix: { label: 'Healthplix', color: 'bg-teal-500/10 text-teal-400' },
+    oneglance: { label: 'OneGlance', color: 'bg-orange-500/10 text-orange-400' },
+  };
+
   const renderToggleItem = (item: any, type: 'card' | 'chart', badge?: string) => {
     const isCard = type === 'card';
-    const id = isCard ? `card-${item.id}` : `chart-${item.id}`;
+    const isVisCard = item._source === 'chart_visibility';
+    const id = (isCard && !isVisCard) ? `card-${item.id}` : `chart-${item.id}`;
     const isSaving = saving === id;
     const isVisible = !!item.is_visible;
-    const label = isCard ? item.title : item.element_label;
+    const label = (isCard && !isVisCard) ? item.title : item.element_label;
+    const description = item.description || '';
+    const source = item.source ? SOURCE_LABELS[item.source] : null;
 
     return (
-      <div key={item.id} className="flex items-center justify-between px-4 py-3 border-b border-dark-400/10 last:border-0">
-        <div className="flex items-center gap-3">
+      <div key={`${item._source || type}-${item.id}`} className="flex items-center justify-between px-4 py-3 border-b border-dark-400/10 last:border-0">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
           <button
-            onClick={() => isCard ? toggleCard(item) : toggleChart(item)}
+            onClick={() => (isCard && !isVisCard) ? toggleCard(item) : isCard ? toggleCard(item) : toggleChart(item)}
             disabled={isSaving}
-            className={`p-1.5 rounded-lg transition-all ${
+            className={`p-1.5 rounded-lg transition-all shrink-0 ${
               isVisible
                 ? 'text-accent-400 bg-accent-500/10 hover:bg-accent-500/20'
                 : 'text-theme-faint bg-dark-500 hover:bg-dark-400'
@@ -1148,14 +1171,26 @@ function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[
           >
             {isVisible ? <Eye size={14} /> : <EyeOff size={14} />}
           </button>
-          <span className="text-sm text-theme-heading">{label}</span>
-          {badge && (
-            <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
-              badge === 'System' ? 'bg-accent-500/10 text-accent-400' :
-              badge === 'Auto' ? 'bg-blue-500/10 text-blue-400' :
-              'bg-purple-500/10 text-purple-400'
-            }`}>{badge}</span>
-          )}
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-medium text-theme-heading">{label}</span>
+              {badge && (
+                <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                  badge === 'System' ? 'bg-accent-500/10 text-accent-400' :
+                  badge === 'Auto' ? 'bg-blue-500/10 text-blue-400' :
+                  'bg-purple-500/10 text-purple-400'
+                }`}>{badge}</span>
+              )}
+              {source && (
+                <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${source.color}`}>
+                  {source.label}
+                </span>
+              )}
+            </div>
+            {description && (
+              <p className="text-[11px] text-theme-faint mt-0.5 leading-relaxed">{description}</p>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -1200,13 +1235,20 @@ function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[
           <button
             key={tab.key}
             onClick={() => setActiveScope(tab.key)}
-            className={`px-4 py-2 rounded-lg text-xs font-medium transition-all ${
+            className={`px-4 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${
               activeScope === tab.key
                 ? 'bg-accent-500/15 text-accent-400 shadow-sm'
                 : 'text-theme-faint hover:text-theme-secondary hover:bg-dark-500/50'
             }`}
           >
             {tab.label}
+            {tab.source && (
+              <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${
+                tab.source === 'healthplix' ? 'bg-teal-500/15 text-teal-400' : 'bg-orange-500/15 text-orange-400'
+              }`}>
+                {tab.source === 'healthplix' ? 'Healthplix' : 'OneGlance'}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -1214,7 +1256,8 @@ function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[
       {/* Sections */}
       {renderSection(
         'KPI Cards', 'cards', currentScope.cards, 'card',
-        (item) => item.card_type === 'total' ? 'System' : item.card_type === 'stream' ? 'Auto' : 'Custom'
+        (item) => item._source === 'chart_visibility' ? undefined :
+          item.card_type === 'total' ? 'System' : item.card_type === 'stream' ? 'Auto' : 'Custom'
       )}
       {renderSection('Charts', 'charts', currentScope.charts, 'chart')}
       {renderSection('Tables', 'tables', currentScope.tables, 'chart')}

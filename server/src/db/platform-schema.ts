@@ -158,6 +158,8 @@ export function initializePlatformSchema(db: DbHelper) {
     "ALTER TABLE client_integrations ADD COLUMN branch_id INTEGER REFERENCES branches(id)",
     "ALTER TABLE team_members ADD COLUMN is_owner INTEGER DEFAULT 0",
     "ALTER TABLE branches ADD COLUMN state TEXT DEFAULT ''",
+    "ALTER TABLE dashboard_chart_visibility ADD COLUMN description TEXT DEFAULT ''",
+    "ALTER TABLE dashboard_chart_visibility ADD COLUMN source TEXT DEFAULT ''",
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch { /* column already exists */ }
@@ -188,18 +190,73 @@ export function initializePlatformSchema(db: DbHelper) {
   }
 
   // Backfill dashboard_chart_visibility for existing clients
+  const seedVis = (clientId: number, scope: string, section: string, key: string, label: string, order: number, desc = '', source = '') => {
+    db.run(
+      `INSERT OR IGNORE INTO dashboard_chart_visibility (client_id, scope, section, element_key, element_label, sort_order, description, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [clientId, scope, section, key, label, order, desc, source]
+    );
+  };
+
   const allClients = db.all('SELECT id FROM clients');
   for (const c of allClients) {
     // Total scope charts
-    db.run('INSERT OR IGNORE INTO dashboard_chart_visibility (client_id, scope, section, element_key, element_label, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
-      [c.id, 'total', 'charts', 'monthly_revenue_trend', 'Monthly Revenue Trend', 0]);
-    db.run('INSERT OR IGNORE INTO dashboard_chart_visibility (client_id, scope, section, element_key, element_label, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
-      [c.id, 'total', 'charts', 'revenue_split', 'Revenue Split', 1]);
-    // Per-stream charts
+    seedVis(c.id, 'total', 'charts', 'monthly_revenue_trend', 'Monthly Revenue Trend', 0, 'Stacked bar chart showing monthly revenue breakdown by stream');
+    seedVis(c.id, 'total', 'charts', 'revenue_split', 'Revenue Split', 1, 'Donut chart showing revenue percentage split across streams');
+
+    // Per-stream items
     const streams = db.all('SELECT * FROM business_streams WHERE client_id = ? ORDER BY sort_order', c.id);
-    streams.forEach((s: any, i: number) => {
-      db.run('INSERT OR IGNORE INTO dashboard_chart_visibility (client_id, scope, section, element_key, element_label, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
-        [c.id, String(s.id), 'charts', 'stream_in_trend', `${s.name} in Trend Chart`, i]);
-    });
+    for (const s of streams) {
+      const sid = String(s.id);
+      const nameLower = (s.name as string).toLowerCase();
+      const isClinic = nameLower.includes('clinic') || nameLower.includes('health');
+      const source = isClinic ? 'healthplix' : nameLower.includes('pharma') ? 'oneglance' : '';
+
+      // Common: stream in trend chart
+      seedVis(c.id, sid, 'charts', 'stream_in_trend', `${s.name} in Trend Chart`, 0, `Whether ${s.name} appears as a bar in the Monthly Revenue Trend chart`, source);
+
+      // Clinic-specific items (Healthplix data)
+      if (isClinic) {
+        // ── KPI Cards ──
+        seedVis(c.id, sid, 'cards', 'total_unique_patients', 'Total Unique Patients', 0,
+          'Count of distinct patients across all departments (Appointment, Lab Test, Other Services)', source);
+        seedVis(c.id, sid, 'cards', 'appointment_patients', 'Appointment Patients', 1,
+          'Number of patients who had at least one appointment visit', source);
+        seedVis(c.id, sid, 'cards', 'lab_test_patients', 'Lab Test Patients', 2,
+          'Number of patients who had at least one lab test', source);
+        seedVis(c.id, sid, 'cards', 'other_services_patients', 'Other Services Patients', 3,
+          'Number of patients who used other services (non-appointment, non-lab)', source);
+        seedVis(c.id, sid, 'cards', 'direct_lab_walkins', 'Direct Lab Walk-ins', 4,
+          'Patients who had lab tests but never an appointment — potential referral or walk-in tracking', source);
+        seedVis(c.id, sid, 'cards', 'direct_other_walkins', 'Direct Other Services Walk-ins', 5,
+          'Patients who had other services but never an appointment — helps track non-doctor revenue sources', source);
+
+        // ── Charts: Section A — Patient Counts ──
+        seedVis(c.id, sid, 'charts', 'department_overlap', 'Department Overlap', 1,
+          'Grouped bar chart showing how many patients appear in exactly 1, 2, or all 3 departments with combination labels', source);
+
+        // ── Charts: Section B — Multi-Revenue Stream ──
+        seedVis(c.id, sid, 'charts', 'patient_dept_donut', 'Patient Department Split', 2,
+          'Donut chart splitting patients by number of departments touched (1 vs 2 vs 3) with total in center', source);
+        seedVis(c.id, sid, 'charts', 'dept_combination_bars', 'Department Combinations', 3,
+          'Horizontal bar chart showing all department combination breakdowns (e.g. "Appointment Only", "Appointment + Lab Test") with patient counts', source);
+        seedVis(c.id, sid, 'charts', 'revenue_per_patient', 'Revenue Per Patient Comparison', 4,
+          'Average revenue per patient: single-department vs multi-department vs all-three, with multiplier annotations (e.g. "3x")', source);
+        seedVis(c.id, sid, 'charts', 'patient_flow_sankey', 'Patient Flow Analysis', 5,
+          'Flow visualization showing patient journey from Appointment to Lab Test, Other Services, Both, or None — reveals cross-sell patterns', source);
+
+        // ── Charts: Section C — Cross-Sell Analysis ──
+        seedVis(c.id, sid, 'charts', 'cross_sell_funnel', 'Cross-Sell Funnel', 6,
+          'Funnel from total appointment patients through cross-sell stages: to Other Services, Lab Tests, Both, or Appointment Only', source);
+        seedVis(c.id, sid, 'charts', 'doctor_cross_sell_rate', 'Doctor Cross-Sell Rate', 7,
+          'Per-doctor cross-sell percentage bar chart, sorted descending, color-coded green (high) to red (low)', source);
+        seedVis(c.id, sid, 'charts', 'doctor_stacked_bar', 'Doctor Cross-Sell Breakdown', 8,
+          'Stacked bar per doctor: cross-sold patients (green) vs appointment-only patients (gray) with percentage labels', source);
+
+        // ── Tables ──
+        seedVis(c.id, sid, 'tables', 'patient_summary_table', 'Patient Summary Table', 0,
+          'Sortable, searchable table: Patient ID, Name, Departments Used, Total Billed, Total Paid, Discount, Number of Visits. Paginated at 50 rows.', source);
+      }
+    }
   }
 }

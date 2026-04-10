@@ -629,8 +629,15 @@ router.get('/clients/:slug/dashboard-visibility', async (req: Request, res: Resp
   // Per-stream scopes
   for (const stream of streams) {
     const sid = String(stream.id);
+    // Merge dashboard_cards (stream card) + dashboard_chart_visibility cards
+    const streamCards: any[] = cards
+      .filter(c => c.card_type === 'stream' && c.stream_id === stream.id)
+      .map(c => ({ ...c, _source: 'dashboard_cards' }));
+    const visCards = chartElements
+      .filter(e => e.scope === sid && e.section === 'cards')
+      .map(e => ({ ...e, _source: 'chart_visibility' }));
     scopes[sid] = {
-      cards: cards.filter(c => c.card_type === 'stream' && c.stream_id === stream.id),
+      cards: [...streamCards, ...visCards],
       charts: chartElements.filter(e => e.scope === sid && e.section === 'charts'),
       tables: chartElements.filter(e => e.scope === sid && e.section === 'tables'),
     };
