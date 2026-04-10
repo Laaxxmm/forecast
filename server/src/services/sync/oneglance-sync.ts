@@ -285,90 +285,212 @@ async function downloadStockReport(
   await debugScreenshot(page, '12-stock-report-loaded');
   progress(opts, 'stock', 'Stock report loaded', 80);
 
-  // Wait for CSV button to appear (DataTables renders export buttons after data loads)
-  progress(opts, 'stock', 'Locating CSV download button...', 81);
-  const csvLocator = page.locator(
-    'button:has-text("csv"), a:has-text("csv"), input[value="csv"], ' +
-    'button:has-text("CSV"), a:has-text("CSV"), input[value="CSV"], ' +
-    '.dt-buttons a, .dt-buttons button'
-  );
-
-  let csvReady = false;
-  try {
-    await csvLocator.first().waitFor({ state: 'visible', timeout: 30_000 });
-    csvReady = true;
-  } catch {
-    // Fallback: scan for any element with "csv" text (case-insensitive)
-    csvReady = await page.evaluate(() => {
-      const allEls = document.querySelectorAll('a, button, input, span');
-      for (const el of allEls) {
-        const text = (el.textContent?.trim() || '').toLowerCase();
-        const val = (el as HTMLInputElement).value?.toLowerCase() || '';
-        if (text === 'csv' || val === 'csv') return true;
-      }
-      return false;
-    });
-  }
-
-  if (!csvReady) {
-    await debugScreenshot(page, '13-FAILED-csv-not-found');
-    const debugInfo = await getPageDebugInfo(page);
-    console.log('[oneglance-sync] CSV button not found on stock page. Debug:\n', debugInfo);
-    throw new Error('CSV download button not found on stock report page');
-  }
-
-  // Click csv to download — handle both file-download and new-tab scenarios
-  progress(opts, 'stock', 'Downloading stock CSV...', 82);
-  await debugScreenshot(page, '14-before-csv-click');
+  // ── Download Stock CSV using multiple strategies ──
+  progress(opts, 'stock', 'Preparing CSV download...', 81);
+  await debugScreenshot(page, '13-before-csv-download');
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const filename = `oneglance-stock-${timestamp}.csv`;
   const filePath = path.join(downloadDir, filename);
+  let saved = false;
 
-  // Set up listeners for BOTH mechanisms BEFORE clicking
-  // Mechanism 1: Standard file download event (like sales/purchase reports)
-  const downloadHandler = page.waitForEvent('download', { timeout: 60_000 })
-    .then(async (dl) => { await dl.saveAs(filePath); return true; })
-    .catch(() => false);
+  // Inspect the CSV button to understand its type and attributes
+  const csvBtnInfo = await page.evaluate(() => {
+    const allEls = document.querySelectorAll('a, button, input, span, div');
+    for (const el of allEls) {
+      const text = (el.textContent?.trim() || '').toLowerCase();
+      const val = (el as HTMLInputElement).value?.toLowerCase() || '';
+      // Match "csv" but exclude elements inside the data table
+      if ((text === 'csv' || val === 'csv') && !el.closest('table') && el.tagName !== 'SCRIPT') {
+        return {
+          tag: el.tagName.toLowerCase(),
+          href: (el as HTMLAnchorElement).href || '',
+          target: el.getAttribute('target') || '',
+          outerHTML: el.outerHTML.slice(0, 500),
+        };
+      }
+    }
+    return null;
+  });
+  console.log('[oneglance-sync] CSV button info:', JSON.stringify(csvBtnInfo));
 
-  // Mechanism 2: CSV opens in a new tab/window (stock report header buttons)
-  const newPageHandler = context.waitForEvent('page', { timeout: 60_000 })
-    .then(async (newPage) => {
-      await newPage.waitForLoadState('load', { timeout: 30_000 });
-      const content = await newPage.evaluate(() => document.body.innerText || document.body.textContent || '');
+  if (!csvBtnInfo) {
+    await debugScreenshot(page, '14-FAILED-csv-not-found');
+    throw new Error('CSV button not found on stock report page');
+  }
+
+  // ── Strategy 1: Direct fetch via href (most reliable) ──
+  if (!saved && csvBtnInfo.tag === 'a' && csvBtnInfo.href && !csvBtnInfo.href.endsWith('#') && !csvBtnInfo.href.startsWith('javascript:')) {
+    console.log('[oneglance-sync] Strategy 1: fetching CSV via href:', csvBtnInfo.href);
+    progress(opts, 'stock', 'Downloading stock CSV (direct)...', 82);
+    try {
+      const content = await page.evaluate(async (url: string) => {
+        const resp = await fetch(url, { credentials: 'include' });
+        return resp.text();
+      }, csvBtnInfo.href);
       if (content && content.trim().length > 10) {
         fs.writeFileSync(filePath, content, 'utf-8');
-        await newPage.close();
-        return true;
+        saved = true;
+        console.log('[oneglance-sync] Strategy 1 succeeded — CSV fetched directly');
       }
-      await newPage.close();
-      return false;
-    })
-    .catch(() => false);
+    } catch (e: any) {
+      console.log('[oneglance-sync] Strategy 1 failed:', e.message);
+    }
+  }
 
-  // Click csv button — try locator first, then evaluate fallback
-  const locatorClicked = await csvLocator.first().click({ timeout: 5_000 }).then(() => true).catch(() => false);
-  if (!locatorClicked) {
-    console.log('[oneglance-sync] CSV locator click failed, trying evaluate fallback...');
+  // ── Strategy 2: Click + intercept response / download / new tab ──
+  if (!saved) {
+    console.log('[oneglance-sync] Strategy 2: click + intercept response...');
+    progress(opts, 'stock', 'Downloading stock CSV...', 82);
+
+    // Capture any network response that looks like CSV
+    let capturedCSV: string | null = null;
+    const responseListener = async (resp: any) => {
+      try {
+        const ct = (resp.headers()['content-type'] || '').toLowerCase();
+        const url = (resp.url() || '').toLowerCase();
+        if (ct.includes('csv') || ct.includes('text/plain') || ct.includes('octet-stream') ||
+            url.includes('csv') || url.includes('export') || url.includes('download')) {
+          const text = await resp.text();
+          if (text && text.trim().length > 10 && text.includes(',')) {
+            capturedCSV = text;
+          }
+        }
+      } catch {}
+    };
+    page.on('response', responseListener);
+
+    // Also listen for download event and new page
+    const dlHandler = page.waitForEvent('download', { timeout: 20_000 })
+      .then(async (dl) => { await dl.saveAs(filePath); return 'download' as const; })
+      .catch(() => null);
+    const npHandler = context.waitForEvent('page', { timeout: 20_000 })
+      .then(async (np) => {
+        await np.waitForLoadState('load', { timeout: 15_000 });
+        const c = await np.evaluate(() => document.body.innerText || document.body.textContent || '');
+        if (c && c.trim().length > 10) {
+          fs.writeFileSync(filePath, c, 'utf-8');
+          await np.close();
+          return 'newpage' as const;
+        }
+        await np.close();
+        return null;
+      })
+      .catch(() => null);
+
+    // Click the csv button via evaluate (more reliable than locator for custom buttons)
     await page.evaluate(() => {
-      const allEls = document.querySelectorAll('a, button, input, span');
+      const allEls = document.querySelectorAll('a, button, input, span, div');
       for (const el of allEls) {
         const text = (el.textContent?.trim() || '').toLowerCase();
         const val = (el as HTMLInputElement).value?.toLowerCase() || '';
-        if (text === 'csv' || val === 'csv') {
+        if ((text === 'csv' || val === 'csv') && !el.closest('table')) {
           (el as HTMLElement).click();
           return;
         }
       }
     });
+
+    // Wait for any mechanism to fire (20s timeout)
+    const result = await Promise.race([
+      dlHandler,
+      npHandler,
+      new Promise<null>(r => setTimeout(() => r(null), 20_000)),
+    ]);
+
+    // Small extra wait for response interception
+    if (!result && !capturedCSV) {
+      await page.waitForTimeout(3000);
+    }
+
+    page.off('response', responseListener);
+
+    if (result === 'download') {
+      saved = true;
+      console.log('[oneglance-sync] Strategy 2 succeeded via download event');
+    } else if (result === 'newpage') {
+      saved = true;
+      console.log('[oneglance-sync] Strategy 2 succeeded via new tab');
+    } else if (capturedCSV) {
+      fs.writeFileSync(filePath, capturedCSV, 'utf-8');
+      saved = true;
+      console.log('[oneglance-sync] Strategy 2 succeeded via response interception');
+    }
   }
 
-  // Wait for whichever download mechanism fires first
-  const downloaded = await Promise.race([downloadHandler, newPageHandler]);
+  // ── Strategy 3: Scrape the HTML table directly (ultimate fallback) ──
+  if (!saved) {
+    console.log('[oneglance-sync] Strategy 3: scraping table data from page...');
+    progress(opts, 'stock', 'Extracting table data...', 82);
+    await debugScreenshot(page, '15-scrape-fallback');
 
-  if (!downloaded) {
-    await debugScreenshot(page, '15-FAILED-csv-download');
-    throw new Error('CSV download failed — neither file download nor new tab detected after clicking csv');
+    // Try to show ALL rows by changing DataTables page length
+    await page.evaluate(() => {
+      const sel = document.querySelector('select[name$="_length"]') as HTMLSelectElement;
+      if (sel) {
+        const allOpt = Array.from(sel.options).find(o => o.value === '-1' || o.textContent?.trim().toLowerCase() === 'all');
+        if (allOpt) { sel.value = allOpt.value; sel.dispatchEvent(new Event('change', { bubbles: true })); }
+        else {
+          // Use largest available option
+          const largest = Array.from(sel.options).reduce((a, b) => parseInt(a.value) > parseInt(b.value) ? a : b);
+          if (largest) { sel.value = largest.value; sel.dispatchEvent(new Event('change', { bubbles: true })); }
+        }
+      }
+    });
+    await page.waitForTimeout(3000);
+    await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
+
+    // Scrape all pages of the table
+    const allRows: string[][] = [];
+    let headers: string[] = [];
+    let pageNum = 0;
+    const MAX_PAGES = 50;
+
+    while (pageNum < MAX_PAGES) {
+      const tableData = await page.evaluate(() => {
+        const table = document.querySelector('table');
+        if (!table) return { headers: [] as string[], rows: [] as string[][], hasNext: false };
+        const ths: string[] = [];
+        table.querySelectorAll('thead th').forEach(th => ths.push((th as HTMLElement).innerText?.trim() || ''));
+        const rows: string[][] = [];
+        table.querySelectorAll('tbody tr').forEach(tr => {
+          const cells: string[] = [];
+          tr.querySelectorAll('td').forEach(td => {
+            let t = (td as HTMLElement).innerText?.trim() || '';
+            if (t.includes(',') || t.includes('"') || t.includes('\n')) t = '"' + t.replace(/"/g, '""') + '"';
+            cells.push(t);
+          });
+          if (cells.length > 0 && cells.some(c => c.length > 0)) rows.push(cells);
+        });
+        const nextBtn = document.querySelector('.paginate_button.next:not(.disabled), a.next:not(.disabled)');
+        return { headers: ths, rows, hasNext: !!nextBtn };
+      });
+
+      if (pageNum === 0 && tableData.headers.length > 0) headers = tableData.headers;
+      allRows.push(...tableData.rows);
+      pageNum++;
+
+      if (!tableData.hasNext || tableData.rows.length === 0) break;
+
+      // Click next page
+      await page.locator('.paginate_button.next, a.next').first().click({ timeout: 5_000 }).catch(() => {});
+      await page.waitForTimeout(1500);
+      await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {});
+    }
+
+    if (allRows.length > 0) {
+      const csvLines: string[] = [];
+      if (headers.length > 0) csvLines.push(headers.join(','));
+      for (const row of allRows) csvLines.push(row.join(','));
+      fs.writeFileSync(filePath, csvLines.join('\n'), 'utf-8');
+      saved = true;
+      console.log(`[oneglance-sync] Strategy 3 succeeded — scraped ${allRows.length} rows from ${pageNum} pages`);
+    }
+  }
+
+  if (!saved) {
+    await debugScreenshot(page, '16-FAILED-all-strategies');
+    throw new Error('All CSV download strategies failed (direct fetch, click+intercept, table scraping)');
   }
 
   progress(opts, 'stock', 'Stock CSV downloaded', 84);
