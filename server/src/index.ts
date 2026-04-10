@@ -242,26 +242,23 @@ async function start() {
   await seedPlatformDatabase(platformDb);
   console.log('Platform database initialized');
 
-  // ── One-time cleanup v2: wipe ALL pharmacy data for magnacode + purge backups ──
-  // v2 needed because v1 missed 'Pharmacy COGS' in dashboard_actuals AND
-  // the OOM crash restored old data from .bak files
+  // ── Permanent pharmacy data guard ──
+  // Runs EVERY startup: if pharmacy_sales_actuals has data but no OneGlance
+  // import logs exist, the data is stale (restored from crash recovery).
+  // Delete it. This guard stops running once a real sync imports fresh data.
   try {
     const mcDb = await getClientHelper('magnacode');
-    const alreadyCleaned = mcDb.get("SELECT value FROM app_settings WHERE key = 'og_cleanup_v2_20260411'");
-    if (!alreadyCleaned) {
-      const salesCount = mcDb.get('SELECT COUNT(*) as n FROM pharmacy_sales_actuals')?.n || 0;
-      const purchaseCount = mcDb.get('SELECT COUNT(*) as n FROM pharmacy_purchase_actuals')?.n || 0;
-      const stockCount = mcDb.get('SELECT COUNT(*) as n FROM pharmacy_stock_actuals')?.n || 0;
+    const ogImports = mcDb.get("SELECT COUNT(*) as n FROM import_logs WHERE source LIKE 'ONEGLANCE%'")?.n || 0;
+    const pharmaSales = mcDb.get('SELECT COUNT(*) as n FROM pharmacy_sales_actuals')?.n || 0;
+    const pharmaDash = mcDb.get("SELECT COUNT(*) as n FROM dashboard_actuals WHERE item_name LIKE 'Pharmacy%'")?.n || 0;
 
-      // Wipe all pharmacy raw data
+    if (ogImports === 0 && (pharmaSales > 0 || pharmaDash > 0)) {
+      console.log(`[Pharmacy Guard] Stale data detected (${pharmaSales} sales, ${pharmaDash} dashboard rows, 0 imports) — wiping`);
       mcDb.run('DELETE FROM pharmacy_sales_actuals');
       mcDb.run('DELETE FROM pharmacy_purchase_actuals');
       mcDb.run('DELETE FROM pharmacy_stock_actuals');
-      mcDb.run("DELETE FROM import_logs WHERE source LIKE 'ONEGLANCE%'");
-
-      // Wipe ALL pharmacy-related dashboard_actuals (Revenue + COGS + by stream_id)
       mcDb.run("DELETE FROM dashboard_actuals WHERE item_name LIKE 'Pharmacy%'");
-      // Also delete by pharmacy stream_id from platform DB
+      // Also catch entries with pharmacy stream_id or NULL stream_id that aren't clinic
       const clientRow = platformDb.get("SELECT id FROM clients WHERE slug = 'magnacode'");
       if (clientRow) {
         const pharmaStream = platformDb.get(
@@ -272,32 +269,10 @@ async function start() {
           mcDb.run('DELETE FROM dashboard_actuals WHERE stream_id = ?', pharmaStream.id);
         }
       }
-
-      mcDb.run("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('og_cleanup_v2_20260411', '1')");
-      console.log(`[Cleanup v2] Wiped ALL pharmacy data for magnacode: ${salesCount} sales, ${purchaseCount} purchases, ${stockCount} stock rows`);
-
-      // Purge .bak and daily backup files so recovery can't restore old data
-      const isProd = process.env.NODE_ENV === 'production';
-      const dataDir = process.env.DATA_DIR || (isProd ? '/data' : '.');
-      const clientsDir = path.join(dataDir, 'clients');
-      const bakPath = path.join(clientsDir, 'magnacode.db.bak');
-      const backupDir = path.join(clientsDir, 'backups');
-      try {
-        if (fs.existsSync(bakPath)) { fs.unlinkSync(bakPath); console.log('[Cleanup v2] Deleted magnacode.db.bak'); }
-      } catch {}
-      try {
-        if (fs.existsSync(backupDir)) {
-          for (const f of fs.readdirSync(backupDir)) {
-            if (f.startsWith('magnacode.db.')) {
-              fs.unlinkSync(path.join(backupDir, f));
-              console.log(`[Cleanup v2] Deleted backup: ${f}`);
-            }
-          }
-        }
-      } catch {}
+      console.log('[Pharmacy Guard] Stale pharmacy data removed');
     }
   } catch (e) {
-    console.error('[Cleanup v2] magnacode pharmacy wipe failed:', e);
+    console.error('[Pharmacy Guard] Failed:', e);
   }
 
   // 2. Initialize existing client databases (ensure schemas + seed data are up to date)
