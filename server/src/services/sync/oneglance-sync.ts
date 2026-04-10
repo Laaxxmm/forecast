@@ -279,15 +279,66 @@ async function downloadStockReport(
   const stockValuesBtn = page.locator('button:has-text("Stock values"), a:has-text("Stock values"), input[value="Stock values"]').first();
   await stockValuesBtn.click({ timeout: TIMEOUT });
 
-  // Wait for report to load
-  await page.waitForTimeout(3000);
+  // Wait for report to fully load (stock reports can be large)
+  await page.waitForTimeout(5000);
   await page.waitForLoadState('networkidle', { timeout: 180_000 });
+  await debugScreenshot(page, '12-stock-report-loaded');
   progress(opts, 'stock', 'Stock report loaded', 80);
 
-  // Click "csv" to download
+  // Wait for CSV button to appear (DataTables renders export buttons after data loads)
+  progress(opts, 'stock', 'Locating CSV download button...', 81);
+  const csvLocator = page.locator(
+    'button:has-text("csv"), a:has-text("csv"), input[value="csv"], ' +
+    'button:has-text("CSV"), a:has-text("CSV"), input[value="CSV"], ' +
+    '.dt-buttons a, .dt-buttons button'
+  );
+
+  let csvReady = false;
+  try {
+    await csvLocator.first().waitFor({ state: 'visible', timeout: 30_000 });
+    csvReady = true;
+  } catch {
+    // Fallback: scan for any element with "csv" text (case-insensitive)
+    csvReady = await page.evaluate(() => {
+      const allEls = document.querySelectorAll('a, button, input, span');
+      for (const el of allEls) {
+        const text = (el.textContent?.trim() || '').toLowerCase();
+        const val = (el as HTMLInputElement).value?.toLowerCase() || '';
+        if (text === 'csv' || val === 'csv') return true;
+      }
+      return false;
+    });
+  }
+
+  if (!csvReady) {
+    await debugScreenshot(page, '13-FAILED-csv-not-found');
+    const debugInfo = await getPageDebugInfo(page);
+    console.log('[oneglance-sync] CSV button not found on stock page. Debug:\n', debugInfo);
+    throw new Error('CSV download button not found on stock report page');
+  }
+
+  // Click csv to download
   progress(opts, 'stock', 'Downloading stock CSV...', 82);
+  await debugScreenshot(page, '14-before-csv-click');
+
   const downloadPromise = page.waitForEvent('download', { timeout: 180_000 });
-  await page.locator('button:has-text("csv"), a:has-text("csv"), input[value="csv"]').first().click({ timeout: TIMEOUT });
+
+  // Try Playwright locator click first, then fallback to evaluate-based click
+  const locatorClicked = await csvLocator.first().click({ timeout: 5_000 }).then(() => true).catch(() => false);
+  if (!locatorClicked) {
+    console.log('[oneglance-sync] CSV locator click failed, trying evaluate fallback...');
+    await page.evaluate(() => {
+      const allEls = document.querySelectorAll('a, button, input, span');
+      for (const el of allEls) {
+        const text = (el.textContent?.trim() || '').toLowerCase();
+        const val = (el as HTMLInputElement).value?.toLowerCase() || '';
+        if (text === 'csv' || val === 'csv') {
+          (el as HTMLElement).click();
+          return;
+        }
+      }
+    });
+  }
 
   const download = await downloadPromise;
   progress(opts, 'stock', 'Stock CSV downloaded', 84);

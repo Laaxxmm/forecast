@@ -561,7 +561,16 @@ export default function ImportPage() {
               {(syncing || syncStatus?.step === 'error') && syncStatus && (
                 <SyncStepTracker
                   status={syncStatus}
-                  steps={syncSource === 'healthplix' ? HP_SYNC_STEPS : syncSource === 'turia' ? TURIA_SYNC_STEPS : OG_SYNC_STEPS}
+                  steps={syncSource === 'healthplix' ? HP_SYNC_STEPS : syncSource === 'turia' ? TURIA_SYNC_STEPS :
+                    OG_SYNC_STEPS.filter(s => {
+                      if (ogReportType === 'all') return true;
+                      if (ogReportType === 'both') return s.key !== 'stock';
+                      if (ogReportType === 'stock') return s.key !== 'sales' && s.key !== 'purchase';
+                      if (ogReportType === 'sales') return s.key !== 'purchase' && s.key !== 'stock';
+                      if (ogReportType === 'purchase') return s.key !== 'sales' && s.key !== 'stock';
+                      return true;
+                    })
+                  }
                 />
               )}
 
