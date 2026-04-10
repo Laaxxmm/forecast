@@ -493,9 +493,12 @@ export default function FinancingTab({ category, label, scenario, months, viewMo
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
 
   // Totals per month
-  const monthlyTotals: Record<string, number> = {};
-  months.forEach(m => { monthlyTotals[m] = items.reduce((sum, item) => sum + (allValues[item.id]?.[m] || 0), 0); });
-  const grandTotal = Object.values(monthlyTotals).reduce((s, v) => s + v, 0);
+  const monthlyTotals = useMemo(() => {
+    const totals: Record<string, number> = {};
+    months.forEach(m => { totals[m] = items.reduce((sum, item) => sum + (allValues[item.id]?.[m] || 0), 0); });
+    return totals;
+  }, [months, items, allValues]);
+  const grandTotal = useMemo(() => Object.values(monthlyTotals).reduce((s, v) => s + v, 0), [monthlyTotals]);
 
   // Chart data
   const chartData = useMemo(() => {
@@ -512,69 +515,84 @@ export default function FinancingTab({ category, label, scenario, months, viewMo
   // Create financing item
   const handleCreateFinancing = async () => {
     if (!finName.trim() || !finType || !scenario) return;
-    const res = await api.post('/forecast-module/items', {
-      scenario_id: scenario.id,
-      category: 'financing',
-      name: finName.trim(),
-      item_type: finType,
-      entry_mode: 'varying',
-    });
-    setShowModal(false);
-    setFinName('');
-    setFinType('');
-    await onReload();
-    const newItem = { ...res.data, meta: res.data.meta ? JSON.parse(res.data.meta) : {} };
-    setEditingItem(newItem);
+    try {
+      const res = await api.post('/forecast-module/items', {
+        scenario_id: scenario.id,
+        category: 'financing',
+        name: finName.trim(),
+        item_type: finType,
+        entry_mode: 'varying',
+      });
+      setShowModal(false);
+      setFinName('');
+      setFinType('');
+      await onReload();
+      setEditingItem(res.data);
+    } catch (err) {
+      console.error('Failed to create financing item:', err);
+    }
   };
 
   // Save handlers
   const handleLoanSave = async (meta: Record<string, any>) => {
     if (!editingItem) return;
-    await api.put(`/forecast-module/items/${editingItem.id}`, { name: editingItem.name, meta: { ...editingItem.meta, ...meta } });
+    try {
+      await api.put(`/forecast-module/items/${editingItem.id}`, { name: editingItem.name, meta: { ...editingItem.meta, ...meta } });
 
-    const { receive_amount, num_payments, interest_rate, receive_month } = meta;
-    if (receive_amount && num_payments) {
-      const monthlyRate = (interest_rate || 0) / 100 / 12;
-      let emi: number;
-      if (monthlyRate > 0) {
-        emi = receive_amount * monthlyRate * Math.pow(1 + monthlyRate, num_payments) / (Math.pow(1 + monthlyRate, num_payments) - 1);
-      } else {
-        emi = receive_amount / num_payments;
+      const { receive_amount, num_payments, interest_rate, receive_month } = meta;
+      if (receive_amount && num_payments) {
+        const monthlyRate = (interest_rate || 0) / 100 / 12;
+        let emi: number;
+        if (monthlyRate > 0) {
+          emi = receive_amount * monthlyRate * Math.pow(1 + monthlyRate, num_payments) / (Math.pow(1 + monthlyRate, num_payments) - 1);
+        } else {
+          emi = receive_amount / num_payments;
+        }
+        emi = Math.round(emi);
+        const startIdx = receive_month === 'before_start' ? 0 : Math.max(0, months.indexOf(receive_month));
+        const entries: { month: string; amount: number }[] = [];
+        for (let i = 0; i < num_payments && startIdx + i < months.length; i++) {
+          entries.push({ month: months[startIdx + i], amount: emi });
+        }
+        if (entries.length > 0) await api.post('/forecast-module/values/bulk', { item_id: editingItem.id, entries });
       }
-      emi = Math.round(emi);
-      const startIdx = receive_month === 'before_start' ? 0 : Math.max(0, months.indexOf(receive_month));
-      const entries: { month: string; amount: number }[] = [];
-      for (let i = 0; i < num_payments && startIdx + i < months.length; i++) {
-        entries.push({ month: months[startIdx + i], amount: emi });
-      }
-      if (entries.length > 0) await api.post('/forecast-module/values/bulk', { item_id: editingItem.id, entries });
+      setEditingItem(null);
+      await onReload();
+    } catch (err) {
+      console.error('Failed to save loan:', err);
     }
-    setEditingItem(null);
-    await onReload();
   };
 
   const handleCreditSave = async (meta: Record<string, any>, withdrawals: Record<string, number>, payments: Record<string, number>) => {
     if (!editingItem) return;
-    await api.put(`/forecast-module/items/${editingItem.id}`, { name: editingItem.name, meta: { ...editingItem.meta, ...meta } });
-    const entries: { month: string; amount: number }[] = [];
-    months.forEach(m => {
-      const w = withdrawals[m] || 0;
-      const p = payments[m] || 0;
-      const net = w - p;
-      if (net !== 0) entries.push({ month: m, amount: net });
-    });
-    if (entries.length > 0) await api.post('/forecast-module/values/bulk', { item_id: editingItem.id, entries });
-    setEditingItem(null);
-    await onReload();
+    try {
+      await api.put(`/forecast-module/items/${editingItem.id}`, { name: editingItem.name, meta: { ...editingItem.meta, ...meta } });
+      const entries: { month: string; amount: number }[] = [];
+      months.forEach(m => {
+        const w = withdrawals[m] || 0;
+        const p = payments[m] || 0;
+        const net = w - p;
+        if (net !== 0) entries.push({ month: m, amount: net });
+      });
+      if (entries.length > 0) await api.post('/forecast-module/values/bulk', { item_id: editingItem.id, entries });
+      setEditingItem(null);
+      await onReload();
+    } catch (err) {
+      console.error('Failed to save credit line:', err);
+    }
   };
 
   const handleInvestmentSave = async (meta: Record<string, any>, values: Record<string, number>) => {
     if (!editingItem) return;
-    await api.put(`/forecast-module/items/${editingItem.id}`, { name: editingItem.name, meta: { ...editingItem.meta, ...meta } });
-    const entries = Object.entries(values).filter(([_, v]) => v !== 0).map(([month, amount]) => ({ month, amount }));
-    if (entries.length > 0) await api.post('/forecast-module/values/bulk', { item_id: editingItem.id, entries });
-    setEditingItem(null);
-    await onReload();
+    try {
+      await api.put(`/forecast-module/items/${editingItem.id}`, { name: editingItem.name, meta: { ...editingItem.meta, ...meta } });
+      const entries = Object.entries(values).filter(([_, v]) => v !== 0).map(([month, amount]) => ({ month, amount }));
+      if (entries.length > 0) await api.post('/forecast-module/values/bulk', { item_id: editingItem.id, entries });
+      setEditingItem(null);
+      await onReload();
+    } catch (err) {
+      console.error('Failed to save investment:', err);
+    }
   };
 
   const handleDiscard = () => setShowDiscardConfirm(true);

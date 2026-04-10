@@ -84,42 +84,50 @@ export default function AssetsTab({ category, label, scenario, months, viewMode,
 
   const handleInlineAdd = async () => {
     if (!inlineAddName.trim() || !scenario) return;
-    const res = await api.post('/forecast-module/items', {
-      scenario_id: scenario.id,
-      category: 'assets',
-      name: inlineAddName.trim(),
-      item_type: 'long_term',
-      entry_mode: 'varying',
-      start_month: months[0],
-      meta: { useful_life: '5', plan_to_sell: false },
-    });
-    setShowInlineAdd(false);
-    setInlineAddName('');
-    await onReload();
-    if (res.data?.id) setEditingItem(res.data);
+    try {
+      const res = await api.post('/forecast-module/items', {
+        scenario_id: scenario.id,
+        category: 'assets',
+        name: inlineAddName.trim(),
+        item_type: 'long_term',
+        entry_mode: 'varying',
+        start_month: months[0],
+        meta: { useful_life: '5', plan_to_sell: false },
+      });
+      setShowInlineAdd(false);
+      setInlineAddName('');
+      await onReload();
+      if (res.data?.id) setEditingItem(res.data);
+    } catch (err) {
+      console.error('Failed to add asset:', err);
+    }
   };
 
   const handleDuplicate = async (item: ForecastItem) => {
     if (!scenario) return;
-    const res = await api.post('/forecast-module/items', {
-      scenario_id: scenario.id,
-      category: item.category,
-      name: `${item.name} (Copy)`,
-      item_type: item.item_type,
-      entry_mode: item.entry_mode,
-      constant_amount: item.constant_amount,
-      constant_period: item.constant_period,
-      start_month: item.start_month,
-      meta: item.meta,
-    });
-    const vals = allValues[item.id];
-    if (vals && Object.keys(vals).length > 0) {
-      await api.post('/forecast-module/values', {
-        item_id: res.data.id,
-        values: Object.entries(vals).map(([month, amount]) => ({ month, amount })),
+    try {
+      const res = await api.post('/forecast-module/items', {
+        scenario_id: scenario.id,
+        category: item.category,
+        name: `${item.name} (Copy)`,
+        item_type: item.item_type,
+        entry_mode: item.entry_mode,
+        constant_amount: item.constant_amount,
+        constant_period: item.constant_period,
+        start_month: item.start_month,
+        meta: item.meta,
       });
+      const vals = allValues[item.id];
+      if (vals && Object.keys(vals).length > 0) {
+        await api.post('/forecast-module/values', {
+          item_id: res.data.id,
+          values: Object.entries(vals).map(([month, amount]) => ({ month, amount })),
+        });
+      }
+      await onReload();
+    } catch (err) {
+      console.error('Failed to duplicate asset:', err);
     }
-    await onReload();
   };
 
   if (editingItem && !readOnly) {
@@ -298,7 +306,7 @@ export default function AssetsTab({ category, label, scenario, months, viewMode,
               <th className="text-left py-3 px-4 font-semibold text-theme-muted sticky left-0 bg-dark-600 z-10 min-w-[240px]">
                 <div className="flex items-center gap-2">
                   <span>Assets</span>
-                  <button className="text-xs text-theme-muted hover:text-theme-muted border border-dark-400 rounded px-2 py-0.5">Organize</button>
+                  <button className="text-xs text-theme-muted hover:text-theme-secondary border border-dark-400 rounded px-2 py-0.5">Organize</button>
                 </div>
               </th>
               {months.map(m => (

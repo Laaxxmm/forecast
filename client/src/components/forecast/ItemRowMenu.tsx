@@ -65,8 +65,8 @@ export default function ItemRowMenu({ item, items, category, allValues, onEdit, 
       category: targetCategory,
       item_type: DEFAULT_TYPES[targetCategory] || item.item_type,
     });
-    closeMenu();
     await onReload();
+    closeMenu();
   };
 
   const handleNoteSave = async () => {
@@ -106,10 +106,11 @@ export default function ItemRowMenu({ item, items, category, allValues, onEdit, 
 
       {open && createPortal(
         <>
-          <div className="fixed inset-0 z-[49]" onClick={closeMenu} />
+          <div className="fixed inset-0 z-[49]" onClick={closeMenu} onKeyDown={e => { if (e.key === 'Escape') closeMenu(); }} />
           <div
             className="fixed bg-dark-700 border border-dark-400/50 rounded-lg shadow-xl z-50 w-48 py-1"
             style={{ top: menuPos.top, left: menuPos.left }}
+            onKeyDown={e => { if (e.key === 'Escape') closeMenu(); }}
           >
             <button
               onClick={() => { onEdit(); closeMenu(); }}

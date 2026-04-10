@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Plus, GripVertical, FileDown, X, StickyNote } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import api from '../../api/client';
@@ -103,21 +103,25 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
   const [showAddType, setShowAddType] = useState(false);
   const [showInlineAdd, setShowInlineAdd] = useState(false);
   const [inlineAddName, setInlineAddName] = useState('');
+  const [pendingTypeItem, setPendingTypeItem] = useState<ForecastItem | null>(null);
 
   const config = CATEGORY_CONFIG[category] || { addLabel: 'Add', itemTypes: [], showChart: false };
 
   // Calculate totals per month
-  const monthlyTotals: Record<string, number> = {};
-  months.forEach(m => {
-    monthlyTotals[m] = items.reduce((sum, item) => sum + (allValues[item.id]?.[m] || 0), 0);
-  });
+  const monthlyTotals = useMemo(() => {
+    const totals: Record<string, number> = {};
+    months.forEach(m => {
+      totals[m] = items.reduce((sum, item) => sum + (allValues[item.id]?.[m] || 0), 0);
+    });
+    return totals;
+  }, [months, items, allValues]);
 
-  const chartData = months.map(m => ({
+  const chartData = useMemo(() => months.map(m => ({
     month: getMonthLabel(m),
     total: monthlyTotals[m] || 0,
-  }));
+  })), [months, monthlyTotals]);
 
-  const grandTotal = Object.values(monthlyTotals).reduce((s, v) => s + v, 0);
+  const grandTotal = useMemo(() => Object.values(monthlyTotals).reduce((s, v) => s + v, 0), [monthlyTotals]);
 
   const handleAddClick = () => {
     if (config.itemTypes.length === 1) {
@@ -167,7 +171,12 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
     setShowInlineAdd(false);
     setInlineAddName('');
     await onReload();
-    if (res.data?.id) setEditingItem(res.data);
+    // If multiple types available, show type selection before opening editor
+    if (res.data?.id && config.itemTypes.length > 1) {
+      setPendingTypeItem(res.data);
+    } else if (res.data?.id) {
+      setEditingItem(res.data);
+    }
   };
 
   const handleDuplicate = async (item: ForecastItem) => {
@@ -308,6 +317,34 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
     );
   }
 
+  // Show type selection for inline-added item (created but needs type chosen)
+  if (pendingTypeItem) {
+    const questionMap: Record<string, string> = {
+      revenue: 'How would you like to forecast this revenue stream?',
+      direct_costs: 'What type of direct cost is this?',
+      assets: 'What type of asset is this?',
+    };
+    return (
+      <TypeSelectionScreen
+        title={pendingTypeItem.name}
+        question={questionMap[category] || `Choose a type for this ${label.toLowerCase()}`}
+        types={config.itemTypes}
+        onSelect={async (selectedType: string) => {
+          await api.put(`/forecast-module/items/${pendingTypeItem.id}`, { item_type: selectedType });
+          await onReload();
+          setEditingItem({ ...pendingTypeItem, item_type: selectedType });
+          setPendingTypeItem(null);
+        }}
+        onBack={async () => {
+          // User cancelled — delete the item since they haven't configured it
+          await api.delete(`/forecast-module/items/${pendingTypeItem.id}`);
+          await onReload();
+          setPendingTypeItem(null);
+        }}
+      />
+    );
+  }
+
   // Show type selection screen
   if (showTypeSelection) {
     const questionMap: Record<string, string> = {
@@ -330,6 +367,14 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
     );
   }
 
+  // Special pages (must come before editingItem check to avoid stale state)
+  if (category === 'cash_flow_assumptions') {
+    return <CashFlowAssumptionsTab scenario={scenario} items={items} allItems={allItems} allValues={allValues} settings={settings} onReload={onReload} readOnly={readOnly} />;
+  }
+  if (category === 'initial_balances') {
+    return <InitialBalancesTab scenario={scenario} months={months} settings={settings} onReload={onReload} readOnly={readOnly} />;
+  }
+
   if (editingItem && !readOnly) {
     return (
       <ItemEditForm
@@ -346,14 +391,6 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
         onDiscard={() => setEditingItem(null)}
       />
     );
-  }
-
-  // Special pages
-  if (category === 'cash_flow_assumptions') {
-    return <CashFlowAssumptionsTab scenario={scenario} items={items} allItems={allItems} allValues={allValues} settings={settings} onReload={onReload} readOnly={readOnly} />;
-  }
-  if (category === 'initial_balances') {
-    return <InitialBalancesTab scenario={scenario} months={months} settings={settings} onReload={onReload} readOnly={readOnly} />;
   }
 
   return (
@@ -429,7 +466,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
               <th className="text-left py-3 px-4 font-semibold text-theme-muted sticky left-0 bg-dark-600 z-10 min-w-[240px]">
                 <div className="flex items-center gap-2">
                   <span>{label}</span>
-                  <button className="text-xs text-theme-muted hover:text-theme-muted border border-dark-400 rounded px-2 py-0.5">Organize</button>
+                  <button className="text-xs text-theme-muted hover:text-theme-secondary border border-dark-400 rounded px-2 py-0.5">Organize</button>
                 </div>
               </th>
               {months.map(m => (

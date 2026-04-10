@@ -1,7 +1,13 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { branchFilter, getBranchIdForInsert, streamFilter, getStreamIdForInsert } from '../utils/branch.js';
 
 const router = Router();
+
+// Write-protection: only admin/super_admin can modify forecast data
+function requireWriteAccess(req: Request, res: Response, next: NextFunction) {
+  if (req.userType === 'super_admin' || req.session?.role === 'admin') return next();
+  return res.status(403).json({ error: 'Write access requires admin role' });
+}
 
 // === CONSOLIDATED VIEW (All Streams) ===
 router.get('/consolidated', async (req, res) => {
@@ -64,7 +70,7 @@ router.get('/scenarios', async (req, res) => {
   res.json(db.all(`SELECT * FROM scenarios WHERE fy_id = ?${bf.where}${sf.where} ORDER BY is_default DESC, name`, fy_id, ...bf.params, ...sf.params));
 });
 
-router.post('/scenarios', async (req, res) => {
+router.post('/scenarios', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id, name } = req.body;
   const bf = branchFilter(req);
@@ -119,12 +125,12 @@ router.get('/items', async (req, res) => {
   // Parse meta JSON
   items = items.map((item: any) => ({
     ...item,
-    meta: item.meta ? JSON.parse(item.meta) : {},
+    meta: (() => { try { return item.meta ? JSON.parse(item.meta) : {}; } catch { return {}; } })(),
   }));
   res.json(items);
 });
 
-router.post('/items', async (req, res) => {
+router.post('/items', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
   const { scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta } = req.body;
   if (!scenario_id || !category || !name) {
@@ -145,11 +151,11 @@ router.post('/items', async (req, res) => {
     'SELECT * FROM forecast_items WHERE scenario_id = ? AND category = ? AND name = ? ORDER BY id DESC LIMIT 1',
     scenario_id, category, name
   );
-  res.json({ ...item, meta: item?.meta ? JSON.parse(item.meta) : {} });
+  res.json({ ...item, meta: (() => { try { return item?.meta ? JSON.parse(item.meta) : {}; } catch { return {}; } })() });
 });
 
 // Reorder must come BEFORE :id to avoid 'reorder' matching as a param
-router.put('/items/reorder', async (req, res) => {
+router.put('/items/reorder', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
   const { items } = req.body; // [{id, sort_order}]
   for (const item of items) {
@@ -158,7 +164,7 @@ router.put('/items/reorder', async (req, res) => {
   res.json({ ok: true });
 });
 
-router.put('/items/:id', async (req, res) => {
+router.put('/items/:id', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
   const { name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta, category } = req.body;
   const fields: string[] = [];
@@ -182,11 +188,14 @@ router.put('/items/:id', async (req, res) => {
   values.push(req.params.id);
   db.run(`UPDATE forecast_items SET ${fields.join(', ')} WHERE id = ?`, ...values);
   const item = db.get('SELECT * FROM forecast_items WHERE id = ?', req.params.id);
-  res.json({ ...item, meta: item?.meta ? JSON.parse(item.meta) : {} });
+  res.json({ ...item, meta: (() => { try { return item?.meta ? JSON.parse(item.meta) : {}; } catch { return {}; } })() });
 });
 
-router.delete('/items/:id', async (req, res) => {
+router.delete('/items/:id', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
+  // Verify item belongs to a scenario accessible by this tenant
+  const item = db.get('SELECT fi.id FROM forecast_items fi JOIN scenarios s ON fi.scenario_id = s.id WHERE fi.id = ?', req.params.id);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
   db.run('DELETE FROM forecast_items WHERE id = ?', req.params.id);
   res.json({ ok: true });
 });
@@ -210,7 +219,7 @@ router.get('/values', async (req, res) => {
   }
 });
 
-router.post('/values', async (req, res) => {
+router.post('/values', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
   const { item_id, values } = req.body; // values: [{month, amount}]
   if (!item_id || !values?.length) return res.status(400).json({ error: 'item_id and values required' });
@@ -228,24 +237,26 @@ router.post('/values', async (req, res) => {
 });
 
 // Bulk save all values for a scenario (used by the grid)
-router.post('/values/bulk', async (req, res) => {
+router.post('/values/bulk', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
-  const { entries } = req.body; // [{item_id, month, amount}]
+  const { item_id, entries } = req.body; // item_id (optional top-level), entries: [{item_id?, month, amount}]
   if (!entries?.length) return res.status(400).json({ error: 'entries required' });
 
   for (const e of entries) {
-    const existing = db.get('SELECT id FROM forecast_values WHERE item_id = ? AND month = ?', e.item_id, e.month);
+    const effectiveItemId = e.item_id || item_id;
+    if (!effectiveItemId) continue;
+    const existing = db.get('SELECT id FROM forecast_values WHERE item_id = ? AND month = ?', effectiveItemId, e.month);
     if (existing) {
       db.run('UPDATE forecast_values SET amount = ? WHERE id = ?', e.amount || 0, existing.id);
     } else {
-      db.run('INSERT INTO forecast_values (item_id, month, amount) VALUES (?, ?, ?)', e.item_id, e.month, e.amount || 0);
+      db.run('INSERT INTO forecast_values (item_id, month, amount) VALUES (?, ?, ?)', effectiveItemId, e.month, e.amount || 0);
     }
   }
   res.json({ ok: true, count: entries.length });
 });
 
 // === AUTO-GENERATE VALUES from constant settings ===
-router.post('/items/:id/generate', async (req, res) => {
+router.post('/items/:id/generate', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
   const { months } = req.body; // array of month strings to generate for
   const item = db.get('SELECT * FROM forecast_items WHERE id = ?', req.params.id);
@@ -300,7 +311,7 @@ router.get('/settings', async (req, res) => {
   res.json(obj);
 });
 
-router.post('/settings', async (req, res) => {
+router.post('/settings', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
   const { scenario_id, settings } = req.body; // settings: {key: value, ...}
   if (!scenario_id || !settings) return res.status(400).json({ error: 'scenario_id and settings required' });
@@ -343,7 +354,7 @@ router.get('/summary', async (req, res) => {
     if (!categories[item.category]) categories[item.category] = [];
     categories[item.category].push({
       ...item,
-      meta: item.meta ? JSON.parse(item.meta) : {},
+      meta: (() => { try { return item.meta ? JSON.parse(item.meta) : {}; } catch { return {}; } })(),
       values: valueLookup[item.id] || {},
     });
   });

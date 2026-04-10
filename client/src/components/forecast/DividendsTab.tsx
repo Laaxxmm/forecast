@@ -31,11 +31,14 @@ export default function DividendsTab({ category, label, scenario, months, viewMo
   const [inlineAddName, setInlineAddName] = useState('');
 
   // Monthly totals
-  const monthlyTotals: Record<string, number> = {};
-  months.forEach(m => {
-    monthlyTotals[m] = items.reduce((sum, item) => sum + (allValues[item.id]?.[m] || 0), 0);
-  });
-  const grandTotal = Object.values(monthlyTotals).reduce((s, v) => s + v, 0);
+  const monthlyTotals = useMemo(() => {
+    const totals: Record<string, number> = {};
+    months.forEach(m => {
+      totals[m] = items.reduce((sum, item) => sum + (allValues[item.id]?.[m] || 0), 0);
+    });
+    return totals;
+  }, [months, items, allValues]);
+  const grandTotal = useMemo(() => Object.values(monthlyTotals).reduce((s, v) => s + v, 0), [monthlyTotals]);
 
   // Chart data
   const chartData = useMemo(() =>
@@ -75,55 +78,67 @@ export default function DividendsTab({ category, label, scenario, months, viewMo
   // Add new dividend
   const handleAdd = async () => {
     if (!scenario) return;
-    const res = await api.post('/forecast-module/items', {
-      scenario_id: scenario.id,
-      category: 'dividends',
-      name: 'New Dividend',
-      item_type: 'dividend',
-      entry_mode: 'varying',
-      start_month: months[0],
-    });
-    await onReload();
-    if (res.data?.id) setEditingItem(res.data);
+    try {
+      const res = await api.post('/forecast-module/items', {
+        scenario_id: scenario.id,
+        category: 'dividends',
+        name: 'New Dividend',
+        item_type: 'dividend',
+        entry_mode: 'varying',
+        start_month: months[0],
+      });
+      await onReload();
+      if (res.data?.id) setEditingItem(res.data);
+    } catch (err) {
+      console.error('Failed to add dividend:', err);
+    }
   };
 
   const handleDuplicate = async (item: ForecastItem) => {
     if (!scenario) return;
-    const res = await api.post('/forecast-module/items', {
-      scenario_id: scenario.id,
-      category: 'dividends',
-      name: `${item.name} (Copy)`,
-      item_type: item.item_type,
-      entry_mode: item.entry_mode,
-      constant_amount: item.constant_amount,
-      constant_period: item.constant_period,
-      start_month: item.start_month,
-      meta: item.meta,
-    });
-    const vals = allValues[item.id];
-    if (vals && Object.keys(vals).length > 0) {
-      await api.post('/forecast-module/values', {
-        item_id: res.data.id,
-        values: Object.entries(vals).map(([month, amount]) => ({ month, amount })),
+    try {
+      const res = await api.post('/forecast-module/items', {
+        scenario_id: scenario.id,
+        category: 'dividends',
+        name: `${item.name} (Copy)`,
+        item_type: item.item_type,
+        entry_mode: item.entry_mode,
+        constant_amount: item.constant_amount,
+        constant_period: item.constant_period,
+        start_month: item.start_month,
+        meta: item.meta,
       });
+      const vals = allValues[item.id];
+      if (vals && Object.keys(vals).length > 0) {
+        await api.post('/forecast-module/values', {
+          item_id: res.data.id,
+          values: Object.entries(vals).map(([month, amount]) => ({ month, amount })),
+        });
+      }
+      await onReload();
+    } catch (err) {
+      console.error('Failed to duplicate dividend:', err);
     }
-    await onReload();
   };
 
   const handleInlineAdd = async () => {
     if (!inlineAddName.trim() || !scenario) return;
-    const res = await api.post('/forecast-module/items', {
-      scenario_id: scenario.id,
-      category: 'dividends',
-      name: inlineAddName.trim(),
-      item_type: 'dividend',
-      entry_mode: 'varying',
-      start_month: months[0],
-    });
-    setShowInlineAdd(false);
-    setInlineAddName('');
-    await onReload();
-    if (res.data?.id) setEditingItem(res.data);
+    try {
+      const res = await api.post('/forecast-module/items', {
+        scenario_id: scenario.id,
+        category: 'dividends',
+        name: inlineAddName.trim(),
+        item_type: 'dividend',
+        entry_mode: 'varying',
+        start_month: months[0],
+      });
+      setShowInlineAdd(false);
+      setInlineAddName('');
+      await onReload();
+      if (res.data?.id) setEditingItem(res.data);
+    } catch (err) {
+      console.error('Failed to add dividend:', err);
+    }
   };
 
   // ─── Editing view → delegate to ItemEditForm ───

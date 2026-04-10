@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { Plus, GripVertical, ChevronDown, ChevronRight, X, StickyNote } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import api from '../../api/client';
@@ -154,8 +154,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
     pendingLaborType.current = laborType;
   };
 
-  // Use a ref-like pattern for pending labor type
-  const pendingLaborType = useMemo(() => ({ current: 'regular_labor' }), []);
+  const pendingLaborType = useRef('regular_labor');
 
   const handleAddWithType = async (itemType: string) => {
     if (!scenario) return;
@@ -414,7 +413,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
               <th className="text-left py-3 px-4 font-semibold text-theme-muted sticky left-0 bg-dark-600 z-10 min-w-[240px]">
                 <div className="flex items-center gap-2">
                   <span>{label}</span>
-                  <button className="text-xs text-theme-muted hover:text-theme-muted border border-dark-400 rounded px-2 py-0.5">Organize</button>
+                  <button className="text-xs text-theme-muted hover:text-theme-secondary border border-dark-400 rounded px-2 py-0.5">Organize</button>
                 </div>
               </th>
               {months.map(m => (
@@ -511,8 +510,8 @@ export default function PersonnelTab({ category, label, scenario, months, items,
 
             {/* ── Employee Taxes & Benefits Row ── */}
             {benefitsItems.length > 0 && (
-              <tr className="border-b border-dark-400/50 bg-amber-500/10/30">
-                <td className="py-2.5 px-4 sticky left-0 bg-amber-500/10/30 z-10">
+              <tr className="border-b border-dark-400/50 bg-amber-500/10">
+                <td className="py-2.5 px-4 sticky left-0 bg-amber-500/10 z-10">
                   <div className="flex items-center gap-2">
                     {readOnly ? (
                       <span className="text-theme-secondary font-medium text-left">Employee Taxes & Benefits</span>
@@ -590,7 +589,7 @@ export default function PersonnelTab({ category, label, scenario, months, items,
                     const count = isGroup ? (item.meta?.stepValues?.headcount?.[m] || 0) : (hasValue ? 1 : 0);
                     return (
                       <td key={m} className="text-right py-1.5 px-3 text-theme-muted tabular-nums text-xs">
-                        {count || <span className="text-theme-primary">-</span>}
+                        {count || <span className="text-theme-faint">-</span>}
                       </td>
                     );
                   })}

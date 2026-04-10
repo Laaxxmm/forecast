@@ -636,7 +636,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
         }
       }
     });
-  }, [stepEntryModes, stepConstants, months]);
+  }, [steps, stepEntryModes, stepConstants, months]);
 
   // Compute percent-of-stream values
   useEffect(() => {
@@ -667,7 +667,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
         setStepValues(prev => ({ ...prev, [step.key]: newVals }));
       }
     });
-  }, [stepEntryModes, pctOfRevenue, pctRevenueStartMonth, allValues, months, revenueItems]);
+  }, [steps, stepEntryModes, pctOfRevenue, pctRevenueStartMonth, allValues, months, revenueItems]);
 
   // Compute pct_specific values (% of a specific revenue stream)
   useEffect(() => {
@@ -683,7 +683,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
         setStepValues(prev => ({ ...prev, [step.key]: newVals }));
       }
     });
-  }, [stepEntryModes, pctLinkedRevenueId, pctOfRevenue, pctRevenueStartMonth, allValues, months]);
+  }, [steps, stepEntryModes, pctLinkedRevenueId, pctOfRevenue, pctRevenueStartMonth, allValues, months]);
 
   // Compute one_time values
   useEffect(() => {
@@ -696,7 +696,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
         setStepValues(prev => ({ ...prev, [step.key]: newVals }));
       }
     });
-  }, [stepEntryModes, oneTimeMonth, oneTimeAmount, months]);
+  }, [steps, stepEntryModes, oneTimeMonth, oneTimeAmount, months]);
 
   // Compute pct_net_profit values (% of net profit — for dividends)
   const costItems = useMemo(() => (allItems || []).filter(i =>
@@ -718,7 +718,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
         setStepValues(prev => ({ ...prev, [step.key]: newVals }));
       }
     });
-  }, [stepEntryModes, pctNetProfit, pctNetProfitStartMonth, allValues, months, revenueItems, costItems]);
+  }, [steps, stepEntryModes, pctNetProfit, pctNetProfitStartMonth, allValues, months, revenueItems, costItems]);
 
   // Compute final monthly values from all steps
   const computedValues = useMemo(() => {
@@ -796,6 +796,15 @@ export default function ItemEditForm({ item, category, months, values: initialVa
     await onSave();
   };
 
+  // Is this a revenue type with type switching?
+  const isRevenue = category === 'revenue';
+  const revenueTypes = [
+    { value: 'unit_sales', label: 'Unit-based revenue' },
+    { value: 'billable_hours', label: 'Billable hours' },
+    { value: 'recurring', label: 'Recurring charges' },
+    { value: 'revenue_only', label: 'Revenue only' },
+  ];
+
   // Is this a direct cost type with type switching?
   const isDirectCost = category === 'direct_costs';
   const directCostTypes = [
@@ -863,7 +872,34 @@ export default function ItemEditForm({ item, category, months, values: initialVa
           Type
           <Info size={12} className="text-theme-muted" />
         </span>
-        {isDirectCost ? (
+        {isRevenue ? (
+          <select
+            value={itemType}
+            onChange={e => {
+              const newType = e.target.value;
+              setItemType(newType);
+              // Reset step values when switching type since steps change
+              const newTypeDef = TYPE_DEFS[newType] || TYPE_DEFS.revenue_only;
+              const newModes: Record<string, string> = {};
+              const newConstants: Record<string, { amount: number; period: string; startMonth: string }> = {};
+              const newValues: Record<string, Record<string, number>> = {};
+              newTypeDef.steps.forEach(s => {
+                newModes[s.key] = s.defaultEntryMode;
+                newConstants[s.key] = { amount: 0, period: 'month', startMonth: months[0] };
+                newValues[s.key] = {};
+              });
+              setStepEntryModes(newModes);
+              setStepConstants(newConstants);
+              setStepValues(newValues);
+              setActiveStepIdx(0);
+            }}
+            className="input text-sm w-auto py-1.5"
+          >
+            {revenueTypes.map(t => (
+              <option key={t.value} value={t.value}>{t.label}</option>
+            ))}
+          </select>
+        ) : isDirectCost ? (
           <>
             <select
               value={itemType}
