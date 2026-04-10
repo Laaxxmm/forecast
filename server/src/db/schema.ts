@@ -149,6 +149,23 @@ export function initializeSchema(db: DbHelper) {
       profit REAL,
       profit_pct REAL
     );
+
+    CREATE TABLE IF NOT EXISTS pharmacy_stock_actuals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      import_id INTEGER NOT NULL REFERENCES import_logs(id),
+      snapshot_date TEXT NOT NULL,
+      drug_name TEXT,
+      batch_no TEXT,
+      received_date TEXT,
+      expiry_date TEXT,
+      avl_qty REAL DEFAULT 0,
+      strips REAL DEFAULT 0,
+      purchase_price REAL DEFAULT 0,
+      purchase_tax REAL DEFAULT 0,
+      purchase_value REAL DEFAULT 0,
+      stock_value REAL DEFAULT 0,
+      branch_id INTEGER
+    );
   `);
 
   // Forecast module tables
@@ -807,6 +824,8 @@ export function initializeSchema(db: DbHelper) {
     'CREATE INDEX IF NOT EXISTS idx_clinic_branch ON clinic_actuals(branch_id)',
     'CREATE INDEX IF NOT EXISTS idx_pharma_sales_branch ON pharmacy_sales_actuals(branch_id)',
     'CREATE INDEX IF NOT EXISTS idx_scenarios_branch ON scenarios(branch_id)',
+    'CREATE INDEX IF NOT EXISTS idx_pharma_stock_snapshot ON pharmacy_stock_actuals(snapshot_date)',
+    'CREATE INDEX IF NOT EXISTS idx_pharma_stock_branch ON pharmacy_stock_actuals(branch_id)',
   ];
   for (const idx of indexes) {
     try { db.exec(idx); } catch { /* index may already exist */ }

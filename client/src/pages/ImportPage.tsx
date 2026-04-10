@@ -3,10 +3,10 @@ import api from '../api/client';
 import { Stethoscope, Pill, ShoppingCart, Upload, CheckCircle, AlertCircle, Trash2,
          RefreshCw, Cloud, Settings as SettingsIcon, Calendar,
          LogIn, Building2, FileSearch, CalendarRange, Download, Database, Check, XCircle,
-         Phone, KeyRound, Briefcase } from 'lucide-react';
+         Phone, KeyRound, Briefcase, Package } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
-type Source = 'healthplix' | 'oneglance-sales' | 'oneglance-purchase' | 'turia';
+type Source = 'healthplix' | 'oneglance-sales' | 'oneglance-purchase' | 'oneglance-stock' | 'turia';
 type Mode = 'upload' | 'sync';
 type SyncSource = 'healthplix' | 'oneglance' | 'turia';
 
@@ -25,6 +25,7 @@ const allSources: { key: Source; label: string; desc: string; icon: any; endpoin
   { key: 'healthplix', label: 'Healthplix', desc: 'Clinic billing report', icon: Stethoscope, endpoint: '/import/healthplix', integration: 'healthplix' },
   { key: 'oneglance-sales', label: 'Oneglance Sales', desc: 'Pharmacy sales report', icon: Pill, endpoint: '/import/oneglance-sales', integration: 'oneglance' },
   { key: 'oneglance-purchase', label: 'Oneglance Purchase', desc: 'Pharmacy purchase report', icon: ShoppingCart, endpoint: '/import/oneglance-purchase', integration: 'oneglance' },
+  { key: 'oneglance-stock', label: 'Oneglance Stock', desc: 'Pharmacy stock snapshot', icon: Package, endpoint: '/import/oneglance-stock', integration: 'oneglance' },
   { key: 'turia', label: 'Turia Invoices', desc: 'Consultancy invoice data', icon: Briefcase, endpoint: '/import/turia', integration: 'turia' },
 ];
 
@@ -59,6 +60,7 @@ const OG_SYNC_STEPS = [
   { key: 'navigate', label: 'Opening reports',      desc: 'Navigating to Pharmacy Reports',   icon: FileSearch },
   { key: 'sales',    label: 'Sales report',         desc: 'Downloading sales CSV',            icon: Download },
   { key: 'purchase', label: 'Purchase report',      desc: 'Downloading purchase CSV',         icon: Download },
+  { key: 'stock',    label: 'Stock report',         desc: 'Downloading stock CSV',            icon: Package },
   { key: 'parsing',  label: 'Parsing data',         desc: 'Reading rows from CSV',            icon: FileSearch },
   { key: 'saving',   label: 'Saving to database',   desc: 'Importing records',                icon: Database },
   { key: 'complete', label: 'Complete',              desc: 'Sync finished successfully',       icon: Check },
@@ -195,7 +197,7 @@ export default function ImportPage() {
   const [hasHpCreds, setHasHpCreds] = useState<boolean | null>(null);
   const [hasOgCreds, setHasOgCreds] = useState<boolean | null>(null);
   const [hasTuriaCreds, setHasTuriaCreds] = useState<boolean | null>(null);
-  const [ogReportType, setOgReportType] = useState<'sales' | 'purchase' | 'both'>('both');
+  const [ogReportType, setOgReportType] = useState<'sales' | 'purchase' | 'stock' | 'both' | 'all'>('both');
   const [turiaOtp, setTuriaOtp] = useState('');
   const [otpSubmitting, setOtpSubmitting] = useState(false);
   const [turiaFY, setTuriaFY] = useState('2025-26');
@@ -249,7 +251,7 @@ export default function ImportPage() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault(); setDragOver(false);
     const f = e.dataTransfer.files[0];
-    if (f && (f.name.endsWith('.xlsx') || f.name.endsWith('.xls'))) setFile(f);
+    if (f && (f.name.endsWith('.xlsx') || f.name.endsWith('.xls') || f.name.endsWith('.csv'))) setFile(f);
   };
 
   const reset = () => {
@@ -374,7 +376,7 @@ export default function ImportPage() {
                 <p className="text-theme-secondary mb-2">Drag & drop your Excel file here, or</p>
                 <label className="btn-primary cursor-pointer inline-block">
                   Browse Files
-                  <input type="file" accept=".xlsx,.xls" className="hidden" onChange={e => setFile(e.target.files?.[0] || null)} />
+                  <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => setFile(e.target.files?.[0] || null)} />
                 </label>
                 {file && (
                   <p className="mt-3 text-sm text-accent-400 font-medium">{file.name}</p>
@@ -541,6 +543,8 @@ export default function ImportPage() {
                       { key: 'both' as const, label: 'Sales & Purchase' },
                       { key: 'sales' as const, label: 'Sales Only' },
                       { key: 'purchase' as const, label: 'Purchase Only' },
+                      { key: 'stock' as const, label: 'Stock Only' },
+                      { key: 'all' as const, label: 'All Reports' },
                     ]).map(rt => (
                       <button key={rt.key} onClick={() => setOgReportType(rt.key)} disabled={syncing}
                         className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all ${

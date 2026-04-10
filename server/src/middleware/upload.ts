@@ -19,10 +19,10 @@ export const upload = multer({
   storage,
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (ext === '.xlsx' || ext === '.xls') {
+    if (ext === '.xlsx' || ext === '.xls' || ext === '.csv') {
       cb(null, true);
     } else {
-      cb(new Error('Only Excel files (.xlsx, .xls) are allowed'));
+      cb(new Error('Only Excel or CSV files (.xlsx, .xls, .csv) are allowed'));
     }
   },
   limits: { fileSize: 50 * 1024 * 1024 },

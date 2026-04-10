@@ -4,6 +4,7 @@ import { requireAdmin, requireIntegration } from '../middleware/auth.js';
 import { parseHealthplix } from '../services/parsers/healthplix.js';
 import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
 import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.js';
+import { parseOneglanceStock } from '../services/parsers/oneglance-stock.js';
 import { parseTuriaInvoices } from '../services/parsers/turia.js';
 import { getBranchIdForInsert, branchFilter, getStreamIdForInsert } from '../utils/branch.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
@@ -211,6 +212,44 @@ router.post('/oneglance-purchase', requireAdmin, requireIntegration('oneglance')
   }
 });
 
+router.post('/oneglance-stock', requireAdmin, requireIntegration('oneglance'), upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  try {
+    const db = req.tenantDb!;
+    const branchId = getBranchIdForInsert(req);
+    const { rows, summary } = parseOneglanceStock(req.file.path);
+    const snapshotDate = req.body.snapshotDate || new Date().toISOString().slice(0, 10);
+
+    // Replace existing snapshot for the same date & branch
+    db.run('DELETE FROM pharmacy_stock_actuals WHERE snapshot_date = ? AND branch_id IS ?', snapshotDate, branchId);
+
+    const importLog = db.run(
+      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      'ONEGLANCE_STOCK', req.file.originalname, rows.length,
+      snapshotDate, snapshotDate, 'completed', branchId
+    );
+
+    for (const r of rows) {
+      db.run(
+        `INSERT INTO pharmacy_stock_actuals (import_id, snapshot_date, drug_name, batch_no,
+          received_date, expiry_date, avl_qty, strips, purchase_price, purchase_tax,
+          purchase_value, stock_value, branch_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        importLog.lastInsertRowid, snapshotDate, r.drug_name, r.batch_no,
+        r.received_date, r.expiry_date, r.avl_qty, r.strips,
+        r.purchase_price, r.purchase_tax, r.purchase_value, r.stock_value, branchId
+      );
+    }
+
+    fs.unlinkSync(req.file.path);
+    res.json({ importId: importLog.lastInsertRowid, ...summary });
+  } catch (err: any) {
+    if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
+    res.status(400).json({ error: isProd ? 'Import failed' : err.message });
+  }
+});
+
 router.post('/turia', requireAdmin, requireIntegration('turia'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
@@ -290,6 +329,7 @@ router.delete('/:id', requireAdmin, async (req, res) => {
   db.run('DELETE FROM clinic_actuals WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM pharmacy_sales_actuals WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM pharmacy_purchase_actuals WHERE import_id = ?', req.params.id);
+  db.run('DELETE FROM pharmacy_stock_actuals WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM turia_invoices WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM import_logs WHERE id = ?', req.params.id);
 

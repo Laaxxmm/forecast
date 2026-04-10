@@ -6,6 +6,7 @@ import { getPlatformHelper } from '../db/platform-connection.js';
 import { parseHealthplix } from '../services/parsers/healthplix.js';
 import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
 import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.js';
+import { parseOneglanceStock } from '../services/parsers/oneglance-stock.js';
 import { parseTuriaInvoices } from '../services/parsers/turia.js';
 // Lazy-import Playwright sync modules (not available on cloud hosts)
 const loadSyncHealthplix = () => import('../services/sync/healthplix-sync.js').then(m => m.syncHealthplix);
@@ -487,6 +488,39 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
       totalRows += rows.length;
 
       try { fs.unlinkSync(result.purchaseFile.filePath); } catch {}
+    }
+
+    // Parse and save Stock report
+    if (result.stockFile) {
+      ogState.progress = { step: 'parsing', message: 'Parsing stock report...', pct: 94 };
+      const { rows, summary } = parseOneglanceStock(result.stockFile.filePath);
+      const snapshotDate = new Date().toISOString().slice(0, 10);
+
+      // Replace existing snapshot for the same date & branch
+      db.run('DELETE FROM pharmacy_stock_actuals WHERE snapshot_date = ? AND branch_id IS ?',
+        snapshotDate, branchId);
+
+      const importLog = db.run(
+        `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        'ONEGLANCE_STOCK_SYNC', result.stockFile.filename, rows.length,
+        snapshotDate, snapshotDate, 'completed', branchId
+      );
+
+      for (const r of rows) {
+        db.run(
+          `INSERT INTO pharmacy_stock_actuals (import_id, snapshot_date, drug_name, batch_no,
+            received_date, expiry_date, avl_qty, strips, purchase_price, purchase_tax,
+            purchase_value, stock_value, branch_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          importLog.lastInsertRowid, snapshotDate, r.drug_name, r.batch_no,
+          r.received_date, r.expiry_date, r.avl_qty, r.strips,
+          r.purchase_price, r.purchase_tax, r.purchase_value, r.stock_value, branchId
+        );
+      }
+      totalRows += rows.length;
+
+      try { fs.unlinkSync(result.stockFile.filePath); } catch {}
     }
 
     ogState.progress = {

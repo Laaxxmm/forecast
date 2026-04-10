@@ -7,13 +7,14 @@ export interface OneglanceSyncOptions {
   password: string;
   fromDate: string; // YYYY-MM-DD
   toDate: string;   // YYYY-MM-DD
-  reportType: 'sales' | 'purchase' | 'both';
+  reportType: 'sales' | 'purchase' | 'stock' | 'both' | 'all';
   onProgress?: (step: string, message: string, pct: number) => void;
 }
 
 export interface OneglanceSyncResult {
   salesFile?: { filePath: string; filename: string };
   purchaseFile?: { filePath: string; filename: string };
+  stockFile?: { filePath: string; filename: string };
 }
 
 const TIMEOUT = 120_000;
@@ -179,6 +180,127 @@ async function downloadReport(
 }
 
 /**
+ * Download Stock Available Report from Oneglance
+ * Navigates to PHARMACY > Stock Available Report, clicks Stock values, downloads CSV
+ */
+async function downloadStockReport(
+  page: Page,
+  context: BrowserContext,
+  opts: OneglanceSyncOptions,
+  downloadDir: string,
+): Promise<{ filePath: string; filename: string }> {
+  progress(opts, 'stock', 'Navigating to Stock Available Report...', 70);
+
+  // Navigate back to Utility page if needed
+  const currentUrl = page.url();
+  if (!currentUrl.includes('/Utility')) {
+    await page.goto('https://emr7.oneglancehealth.com/Utility', { waitUntil: 'networkidle', timeout: TIMEOUT });
+    await page.waitForTimeout(2000);
+  }
+
+  // Click PHARMACY section in sidebar to expand
+  await page.evaluate(() => {
+    const allEls = document.querySelectorAll('*');
+    for (const el of allEls) {
+      const ownText = el.childNodes.length <= 2 ? el.textContent?.trim() : '';
+      if (ownText && (ownText === 'PHARMACY' || ownText === 'Pharmacy')) {
+        (el as HTMLElement).click(); break;
+      }
+    }
+  });
+  await page.waitForTimeout(2000);
+
+  // Click "Stock Available Report"
+  let stockFound = await page.evaluate(() => {
+    const allEls = document.querySelectorAll('a, div, span, li, button');
+    for (const el of allEls) {
+      const text = el.textContent?.trim() || '';
+      if (text.match(/stock\s*available\s*report/i) && text.length < 60) {
+        (el as HTMLElement).click();
+        return true;
+      }
+    }
+    return false;
+  });
+
+  if (!stockFound) {
+    const loc = page.locator('text=/Stock.*Available.*Report/i').first();
+    stockFound = await loc.isVisible({ timeout: 3000 }).catch(() => false);
+    if (stockFound) await loc.click({ timeout: 5000 });
+  }
+
+  if (!stockFound) {
+    await debugScreenshot(page, 'FAILED-stock-report-not-found');
+    throw new Error('Could not find "Stock Available Report" link');
+  }
+
+  await page.waitForTimeout(2000);
+  await page.waitForLoadState('networkidle', { timeout: TIMEOUT });
+  progress(opts, 'stock', 'Stock Available Report page loaded', 73);
+
+  // Click Filter button to show filter options
+  const filterBtn = page.locator('button:has-text("Filter"), a:has-text("Filter")').first();
+  const filterVisible = await filterBtn.isVisible({ timeout: 3000 }).catch(() => false);
+  if (filterVisible) {
+    await filterBtn.click();
+    await page.waitForTimeout(1000);
+  }
+
+  // Set date range (widest range to capture all batches)
+  const fromDateStr = toOneglanceDate(opts.fromDate);
+  const toDateStr = toOneglanceDate(opts.toDate);
+
+  const dateInputs = page.locator('input.dateclass, input[placeholder="DD/MM/YYYY"]');
+  const dateCount = await dateInputs.count();
+
+  if (dateCount >= 2) {
+    const fromInput = dateInputs.first();
+    const toInput = dateInputs.nth(1);
+
+    async function setDateInput(input: any, dateStr: string) {
+      await input.evaluate((el: HTMLInputElement, val: string) => {
+        el.removeAttribute('readonly');
+        el.value = val;
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      }, dateStr);
+      await page.waitForTimeout(300);
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(200);
+    }
+
+    await setDateInput(fromInput, fromDateStr);
+    await setDateInput(toInput, toDateStr);
+    progress(opts, 'stock', `Date range set: ${fromDateStr} to ${toDateStr}`, 75);
+  }
+
+  // Click "Stock values" button to generate stock valuation report
+  progress(opts, 'stock', 'Generating stock valuation report...', 77);
+  const stockValuesBtn = page.locator('button:has-text("Stock values"), a:has-text("Stock values"), input[value="Stock values"]').first();
+  await stockValuesBtn.click({ timeout: TIMEOUT });
+
+  // Wait for report to load
+  await page.waitForTimeout(3000);
+  await page.waitForLoadState('networkidle', { timeout: 180_000 });
+  progress(opts, 'stock', 'Stock report loaded', 80);
+
+  // Click "csv" to download
+  progress(opts, 'stock', 'Downloading stock CSV...', 82);
+  const downloadPromise = page.waitForEvent('download', { timeout: 180_000 });
+  await page.locator('button:has-text("csv"), a:has-text("csv"), input[value="csv"]').first().click({ timeout: TIMEOUT });
+
+  const download = await downloadPromise;
+  progress(opts, 'stock', 'Stock CSV downloaded', 84);
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const filename = `oneglance-stock-${timestamp}.csv`;
+  const filePath = path.join(downloadDir, filename);
+  await download.saveAs(filePath);
+
+  return { filePath, filename };
+}
+
+/**
  * Main Oneglance sync function
  */
 export async function syncOneglance(opts: OneglanceSyncOptions): Promise<OneglanceSyncResult> {
@@ -255,10 +377,14 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
     progress(opts, 'navigate', 'Reports page loaded', 25);
 
     // ── Step 4: Click on PHARMACY section, then Purchase/Sales Report ──
-    progress(opts, 'navigate', 'Opening Purchase/Sales Report...', 28);
+    // Skip Purchase/Sales navigation if only downloading stock report
+    if (opts.reportType === 'stock') {
+      progress(opts, 'navigate', 'Skipping to Stock Available Report...', 30);
+    }
 
-    // Try multiple strategies to reach Purchase/Sales Report
-    let psrFound = false;
+    let psrFound = opts.reportType === 'stock'; // Skip PSR navigation for stock-only
+    if (!psrFound) {
+    progress(opts, 'navigate', 'Opening Purchase/Sales Report...', 28);
 
     // Strategy 1: Click PHARMACY to expand, then click Purchase/Sales Report
     for (let attempt = 0; attempt < 3 && !psrFound; attempt++) {
@@ -338,17 +464,18 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
     await page.waitForTimeout(2000);
     await page.waitForLoadState('networkidle', { timeout: TIMEOUT });
     progress(opts, 'navigate', 'Purchase/Sales Report page ready', 30);
+    } // end of PSR navigation block (skipped for stock-only)
 
     const result: OneglanceSyncResult = {};
 
     // ── Step 5: Download Sales report ──
-    if (opts.reportType === 'sales' || opts.reportType === 'both') {
+    if (opts.reportType === 'sales' || opts.reportType === 'both' || opts.reportType === 'all') {
       progress(opts, 'sales', 'Starting Sales report...', 35);
       result.salesFile = await downloadReport(page, context, opts, 'Sales', downloadDir, 'sales', 35);
       progress(opts, 'sales', 'Sales report downloaded', 55);
 
       // Navigate back to the report page for purchase if needed
-      if (opts.reportType === 'both') {
+      if (opts.reportType === 'both' || opts.reportType === 'all') {
         // Click Filter button to show filters again, or reload
         const filterBtn = page.locator('button:has-text("Filter"), a:has-text("Filter")').first();
         const filterVisible = await filterBtn.isVisible({ timeout: 2000 }).catch(() => false);
@@ -385,11 +512,16 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
     }
 
     // ── Step 6: Download Purchase report ──
-    if (opts.reportType === 'purchase' || opts.reportType === 'both') {
-      const pctStart = opts.reportType === 'both' ? 58 : 35;
+    if (opts.reportType === 'purchase' || opts.reportType === 'both' || opts.reportType === 'all') {
+      const pctStart = (opts.reportType === 'both' || opts.reportType === 'all') ? 58 : 35;
       progress(opts, 'purchase', 'Starting Purchase report...', pctStart);
       result.purchaseFile = await downloadReport(page, context, opts, 'Purchase', downloadDir, 'purchase', pctStart);
       progress(opts, 'purchase', 'Purchase report downloaded', pctStart + 25);
+    }
+
+    // ── Step 7: Download Stock Available report ──
+    if (opts.reportType === 'stock' || opts.reportType === 'all') {
+      result.stockFile = await downloadStockReport(page, context, opts, downloadDir);
     }
 
     progress(opts, 'complete', 'Download complete!', 100);
