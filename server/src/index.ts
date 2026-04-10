@@ -226,6 +226,26 @@ async function start() {
   await seedPlatformDatabase(platformDb);
   console.log('Platform database initialized');
 
+  // ── One-time cleanup: wipe OneGlance data for magnacode so user can re-import fresh ──
+  try {
+    const mcDb = await getClientHelper('magnacode');
+    const alreadyCleaned = mcDb.get("SELECT value FROM app_settings WHERE key = 'og_cleanup_20260411'");
+    if (!alreadyCleaned) {
+      const salesCount = mcDb.get('SELECT COUNT(*) as n FROM pharmacy_sales_actuals')?.n || 0;
+      const purchaseCount = mcDb.get('SELECT COUNT(*) as n FROM pharmacy_purchase_actuals')?.n || 0;
+      const stockCount = mcDb.get('SELECT COUNT(*) as n FROM pharmacy_stock_actuals')?.n || 0;
+      mcDb.run('DELETE FROM pharmacy_sales_actuals');
+      mcDb.run('DELETE FROM pharmacy_purchase_actuals');
+      mcDb.run('DELETE FROM pharmacy_stock_actuals');
+      mcDb.run("DELETE FROM import_logs WHERE source LIKE 'ONEGLANCE%'");
+      mcDb.run("DELETE FROM dashboard_actuals WHERE item_name = 'Pharmacy Revenue'");
+      mcDb.run("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('og_cleanup_20260411', '1')");
+      console.log(`[Cleanup] Wiped OneGlance data for magnacode: ${salesCount} sales, ${purchaseCount} purchases, ${stockCount} stock rows`);
+    }
+  } catch (e) {
+    console.error('[Cleanup] magnacode OneGlance wipe failed:', e);
+  }
+
   // 2. Initialize existing client databases (ensure schemas + seed data are up to date)
   const clients = platformDb.all('SELECT slug FROM clients WHERE is_active = 1');
   for (const client of clients) {
