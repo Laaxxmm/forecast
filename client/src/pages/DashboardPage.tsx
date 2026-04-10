@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import api from '../api/client';
-import { formatINR, formatNumber, getMonthLabel } from '../utils/format';
+import { formatINR, getMonthLabel } from '../utils/format';
 import ClinicAnalytics from '../components/dashboard/ClinicAnalytics';
 import {
   TrendingUp, TrendingDown, IndianRupee, Activity,
@@ -55,9 +54,23 @@ function KPICard({ title, value, subtitle, icon: Icon, trend, color = 'accent', 
 }
 
 export default function DashboardPage() {
-  const navigate = useNavigate();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+
+  // Active stream filter (set by sidebar or KPI card click)
+  const activeStreamId = localStorage.getItem('stream_id');
+  const activeStreamName = localStorage.getItem('stream_name');
+
+  const selectStream = (id: string | null, name: string) => {
+    if (id) {
+      localStorage.setItem('stream_id', id);
+      localStorage.setItem('stream_name', name);
+    } else {
+      localStorage.removeItem('stream_id');
+      localStorage.removeItem('stream_name');
+    }
+    window.location.reload();
+  };
 
   useEffect(() => {
     api.get('/dashboard/overview').then(res => {
@@ -84,6 +97,12 @@ export default function DashboardPage() {
 
   const streams: any[] = data.streams || [];
 
+  // Stream mode detection
+  const isAllStreams = !activeStreamId;
+  const isClinicStream = !isAllStreams && streams.some((s: any) =>
+    String(s.id) === activeStreamId &&
+    ((s.name || '').toLowerCase().includes('clinic') || (s.name || '').toLowerCase().includes('health'))
+  );
   // Chart visibility helper
   const chartVis = data.chartVisibility || [];
   const isChartVisible = (key: string) => {
@@ -105,9 +124,14 @@ export default function DashboardPage() {
     return entry ? !!entry.is_visible : false;
   };
 
+  // Filter streams for charts when a specific stream is selected
+  const chartStreams = activeStreamId
+    ? streams.filter((s: any) => String(s.id) === activeStreamId)
+    : streams;
+
   // Build monthly trend data from stream monthly breakdowns
   const monthlyMap: Record<string, any> = {};
-  for (const stream of streams) {
+  for (const stream of chartStreams) {
     for (const entry of (stream.monthly || [])) {
       if (entry.category !== 'revenue') continue;
       if (!monthlyMap[entry.month]) monthlyMap[entry.month] = { month: entry.month };
@@ -120,7 +144,7 @@ export default function DashboardPage() {
     .map((d: any) => ({ ...d, label: getMonthLabel(d.month) }));
 
   // Pie data — revenue per stream
-  const pieData = streams
+  const pieData = chartStreams
     .filter(s => s.total_revenue > 0)
     .map(s => ({ name: s.name, value: s.total_revenue }));
 
@@ -128,70 +152,80 @@ export default function DashboardPage() {
     <div className="animate-fade-in">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-theme-heading">Actuals</h1>
-        <p className="text-theme-faint mt-1 text-sm">{data.fy?.label || 'All Time'} Overview</p>
+        <p className="text-theme-faint mt-1 text-sm">
+          {activeStreamName
+            ? `${activeStreamName} \u2014 ${data.fy?.label || 'All Time'}`
+            : `${data.fy?.label || 'All Time'} Overview`}
+        </p>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
-        {data.cards && data.cards.length > 0 ? (
-          data.cards.map((card: any) => {
-            const CardIcon = ICON_MAP[card.icon] || BarChart3;
-            return (
-              <KPICard
-                key={card.id}
-                title={card.title}
-                value={formatINR(card.value)}
-                subtitle={card.subtitle === 'No data yet' ? card.subtitle :
-                  card.budget > 0 ? `vs ${formatINR(card.budget)} budget` :
-                  card.subtitle || undefined}
-                icon={CardIcon}
-                color={card.color || 'accent'}
-                trend={card.trend}
-                onClick={card.stream_id ? () => navigate(`/stream/${card.stream_id}`) : undefined}
-              />
-            );
-          })
-        ) : (
-          <>
-            <KPICard
-              title="Total Revenue"
-              value={formatINR(data.combined.total_revenue)}
-              subtitle="All streams"
-              icon={IndianRupee}
-              color="accent"
-              trend={data.combined.total_budget > 0
-                ? ((data.combined.total_revenue - data.combined.total_budget) / data.combined.total_budget) * 100
-                : undefined}
-            />
-            {streams.map((stream: any) => {
-              const StreamIcon = ICON_MAP[stream.icon] || BarChart3;
-              const trend = stream.budget_total > 0
-                ? ((stream.total_revenue - stream.budget_total) / stream.budget_total) * 100
-                : undefined;
+      {/* KPI Cards — only in "All" mode */}
+      {isAllStreams && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
+          {data.cards && data.cards.length > 0 ? (
+            data.cards.map((card: any) => {
+              const CardIcon = ICON_MAP[card.icon] || BarChart3;
               return (
                 <KPICard
-                  key={stream.id}
-                  title={`${stream.name} Revenue`}
-                  value={formatINR(stream.total_revenue)}
-                  subtitle={stream.total_revenue > 0 ? `vs ${formatINR(stream.budget_total)} budget` : 'No data yet'}
-                  icon={StreamIcon}
-                  color={stream.color || 'blue'}
-                  trend={trend}
-                  onClick={() => navigate(`/stream/${stream.id}`)}
+                  key={card.id}
+                  title={card.title}
+                  value={formatINR(card.value)}
+                  subtitle={card.subtitle === 'No data yet' ? card.subtitle :
+                    card.budget > 0 ? `vs ${formatINR(card.budget)} budget` :
+                    card.subtitle || undefined}
+                  icon={CardIcon}
+                  color={card.color || 'accent'}
+                  trend={card.trend}
+                  onClick={card.card_type === 'total'
+                    ? undefined
+                    : card.stream_id
+                      ? () => selectStream(String(card.stream_id), card.title.replace(' Revenue', '') || card.title)
+                      : undefined}
                 />
               );
-            })}
-            {streams.length === 0 && (
-              <div className="card border border-dashed border-slate-700 flex items-center justify-center">
-                <p className="text-sm text-theme-faint text-center">Configure revenue streams in Admin Panel</p>
-              </div>
-            )}
-          </>
-        )}
-      </div>
+            })
+          ) : (
+            <>
+              <KPICard
+                title="Total Revenue"
+                value={formatINR(data.combined.total_revenue)}
+                subtitle="All streams"
+                icon={IndianRupee}
+                color="accent"
+                trend={data.combined.total_budget > 0
+                  ? ((data.combined.total_revenue - data.combined.total_budget) / data.combined.total_budget) * 100
+                  : undefined}
+              />
+              {streams.map((stream: any) => {
+                const StreamIcon = ICON_MAP[stream.icon] || BarChart3;
+                const trend = stream.budget_total > 0
+                  ? ((stream.total_revenue - stream.budget_total) / stream.budget_total) * 100
+                  : undefined;
+                return (
+                  <KPICard
+                    key={stream.id}
+                    title={`${stream.name} Revenue`}
+                    value={formatINR(stream.total_revenue)}
+                    subtitle={stream.total_revenue > 0 ? `vs ${formatINR(stream.budget_total)} budget` : 'No data yet'}
+                    icon={StreamIcon}
+                    color={stream.color || 'blue'}
+                    trend={trend}
+                    onClick={() => selectStream(String(stream.id), stream.name)}
+                  />
+                );
+              })}
+              {streams.length === 0 && (
+                <div className="card border border-dashed border-slate-700 flex items-center justify-center">
+                  <p className="text-sm text-theme-faint text-center">Configure revenue streams in Admin Panel</p>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
-      {/* Charts Row */}
-      {(showTrend || showPie) && (
+      {/* Charts Row — hidden when clinic stream is active */}
+      {!isClinicStream && (showTrend || showPie) && (
         <div className={`grid grid-cols-1 ${showTrend && showPie ? 'lg:grid-cols-3' : ''} gap-5 mb-6`}>
           {showTrend && (
             <div className={`card ${showPie ? 'lg:col-span-2' : ''}`}>
@@ -209,7 +243,7 @@ export default function DashboardPage() {
                       labelStyle={{ color: '#94a3b8' }}
                     />
                     <Legend />
-                    {streams.map((stream: any, i: number) => {
+                    {chartStreams.map((stream: any, i: number) => {
                       const key = stream.name.toLowerCase().replace(/\s+/g, '_');
                       return (
                         <Bar key={stream.id} dataKey={key} name={stream.name} fill={BAR_COLORS[i % BAR_COLORS.length]} radius={[6, 6, 0, 0]} />
@@ -263,8 +297,8 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Clinic Analytics */}
-      {clinicStreamId && <ClinicAnalytics isVisible={isClinicVisible} />}
+      {/* Clinic Analytics — only when clinic stream is active */}
+      {isClinicStream && clinicStreamId && <ClinicAnalytics isVisible={isClinicVisible} />}
     </div>
   );
 }
