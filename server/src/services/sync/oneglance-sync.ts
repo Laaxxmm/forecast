@@ -279,9 +279,11 @@ async function downloadStockReport(
   const stockValuesBtn = page.locator('button:has-text("Stock values"), a:has-text("Stock values"), input[value="Stock values"]').first();
   await stockValuesBtn.click({ timeout: TIMEOUT });
 
-  // Wait for report to fully load (stock reports can be large)
+  // Wait for report to load (cap at 60s to avoid memory buildup)
   await page.waitForTimeout(5000);
-  await page.waitForLoadState('networkidle', { timeout: 180_000 });
+  await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => {
+    console.log('[oneglance-sync] Stock report networkidle timed out at 60s, proceeding...');
+  });
   await debugScreenshot(page, '12-stock-report-loaded');
   progress(opts, 'stock', 'Stock report loaded', 80);
 
@@ -314,72 +316,83 @@ async function downloadStockReport(
 
   // ── Strategy A: DataTables API extraction (most reliable) ──
   // DataTables stores ALL data in memory even when paginated — extract directly via API
+  // IMPORTANT: Extract in CHUNKS to avoid OOM from serializing a huge string through CDP
   if (!saved && pageInfo.hasDataTables && pageInfo.dtTables > 0) {
-    console.log('[oneglance-sync] Strategy A: extracting data via DataTables API...');
+    console.log('[oneglance-sync] Strategy A: extracting data via DataTables API (chunked)...');
     progress(opts, 'stock', 'Extracting data from table...', 82);
 
     try {
-      const csvContent = await page.evaluate(() => {
+      // Step 1: Get headers and total row count (small payload)
+      const meta = await page.evaluate(() => {
         try {
           const $ = (window as any).jQuery;
           if (!$ || !$.fn.dataTable) return null;
-
-          // Find the DataTable instance — try multiple selectors
-          let dt: any = null;
           const selectors = ['table.dataTable', 'table.display', 'table.table', '#DataTables_Table_0', 'table'];
+          let dt: any = null;
           for (const sel of selectors) {
             try {
               const $t = $(sel).first();
-              if ($t.length && $.fn.dataTable.isDataTable($t)) {
-                dt = $t.DataTable();
-                break;
-              }
+              if ($t.length && $.fn.dataTable.isDataTable($t)) { dt = $t.DataTable(); break; }
             } catch {}
           }
           if (!dt) return null;
-
-          // Get headers from the DataTable columns
           const headers: string[] = [];
-          dt.columns().every(function(this: any) {
-            const hdr = $(this.header()).text().trim();
-            headers.push(hdr);
-          });
-
-          // Get ALL data rows (across all pages, unfiltered)
-          const rows: string[][] = [];
-          dt.rows({ search: 'none' }).every(function(this: any) {
-            const data = this.data();
-            const row: string[] = [];
-            for (let i = 0; i < headers.length; i++) {
-              let val = String(data[i] ?? '').trim();
-              // Strip any HTML tags from cell values
-              val = val.replace(/<[^>]*>/g, '').trim();
-              // CSV-escape values containing comma, quote, or newline
-              if (val.includes(',') || val.includes('"') || val.includes('\n')) {
-                val = '"' + val.replace(/"/g, '""') + '"';
-              }
-              row.push(val);
-            }
-            rows.push(row);
-          });
-
-          if (rows.length === 0) return null;
-
-          let csv = headers.join(',') + '\n';
-          csv += rows.map(r => r.join(',')).join('\n');
-          return csv;
-        } catch (e: any) {
-          return null;
-        }
+          dt.columns().every(function(this: any) { headers.push($(this.header()).text().trim()); });
+          const totalRows = dt.rows({ search: 'none' }).count();
+          return { headers, totalRows };
+        } catch { return null; }
       });
 
-      if (csvContent && csvContent.trim().length > 50) {
-        fs.writeFileSync(filePath, csvContent, 'utf-8');
-        saved = true;
-        const rowCount = csvContent.split('\n').length - 1;
-        console.log(`[oneglance-sync] Strategy A succeeded — extracted ${rowCount} rows via DataTables API`);
+      if (meta && meta.totalRows > 0) {
+        console.log(`[oneglance-sync] Strategy A: found ${meta.totalRows} rows, ${meta.headers.length} columns`);
+        // Write headers
+        fs.writeFileSync(filePath, meta.headers.join(',') + '\n', 'utf-8');
+
+        // Step 2: Extract in chunks of 200 rows to avoid OOM
+        const CHUNK = 200;
+        let extracted = 0;
+        for (let start = 0; start < meta.totalRows; start += CHUNK) {
+          const chunkCSV = await page.evaluate(({ s, c, colCount }: { s: number; c: number; colCount: number }) => {
+            try {
+              const $ = (window as any).jQuery;
+              const selectors = ['table.dataTable', 'table.display', 'table.table', '#DataTables_Table_0', 'table'];
+              let dt: any = null;
+              for (const sel of selectors) {
+                try {
+                  const $t = $(sel).first();
+                  if ($t.length && $.fn.dataTable.isDataTable($t)) { dt = $t.DataTable(); break; }
+                } catch {}
+              }
+              if (!dt) return '';
+              const allData = dt.rows({ search: 'none' }).data();
+              const end = Math.min(s + c, allData.length);
+              const lines: string[] = [];
+              for (let i = s; i < end; i++) {
+                const row: string[] = [];
+                for (let j = 0; j < colCount; j++) {
+                  let val = String(allData[i][j] ?? '').replace(/<[^>]*>/g, '').trim();
+                  if (val.includes(',') || val.includes('"') || val.includes('\n'))
+                    val = '"' + val.replace(/"/g, '""') + '"';
+                  row.push(val);
+                }
+                lines.push(row.join(','));
+              }
+              return lines.join('\n');
+            } catch { return ''; }
+          }, { s: start, c: CHUNK, colCount: meta.headers.length });
+
+          if (chunkCSV) {
+            fs.appendFileSync(filePath, chunkCSV + '\n', 'utf-8');
+            extracted += chunkCSV.split('\n').length;
+          }
+        }
+
+        if (extracted > 0) {
+          saved = true;
+          console.log(`[oneglance-sync] Strategy A succeeded — extracted ${extracted} rows via DataTables API (chunked)`);
+        }
       } else {
-        console.log('[oneglance-sync] Strategy A: no data returned from DataTables API');
+        console.log('[oneglance-sync] Strategy A: no DataTables data found');
       }
     } catch (e: any) {
       console.log('[oneglance-sync] Strategy A failed:', e.message);
@@ -543,26 +556,25 @@ async function downloadStockReport(
     await page.waitForTimeout(3000);
     await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
 
-    // Scrape all pages of the table — try multiple table selectors
-    const allRows: string[][] = [];
-    let headers: string[] = [];
+    // Scrape table page by page — write each page's rows immediately to avoid OOM
+    let totalScraped = 0;
+    let headersWritten = false;
     let pageNum = 0;
     const MAX_PAGES = 50;
 
     while (pageNum < MAX_PAGES) {
       const tableData = await page.evaluate(() => {
-        // Try multiple selectors for the data table
         const selectors = ['table.dataTable', 'table.display', 'table.table-bordered', '#DataTables_Table_0', 'table'];
         let table: HTMLTableElement | null = null;
         for (const sel of selectors) {
           const t = document.querySelector(sel) as HTMLTableElement;
           if (t && t.querySelector('tbody tr')) { table = t; break; }
         }
-        if (!table) return { headers: [] as string[], rows: [] as string[][], hasNext: false };
+        if (!table) return { headers: [] as string[], csv: '', rowCount: 0, hasNext: false };
 
         const ths: string[] = [];
         table.querySelectorAll('thead th').forEach(th => ths.push((th as HTMLElement).innerText?.trim() || ''));
-        const rows: string[][] = [];
+        const lines: string[] = [];
         table.querySelectorAll('tbody tr').forEach(tr => {
           const cells: string[] = [];
           tr.querySelectorAll('td').forEach(td => {
@@ -570,34 +582,35 @@ async function downloadStockReport(
             if (t.includes(',') || t.includes('"') || t.includes('\n')) t = '"' + t.replace(/"/g, '""') + '"';
             cells.push(t);
           });
-          if (cells.length > 0 && cells.some(c => c.length > 0)) rows.push(cells);
+          if (cells.length > 0 && cells.some(c => c.length > 0)) lines.push(cells.join(','));
         });
-        // Check for DataTables next page button (both standard and custom selectors)
         const nextBtn = document.querySelector(
           '.paginate_button.next:not(.disabled), a.next:not(.disabled), .pagination .next:not(.disabled), [class*="paginate"] .next:not(.disabled)'
         );
-        return { headers: ths, rows, hasNext: !!nextBtn };
+        return { headers: ths, csv: lines.join('\n'), rowCount: lines.length, hasNext: !!nextBtn };
       });
 
-      if (pageNum === 0 && tableData.headers.length > 0) headers = tableData.headers;
-      allRows.push(...tableData.rows);
+      // Write headers once, then append rows
+      if (!headersWritten && tableData.headers.length > 0) {
+        fs.writeFileSync(filePath, tableData.headers.join(',') + '\n', 'utf-8');
+        headersWritten = true;
+      }
+      if (tableData.csv) {
+        fs.appendFileSync(filePath, tableData.csv + '\n', 'utf-8');
+        totalScraped += tableData.rowCount;
+      }
       pageNum++;
 
-      if (!tableData.hasNext || tableData.rows.length === 0) break;
+      if (!tableData.hasNext || tableData.rowCount === 0) break;
 
-      // Click next page
       await page.locator('.paginate_button.next, a.next, .pagination .next').first().click({ timeout: 5_000 }).catch(() => {});
       await page.waitForTimeout(1500);
       await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {});
     }
 
-    if (allRows.length > 0) {
-      const csvLines: string[] = [];
-      if (headers.length > 0) csvLines.push(headers.join(','));
-      for (const row of allRows) csvLines.push(row.join(','));
-      fs.writeFileSync(filePath, csvLines.join('\n'), 'utf-8');
+    if (totalScraped > 0) {
       saved = true;
-      console.log(`[oneglance-sync] Strategy D succeeded — scraped ${allRows.length} rows from ${pageNum} pages`);
+      console.log(`[oneglance-sync] Strategy D succeeded — scraped ${totalScraped} rows from ${pageNum} pages`);
     }
   }
 
@@ -627,7 +640,12 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
     headless: isProd ? true : false,
     args: [
       '--disable-blink-features=AutomationControlled',
-      ...(isProd ? ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] : []),
+      ...(isProd ? [
+        '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
+        '--disable-extensions', '--disable-background-networking', '--disable-default-apps',
+        '--disable-sync', '--disable-translate', '--metrics-recording-only',
+        '--js-flags=--max-old-space-size=256',
+      ] : []),
     ],
   });
   const context: BrowserContext = await browser.newContext({
@@ -833,16 +851,24 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
 
     // ── Step 7: Download Stock Available report ──
     if (opts.reportType === 'stock' || opts.reportType === 'all') {
-      result.stockFile = await downloadStockReport(page, context, opts, downloadDir);
+      // Wrap stock download in a 90-second timeout to prevent OOM crashes
+      const stockTimeout = 90_000;
+      const stockResult = await Promise.race([
+        downloadStockReport(page, context, opts, downloadDir),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Stock report download timed out after ${stockTimeout / 1000}s`)), stockTimeout)
+        ),
+      ]);
+      result.stockFile = stockResult;
     }
 
     progress(opts, 'complete', 'Download complete!', 100);
 
-    await browser.close();
+    await browser.close().catch(() => {});
     return result;
   } catch (err: any) {
     await debugScreenshot(page, '99-ERROR').catch(() => {});
-    await browser.close();
+    await browser.close().catch(() => {});
     throw new Error(`Oneglance sync failed: ${err.message}`);
   }
 }
