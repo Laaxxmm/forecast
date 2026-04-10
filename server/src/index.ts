@@ -217,13 +217,87 @@ async function start() {
   await seedPlatformDatabase(platformDb);
   console.log('Platform database initialized');
 
-  // 2. Initialize existing client databases (ensure schemas are up to date)
+  // 2. Initialize existing client databases (ensure schemas + seed data are up to date)
   const clients = platformDb.all('SELECT slug FROM clients WHERE is_active = 1');
   for (const client of clients) {
     try {
       const clientDb = await getClientHelper(client.slug);
       initializeSchema(clientDb);
-      console.log(`Client DB "${client.slug}" schema verified`);
+      await seedDatabase(clientDb);
+
+      // Auto-create default scenario if FY exists but no scenario does
+      const activeFy = clientDb.get('SELECT id FROM financial_years WHERE is_active = 1');
+      if (activeFy) {
+        const hasScenario = clientDb.get('SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1', activeFy.id);
+        if (!hasScenario) {
+          clientDb.run('INSERT INTO scenarios (fy_id, name, is_default) VALUES (?, ?, 1)', activeFy.id, 'Default');
+          console.log(`  Auto-created default scenario for FY ${activeFy.id}`);
+        }
+
+        // Auto-sync imported data to dashboard_actuals if empty
+        const scenario = clientDb.get('SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1', activeFy.id);
+        const fy = clientDb.get('SELECT * FROM financial_years WHERE id = ?', activeFy.id);
+        if (scenario && fy) {
+          const actualsCount = clientDb.get('SELECT COUNT(*) as n FROM dashboard_actuals WHERE scenario_id = ?', scenario.id);
+          if ((actualsCount?.n || 0) === 0) {
+            const startMonth = fy.start_date.slice(0, 7);
+            const endMonth = fy.end_date.slice(0, 7);
+
+            // Find stream IDs for tagging
+            const clientRow = platformDb.get('SELECT id FROM clients WHERE slug = ?', client.slug);
+            const clinicStream = clientRow ? platformDb.get(
+              "SELECT id FROM business_streams WHERE client_id = ? AND (LOWER(name) LIKE '%clinic%' OR LOWER(name) LIKE '%health%') AND is_active = 1 LIMIT 1",
+              clientRow.id
+            ) : null;
+            const pharmaStream = clientRow ? platformDb.get(
+              "SELECT id FROM business_streams WHERE client_id = ? AND LOWER(name) LIKE '%pharma%' AND is_active = 1 LIMIT 1",
+              clientRow.id
+            ) : null;
+
+            // Sync clinic_actuals → dashboard_actuals
+            try {
+              const clinicMonthly = clientDb.all(
+                `SELECT bill_month as month, COALESCE(SUM(item_price), 0) as total
+                 FROM clinic_actuals WHERE bill_month >= ? AND bill_month <= ? GROUP BY bill_month`,
+                startMonth, endMonth
+              );
+              for (const row of clinicMonthly) {
+                if (!row.month) continue;
+                clientDb.run(
+                  `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, stream_id)
+                   VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?)
+                   ON CONFLICT(scenario_id, category, item_name, month)
+                   DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id`,
+                  scenario.id, row.month, row.total, clinicStream?.id || null
+                );
+              }
+              if (clinicMonthly.length > 0) console.log(`  Synced ${clinicMonthly.length} clinic months to dashboard_actuals`);
+            } catch {}
+
+            // Sync pharmacy_sales_actuals → dashboard_actuals
+            try {
+              const pharmaMonthly = clientDb.all(
+                `SELECT bill_month as month, COALESCE(SUM(sales_amount), 0) as total
+                 FROM pharmacy_sales_actuals WHERE bill_month >= ? AND bill_month <= ? GROUP BY bill_month`,
+                startMonth, endMonth
+              );
+              for (const row of pharmaMonthly) {
+                if (!row.month) continue;
+                clientDb.run(
+                  `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, stream_id)
+                   VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?)
+                   ON CONFLICT(scenario_id, category, item_name, month)
+                   DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id`,
+                  scenario.id, row.month, row.total, pharmaStream?.id || null
+                );
+              }
+              if (pharmaMonthly.length > 0) console.log(`  Synced ${pharmaMonthly.length} pharmacy months to dashboard_actuals`);
+            } catch {}
+          }
+        }
+      }
+
+      console.log(`Client DB "${client.slug}" schema + seed verified`);
     } catch (e) {
       console.error(`Failed to init client DB "${client.slug}":`, e);
     }
