@@ -317,13 +317,36 @@ async function downloadStockReport(
     throw new Error('CSV download button not found on stock report page');
   }
 
-  // Click csv to download
+  // Click csv to download — handle both file-download and new-tab scenarios
   progress(opts, 'stock', 'Downloading stock CSV...', 82);
   await debugScreenshot(page, '14-before-csv-click');
 
-  const downloadPromise = page.waitForEvent('download', { timeout: 180_000 });
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const filename = `oneglance-stock-${timestamp}.csv`;
+  const filePath = path.join(downloadDir, filename);
 
-  // Try Playwright locator click first, then fallback to evaluate-based click
+  // Set up listeners for BOTH mechanisms BEFORE clicking
+  // Mechanism 1: Standard file download event (like sales/purchase reports)
+  const downloadHandler = page.waitForEvent('download', { timeout: 60_000 })
+    .then(async (dl) => { await dl.saveAs(filePath); return true; })
+    .catch(() => false);
+
+  // Mechanism 2: CSV opens in a new tab/window (stock report header buttons)
+  const newPageHandler = context.waitForEvent('page', { timeout: 60_000 })
+    .then(async (newPage) => {
+      await newPage.waitForLoadState('load', { timeout: 30_000 });
+      const content = await newPage.evaluate(() => document.body.innerText || document.body.textContent || '');
+      if (content && content.trim().length > 10) {
+        fs.writeFileSync(filePath, content, 'utf-8');
+        await newPage.close();
+        return true;
+      }
+      await newPage.close();
+      return false;
+    })
+    .catch(() => false);
+
+  // Click csv button — try locator first, then evaluate fallback
   const locatorClicked = await csvLocator.first().click({ timeout: 5_000 }).then(() => true).catch(() => false);
   if (!locatorClicked) {
     console.log('[oneglance-sync] CSV locator click failed, trying evaluate fallback...');
@@ -340,14 +363,15 @@ async function downloadStockReport(
     });
   }
 
-  const download = await downloadPromise;
+  // Wait for whichever download mechanism fires first
+  const downloaded = await Promise.race([downloadHandler, newPageHandler]);
+
+  if (!downloaded) {
+    await debugScreenshot(page, '15-FAILED-csv-download');
+    throw new Error('CSV download failed — neither file download nor new tab detected after clicking csv');
+  }
+
   progress(opts, 'stock', 'Stock CSV downloaded', 84);
-
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const filename = `oneglance-stock-${timestamp}.csv`;
-  const filePath = path.join(downloadDir, filename);
-  await download.saveAs(filePath);
-
   return { filePath, filename };
 }
 
