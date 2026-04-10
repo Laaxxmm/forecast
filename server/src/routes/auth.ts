@@ -103,11 +103,24 @@ router.post('/login', loginLimiter, async (req, res) => {
       clientUser.cid
     ).map((m: any) => m.module_key);
 
-    // Get enabled integrations for this client
-    const enabledIntegrations = platformDb.all(
-      'SELECT integration_key FROM client_integrations WHERE client_id = ? AND is_enabled = 1',
+    // Get enabled integrations/settings for this client
+    const allIntegrationRows = platformDb.all(
+      'SELECT integration_key, is_enabled FROM client_integrations WHERE client_id = ?',
       clientUser.cid
-    ).map((i: any) => i.integration_key);
+    );
+    const enabledIntegrations = allIntegrationRows
+      .filter((i: any) => i.is_enabled)
+      .map((i: any) => i.integration_key);
+
+    // For backward compat: if new core keys have no DB row yet, treat as enabled by default
+    const existingKeys = new Set(allIntegrationRows.map((i: any) => i.integration_key));
+    const clientObj = platformDb.get('SELECT industry FROM clients WHERE id = ?', clientUser.cid);
+    const clientIndustry = clientObj?.industry || 'custom';
+    const defaultOnKeys = ['financial_years', 'manual_upload'];
+    if (clientIndustry === 'healthcare') defaultOnKeys.push('doctors');
+    for (const key of defaultOnKeys) {
+      if (!existingKeys.has(key)) enabledIntegrations.push(key);
+    }
 
     // Get branch info for multi-branch clients
     let branches: any[] = [];

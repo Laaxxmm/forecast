@@ -133,11 +133,25 @@ router.post('/clients', async (req: Request, res: Response) => {
       [clientId, 'stream', s.id, s.name, s.icon, s.color, i + 1]);
   });
 
-  // Enable manual upload by default
-  db.run(
-    'INSERT INTO client_integrations (client_id, integration_key, is_enabled) VALUES (?, ?, ?)',
-    [clientId, 'manual_upload', 1]
-  );
+  // Enable default settings based on industry
+  const defaultSettings: { key: string; on: boolean }[] = [
+    { key: 'financial_years', on: true },
+    { key: 'manual_upload', on: true },
+    { key: 'tally', on: false },
+    { key: 'zoho_books', on: false },
+  ];
+  if (industry === 'healthcare') {
+    defaultSettings.push({ key: 'doctors', on: true }, { key: 'healthplix', on: false }, { key: 'oneglance', on: false });
+  }
+  if (industry === 'consultancy') {
+    defaultSettings.push({ key: 'turia', on: false });
+  }
+  for (const s of defaultSettings) {
+    db.run(
+      'INSERT INTO client_integrations (client_id, integration_key, is_enabled) VALUES (?, ?, ?)',
+      [clientId, s.key, s.on ? 1 : 0]
+    );
+  }
 
   // Create default modules (forecast_ops enabled by default)
   db.run('INSERT INTO client_modules (client_id, module_key, is_enabled) VALUES (?, ?, ?)', [clientId, 'forecast_ops', 1]);
@@ -380,21 +394,39 @@ router.get('/clients/:slug/integrations', async (req: Request, res: Response) =>
   const client = db.get('SELECT id, industry FROM clients WHERE slug = ?', req.params.slug);
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
-  const integrations = db.all('SELECT * FROM client_integrations WHERE client_id = ?', client.id);
-
-  // Available integrations catalog — filtered by client industry
-  // industries: null = common (all industries)
+  // Full settings catalog — core settings + integrations, filtered by industry
+  // industries: null = common (all industries), defaultOn: auto-enabled for new/existing clients
   const fullCatalog = [
-    { key: 'manual_upload', name: 'Manual Upload', description: 'Upload Excel/CSV files manually', industries: null },
-    { key: 'tally', name: 'Tally Sync', description: 'Sync from Tally accounting software (coming soon)', industries: null },
-    { key: 'zoho_books', name: 'Zoho Books', description: 'Sync from Zoho Books (coming soon)', industries: null },
-    { key: 'healthplix', name: 'HealthPlix Sync', description: 'Auto-sync clinic data from HealthPlix EMR', industries: ['healthcare'] },
-    { key: 'oneglance', name: 'OneGlance Sync', description: 'Auto-sync pharmacy data from OneGlance', industries: ['healthcare'] },
-    { key: 'turia', name: 'Turia', description: 'Sync data from Turia platform', industries: ['consultancy'] },
+    // Core settings
+    { key: 'financial_years', name: 'Financial Years', description: 'Manage financial year periods', industries: null, group: 'core', defaultOn: true },
+    { key: 'doctors', name: 'Doctors', description: 'Manage doctor records for clinic billing', industries: ['healthcare'], group: 'core', defaultOn: true },
+    // Integrations
+    { key: 'manual_upload', name: 'Manual Upload', description: 'Upload Excel/CSV files manually', industries: null, group: 'integration', defaultOn: true },
+    { key: 'tally', name: 'Tally Sync', description: 'Sync from Tally accounting software (coming soon)', industries: null, group: 'integration', defaultOn: false },
+    { key: 'zoho_books', name: 'Zoho Books', description: 'Sync from Zoho Books (coming soon)', industries: null, group: 'integration', defaultOn: false },
+    { key: 'healthplix', name: 'HealthPlix Sync', description: 'Auto-sync clinic data from HealthPlix EMR', industries: ['healthcare'], group: 'integration', defaultOn: false },
+    { key: 'oneglance', name: 'OneGlance Sync', description: 'Auto-sync pharmacy data from OneGlance', industries: ['healthcare'], group: 'integration', defaultOn: false },
+    { key: 'turia', name: 'Turia', description: 'Sync data from Turia platform', industries: ['consultancy'], group: 'integration', defaultOn: false },
   ];
 
   const clientIndustry = client.industry || 'custom';
   const catalog = fullCatalog.filter(c => !c.industries || c.industries.includes(clientIndustry));
+
+  // Auto-create missing rows for catalog items (ensures existing clients get new settings)
+  const existingKeys = new Set(
+    db.all('SELECT integration_key FROM client_integrations WHERE client_id = ?', client.id)
+      .map((i: any) => i.integration_key)
+  );
+  for (const item of catalog) {
+    if (!existingKeys.has(item.key)) {
+      db.run(
+        'INSERT INTO client_integrations (client_id, integration_key, is_enabled) VALUES (?, ?, ?)',
+        [client.id, item.key, item.defaultOn ? 1 : 0]
+      );
+    }
+  }
+
+  const integrations = db.all('SELECT * FROM client_integrations WHERE client_id = ?', client.id);
 
   res.json({
     enabled: integrations,

@@ -29,6 +29,8 @@ export default function SettingsPage() {
   const enabledIntegrations: string[] = (() => {
     try { return JSON.parse(localStorage.getItem('enabled_integrations') || '[]'); } catch { return []; }
   })();
+  const showFY = enabledIntegrations.includes('financial_years');
+  const showDoctors = enabledIntegrations.includes('doctors');
   const showHp = enabledIntegrations.includes('healthplix');
   const showOg = enabledIntegrations.includes('oneglance');
   const showTuria = enabledIntegrations.includes('turia');
@@ -180,7 +182,7 @@ export default function SettingsPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Financial Years */}
-        <div className="card">
+        {showFY && <div className="card">
           <h3 className="font-semibold text-theme-heading mb-4">Financial Years</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-sm mb-4">
@@ -220,10 +222,10 @@ export default function SettingsPage() {
               <button onClick={addFY} disabled={!newFY.label} className="btn-primary">Add</button>
             </div>
           </div>
-        </div>
+        </div>}
 
         {/* Doctors */}
-        <div className="card">
+        {showDoctors && <div className="card">
           <h3 className="font-semibold text-theme-heading mb-4">Doctors</h3>
           <p className="text-sm text-theme-faint mb-3">Doctors are auto-imported from Healthplix reports. You can also add manually.</p>
           <div className="max-h-64 overflow-y-auto mb-4">
@@ -242,7 +244,7 @@ export default function SettingsPage() {
               placeholder="Doctor name" className="input flex-1" onKeyDown={e => e.key === 'Enter' && addDoctor()} />
             <button onClick={addDoctor} className="btn-primary">Add</button>
           </div>
-        </div>
+        </div>}
 
         {/* Healthplix Credentials */}
         {showHp && <div className="card">
@@ -413,11 +415,19 @@ export default function SettingsPage() {
             {tallySaving ? 'Saving...' : tallySaved ? 'Saved!' : 'Save'}
           </button>
         </div>}
+        {!showFY && !showDoctors && !showHp && !showOg && !showTuria && !showTally && (
+          <div className="card col-span-full text-center py-10">
+            <p className="text-theme-faint text-sm">No settings sections are enabled for your account.</p>
+            <p className="text-theme-faint text-xs mt-1">Contact your administrator to configure available settings.</p>
+          </div>
+        )}
       </div>
 
-      <p className="text-xs text-theme-faint mt-4">
-        Credentials are encrypted and stored locally. They are only used to automate report downloads.
-      </p>
+      {(showHp || showOg || showTuria || showTally) && (
+        <p className="text-xs text-theme-faint mt-4">
+          Credentials are encrypted and stored locally. They are only used to automate report downloads.
+        </p>
+      )}
     </div>
   );
 }

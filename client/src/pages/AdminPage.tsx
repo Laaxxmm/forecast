@@ -5,7 +5,7 @@ import {
   Building2, Users, UserPlus, Plus, Power, ArrowLeft,
   Eye, EyeOff, CheckCircle, Plug, Shield, Trash2, Copy, KeyRound, BarChart3,
   MapPin, GitBranch, Layers, Search, Activity, Globe, ChevronRight, ChevronDown,
-  ChevronUp, LayoutDashboard, Edit2,
+  ChevronUp, LayoutDashboard, Edit2, Calendar, Stethoscope, Upload, Server, BookOpen,
 } from 'lucide-react';
 
 /* ─── Types ──────────────────────────────────────────────── */
@@ -24,7 +24,7 @@ interface TeamMember {
   assigned_client_count: number; created_at: string;
 }
 interface Integration {
-  key: string; name: string; description: string; enabled: boolean;
+  key: string; name: string; description: string; enabled: boolean; group?: string;
 }
 
 type Tab = 'clients' | 'team';
@@ -923,36 +923,59 @@ function ModulesSection({ slug, modules, onReload }: {
 
 /* ─── Integrations Section ───────────────────────────────── */
 
+const SETTING_ICONS: Record<string, any> = {
+  financial_years: Calendar,
+  doctors: Stethoscope,
+  manual_upload: Upload,
+  tally: Server,
+  zoho_books: BookOpen,
+  healthplix: Stethoscope,
+  oneglance: Activity,
+  turia: Globe,
+};
+
 function IntegrationsSection({ slug, integrations, onReload }: {
   slug: string; integrations: Integration[]; onReload: () => void;
 }) {
+  const coreItems = integrations.filter(i => i.group === 'core');
+  const integrationItems = integrations.filter(i => i.group !== 'core');
+
+  const renderItem = (int: Integration) => {
+    const Icon = SETTING_ICONS[int.key] || Globe;
+    return (
+      <div key={int.key} className="flex items-center justify-between px-5 py-4 rounded-2xl bg-dark-700/40 border border-dark-400/20">
+        <div className="flex items-center gap-3">
+          <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${int.enabled ? 'bg-accent-500/10' : 'bg-dark-500'}`}>
+            <Icon size={16} className={int.enabled ? 'text-accent-400' : 'text-theme-faint'} />
+          </div>
+          <div>
+            <span className="text-sm font-medium text-theme-heading">{int.name}</span>
+            <p className="text-xs text-theme-faint">{int.description}</p>
+          </div>
+        </div>
+        <button
+          onClick={async () => {
+            await api.put(`/admin/clients/${slug}/integrations/${int.key}`, { is_enabled: !int.enabled });
+            onReload();
+          }}
+          className={`relative w-11 h-6 rounded-full transition-all ${int.enabled ? 'bg-accent-500' : 'bg-dark-400'}`}
+        >
+          <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-sm ${int.enabled ? 'left-[24px]' : 'left-1'}`} />
+        </button>
+      </div>
+    );
+  };
+
   return (
     <div>
-      <p className="text-sm text-theme-faint mb-4">Connect third-party services</p>
-      <div className="space-y-2">
-        {integrations.map(int => (
-          <div key={int.key} className="flex items-center justify-between px-5 py-4 rounded-2xl bg-dark-700/40 border border-dark-400/20">
-            <div className="flex items-center gap-3">
-              <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${int.enabled ? 'bg-accent-500/10' : 'bg-dark-500'}`}>
-                <Globe size={16} className={int.enabled ? 'text-accent-400' : 'text-theme-faint'} />
-              </div>
-              <div>
-                <span className="text-sm font-medium text-theme-heading">{int.name}</span>
-                <p className="text-xs text-theme-faint">{int.description}</p>
-              </div>
-            </div>
-            <button
-              onClick={async () => {
-                await api.put(`/admin/clients/${slug}/integrations/${int.key}`, { is_enabled: !int.enabled });
-                onReload();
-              }}
-              className={`relative w-11 h-6 rounded-full transition-all ${int.enabled ? 'bg-accent-500' : 'bg-dark-400'}`}
-            >
-              <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-sm ${int.enabled ? 'left-[24px]' : 'left-1'}`} />
-            </button>
-          </div>
-        ))}
-      </div>
+      {coreItems.length > 0 && (
+        <>
+          <p className="text-xs font-medium text-theme-faint uppercase tracking-wide mb-3">Settings</p>
+          <div className="space-y-2 mb-6">{coreItems.map(renderItem)}</div>
+        </>
+      )}
+      <p className="text-xs font-medium text-theme-faint uppercase tracking-wide mb-3">Integrations</p>
+      <div className="space-y-2">{integrationItems.map(renderItem)}</div>
     </div>
   );
 }
