@@ -80,7 +80,7 @@ export function parseOneglanceSales(filePath: string) {
   const allRawDates = dateColIdx
     ? rawData.slice(headerRowIdx + 1).map(r => r ? r[parseInt(dateColIdx)] : null).filter(Boolean)
     : [];
-  const dateFormat = detectDateFormat(allRawDates);
+  const dateFormat = detectDateFormat(allRawDates, 'mdy'); // OneGlance CSV exports MM/DD/YYYY
 
   for (let i = headerRowIdx + 1; i < rawData.length; i++) {
     const raw = rawData[i];

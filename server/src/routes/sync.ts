@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { requireAdmin, requireIntegration } from '../middleware/auth.js';
 import { encrypt, decrypt } from '../utils/crypto.js';
 import { branchFilter, getBranchIdForInsert, branchSettingsKey } from '../utils/branch.js';
+import { getPlatformHelper } from '../db/platform-connection.js';
 import { parseHealthplix } from '../services/parsers/healthplix.js';
 import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
 import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.js';
@@ -196,6 +197,13 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async
     if (activeScenario) {
       // Aggregate clinic revenue into dashboard_actuals (branch-scoped)
       const bf = branchFilter(req);
+      // Look up the clinic stream_id to tag dashboard entries
+      const platformDb = await getPlatformHelper();
+      const clinicStream = req.clientId ? platformDb.get(
+        "SELECT id FROM business_streams WHERE client_id = ? AND (LOWER(name) LIKE '%clinic%' OR LOWER(name) LIKE '%health%') AND is_active = 1 LIMIT 1",
+        req.clientId
+      ) : null;
+      const clinicStreamId = clinicStream?.id || null;
       // Clear old Clinic Revenue entries before re-syncing (prevents stale month data)
       db.run(
         `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Clinic Revenue'${bf.where}`,
@@ -209,11 +217,11 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async
       for (const row of clinicMonthly) {
         if (!row.month) continue;
         db.run(
-          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
-           VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, datetime('now'))
+          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+           VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, ?, datetime('now'))
            ON CONFLICT(scenario_id, category, item_name, month)
-           DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-          activeScenario.id, row.month, row.total, branchId
+           DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
+          activeScenario.id, row.month, row.total, branchId, clinicStreamId
         );
       }
     }
@@ -404,6 +412,13 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
          WHERE fy.is_active = 1 AND s.is_default = 1 LIMIT 1`
       );
       if (activeScenario) {
+        // Look up the pharmacy stream_id to tag dashboard entries
+        const platformDb = await getPlatformHelper();
+        const pharmaStream = req.clientId ? platformDb.get(
+          "SELECT id FROM business_streams WHERE client_id = ? AND LOWER(name) LIKE '%pharma%' AND is_active = 1 LIMIT 1",
+          req.clientId
+        ) : null;
+        const pharmaStreamId = pharmaStream?.id || null;
         // Clear old Pharmacy Revenue/COGS entries before re-syncing (prevents stale month data)
         db.run(
           `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Pharmacy Revenue'${bf.where}`,
@@ -424,18 +439,18 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
         for (const row of pharmaMonthly) {
           if (!row.month) continue;
           db.run(
-            `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
-             VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?, datetime('now'))
+            `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+             VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?, ?, datetime('now'))
              ON CONFLICT(scenario_id, category, item_name, month)
-             DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-            activeScenario.id, row.month, row.revenue, branchId
+             DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
+            activeScenario.id, row.month, row.revenue, branchId, pharmaStreamId
           );
           db.run(
-            `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
-             VALUES (?, 'direct_costs', 'Pharmacy COGS', ?, ?, ?, datetime('now'))
+            `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+             VALUES (?, 'direct_costs', 'Pharmacy COGS', ?, ?, ?, ?, datetime('now'))
              ON CONFLICT(scenario_id, category, item_name, month)
-             DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-            activeScenario.id, row.month, row.cogs, branchId
+             DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
+            activeScenario.id, row.month, row.cogs, branchId, pharmaStreamId
           );
         }
       }

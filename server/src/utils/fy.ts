@@ -25,7 +25,7 @@ export function monthToFY(month: string): { startYear: number; label: string } {
  * where one number is unambiguously > 12 (must be a day).
  * Falls back to 'dmy' (Indian standard) when all dates are ambiguous.
  */
-export function detectDateFormat(rawDates: any[]): 'dmy' | 'mdy' {
+export function detectDateFormat(rawDates: any[], defaultFormat: 'dmy' | 'mdy' = 'dmy'): 'dmy' | 'mdy' {
   for (const raw of rawDates) {
     if (raw == null || raw === '' || typeof raw === 'number' || raw instanceof Date) continue;
     const str = String(raw).trim();
@@ -36,7 +36,7 @@ export function detectDateFormat(rawDates: any[]): 'dmy' | 'mdy' {
     if (a > 12 && b <= 12) return 'dmy'; // First > 12 must be day → DD/MM/YYYY
     if (b > 12 && a <= 12) return 'mdy'; // Second > 12 must be day → MM/DD/YYYY
   }
-  return 'dmy'; // Default: DD/MM/YYYY (Indian standard)
+  return defaultFormat; // Caller-specified fallback when all dates are ambiguous
 }
 
 export function parseExcelDate(raw: any, format: 'dmy' | 'mdy' = 'dmy'): string | null {
