@@ -89,7 +89,16 @@ app.get('/api/health', async (_req, res) => {
         for (const t of ['financial_years','scenarios','budgets','forecast_items','import_logs','dashboard_actuals','clinic_actuals','pharmacy_sales_actuals','pharmacy_purchase_actuals','pharmacy_stock_actuals']) {
           try { tables[t] = db.all(`SELECT COUNT(*) as n FROM ${t}`)[0]?.n || 0; } catch { tables[t] = -1; }
         }
-        clientInfo.push({ slug: c.slug, tables });
+        // Diagnostic: show import history and data months
+        let imports: any[] = [];
+        let salesMonths: string[] = [];
+        let clinicMonths: string[] = [];
+        let activeFy: any = null;
+        try { imports = db.all('SELECT id, source, filename, rows_imported, date_range_start, date_range_end, created_at FROM import_logs ORDER BY id'); } catch {}
+        try { salesMonths = db.all('SELECT DISTINCT bill_month FROM pharmacy_sales_actuals ORDER BY bill_month').map((r: any) => r.bill_month); } catch {}
+        try { clinicMonths = db.all('SELECT DISTINCT bill_month FROM clinic_actuals ORDER BY bill_month').map((r: any) => r.bill_month); } catch {}
+        try { activeFy = db.get('SELECT * FROM financial_years WHERE is_active = 1'); } catch {}
+        clientInfo.push({ slug: c.slug, tables, imports, salesMonths, clinicMonths, activeFy });
       } catch (e: any) {
         clientInfo.push({ slug: c.slug, error: e.message });
       }
