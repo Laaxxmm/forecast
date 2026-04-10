@@ -3,10 +3,10 @@ import cors from 'cors';
 import helmet from 'helmet';
 import session from 'express-session';
 import path from 'path';
-import { getClientHelper } from './db/connection.js';
+import { getClientHelper, createDailyBackups } from './db/connection.js';
 import { initializeSchema } from './db/schema.js';
 import { seedDatabase } from './db/seed.js';
-import { getPlatformHelper } from './db/platform-connection.js';
+import { getPlatformHelper, createPlatformBackup } from './db/platform-connection.js';
 import { initializePlatformSchema } from './db/platform-schema.js';
 import { seedPlatformDatabase } from './db/platform-seed.js';
 import { requireAuth, requireSuperAdmin, requireAdmin, requireModule } from './middleware/auth.js';
@@ -227,6 +227,15 @@ async function start() {
     } catch (e) {
       console.error(`Failed to init client DB "${client.slug}":`, e);
     }
+  }
+
+  // 3. Create daily backups (keeps last 3 days)
+  try {
+    createPlatformBackup();
+    createDailyBackups();
+    console.log('Daily backups checked');
+  } catch (e) {
+    console.error('Backup creation failed:', e);
   }
 
   console.log('Database initialized and seeded');

@@ -84,7 +84,15 @@ function saveClientDb(slug: string) {
   if (!entry) return;
   const data = entry.db.export();
   const dbPath = path.join(clientsDir, `${slug}.db`);
-  fs.writeFileSync(dbPath, Buffer.from(data));
+  const tmpPath = dbPath + '.tmp';
+  const bakPath = dbPath + '.bak';
+
+  // Atomic write: temp → rename (prevents corruption if process killed mid-write)
+  fs.writeFileSync(tmpPath, Buffer.from(data));
+  if (fs.existsSync(dbPath)) {
+    try { fs.renameSync(dbPath, bakPath); } catch {}
+  }
+  fs.renameSync(tmpPath, dbPath);
 }
 
 export async function getClientHelper(slug: string): Promise<DbHelper> {
@@ -92,10 +100,26 @@ export async function getClientHelper(slug: string): Promise<DbHelper> {
   if (cached) return cached.helper;
 
   const dbPath = path.join(clientsDir, `${slug}.db`);
+  const bakPath = dbPath + '.bak';
+  const tmpPath = dbPath + '.tmp';
+
+  // Recovery: if main DB is missing or empty (corrupted write), restore from backup
+  const mainExists = fs.existsSync(dbPath);
+  const mainSize = mainExists ? fs.statSync(dbPath).size : 0;
+  if (!mainExists || mainSize === 0) {
+    if (fs.existsSync(bakPath) && fs.statSync(bakPath).size > 0) {
+      console.log(`[DB] ⚠ Recovering "${slug}" from backup (main DB ${mainExists ? 'empty' : 'missing'})...`);
+      fs.copyFileSync(bakPath, dbPath);
+    } else if (fs.existsSync(tmpPath) && fs.statSync(tmpPath).size > 0) {
+      console.log(`[DB] ⚠ Recovering "${slug}" from temp file...`);
+      fs.copyFileSync(tmpPath, dbPath);
+    }
+  }
+
   const SQL = await initSqlJs();
 
   let db: Database;
-  if (fs.existsSync(dbPath)) {
+  if (fs.existsSync(dbPath) && fs.statSync(dbPath).size > 0) {
     const buffer = fs.readFileSync(dbPath);
     db = new SQL.Database(buffer);
   } else {
@@ -147,4 +171,41 @@ export async function getDb(): Promise<Database> {
   // Legacy wrapper
   const helper = await getHelper();
   return (helper as any).db;
+}
+
+/** Create daily backups for all loaded client databases (call on startup) */
+export function createDailyBackups() {
+  const backupDir = path.join(clientsDir, 'backups');
+  if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Backup all .db files in the clients directory
+  for (const file of fs.readdirSync(clientsDir)) {
+    if (!file.endsWith('.db')) continue;
+    const dbPath = path.join(clientsDir, file);
+    if (fs.statSync(dbPath).size === 0) continue; // skip empty DBs
+
+    const backupName = `${file}.${today}`;
+    const backupPath = path.join(backupDir, backupName);
+
+    if (!fs.existsSync(backupPath)) {
+      fs.copyFileSync(dbPath, backupPath);
+      console.log(`[DB] Daily backup: ${backupName}`);
+    }
+  }
+
+  // Clean old backups — keep last 3 per database
+  const backups = fs.readdirSync(backupDir).sort();
+  const grouped = new Map<string, string[]>();
+  for (const f of backups) {
+    const base = f.replace(/\.\d{4}-\d{2}-\d{2}$/, '');
+    if (!grouped.has(base)) grouped.set(base, []);
+    grouped.get(base)!.push(f);
+  }
+  for (const [, files] of grouped) {
+    for (const old of files.slice(0, -3)) {
+      try { fs.unlinkSync(path.join(backupDir, old)); } catch {}
+    }
+  }
 }
