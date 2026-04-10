@@ -213,7 +213,8 @@ app.get('/api/branches', requireAuth, resolveTenant, resolveBranch, async (req, 
 });
 
 // ─── Debug screenshots (for diagnosing sync issues) ─────────────────────────
-const debugDir = path.join(process.env.DATA_DIR || '.', 'uploads', 'debug');
+const isProdEnv = process.env.NODE_ENV === 'production';
+const debugDir = path.join(process.env.DATA_DIR || (isProdEnv ? '/data' : '.'), 'uploads', 'debug');
 app.get('/api/debug/screenshots', (_req, res) => {
   if (!fs.existsSync(debugDir)) return res.json([]);
   const files = fs.readdirSync(debugDir).filter(f => f.endsWith('.png')).sort();
