@@ -377,6 +377,397 @@ router.get('/clinic-analytics', async (req, res) => {
   });
 });
 
+// ─── Pharmacy Analytics (OneGlance) ─────────────────────────────────────────
+
+router.get('/pharmacy-analytics', async (req, res) => {
+  const db = req.tenantDb!;
+  const { fy_id } = req.query;
+  const bf = branchFilter(req);
+
+  const fy = fy_id
+    ? db.get('SELECT * FROM financial_years WHERE id = ?', fy_id)
+    : db.get('SELECT * FROM financial_years WHERE is_active = 1');
+  if (!fy) return res.json({ hasData: false });
+
+  const startMonth = fy.start_date.slice(0, 7);
+  const endMonth = fy.end_date.slice(0, 7);
+
+  // Check which pharmacy tables have data in this FY
+  let hasSales = false, hasPurchases = false, hasStock = false;
+  try {
+    const c = db.get(`SELECT COUNT(*) as n FROM pharmacy_sales_actuals WHERE bill_month >= ? AND bill_month <= ?${bf.where}`, startMonth, endMonth, ...bf.params);
+    hasSales = (c?.n || 0) > 0;
+  } catch {}
+  try {
+    const c = db.get(`SELECT COUNT(*) as n FROM pharmacy_purchase_actuals WHERE invoice_month >= ? AND invoice_month <= ?${bf.where}`, startMonth, endMonth, ...bf.params);
+    hasPurchases = (c?.n || 0) > 0;
+  } catch {}
+  try {
+    const c = db.get(`SELECT COUNT(*) as n FROM pharmacy_stock_actuals WHERE 1=1${bf.where}`, ...bf.params);
+    hasStock = (c?.n || 0) > 0;
+  } catch {}
+
+  if (!hasSales && !hasPurchases && !hasStock) {
+    return res.json({ hasData: false });
+  }
+
+  const result: any = { hasData: true, hasSales, hasPurchases, hasStock };
+
+  // ── PURCHASES TAB ──────────────────────────────────────────────────────────
+  if (hasPurchases) {
+    const purchaseKpi = db.get(`
+      SELECT
+        COALESCE(SUM(purchase_value), 0) as totalPurchaseValue,
+        COUNT(DISTINCT invoice_no) as totalInvoices,
+        COUNT(DISTINCT stockiest_name) as uniqueStockists,
+        COUNT(DISTINCT drug_name) as uniqueProducts,
+        COALESCE(SUM(free_qty), 0) as totalFreeQty,
+        COALESCE(SUM(tax_amount), 0) as totalTax,
+        COALESCE(SUM(discount_amount), 0) as totalDiscount
+      FROM pharmacy_purchase_actuals
+      WHERE invoice_month >= ? AND invoice_month <= ?${bf.where}
+    `, startMonth, endMonth, ...bf.params);
+
+    const purchaseMonthly = db.all(`
+      SELECT invoice_month as month,
+        COALESCE(SUM(purchase_value), 0) as purchaseValue,
+        COALESCE(SUM(net_purchase_value), 0) as netPurchase,
+        COALESCE(SUM(tax_amount), 0) as tax,
+        COUNT(DISTINCT invoice_no) as invoices
+      FROM pharmacy_purchase_actuals
+      WHERE invoice_month >= ? AND invoice_month <= ?${bf.where}
+      GROUP BY invoice_month ORDER BY invoice_month
+    `, startMonth, endMonth, ...bf.params);
+
+    const topStockists = db.all(`
+      SELECT stockiest_name as name,
+        COALESCE(SUM(purchase_value), 0) as value,
+        COUNT(DISTINCT invoice_no) as invoices,
+        COUNT(DISTINCT drug_name) as products
+      FROM pharmacy_purchase_actuals
+      WHERE invoice_month >= ? AND invoice_month <= ?${bf.where}
+        AND stockiest_name IS NOT NULL AND stockiest_name != ''
+      GROUP BY stockiest_name ORDER BY value DESC LIMIT 10
+    `, startMonth, endMonth, ...bf.params);
+
+    const topManufacturers = db.all(`
+      SELECT mfg_name as name,
+        COALESCE(SUM(purchase_value), 0) as value,
+        COUNT(DISTINCT drug_name) as products
+      FROM pharmacy_purchase_actuals
+      WHERE invoice_month >= ? AND invoice_month <= ?${bf.where}
+        AND mfg_name IS NOT NULL AND mfg_name != ''
+      GROUP BY mfg_name ORDER BY value DESC LIMIT 10
+    `, startMonth, endMonth, ...bf.params);
+
+    const topPurchaseProducts = db.all(`
+      SELECT drug_name as name,
+        COALESCE(SUM(purchase_value), 0) as value,
+        COALESCE(SUM(purchase_qty), 0) as qty
+      FROM pharmacy_purchase_actuals
+      WHERE invoice_month >= ? AND invoice_month <= ?${bf.where}
+      GROUP BY drug_name ORDER BY value DESC LIMIT 15
+    `, startMonth, endMonth, ...bf.params);
+
+    const profitMarginDist = db.all(`
+      SELECT
+        CASE
+          WHEN profit_pct IS NULL THEN 'Unknown'
+          WHEN profit_pct < 0 THEN 'Loss'
+          WHEN profit_pct < 10 THEN '0-10%'
+          WHEN profit_pct < 20 THEN '10-20%'
+          WHEN profit_pct < 30 THEN '20-30%'
+          WHEN profit_pct < 50 THEN '30-50%'
+          ELSE '50%+'
+        END as range,
+        COUNT(*) as count,
+        COALESCE(SUM(purchase_value), 0) as value
+      FROM pharmacy_purchase_actuals
+      WHERE invoice_month >= ? AND invoice_month <= ?${bf.where}
+      GROUP BY range
+    `, startMonth, endMonth, ...bf.params);
+
+    const freeQtyAnalysis = db.all(`
+      SELECT stockiest_name as name,
+        COALESCE(SUM(free_qty), 0) as freeQty,
+        COALESCE(SUM(batch_qty), 0) as batchQty,
+        CASE WHEN SUM(batch_qty) > 0
+          THEN ROUND(SUM(free_qty) * 100.0 / SUM(batch_qty), 1)
+          ELSE 0 END as freePct
+      FROM pharmacy_purchase_actuals
+      WHERE invoice_month >= ? AND invoice_month <= ?${bf.where}
+        AND free_qty > 0
+      GROUP BY stockiest_name ORDER BY freeQty DESC LIMIT 10
+    `, startMonth, endMonth, ...bf.params);
+
+    const purchaseTable = db.all(`
+      SELECT invoice_no, invoice_date, stockiest_name, mfg_name, drug_name,
+        batch_no, batch_qty, free_qty, mrp, rate, discount_amount,
+        purchase_value, net_purchase_value, tax_amount, profit_pct
+      FROM pharmacy_purchase_actuals
+      WHERE invoice_month >= ? AND invoice_month <= ?${bf.where}
+      ORDER BY purchase_value DESC LIMIT 200
+    `, startMonth, endMonth, ...bf.params);
+
+    result.purchases = {
+      kpi: purchaseKpi,
+      monthlyTrend: purchaseMonthly,
+      topStockists,
+      topManufacturers,
+      topProducts: topPurchaseProducts,
+      profitMarginDist,
+      freeQtyAnalysis,
+      table: purchaseTable,
+    };
+  }
+
+  // ── SALES TAB ──────────────────────────────────────────────────────────────
+  if (hasSales) {
+    const salesKpi = db.get(`
+      SELECT
+        COALESCE(SUM(sales_amount), 0) as totalSales,
+        COALESCE(SUM(purchase_amount), 0) as totalCogs,
+        COALESCE(SUM(profit), 0) as totalProfit,
+        COUNT(DISTINCT bill_no) as totalBills,
+        COUNT(DISTINCT CASE WHEN patient_id IS NOT NULL AND patient_id != '' THEN patient_id END) as uniquePatients,
+        COUNT(DISTINCT drug_name) as uniqueDrugs,
+        COALESCE(SUM(qty), 0) as totalQty,
+        COALESCE(SUM(sales_tax), 0) as totalTax
+      FROM pharmacy_sales_actuals
+      WHERE bill_month >= ? AND bill_month <= ?${bf.where}
+    `, startMonth, endMonth, ...bf.params);
+
+    salesKpi.profitMargin = salesKpi.totalSales > 0
+      ? Math.round(salesKpi.totalProfit * 100 / salesKpi.totalSales * 100) / 100
+      : 0;
+
+    const salesMonthly = db.all(`
+      SELECT bill_month as month,
+        COALESCE(SUM(sales_amount), 0) as sales,
+        COALESCE(SUM(purchase_amount), 0) as cogs,
+        COALESCE(SUM(profit), 0) as profit,
+        COUNT(DISTINCT bill_no) as bills
+      FROM pharmacy_sales_actuals
+      WHERE bill_month >= ? AND bill_month <= ?${bf.where}
+      GROUP BY bill_month ORDER BY bill_month
+    `, startMonth, endMonth, ...bf.params);
+
+    const topDrugsBySales = db.all(`
+      SELECT drug_name as name,
+        COALESCE(SUM(sales_amount), 0) as sales,
+        COALESCE(SUM(qty), 0) as qty,
+        COALESCE(SUM(profit), 0) as profit
+      FROM pharmacy_sales_actuals
+      WHERE bill_month >= ? AND bill_month <= ?${bf.where}
+      GROUP BY drug_name ORDER BY sales DESC LIMIT 15
+    `, startMonth, endMonth, ...bf.params);
+
+    const topDrugsByProfit = db.all(`
+      SELECT drug_name as name,
+        COALESCE(SUM(profit), 0) as profit,
+        COALESCE(SUM(sales_amount), 0) as sales,
+        CASE WHEN SUM(sales_amount) > 0
+          THEN ROUND(SUM(profit) * 100.0 / SUM(sales_amount), 2)
+          ELSE 0 END as marginPct
+      FROM pharmacy_sales_actuals
+      WHERE bill_month >= ? AND bill_month <= ?${bf.where}
+      GROUP BY drug_name HAVING SUM(sales_amount) > 0
+      ORDER BY profit DESC LIMIT 15
+    `, startMonth, endMonth, ...bf.params);
+
+    const referralAnalysis = db.all(`
+      SELECT COALESCE(NULLIF(referred_by, ''), 'Walk-in / Unknown') as name,
+        COUNT(DISTINCT bill_no) as bills,
+        COALESCE(SUM(sales_amount), 0) as sales,
+        COUNT(DISTINCT CASE WHEN patient_id IS NOT NULL AND patient_id != '' THEN patient_id END) as patients
+      FROM pharmacy_sales_actuals
+      WHERE bill_month >= ? AND bill_month <= ?${bf.where}
+      GROUP BY name ORDER BY sales DESC LIMIT 10
+    `, startMonth, endMonth, ...bf.params);
+
+    const topPatients = db.all(`
+      SELECT patient_name, patient_id,
+        COALESCE(SUM(sales_amount), 0) as totalSales,
+        COUNT(DISTINCT bill_no) as visits,
+        COUNT(DISTINCT drug_name) as drugs
+      FROM pharmacy_sales_actuals
+      WHERE bill_month >= ? AND bill_month <= ?${bf.where}
+        AND patient_id IS NOT NULL AND patient_id != ''
+      GROUP BY patient_id ORDER BY totalSales DESC LIMIT 20
+    `, startMonth, endMonth, ...bf.params);
+
+    const salesTable = db.all(`
+      SELECT bill_no, bill_date, patient_name, drug_name, batch_no,
+        qty, sales_amount, purchase_amount, profit, referred_by
+      FROM pharmacy_sales_actuals
+      WHERE bill_month >= ? AND bill_month <= ?${bf.where}
+      ORDER BY sales_amount DESC LIMIT 200
+    `, startMonth, endMonth, ...bf.params);
+
+    result.sales = {
+      kpi: salesKpi,
+      monthlyTrend: salesMonthly,
+      topDrugsBySales,
+      topDrugsByProfit,
+      referralAnalysis,
+      topPatients,
+      table: salesTable,
+    };
+  }
+
+  // ── STOCK TAB ──────────────────────────────────────────────────────────────
+  if (hasStock) {
+    const latest = db.get(`SELECT MAX(snapshot_date) as date FROM pharmacy_stock_actuals WHERE 1=1${bf.where}`, ...bf.params);
+    const snapshotDate = latest?.date;
+
+    if (snapshotDate) {
+      const stockKpi = db.get(`
+        SELECT
+          COALESCE(SUM(stock_value), 0) as totalStockValue,
+          COUNT(DISTINCT drug_name) as totalSkus,
+          COALESCE(SUM(avl_qty), 0) as totalQty,
+          COUNT(*) as totalBatches
+        FROM pharmacy_stock_actuals
+        WHERE snapshot_date = ?${bf.where}
+      `, snapshotDate, ...bf.params);
+
+      const topStockProducts = db.all(`
+        SELECT drug_name as name,
+          COALESCE(SUM(stock_value), 0) as value,
+          COALESCE(SUM(avl_qty), 0) as qty,
+          COUNT(*) as batches
+        FROM pharmacy_stock_actuals
+        WHERE snapshot_date = ?${bf.where}
+        GROUP BY drug_name ORDER BY value DESC LIMIT 15
+      `, snapshotDate, ...bf.params);
+
+      // Get all stock rows for expiry zone analysis (process in JS)
+      const stockRows = db.all(`
+        SELECT drug_name, batch_no, expiry_date, avl_qty, stock_value, received_date
+        FROM pharmacy_stock_actuals
+        WHERE snapshot_date = ?${bf.where}
+      `, snapshotDate, ...bf.params);
+
+      const now = new Date();
+      const curMonth = now.getMonth();
+      const curYear = now.getFullYear();
+
+      const zones: Record<string, { batches: number; value: number; qty: number }> = {
+        'Expired': { batches: 0, value: 0, qty: 0 },
+        'Critical (0-3m)': { batches: 0, value: 0, qty: 0 },
+        'Warning (3-6m)': { batches: 0, value: 0, qty: 0 },
+        'Safe (6-12m)': { batches: 0, value: 0, qty: 0 },
+        'Long Term (12m+)': { batches: 0, value: 0, qty: 0 },
+        'Unknown': { batches: 0, value: 0, qty: 0 },
+      };
+      let nearExpiry = 0, expired = 0;
+
+      for (const row of stockRows as any[]) {
+        let zone = 'Unknown';
+        const ed = row.expiry_date;
+        if (ed && typeof ed === 'string') {
+          const parts = ed.match(/(\d{1,2})[\/\-](\d{4})/);
+          const partsAlt = ed.match(/(\d{4})[\/\-](\d{1,2})/);
+          let expMonth = -1, expYear = -1;
+          if (parts) { expMonth = parseInt(parts[1]) - 1; expYear = parseInt(parts[2]); }
+          else if (partsAlt) { expYear = parseInt(partsAlt[1]); expMonth = parseInt(partsAlt[2]) - 1; }
+          if (expMonth >= 0 && expYear > 0) {
+            const diff = (expYear - curYear) * 12 + (expMonth - curMonth);
+            if (diff < 0) { zone = 'Expired'; expired++; }
+            else if (diff <= 3) { zone = 'Critical (0-3m)'; nearExpiry++; }
+            else if (diff <= 6) { zone = 'Warning (3-6m)'; nearExpiry++; }
+            else if (diff <= 12) { zone = 'Safe (6-12m)'; }
+            else { zone = 'Long Term (12m+)'; }
+          }
+        }
+        zones[zone].batches++;
+        zones[zone].value += row.stock_value || 0;
+        zones[zone].qty += row.avl_qty || 0;
+      }
+
+      const expiryZones = Object.entries(zones)
+        .map(([name, data]) => ({ name, ...data }))
+        .filter(z => z.batches > 0);
+
+      stockKpi.nearExpiry = nearExpiry;
+      stockKpi.expired = expired;
+      stockKpi.snapshotDate = snapshotDate;
+
+      const stockTable = db.all(`
+        SELECT drug_name, batch_no, received_date, expiry_date, avl_qty, strips,
+          purchase_price, purchase_value, stock_value
+        FROM pharmacy_stock_actuals
+        WHERE snapshot_date = ?${bf.where}
+        ORDER BY stock_value DESC LIMIT 200
+      `, snapshotDate, ...bf.params);
+
+      result.stock = {
+        kpi: stockKpi,
+        topProducts: topStockProducts,
+        expiryZones,
+        table: stockTable,
+      };
+    }
+  }
+
+  // ── CROSS-REPORT INSIGHTS ─────────────────────────────────────────────────
+  if (hasSales && hasPurchases) {
+    const salesByProduct = db.all(`
+      SELECT drug_name, COALESCE(SUM(sales_amount), 0) as sales,
+        COALESCE(SUM(qty), 0) as salesQty
+      FROM pharmacy_sales_actuals
+      WHERE bill_month >= ? AND bill_month <= ?${bf.where}
+      GROUP BY drug_name
+    `, startMonth, endMonth, ...bf.params);
+
+    const purchasesByProduct = db.all(`
+      SELECT drug_name, COALESCE(SUM(purchase_value), 0) as purchases,
+        COALESCE(SUM(purchase_qty), 0) as purchaseQty
+      FROM pharmacy_purchase_actuals
+      WHERE invoice_month >= ? AND invoice_month <= ?${bf.where}
+      GROUP BY drug_name
+    `, startMonth, endMonth, ...bf.params);
+
+    // Merge products from both sources
+    const productMap = new Map<string, any>();
+    for (const p of purchasesByProduct as any[]) {
+      productMap.set(p.drug_name, { name: p.drug_name, purchases: p.purchases, purchaseQty: p.purchaseQty, sales: 0, salesQty: 0 });
+    }
+    for (const s of salesByProduct as any[]) {
+      const existing = productMap.get(s.drug_name);
+      if (existing) { existing.sales = s.sales; existing.salesQty = s.salesQty; }
+      else { productMap.set(s.drug_name, { name: s.drug_name, purchases: 0, purchaseQty: 0, sales: s.sales, salesQty: s.salesQty }); }
+    }
+
+    const allProducts = [...productMap.values()];
+    const purchasedNotSold = allProducts.filter(p => p.purchases > 0 && p.sales === 0);
+    const soldNotPurchased = allProducts.filter(p => p.sales > 0 && p.purchases === 0);
+    const topCross = allProducts
+      .filter(p => p.purchases > 0 && p.sales > 0)
+      .map(p => ({ ...p, sellThrough: p.purchaseQty > 0 ? Math.round(p.salesQty / p.purchaseQty * 100) : 0 }))
+      .sort((a, b) => (b.purchases + b.sales) - (a.purchases + a.sales))
+      .slice(0, 15);
+
+    const totalPurchaseVal = allProducts.reduce((s, p) => s + p.purchases, 0);
+    const totalSalesVal = allProducts.reduce((s, p) => s + p.sales, 0);
+
+    result.crossInsights = {
+      kpi: {
+        totalProducts: allProducts.length,
+        purchasedNotSoldCount: purchasedNotSold.length,
+        soldNotPurchasedCount: soldNotPurchased.length,
+        sellThroughRate: totalPurchaseVal > 0 ? Math.round(totalSalesVal / totalPurchaseVal * 100) : 0,
+        purchasedNotSoldValue: purchasedNotSold.reduce((s, p) => s + p.purchases, 0),
+      },
+      topCrossProducts: topCross,
+      purchasedNotSold: purchasedNotSold.sort((a, b) => b.purchases - a.purchases).slice(0, 10),
+      soldNotPurchased: soldNotPurchased.sort((a, b) => b.sales - a.sales).slice(0, 10),
+    };
+  }
+
+  res.json(result);
+});
+
 router.get('/variance', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id } = req.query;

@@ -3,6 +3,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 import api from '../api/client';
 import { formatINR, getMonthLabel } from '../utils/format';
 import ClinicAnalytics from '../components/dashboard/ClinicAnalytics';
+import PharmacyAnalytics from '../components/dashboard/PharmacyAnalytics';
 import {
   TrendingUp, TrendingDown, IndianRupee, Activity,
   BarChart3, Briefcase, RefreshCcw, GraduationCap, Store, Globe, Warehouse,
@@ -103,6 +104,10 @@ export default function DashboardPage() {
     String(s.id) === activeStreamId &&
     ((s.name || '').toLowerCase().includes('clinic') || (s.name || '').toLowerCase().includes('health'))
   );
+  const isPharmaStream = !isAllStreams && streams.some((s: any) =>
+    String(s.id) === activeStreamId &&
+    (s.name || '').toLowerCase().includes('pharma')
+  );
   // Chart visibility helper
   const chartVis = data.chartVisibility || [];
   const isChartVisible = (key: string) => {
@@ -122,6 +127,18 @@ export default function DashboardPage() {
     if (!clinicStreamId) return false;
     const entry = chartVis.find((v: any) => v.element_key === key && v.scope === clinicStreamId);
     return entry ? !!entry.is_visible : false;
+  };
+
+  // Pharmacy stream visibility helper
+  const pharmaStream = streams.find((s: any) => {
+    const n = (s.name || '').toLowerCase();
+    return n.includes('pharma');
+  });
+  const pharmaStreamId = pharmaStream ? String(pharmaStream.id) : null;
+  const isPharmaVisible = (key: string) => {
+    if (!pharmaStreamId) return false;
+    const entry = chartVis.find((v: any) => v.element_key === key && v.scope === pharmaStreamId);
+    return entry ? !!entry.is_visible : true; // default visible for pharmacy
   };
 
   // Filter streams for charts when a specific stream is selected
@@ -224,8 +241,8 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Charts Row — hidden when clinic stream is active */}
-      {!isClinicStream && (showTrend || showPie) && (
+      {/* Charts Row — hidden when clinic/pharmacy stream is active */}
+      {!isClinicStream && !isPharmaStream && (showTrend || showPie) && (
         <div className={`grid grid-cols-1 ${showTrend && showPie ? 'lg:grid-cols-3' : ''} gap-5 mb-6`}>
           {showTrend && (
             <div className={`card ${showPie ? 'lg:col-span-2' : ''}`}>
@@ -299,6 +316,9 @@ export default function DashboardPage() {
 
       {/* Clinic Analytics — only when clinic stream is active */}
       {isClinicStream && clinicStreamId && <ClinicAnalytics isVisible={isClinicVisible} />}
+
+      {/* Pharmacy Analytics — only when pharmacy stream is active */}
+      {isPharmaStream && pharmaStreamId && <PharmacyAnalytics isVisible={isPharmaVisible} />}
     </div>
   );
 }

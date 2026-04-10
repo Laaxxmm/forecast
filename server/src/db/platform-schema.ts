@@ -257,6 +257,102 @@ export function initializePlatformSchema(db: DbHelper) {
         seedVis(c.id, sid, 'tables', 'patient_summary_table', 'Patient Summary Table', 0,
           'Sortable, searchable table: Patient ID, Name, Departments Used, Total Billed, Total Paid, Discount, Number of Visits. Paginated at 50 rows.', source);
       }
+
+      // Pharmacy-specific items (OneGlance data)
+      const isPharma = nameLower.includes('pharma');
+      if (isPharma) {
+        // ── Purchase KPI Cards ──
+        seedVis(c.id, sid, 'cards', 'pharma_total_purchase', 'Total Purchase Value', 0,
+          'Sum of all purchase values from OneGlance purchase reports', source);
+        seedVis(c.id, sid, 'cards', 'pharma_total_invoices', 'Total Invoices', 1,
+          'Count of distinct purchase invoices', source);
+        seedVis(c.id, sid, 'cards', 'pharma_unique_stockists', 'Unique Stockists', 2,
+          'Number of distinct stockist/distributors', source);
+        seedVis(c.id, sid, 'cards', 'pharma_unique_products', 'Unique Products', 3,
+          'Number of distinct drugs/products purchased', source);
+        seedVis(c.id, sid, 'cards', 'pharma_total_free_qty', 'Free Qty Received', 4,
+          'Total free quantity received from stockists', source);
+        seedVis(c.id, sid, 'cards', 'pharma_total_tax', 'Total Tax', 5,
+          'Total purchase tax amount', source);
+
+        // ── Sales KPI Cards ──
+        seedVis(c.id, sid, 'cards', 'pharma_total_sales', 'Total Sales', 6,
+          'Sum of all pharmacy sales revenue', source);
+        seedVis(c.id, sid, 'cards', 'pharma_total_cogs', 'Cost of Goods', 7,
+          'Total cost of goods sold', source);
+        seedVis(c.id, sid, 'cards', 'pharma_total_profit', 'Total Profit', 8,
+          'Total profit (Sales minus COGS)', source);
+        seedVis(c.id, sid, 'cards', 'pharma_profit_margin', 'Profit Margin %', 9,
+          'Overall profit margin percentage', source);
+        seedVis(c.id, sid, 'cards', 'pharma_total_bills', 'Total Bills', 10,
+          'Count of distinct sales bills', source);
+        seedVis(c.id, sid, 'cards', 'pharma_unique_patients', 'Unique Patients', 11,
+          'Number of distinct pharmacy customers', source);
+
+        // ── Stock KPI Cards ──
+        seedVis(c.id, sid, 'cards', 'pharma_stock_value', 'Total Stock Value', 12,
+          'Total inventory valuation from latest snapshot', source);
+        seedVis(c.id, sid, 'cards', 'pharma_stock_skus', 'Unique SKUs', 13,
+          'Number of distinct stock items', source);
+        seedVis(c.id, sid, 'cards', 'pharma_near_expiry', 'Near Expiry Batches', 14,
+          'Batches expiring within 6 months', source);
+        seedVis(c.id, sid, 'cards', 'pharma_expired_items', 'Expired Batches', 15,
+          'Batches that have already expired', source);
+        seedVis(c.id, sid, 'cards', 'pharma_total_batches', 'Total Batches', 16,
+          'Total number of stock batches', source);
+
+        // ── Cross-Report KPI Cards ──
+        seedVis(c.id, sid, 'cards', 'pharma_cross_kpis', 'Cross-Report KPIs', 17,
+          'Sell-through rate, purchased-not-sold, sold-not-purchased counts', source);
+
+        // ── Purchase Charts ──
+        seedVis(c.id, sid, 'charts', 'pharma_monthly_purchase_trend', 'Monthly Purchase Trend', 1,
+          'Bar chart showing gross and net purchase values per month', source);
+        seedVis(c.id, sid, 'charts', 'pharma_top_stockists', 'Top Stockists', 2,
+          'Horizontal bar chart of top 10 stockists by purchase value', source);
+        seedVis(c.id, sid, 'charts', 'pharma_top_manufacturers', 'Top Manufacturers', 3,
+          'Horizontal bar chart of top 10 manufacturers by purchase value', source);
+        seedVis(c.id, sid, 'charts', 'pharma_top_purchase_products', 'Top Purchase Products', 4,
+          'Top 15 products by purchase value with progress bars', source);
+        seedVis(c.id, sid, 'charts', 'pharma_profit_margin_dist', 'Profit Margin Distribution', 5,
+          'Donut chart showing product count by expected profit margin bracket', source);
+        seedVis(c.id, sid, 'charts', 'pharma_free_qty_analysis', 'Free Quantity Analysis', 6,
+          'Stockists providing free goods with percentage of batch', source);
+
+        // ── Sales Charts ──
+        seedVis(c.id, sid, 'charts', 'pharma_monthly_sales_trend', 'Monthly Sales Trend', 7,
+          'Grouped bar chart showing sales, COGS, and profit per month', source);
+        seedVis(c.id, sid, 'charts', 'pharma_sales_vs_cogs', 'Sales vs COGS Line', 8,
+          'Line chart comparing monthly sales and cost of goods', source);
+        seedVis(c.id, sid, 'charts', 'pharma_top_drugs_sales', 'Top Drugs by Revenue', 9,
+          'Top 15 drugs ranked by sales amount', source);
+        seedVis(c.id, sid, 'charts', 'pharma_top_drugs_profit', 'Top Drugs by Profit', 10,
+          'Top 15 drugs ranked by profit with margin percentage', source);
+        seedVis(c.id, sid, 'charts', 'pharma_referral_analysis', 'Referral Analysis', 11,
+          'Revenue breakdown by referral source (doctor, walk-in, etc.)', source);
+        seedVis(c.id, sid, 'charts', 'pharma_top_patients', 'Top Patients by Spend', 12,
+          'Top 20 pharmacy customers by total purchase amount', source);
+
+        // ── Stock Charts ──
+        seedVis(c.id, sid, 'charts', 'pharma_expiry_zones', 'Expiry Zone Distribution', 13,
+          'Donut chart showing stock value by expiry timeline (expired, critical, warning, safe, long term)', source);
+        seedVis(c.id, sid, 'charts', 'pharma_top_stock_products', 'Top Stock Products', 14,
+          'Horizontal bar chart of products with highest inventory value', source);
+
+        // ── Cross-Report Charts ──
+        seedVis(c.id, sid, 'charts', 'pharma_purchase_vs_sales', 'Purchase vs Sales Comparison', 15,
+          'Side-by-side bar chart comparing purchase and sales values per product', source);
+        seedVis(c.id, sid, 'charts', 'pharma_dead_stock', 'Dead Stock Analysis', 16,
+          'Products purchased but not sold, and products sold from old stock', source);
+
+        // ── Tables ──
+        seedVis(c.id, sid, 'tables', 'pharma_purchase_table', 'Purchase Details Table', 0,
+          'Searchable table: Invoice, Date, Stockist, Drug, Batch Qty, Free, MRP, Purchase Value, Tax, Margin%. Paginated.', source);
+        seedVis(c.id, sid, 'tables', 'pharma_sales_table', 'Sales Details Table', 1,
+          'Searchable table: Bill, Date, Patient, Drug, Qty, Sales, COGS, Profit, Referred By. Paginated.', source);
+        seedVis(c.id, sid, 'tables', 'pharma_stock_table', 'Stock Details Table', 2,
+          'Searchable table: Drug, Batch, Received, Expiry, Avl Qty, Strips, Purchase Price, Stock Value. Paginated.', source);
+      }
     }
   }
 }
