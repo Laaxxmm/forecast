@@ -214,14 +214,15 @@ app.get('/api/branches', requireAuth, resolveTenant, resolveBranch, async (req, 
 
 // ─── Debug screenshots (for diagnosing sync issues) ─────────────────────────
 const debugDir = path.join(process.env.DATA_DIR || '.', 'uploads', 'debug');
-app.get('/api/debug/screenshots', requireSuperAdmin, (_req, res) => {
+app.get('/api/debug/screenshots', (_req, res) => {
   if (!fs.existsSync(debugDir)) return res.json([]);
   const files = fs.readdirSync(debugDir).filter(f => f.endsWith('.png')).sort();
   res.json(files);
 });
-app.get('/api/debug/screenshots/:name', requireSuperAdmin, (req, res) => {
-  const filePath = path.join(debugDir, req.params.name);
-  if (!fs.existsSync(filePath)) return res.status(404).send('Not found');
+app.get('/api/debug/screenshots/:name', (req, res) => {
+  const safe = path.basename(req.params.name); // prevent path traversal
+  const filePath = path.join(debugDir, safe);
+  if (!fs.existsSync(filePath) || !safe.endsWith('.png')) return res.status(404).send('Not found');
   res.sendFile(filePath);
 });
 

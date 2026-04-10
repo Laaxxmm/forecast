@@ -618,7 +618,9 @@ async function downloadStockReport(
     await debugScreenshot(page, '16-FAILED-all-strategies');
     const debugInfo = await getPageDebugInfo(page);
     console.log('[oneglance-sync] All strategies failed. Page debug:\n', debugInfo);
-    throw new Error('All CSV download strategies failed for stock report');
+    // Include diagnostic info in error so it shows in the UI
+    const diagSummary = `tables=${pageInfo.tableCount} jQuery=${pageInfo.hasJQuery} DT=${pageInfo.hasDataTables} dtTables=${pageInfo.dtTables} btns=[${pageInfo.csvButtons.join(',')}]`;
+    throw new Error(`Stock CSV download failed. Page: ${diagSummary}`);
   }
 
   progress(opts, 'stock', 'Stock CSV downloaded', 84);
