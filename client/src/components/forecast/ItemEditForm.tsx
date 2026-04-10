@@ -246,7 +246,7 @@ const TYPE_DEFS: Record<string, TypeDef> = {
           { value: 'constant', label: 'Constant amount' },
           { value: 'varying', label: 'Varying amounts over time' },
         ],
-        defaultEntryMode: 'varying',
+        defaultEntryMode: 'constant',
       },
       {
         key: 'salary_per',
@@ -720,10 +720,50 @@ export default function ItemEditForm({ item, category, months, values: initialVa
     });
   }, [steps, stepEntryModes, pctNetProfit, pctNetProfitStartMonth, allValues, months, revenueItems, costItems]);
 
+  // Synchronous effective step values: for constant-mode steps, compute directly
+  // from stepConstants instead of relying on async useEffect → stepValues chain.
+  // This ensures chart and saved values are always up-to-date.
+  const effectiveStepValues = useMemo(() => {
+    const result: Record<string, Record<string, number>> = {};
+    steps.forEach(step => {
+      if (stepEntryModes[step.key] === 'constant') {
+        const c = stepConstants[step.key];
+        if (c && c.amount > 0) {
+          const newVals: Record<string, number> = {};
+          const baseAmount = c.period === 'year' ? c.amount / 12 : c.amount;
+          months.forEach(m => {
+            if (m >= c.startMonth) {
+              let amount = baseAmount;
+              // Apply annual raise for personnel salary step
+              if (category === 'personnel' && step.key === 'salary_per' && annualRaisePct > 0) {
+                const [startYr, startMo] = c.startMonth.split('-').map(Number);
+                const [curYr, curMo] = m.split('-').map(Number);
+                const monthsDiff = (curYr - startYr) * 12 + (curMo - startMo);
+                const yearsElapsed = Math.floor(monthsDiff / 12);
+                if (yearsElapsed > 0) {
+                  amount = baseAmount * Math.pow(1 + annualRaisePct / 100, yearsElapsed);
+                }
+              }
+              newVals[m] = Math.round(amount * 100) / 100;
+            }
+          });
+          result[step.key] = newVals;
+        } else {
+          result[step.key] = stepValues[step.key] || {};
+        }
+      } else {
+        // For varying / pct_overall / pct_specific / one_time / pct_net_profit modes,
+        // use the stepValues populated by their respective useEffects
+        result[step.key] = stepValues[step.key] || {};
+      }
+    });
+    return result;
+  }, [stepValues, steps, stepEntryModes, stepConstants, months, category, annualRaisePct]);
+
   // Compute final monthly values from all steps
   const computedValues = useMemo(() => {
-    return typeDef.computeRevenue(stepValues, months);
-  }, [stepValues, months, typeDef]);
+    return typeDef.computeRevenue(effectiveStepValues, months);
+  }, [effectiveStepValues, months, typeDef]);
 
   const total = useMemo(() => months.reduce((s, m) => s + (computedValues[m] || 0), 0), [computedValues, months]);
 
@@ -733,10 +773,10 @@ export default function ItemEditForm({ item, category, months, values: initialVa
   })), [computedValues, months]);
 
   const stepStatus = useCallback((stepKey: string) => {
-    const vals = stepValues[stepKey] || {};
+    const vals = effectiveStepValues[stepKey] || {};
     const hasAnyValue = Object.values(vals).some(v => v > 0);
     return hasAnyValue ? 'complete' : 'incomplete';
-  }, [stepValues]);
+  }, [effectiveStepValues]);
 
   const updateStepMonthValue = (month: string, value: string) => {
     const num = parseFloat(value) || 0;
@@ -754,7 +794,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
         item_type: itemType,
         entry_mode: steps.length === 1 ? stepEntryModes[steps[0].key] : 'varying',
         meta: {
-          stepValues,
+          stepValues: effectiveStepValues,
           stepEntryModes,
           stepConstants,
           linkedRevenueId,
@@ -821,7 +861,7 @@ export default function ItemEditForm({ item, category, months, values: initialVa
     { value: 'other', label: 'Other expense' },
   ];
 
-  const currentStepValues = stepValues[activeStep.key] || {};
+  const currentStepValues = effectiveStepValues[activeStep.key] || {};
   const currentStepTotal = months.reduce((s, m) => s + (currentStepValues[m] || 0), 0);
 
   return (
