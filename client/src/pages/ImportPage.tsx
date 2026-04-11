@@ -305,11 +305,11 @@ export default function ImportPage() {
 
   return (
     <div className="animate-fade-in">
-      <h1 className="text-2xl font-bold text-theme-heading mb-1">Import Data</h1>
-      <p className="text-theme-faint text-sm mb-6">Upload Excel reports{(showHpSync || showOgSync || showTuriaSync) ? ' or sync directly from your integrations' : ''}</p>
+      <h1 className="text-xl font-bold text-theme-heading mb-0.5">Import Data</h1>
+      <p className="text-theme-faint text-xs mb-4">Upload Excel reports{(showHpSync || showOgSync || showTuriaSync) ? ' or sync from integrations' : ''}</p>
 
       {/* Mode Toggle */}
-      <div className="flex gap-2 mb-6">
+      <div className="flex gap-2 mb-4">
         <button
           onClick={() => { setMode('upload'); reset(); }}
           className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
@@ -337,61 +337,58 @@ export default function ImportPage() {
       {/* UPLOAD MODE */}
       {mode === 'upload' && (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+          <div className="flex flex-wrap gap-2 mb-4">
             {sources.map(s => (
               <button
                 key={s.key}
                 onClick={() => { setSelected(s.key); setFile(null); setResult(null); setError(''); }}
-                className={`card-hover text-left transition-all ${
-                  selected === s.key ? 'ring-2 ring-accent-500 border-accent-500/50' : ''
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all ${
+                  selected === s.key
+                    ? 'bg-accent-500/15 ring-1 ring-accent-500 text-accent-400 font-medium'
+                    : 'bg-dark-600 text-theme-muted hover:bg-dark-500 border border-dark-400/40'
                 }`}
               >
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-3 ${
-                  selected === s.key ? 'bg-accent-500/15' : 'bg-dark-500'
-                }`}>
-                  <s.icon size={20} className={selected === s.key ? 'text-accent-400' : 'text-theme-faint'} />
-                </div>
-                <h3 className="font-semibold text-theme-heading mt-1">{s.label}</h3>
-                <p className="text-sm text-theme-faint mt-1">{s.desc}</p>
+                <s.icon size={15} className={selected === s.key ? 'text-accent-400' : 'text-theme-faint'} />
+                {s.label}
+                <span className="text-[10px] text-theme-faint hidden sm:inline">· {s.desc}</span>
               </button>
             ))}
           </div>
 
           {selected && !result && (
-            <div className="card mb-8">
-              <h3 className="font-semibold text-theme-heading mb-4">
-                Upload {sources.find(s => s.key === selected)?.label} Report
-              </h3>
+            <div className="card mb-5">
               <div
                 onDragOver={e => { e.preventDefault(); setDragOver(true); }}
                 onDragLeave={() => setDragOver(false)}
                 onDrop={handleDrop}
-                className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all ${
+                className={`border border-dashed rounded-xl p-5 text-center transition-all ${
                   dragOver ? 'border-accent-400 bg-accent-500/5' : 'border-dark-400'
                 }`}
               >
-                <div className="w-14 h-14 rounded-2xl bg-dark-600 flex items-center justify-center mx-auto mb-4">
-                  <Upload size={24} className="text-theme-faint" />
-                </div>
-                <p className="text-theme-secondary mb-2">Drag & drop your Excel file here, or</p>
-                <label className="btn-primary cursor-pointer inline-block">
-                  Browse Files
-                  <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => setFile(e.target.files?.[0] || null)} />
-                </label>
+                <Upload size={20} className="text-theme-faint mx-auto mb-2" />
+                <p className="text-theme-secondary text-sm mb-2">
+                  Drop your <span className="font-medium text-theme-heading">{sources.find(s => s.key === selected)?.label}</span> file here, or{' '}
+                  <label className="text-accent-400 cursor-pointer hover:underline font-medium">
+                    browse
+                    <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => setFile(e.target.files?.[0] || null)} />
+                  </label>
+                </p>
                 {file && (
-                  <p className="mt-3 text-sm text-accent-400 font-medium">{file.name}</p>
+                  <div className="flex items-center justify-center gap-2 mt-2 text-sm text-accent-400 font-medium">
+                    <CheckCircle size={14} /> {file.name}
+                  </div>
                 )}
               </div>
               {error && (
-                <div className="mt-4 bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-xl flex items-center gap-2 text-sm">
-                  <AlertCircle size={16} /> {error}
+                <div className="mt-3 bg-red-500/10 border border-red-500/20 text-red-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+                  <AlertCircle size={14} /> {error}
                 </div>
               )}
-              <div className="flex gap-3 mt-4">
-                <button onClick={handleUpload} disabled={!file || uploading} className="btn-primary">
-                  {uploading ? 'Importing...' : 'Import Data'}
+              <div className="flex gap-2 mt-3">
+                <button onClick={handleUpload} disabled={!file || uploading} className="btn-primary text-sm py-2">
+                  {uploading ? 'Importing...' : 'Import'}
                 </button>
-                <button onClick={reset} className="btn-secondary">Cancel</button>
+                <button onClick={reset} className="btn-secondary text-sm py-2">Cancel</button>
               </div>
             </div>
           )}
@@ -400,7 +397,7 @@ export default function ImportPage() {
 
       {/* SYNC MODE */}
       {mode === 'sync' && !result && (
-        <div className="card mb-8">
+        <div className="card mb-5">
           {([showHpSync, showOgSync, showTuriaSync].filter(Boolean).length > 1) && (
             <div className="flex gap-3 mb-5">
               {showHpSync && (
@@ -627,59 +624,46 @@ export default function ImportPage() {
 
       {/* Result */}
       {result && (
-        <div className="card mb-8 border-accent-500/30 bg-accent-500/5">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 rounded-xl bg-accent-500/15 flex items-center justify-center">
-              <CheckCircle size={20} className="text-accent-400" />
-            </div>
-            <h3 className="font-semibold text-accent-300">
+        <div className="card mb-5 border-accent-500/30 bg-accent-500/5">
+          <div className="flex items-center gap-2 mb-3">
+            <CheckCircle size={18} className="text-accent-400" />
+            <h3 className="font-semibold text-accent-300 text-sm">
               {mode === 'sync' ? 'Sync Successful' : 'Import Successful'}
             </h3>
           </div>
-          <div className="grid grid-cols-3 gap-4 text-sm">
-            <div className="bg-dark-600 rounded-xl p-3">
-              <p className="text-xs text-theme-faint mb-1">Rows Imported</p>
-              <p className="text-lg font-bold text-theme-heading">{result.totalRows?.toLocaleString('en-IN')}</p>
-            </div>
-            <div className="bg-dark-600 rounded-xl p-3">
-              <p className="text-xs text-theme-faint mb-1">Date Range</p>
-              <p className="text-lg font-bold text-theme-heading">
-                {result.dateRange ? `${result.dateRange.start} to ${result.dateRange.end}` : 'N/A'}
-              </p>
-            </div>
-            <div className="bg-dark-600 rounded-xl p-3">
-              <p className="text-xs text-theme-faint mb-1">Warnings</p>
-              <p className="text-lg font-bold text-theme-heading">{result.warnings?.length || 0}</p>
-            </div>
+          <div className="flex gap-4 text-sm mb-3">
+            <div><span className="text-theme-faint">Rows:</span> <span className="font-bold text-theme-heading">{result.totalRows?.toLocaleString('en-IN')}</span></div>
+            <div><span className="text-theme-faint">Range:</span> <span className="font-bold text-theme-heading">{result.dateRange ? `${result.dateRange.start} → ${result.dateRange.end}` : 'N/A'}</span></div>
+            {(result.warnings?.length > 0) && <div><span className="text-theme-faint">Warnings:</span> <span className="font-bold text-yellow-400">{result.warnings.length}</span></div>}
           </div>
-          <button onClick={reset} className="btn-primary mt-4">
-            {mode === 'sync' ? 'Sync Another Period' : 'Import Another'}
+          <button onClick={reset} className="btn-primary text-sm py-2">
+            {mode === 'sync' ? 'Sync Another' : 'Import Another'}
           </button>
         </div>
       )}
 
       {/* Import History */}
-      <div className="card">
-        <h3 className="font-semibold text-theme-heading mb-4">Import History</h3>
+      <div className="card !p-4">
+        <h3 className="font-semibold text-theme-heading text-sm mb-3">Import History</h3>
         {history.length === 0 ? (
-          <p className="text-theme-faint text-center py-8">No imports yet</p>
+          <p className="text-theme-faint text-center py-4 text-sm">No imports yet</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          <div className="overflow-x-auto -mx-1">
+            <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-dark-400/50">
-                  <th className="text-left py-3 px-3 text-theme-faint font-medium text-xs uppercase tracking-wider">Source</th>
-                  <th className="text-left py-3 px-3 text-theme-faint font-medium text-xs uppercase tracking-wider">File</th>
-                  <th className="text-right py-3 px-3 text-theme-faint font-medium text-xs uppercase tracking-wider">Rows</th>
-                  <th className="text-left py-3 px-3 text-theme-faint font-medium text-xs uppercase tracking-wider">Date Range</th>
-                  <th className="text-left py-3 px-3 text-theme-faint font-medium text-xs uppercase tracking-wider">Imported At</th>
-                  <th className="text-right py-3 px-3 text-theme-faint font-medium text-xs uppercase tracking-wider">Actions</th>
+                  <th className="text-left py-2 px-2 text-theme-faint font-medium uppercase tracking-wider">Source</th>
+                  <th className="text-left py-2 px-2 text-theme-faint font-medium uppercase tracking-wider">File</th>
+                  <th className="text-right py-2 px-2 text-theme-faint font-medium uppercase tracking-wider">Rows</th>
+                  <th className="text-left py-2 px-2 text-theme-faint font-medium uppercase tracking-wider">Range</th>
+                  <th className="text-left py-2 px-2 text-theme-faint font-medium uppercase tracking-wider">When</th>
+                  <th className="py-2 px-2"></th>
                 </tr>
               </thead>
               <tbody>
                 {history.map(log => (
-                  <tr key={log.id} className="border-b border-dark-400/30 hover:bg-dark-600/50 transition-colors">
-                    <td className="py-3 px-3">
+                  <tr key={log.id} className="border-b border-dark-400/20 hover:bg-dark-600/50 transition-colors">
+                    <td className="py-1.5 px-2">
                       <span className={`badge text-[10px] ${
                         log.source === 'HEALTHPLIX_SYNC' ? 'badge-info' :
                         log.source.includes('ONEGLANCE') ? 'badge-warning' :
@@ -689,20 +673,21 @@ export default function ImportPage() {
                         {log.source === 'HEALTHPLIX_SYNC' ? 'HP Sync' :
                          log.source === 'ONEGLANCE_SALES_SYNC' ? 'OG Sales' :
                          log.source === 'ONEGLANCE_PURCHASE_SYNC' ? 'OG Purchase' :
+                         log.source === 'ONEGLANCE_STOCK_SYNC' ? 'OG Stock' :
                          log.source === 'TURIA_SYNC' ? 'Turia Sync' :
                          log.source === 'TURIA' ? 'Turia Upload' :
                          log.source}
                       </span>
                     </td>
-                    <td className="py-3 px-3 text-theme-secondary">{log.filename}</td>
-                    <td className="py-3 px-3 text-right text-theme-secondary">{log.rows_imported.toLocaleString('en-IN')}</td>
-                    <td className="py-3 px-3 text-theme-faint">
-                      {log.date_range_start && log.date_range_end ? `${log.date_range_start} to ${log.date_range_end}` : '-'}
+                    <td className="py-1.5 px-2 text-theme-secondary truncate max-w-[180px]">{log.filename}</td>
+                    <td className="py-1.5 px-2 text-right text-theme-secondary font-medium">{log.rows_imported.toLocaleString('en-IN')}</td>
+                    <td className="py-1.5 px-2 text-theme-faint">
+                      {log.date_range_start && log.date_range_end ? `${log.date_range_start} → ${log.date_range_end}` : '-'}
                     </td>
-                    <td className="py-3 px-3 text-theme-faint">{new Date(log.created_at).toLocaleString('en-IN')}</td>
-                    <td className="py-3 px-3 text-right">
-                      <button onClick={() => handleDelete(log.id)} className="text-red-400/60 hover:text-red-400 transition-colors">
-                        <Trash2 size={15} />
+                    <td className="py-1.5 px-2 text-theme-faint">{new Date(log.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}</td>
+                    <td className="py-1.5 px-2 text-right">
+                      <button onClick={() => handleDelete(log.id)} className="text-red-400/40 hover:text-red-400 transition-colors">
+                        <Trash2 size={13} />
                       </button>
                     </td>
                   </tr>
