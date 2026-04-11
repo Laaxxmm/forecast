@@ -123,7 +123,15 @@ app.post('/api/cleanup-pharmacy', async (_req, res) => {
     const pharmaSales = mcDb.get('SELECT COUNT(*) as n FROM pharmacy_sales_actuals')?.n || 0;
     const pharmaDash = mcDb.get("SELECT COUNT(*) as n FROM dashboard_actuals WHERE item_name LIKE 'Pharmacy%'")?.n || 0;
 
-    if (futureData > 0) {
+    // Also check for phantom past months (e.g. Jan-Mar from date format bug)
+    // Any pharmacy sales month before the earliest real import date is phantom
+    const earliestImport = mcDb.get("SELECT MIN(date_range_start) as m FROM import_logs WHERE source LIKE 'ONEGLANCE%' AND date_range_start IS NOT NULL");
+    const phantomPastMonths = earliestImport?.m
+      ? (mcDb.get('SELECT COUNT(*) as n FROM pharmacy_sales_actuals WHERE bill_month < ?', earliestImport.m)?.n || 0)
+      : 0;
+
+    if (futureData > 0 || phantomPastMonths > 0) {
+      // Wipe all pharmacy data and import logs for a clean slate
       mcDb.run('DELETE FROM pharmacy_sales_actuals');
       mcDb.run('DELETE FROM pharmacy_purchase_actuals');
       mcDb.run('DELETE FROM pharmacy_stock_actuals');
@@ -143,9 +151,9 @@ app.post('/api/cleanup-pharmacy', async (_req, res) => {
       const bakPath = path.join(process.env.DATA_DIR || '/data', 'clients', 'magnacode.db.bak');
       if (fs.existsSync(bakPath)) try { fs.unlinkSync(bakPath); } catch {}
 
-      res.json({ cleaned: true, futureData, pharmaSales, pharmaDash });
+      res.json({ cleaned: true, futureData, phantomPastMonths, pharmaSales, pharmaDash });
     } else {
-      res.json({ cleaned: false, message: 'No phantom data found', futureData, pharmaSales, pharmaDash });
+      res.json({ cleaned: false, message: 'No phantom data found', futureData, phantomPastMonths, pharmaSales, pharmaDash });
     }
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -685,6 +693,17 @@ async function start() {
 
       const itemCount = mcDb.get('SELECT COUNT(*) as n FROM forecast_items WHERE scenario_id = ?', scenarioId)?.n;
       const valCount  = mcDb.get('SELECT COUNT(*) as n FROM forecast_values fv JOIN forecast_items fi ON fv.item_id = fi.id WHERE fi.scenario_id = ?', scenarioId)?.n;
+      // Clean up any forecast items that landed in wrong (non-clinic) scenarios from earlier failed attempts
+      const wrongItems = mcDb.all('SELECT DISTINCT scenario_id FROM forecast_items WHERE scenario_id != ?', scenarioId);
+      for (const w of wrongItems) {
+        // Only clean if it's a stream-specific scenario (not the default no-stream one)
+        const wrongScenario = mcDb.get('SELECT stream_id FROM scenarios WHERE id = ?', w.scenario_id);
+        if (wrongScenario?.stream_id) {
+          mcDb.run('DELETE FROM forecast_items WHERE scenario_id = ?', w.scenario_id);
+          console.log(`[Inject Forecast] Cleaned up wrong forecast items from scenario ${w.scenario_id}`);
+        }
+      }
+
       const allItems = mcDb.all('SELECT id, scenario_id, category, name FROM forecast_items WHERE scenario_id = ?', scenarioId);
       console.log(`[Inject Forecast] ✅ Restored ${itemCount} items + ${valCount} values into scenario ${scenarioId}`);
       res.json({ ok: true, scenarioId, items: itemCount, values: valCount, clinicStreamId, allScenarios, allStreams, newIds, insertedItems: allItems });
