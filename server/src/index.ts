@@ -119,24 +119,26 @@ app.post('/api/cleanup-pharmacy', async (_req, res) => {
   try {
     const mcDb = await getClientHelper('magnacode');
     const currentMonth = new Date().toISOString().slice(0, 7);
-    const futureData = mcDb.get("SELECT COUNT(*) as n FROM pharmacy_sales_actuals WHERE bill_month > ?", currentMonth)?.n || 0;
-    const pharmaSales = mcDb.get('SELECT COUNT(*) as n FROM pharmacy_sales_actuals')?.n || 0;
-    const pharmaDash = mcDb.get("SELECT COUNT(*) as n FROM dashboard_actuals WHERE item_name LIKE 'Pharmacy%'")?.n || 0;
 
-    // Also check for phantom past months (e.g. Jan-Mar from date format bug)
-    // Any pharmacy sales month before the active FY start is phantom
+    // Check for phantom past months (e.g. Jan-Mar from date format bug)
     const activeFy = mcDb.get('SELECT start_date FROM financial_years WHERE is_active = 1');
     const fyStart = activeFy?.start_date?.slice(0, 7) || currentMonth;
+
+    const futureData = mcDb.get("SELECT COUNT(*) as n FROM pharmacy_sales_actuals WHERE bill_month > ?", currentMonth)?.n || 0;
     const phantomPastMonths = mcDb.get('SELECT COUNT(*) as n FROM pharmacy_sales_actuals WHERE bill_month < ?', fyStart)?.n || 0;
+    const pharmaSales = mcDb.get('SELECT COUNT(*) as n FROM pharmacy_sales_actuals')?.n || 0;
+    const pharmaPurchase = mcDb.get('SELECT COUNT(*) as n FROM pharmacy_purchase_actuals')?.n || 0;
+    const pharmaStock = mcDb.get('SELECT COUNT(*) as n FROM pharmacy_stock_actuals')?.n || 0;
+    const pharmaDash = mcDb.get("SELECT COUNT(*) as n FROM dashboard_actuals WHERE item_name LIKE 'Pharmacy%'")?.n || 0;
 
     if (futureData > 0 || phantomPastMonths > 0) {
-      // Wipe all pharmacy data and import logs for a clean slate
-      mcDb.run('DELETE FROM pharmacy_sales_actuals');
-      mcDb.run('DELETE FROM pharmacy_purchase_actuals');
-      mcDb.run('DELETE FROM pharmacy_stock_actuals');
-      mcDb.run("DELETE FROM dashboard_actuals WHERE item_name LIKE 'Pharmacy%'");
-      mcDb.run("DELETE FROM import_logs WHERE source LIKE 'ONEGLANCE%'");
+      // Surgical cleanup: remove phantom/future sales + purchase only.
+      // Stock data is preserved — it's a point-in-time snapshot not affected by the date bug.
+      mcDb.run('DELETE FROM pharmacy_sales_actuals WHERE bill_month < ? OR bill_month > ?', fyStart, currentMonth);
+      mcDb.run('DELETE FROM pharmacy_purchase_actuals WHERE invoice_month < ? OR invoice_month > ?', fyStart, currentMonth);
 
+      // Wipe stale dashboard actuals for pharmacy (will be rebuilt on next sync)
+      mcDb.run("DELETE FROM dashboard_actuals WHERE item_name LIKE 'Pharmacy%'");
       const platformDb = await getPlatformHelper();
       const clientRow = platformDb.get("SELECT id FROM clients WHERE slug = 'magnacode'");
       if (clientRow) {
@@ -146,11 +148,20 @@ app.post('/api/cleanup-pharmacy', async (_req, res) => {
         );
         if (pharmaStream) mcDb.run('DELETE FROM dashboard_actuals WHERE stream_id = ?', pharmaStream.id);
       }
-      // Purge .bak
+
+      // Remove bad import_logs for sales/purchase (stock log kept)
+      mcDb.run("DELETE FROM import_logs WHERE source IN ('ONEGLANCE_SALES_SYNC','ONEGLANCE_PURCHASE_SYNC','OG_SALES','OG_PURCHASE','ONEGLANCE_SALES','ONEGLANCE_PURCHASE')");
+
+      // Purge .bak so the clean state doesn't get rolled back
       const bakPath = path.join(process.env.DATA_DIR || '/data', 'clients', 'magnacode.db.bak');
       if (fs.existsSync(bakPath)) try { fs.unlinkSync(bakPath); } catch {}
 
-      res.json({ cleaned: true, futureData, phantomPastMonths, pharmaSales, pharmaDash });
+      res.json({
+        cleaned: true, futureData, phantomPastMonths,
+        deleted: { sales: pharmaSales, purchase: pharmaPurchase },
+        preserved: { stock: pharmaStock },
+        pharmaDash,
+      });
     } else {
       res.json({ cleaned: false, message: 'No phantom data found', futureData, phantomPastMonths, pharmaSales, pharmaDash });
     }
