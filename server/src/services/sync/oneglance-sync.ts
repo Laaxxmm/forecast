@@ -17,7 +17,7 @@ export interface OneglanceSyncResult {
   stockFile?: { filePath: string; filename: string };
 }
 
-const TIMEOUT = 120_000;
+const TIMEOUT = 45_000;
 
 // Use persistent volume in production
 const isProd = process.env.NODE_ENV === 'production';
@@ -35,7 +35,7 @@ async function debugScreenshot(page: Page, stepName: string) {
   try {
     if (!fs.existsSync(DEBUG_DIR)) fs.mkdirSync(DEBUG_DIR, { recursive: true });
     const filename = `${Date.now()}-${stepName.replace(/[^a-z0-9]/gi, '_')}.png`;
-    await page.screenshot({ path: path.join(DEBUG_DIR, filename), fullPage: true });
+    await page.screenshot({ path: path.join(DEBUG_DIR, filename), fullPage: false });
     console.log(`[debug-screenshot] ${stepName} → ${filename}`);
   } catch (e) {
     console.log(`[debug-screenshot] Failed for ${stepName}:`, e);
@@ -156,15 +156,19 @@ async function downloadReport(
   progress(opts, stepPrefix, `Generating ${type} report...`, pctBase + 8);
   await page.locator('button:has-text("Detailed"), a:has-text("Detailed"), input[value="Detailed"]').first().click({ timeout: TIMEOUT });
 
-  // Wait for report to load
+  // Wait for report to load — use short timeout, don't block on networkidle
   await page.waitForTimeout(3000);
-  await page.waitForLoadState('networkidle', { timeout: 180_000 });
+  try {
+    await page.waitForLoadState('networkidle', { timeout: 30_000 });
+  } catch {
+    console.log(`[oneglance-sync] networkidle timeout for ${type}, proceeding`);
+  }
   progress(opts, stepPrefix, `${type} report loaded`, pctBase + 15);
 
   // Click "csv" button to download
   progress(opts, stepPrefix, `Downloading ${type} CSV...`, pctBase + 18);
 
-  const downloadPromise = page.waitForEvent('download', { timeout: 180_000 });
+  const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
   await page.locator('button:has-text("csv"), a:has-text("csv"), input[value="csv"]').first().click({ timeout: TIMEOUT });
 
   const download = await downloadPromise;
@@ -235,7 +239,7 @@ async function downloadStockReport(
   }
 
   await page.waitForTimeout(2000);
-  await page.waitForLoadState('networkidle', { timeout: TIMEOUT });
+  try { await page.waitForLoadState('networkidle', { timeout: 20_000 }); } catch {}
   progress(opts, 'stock', 'Stock Available Report page loaded', 73);
 
   // Click Filter button to show filter options
@@ -279,20 +283,14 @@ async function downloadStockReport(
   const stockValuesBtn = page.locator('button:has-text("Stock values"), a:has-text("Stock values"), input[value="Stock values"]').first();
   await stockValuesBtn.click({ timeout: TIMEOUT });
 
-  // Wait for table data to appear (max 20s — keep browser time short to avoid OOM)
+  // Wait for CSV button to appear (don't wait for full 30K-row table render)
   await page.waitForTimeout(3000);
   try {
-    await page.waitForFunction(() => {
-      const tables = document.querySelectorAll('table');
-      for (const t of tables) {
-        if (t.querySelectorAll('tr').length > 1) return true;
-      }
-      return false;
-    }, { timeout: 20_000 });
+    await page.locator('button.uti_btn, button:has-text("csv")').first()
+      .waitFor({ state: 'visible', timeout: 15_000 });
   } catch {
-    console.log('[oneglance-sync] Table data not found after 20s');
+    console.log('[oneglance-sync] CSV button not visible after 15s, trying anyway');
   }
-  await page.waitForTimeout(1000);
   await debugScreenshot(page, '12-stock-report-loaded');
   progress(opts, 'stock', 'Stock report loaded', 80);
 
@@ -301,75 +299,21 @@ async function downloadStockReport(
   const filePath = path.join(downloadDir, filename);
   let saved = false;
 
-  // Quick diagnostics
+  // Quick diagnostics (lightweight — no row counting to avoid iterating 30K DOM nodes)
   const pageInfo = await page.evaluate(() => {
     const tables = document.querySelectorAll('table');
-    let maxRows = 0;
-    tables.forEach(t => { const r = t.querySelectorAll('tr').length; if (r > maxRows) maxRows = r; });
     const hasCsvBtn = !!document.querySelector('button.uti_btn');
-    return { tableCount: tables.length, maxRows, hasCsvBtn, url: location.href };
+    return { tableCount: tables.length, hasCsvBtn, url: location.href };
   });
   console.log('[oneglance-sync] Stock page:', JSON.stringify(pageInfo));
 
-  // ── Strategy 1: Scrape table FIRST (fast, no download needed) ──
-  // This is the safest approach — minimal memory, no waiting for downloads
-  progress(opts, 'stock', 'Extracting table data...', 82);
-  console.log('[oneglance-sync] Strategy 1: scraping table...');
-
-  const tableData = await page.evaluate(() => {
-    const tables = document.querySelectorAll('table');
-    let bestHeaders: string[] = [];
-    let bestLines: string[] = [];
-
-    for (const table of tables) {
-      const ths: string[] = [];
-      const headerRow = table.querySelector('thead tr') || table.querySelector('tr');
-      if (headerRow) {
-        headerRow.querySelectorAll('th, td').forEach(cell => {
-          ths.push((cell as HTMLElement).innerText?.trim() || '');
-        });
-      }
-
-      const lines: string[] = [];
-      const tbodyRows = table.querySelectorAll('tbody tr');
-      const dataRows = tbodyRows.length > 0 ? tbodyRows : table.querySelectorAll('tr');
-      const startIdx = tbodyRows.length > 0 ? 0 : 1;
-
-      for (let i = startIdx; i < dataRows.length; i++) {
-        const tr = dataRows[i];
-        const cells: string[] = [];
-        tr.querySelectorAll('td, th').forEach(td => {
-          let t = (td as HTMLElement).innerText?.trim() || '';
-          if (t.includes(',') || t.includes('"') || t.includes('\n')) t = '"' + t.replace(/"/g, '""') + '"';
-          cells.push(t);
-        });
-        if (cells.length > 0 && cells.some(c => c.length > 0)) lines.push(cells.join(','));
-      }
-
-      if (lines.length > bestLines.length) {
-        bestHeaders = ths;
-        bestLines = lines;
-      }
-    }
-    return { headers: bestHeaders, csv: bestLines.join('\n'), rowCount: bestLines.length };
-  });
-
-  if (tableData.rowCount > 0) {
-    const csvContent = (tableData.headers.length > 0 ? tableData.headers.join(',') + '\n' : '') + tableData.csv + '\n';
-    fs.writeFileSync(filePath, csvContent, 'utf-8');
-    saved = true;
-    console.log(`[oneglance-sync] Strategy 1 succeeded — scraped ${tableData.rowCount} rows`);
-  } else {
-    console.log(`[oneglance-sync] Strategy 1: 0 rows (tables=${pageInfo.tableCount}, maxRows=${pageInfo.maxRows})`);
-  }
-
-  // ── Strategy 2: Click CSV + wait for download (15s max) ──
-  // Only try if table scraping failed AND a CSV button exists
-  if (!saved && pageInfo.hasCsvBtn) {
-    console.log('[oneglance-sync] Strategy 2: click CSV + download (15s)...');
+  // ── Strategy 1: Click CSV button + wait for download (low memory) ──
+  // Prefer this over table scraping — the CSV file is ~4MB vs 30K DOM nodes in memory
+  if (pageInfo.hasCsvBtn) {
+    console.log('[oneglance-sync] Strategy 1: click CSV + download...');
     progress(opts, 'stock', 'Downloading stock CSV...', 82);
 
-    // Set up interception
+    // Intercept blob creation (OneGlance generates CSV client-side)
     await page.evaluate(() => {
       (window as any).__capturedCSV = null;
       const orig = URL.createObjectURL.bind(URL);
@@ -395,7 +339,7 @@ async function downloadStockReport(
     };
     page.on('response', respListener);
 
-    const dlPromise = page.waitForEvent('download', { timeout: 15_000 })
+    const dlPromise = page.waitForEvent('download', { timeout: 30_000 })
       .then(async dl => { await dl.saveAs(filePath); return 'download' as const; })
       .catch(() => null);
 
@@ -405,31 +349,86 @@ async function downloadStockReport(
 
     const dlResult = await Promise.race([
       dlPromise,
-      new Promise<null>(r => setTimeout(() => r(null), 15_000)),
+      new Promise<null>(r => setTimeout(() => r(null), 30_000)),
     ]);
 
-    const blobCSV = await page.evaluate(() => (window as any).__capturedCSV);
+    const blobCSV = await page.evaluate(() => (window as any).__capturedCSV).catch(() => null);
     page.off('response', respListener);
 
     if (dlResult === 'download') {
       saved = true;
-      console.log('[oneglance-sync] Strategy 2 succeeded via download');
+      console.log('[oneglance-sync] Strategy 1 succeeded via download event');
     } else if (blobCSV && String(blobCSV).length > 50) {
       fs.writeFileSync(filePath, String(blobCSV), 'utf-8');
       saved = true;
-      console.log('[oneglance-sync] Strategy 2 succeeded via JS interception');
+      console.log('[oneglance-sync] Strategy 1 succeeded via JS blob interception');
     } else if (capturedCSV) {
       fs.writeFileSync(filePath, capturedCSV, 'utf-8');
       saved = true;
-      console.log('[oneglance-sync] Strategy 2 succeeded via response');
+      console.log('[oneglance-sync] Strategy 1 succeeded via response interception');
     } else {
-      console.log('[oneglance-sync] Strategy 2: no download after 15s');
+      console.log('[oneglance-sync] Strategy 1: no download after 30s');
+    }
+  }
+
+  // ── Strategy 2: Scrape table in chunks (fallback — higher memory but works offline) ──
+  if (!saved) {
+    console.log('[oneglance-sync] Strategy 2: scraping table in chunks...');
+    progress(opts, 'stock', 'Extracting table data...', 82);
+
+    // Get headers + row count first (lightweight)
+    const tableInfo = await page.evaluate(() => {
+      const tables = document.querySelectorAll('table');
+      let bestTable = -1, bestCount = 0;
+      tables.forEach((t, i) => {
+        const rows = (t.querySelector('tbody') || t).querySelectorAll('tr').length;
+        if (rows > bestCount) { bestTable = i; bestCount = rows; }
+      });
+      if (bestTable < 0) return { headers: [] as string[], totalRows: 0, tableIdx: -1 };
+      const table = tables[bestTable];
+      const headerRow = table.querySelector('thead tr') || table.querySelector('tr');
+      const headers: string[] = [];
+      headerRow?.querySelectorAll('th, td').forEach(c => headers.push((c as HTMLElement).innerText?.trim() || ''));
+      return { headers, totalRows: bestCount, tableIdx: bestTable };
+    });
+
+    if (tableInfo.totalRows > 0) {
+      const CHUNK = 2000;
+      const csvLines: string[] = [];
+      if (tableInfo.headers.length > 0) csvLines.push(tableInfo.headers.join(','));
+
+      for (let offset = 0; offset < tableInfo.totalRows; offset += CHUNK) {
+        const chunk = await page.evaluate(({ idx, start, size }) => {
+          const table = document.querySelectorAll('table')[idx];
+          const tbody = table.querySelector('tbody') || table;
+          const rows = tbody.querySelectorAll('tr');
+          const startIdx = start + (table.querySelector('thead') ? 0 : (start === 0 ? 1 : 0));
+          const lines: string[] = [];
+          for (let i = startIdx; i < Math.min(startIdx + size, rows.length); i++) {
+            const cells: string[] = [];
+            rows[i].querySelectorAll('td, th').forEach(td => {
+              let t = (td as HTMLElement).innerText?.trim() || '';
+              if (t.includes(',') || t.includes('"') || t.includes('\n')) t = '"' + t.replace(/"/g, '""') + '"';
+              cells.push(t);
+            });
+            if (cells.some(c => c.length > 0)) lines.push(cells.join(','));
+          }
+          return lines;
+        }, { idx: tableInfo.tableIdx, start: offset, size: CHUNK });
+        csvLines.push(...chunk);
+      }
+
+      if (csvLines.length > 1) {
+        fs.writeFileSync(filePath, csvLines.join('\n') + '\n', 'utf-8');
+        saved = true;
+        console.log(`[oneglance-sync] Strategy 2 succeeded — scraped ${csvLines.length - 1} rows in chunks`);
+      }
     }
   }
 
   if (!saved) {
     await debugScreenshot(page, '16-FAILED');
-    throw new Error(`Stock CSV failed: tables=${pageInfo.tableCount} rows=${pageInfo.maxRows} csvBtn=${pageInfo.hasCsvBtn} url=${pageInfo.url}`);
+    throw new Error(`Stock CSV failed: tables=${pageInfo.tableCount} csvBtn=${pageInfo.hasCsvBtn} url=${pageInfo.url}`);
   }
 
   progress(opts, 'stock', 'Stock CSV downloaded', 84);
@@ -456,6 +455,8 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
         '--disable-extensions', '--disable-background-networking', '--disable-default-apps',
         '--disable-sync', '--disable-translate', '--metrics-recording-only',
         '--js-flags=--max-old-space-size=256',
+        '--blink-settings=imagesEnabled=false', // skip loading images — saves memory
+        '--disable-software-rasterizer',
       ] : []),
     ],
   });
@@ -662,15 +663,19 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
 
     // ── Step 7: Download Stock Available report ──
     if (opts.reportType === 'stock' || opts.reportType === 'all') {
-      // Wrap stock download in a 90-second timeout to prevent OOM crashes
-      const stockTimeout = 50_000;
+      // Close current page to free DOM memory before loading stock (30K rows)
+      await page.close().catch(() => {});
+      const stockPage = await context.newPage();
+
+      const stockTimeout = 60_000;
       const stockResult = await Promise.race([
-        downloadStockReport(page, context, opts, downloadDir),
+        downloadStockReport(stockPage, context, opts, downloadDir),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error(`Stock report download timed out after ${stockTimeout / 1000}s`)), stockTimeout)
         ),
       ]);
       result.stockFile = stockResult;
+      await stockPage.close().catch(() => {});
     }
 
     progress(opts, 'complete', 'Download complete!', 100);
