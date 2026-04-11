@@ -368,7 +368,7 @@ router.get('/clinic-analytics', async (req, res) => {
       return { doctor, totalPatients: total, crossSold, apptOnly: total - crossSold, crossSellRate: total > 0 ? (crossSold / total) * 100 : 0 };
     })
     .filter(d => d.totalPatients >= 1)
-    .sort((a, b) => b.crossSellRate - a.crossSellRate);
+    .sort((a, b) => b.totalPatients - a.totalPatients);
 
   // Patient table data (top 200 for initial load)
   const patientTable = patients
