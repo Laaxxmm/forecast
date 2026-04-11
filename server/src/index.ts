@@ -99,7 +99,13 @@ app.get('/api/health', async (_req, res) => {
         try { salesMonths = db.all('SELECT DISTINCT bill_month FROM pharmacy_sales_actuals ORDER BY bill_month').map((r: any) => r.bill_month); } catch {}
         try { clinicMonths = db.all('SELECT DISTINCT bill_month FROM clinic_actuals ORDER BY bill_month').map((r: any) => r.bill_month); } catch {}
         try { activeFy = db.get('SELECT * FROM financial_years WHERE is_active = 1'); } catch {}
-        clientInfo.push({ slug: c.slug, tables, imports, salesMonths, clinicMonths, activeFy });
+        let dashActuals: any[] = [];
+        let scenarios: any[] = [];
+        let clinicRevSum: any = null;
+        try { dashActuals = db.all('SELECT scenario_id, category, item_name, month, amount, stream_id FROM dashboard_actuals ORDER BY item_name, month'); } catch {}
+        try { scenarios = db.all('SELECT s.id, s.name, s.stream_id, s.is_default, s.fy_id FROM scenarios s'); } catch {}
+        try { clinicRevSum = db.get('SELECT SUM(item_price) as total, COUNT(*) as rows FROM clinic_actuals'); } catch {}
+        clientInfo.push({ slug: c.slug, tables, imports, salesMonths, clinicMonths, activeFy, dashActuals, scenarios, clinicRevSum });
       } catch (e: any) {
         clientInfo.push({ slug: c.slug, error: e.message });
       }
