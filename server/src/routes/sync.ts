@@ -396,6 +396,23 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
       const rows = allRows.filter(r => !r.bill_month || r.bill_month <= currentMonth);
       console.log(`[oneglance-sync] Sales: ${allRows.length} total rows, ${rows.length} after filtering future months (dropped ${allRows.length - rows.length})`);
 
+      // ── Deduplication: delete existing rows for the months being imported ──
+      const salesMonthsToReplace = [...new Set(rows.map((r: any) => r.bill_month).filter(Boolean))];
+      if (salesMonthsToReplace.length > 0) {
+        const ph = salesMonthsToReplace.map(() => '?').join(',');
+        // Delete old import_logs for the same months (sales source, same branch)
+        const oldSalesImports = db.all(
+          `SELECT id FROM import_logs WHERE source IN ('ONEGLANCE_SALES_SYNC','OG_SALES','ONEGLANCE_SALES')
+           AND date_range_start IS NOT NULL`,
+        );
+        for (const imp of oldSalesImports) {
+          db.run('DELETE FROM pharmacy_sales_actuals WHERE import_id = ? AND bill_month IN (' + ph + ')', imp.id, ...salesMonthsToReplace);
+        }
+        // Also clean up any orphaned rows for these months
+        db.run(`DELETE FROM pharmacy_sales_actuals WHERE bill_month IN (${ph})`, ...salesMonthsToReplace);
+        console.log(`[oneglance-sync] Cleared existing sales data for months: ${salesMonthsToReplace.join(', ')}`);
+      }
+
       const importLog = db.run(
         `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -422,26 +439,28 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
 
       // Auto-sync pharmacy revenue to dashboard_actuals (branch-scoped)
       const bf = branchFilter(req);
+      // Look up the pharmacy stream_id to tag dashboard entries
+      const platformDb = await getPlatformHelper();
+      const pharmaStream = req.clientId ? platformDb.get(
+        "SELECT id FROM business_streams WHERE client_id = ? AND LOWER(name) LIKE '%pharma%' AND is_active = 1 LIMIT 1",
+        req.clientId
+      ) : null;
+      const pharmaStreamId = pharmaStream?.id || null;
+      // Find the scenario specifically for the pharma stream (not just any default)
       const activeScenario = db.get(
         `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
-         WHERE fy.is_active = 1 AND s.is_default = 1 LIMIT 1`
+         WHERE fy.is_active = 1 AND (s.stream_id = ? OR s.is_default = 1) ORDER BY CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id LIMIT 1`,
+        pharmaStreamId, pharmaStreamId
       );
       if (activeScenario) {
-        // Look up the pharmacy stream_id to tag dashboard entries
-        const platformDb = await getPlatformHelper();
-        const pharmaStream = req.clientId ? platformDb.get(
-          "SELECT id FROM business_streams WHERE client_id = ? AND LOWER(name) LIKE '%pharma%' AND is_active = 1 LIMIT 1",
-          req.clientId
-        ) : null;
-        const pharmaStreamId = pharmaStream?.id || null;
         // Clear old Pharmacy Revenue/COGS entries before re-syncing (prevents stale month data)
         db.run(
-          `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Pharmacy Revenue'${bf.where}`,
-          activeScenario.id, ...bf.params
+          `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Pharmacy Revenue'`,
+          activeScenario.id
         );
         db.run(
-          `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'direct_costs' AND item_name = 'Pharmacy COGS'${bf.where}`,
-          activeScenario.id, ...bf.params
+          `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'direct_costs' AND item_name = 'Pharmacy COGS'`,
+          activeScenario.id
         );
         const pharmaMonthly = db.all(
           `SELECT bill_month as month, COALESCE(SUM(sales_amount), 0) as revenue,
@@ -479,6 +498,14 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
       const { rows: allPurchaseRows, summary } = parseOneglancePurchase(result.purchaseFile.filePath);
       const rows = allPurchaseRows.filter(r => !r.invoice_month || r.invoice_month <= currentMonth);
       console.log(`[oneglance-sync] Purchase: ${allPurchaseRows.length} total rows, ${rows.length} after filtering future months`);
+
+      // ── Deduplication: delete existing purchase rows for same months ──
+      const purchaseMonthsToReplace = [...new Set(rows.map((r: any) => r.invoice_month).filter(Boolean))];
+      if (purchaseMonthsToReplace.length > 0) {
+        const ph = purchaseMonthsToReplace.map(() => '?').join(',');
+        db.run(`DELETE FROM pharmacy_purchase_actuals WHERE invoice_month IN (${ph})`, ...purchaseMonthsToReplace);
+        console.log(`[oneglance-sync] Cleared existing purchase data for months: ${purchaseMonthsToReplace.join(', ')}`);
+      }
 
       const importLog = db.run(
         `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
