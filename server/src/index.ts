@@ -636,26 +636,28 @@ async function start() {
         { category: 'expenses', name: 'New Expense 2', item_type: 'other', entry_mode: 'varying', sort_order: 2, meta: null },
       ];
 
-      // Insert items and build id map (name -> new id for values linking)
+      // Insert items and build id map — use SELECT after INSERT (lastInsertRowid unreliable in sql.js)
       const newIds: Record<string, number> = {};
       for (const item of ITEMS) {
-        const r = mcDb.run(
+        mcDb.run(
           `INSERT INTO forecast_items (scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta)
            VALUES (?, ?, ?, ?, ?, 0, 'month', '2026-04', 0, 0, ?, null, ?)`,
           scenarioId, item.category, item.name, item.item_type, item.entry_mode, item.sort_order, item.meta || null
         );
-        newIds[item.name] = r.lastInsertRowid;
+        const inserted = mcDb.get('SELECT id FROM forecast_items WHERE scenario_id = ? AND name = ? ORDER BY id DESC LIMIT 1', scenarioId, item.name);
+        newIds[item.name] = inserted?.id;
       }
 
       // Insert Consultation share personnel — linked to Consultation Revenue
       const consultRevId = newIds['Consultation Revenue'];
       const consultShareMeta = JSON.stringify({stepValues:{headcount:{"2026-04":5,"2026-05":5,"2026-06":5,"2026-07":5,"2026-08":5,"2026-09":5,"2026-10":5,"2026-11":5,"2026-12":5,"2027-01":5,"2027-02":5,"2027-03":5},salary_per:{"2026-04":310034,"2026-05":321927,"2026-06":272733,"2026-07":370852,"2026-08":310304,"2026-09":275706,"2026-10":318413,"2026-11":332739,"2026-12":318413,"2027-01":308683,"2027-02":314900,"2027-03":314089}},stepEntryModes:{headcount:"constant",salary_per:"pct_specific"},stepConstants:{headcount:{amount:5,period:"month",startMonth:"2026-04"},salary_per:{amount:0,period:"month",startMonth:"2026-04"}},linkedRevenueId:consultRevId,percentOfStream:0,percentStartMonth:"2026-04",labor_type:"direct_labor",staffing_type:"contract",annual_raise_pct:0,percent_of_revenue:30,pct_revenue_start_month:"2026-04",linked_revenue_id:consultRevId});
-      const r2 = mcDb.run(
+      mcDb.run(
         `INSERT INTO forecast_items (scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta)
          VALUES (?, 'personnel', 'Consultation Share', 'group', 'varying', 0, 'month', '2026-04', 0, 0, 1, null, ?)`,
         scenarioId, consultShareMeta
       );
-      const consultShareId = r2.lastInsertRowid;
+      const consultShareRow = mcDb.get('SELECT id FROM forecast_items WHERE scenario_id = ? AND name = ? ORDER BY id DESC LIMIT 1', scenarioId, 'Consultation Share');
+      const consultShareId = consultShareRow?.id;
       mcDb.run(
         `INSERT INTO forecast_items (scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta)
          VALUES (?, 'personnel', 'New Employee', 'group', 'varying', 0, 'month', '2026-04', 0, 0, 2, null, ?)`,
