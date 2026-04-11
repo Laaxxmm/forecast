@@ -596,13 +596,25 @@ async function start() {
     try {
       const mcDb = await getClientHelper('magnacode');
 
-      // Find Clinic scenario (stream_id=2 is Clinic based on platform DB seed)
-      // Try by name + stream presence, fall back to any scenario
-      let scenario = mcDb.get(`SELECT id FROM scenarios WHERE stream_id IS NOT NULL ORDER BY id LIMIT 1`);
-      // Prefer the one most likely to be Clinic (stream_id=2)
-      const clinicScenario = mcDb.get(`SELECT id FROM scenarios WHERE stream_id = 2 LIMIT 1`);
-      if (clinicScenario) scenario = clinicScenario;
-      if (!scenario) return res.status(404).json({ error: 'No scenario found — ensure scenarios are set up first' });
+      // Find Clinic stream ID from platform DB (by name, not hard-coded stream_id)
+      const platformDb = await getPlatformHelper();
+      const clientRow = platformDb.get("SELECT id FROM clients WHERE slug = 'magnacode'");
+      const clinicStreamRow = clientRow ? platformDb.get(
+        "SELECT id FROM business_streams WHERE client_id = ? AND (LOWER(name) LIKE '%clinic%' OR LOWER(name) LIKE '%health%') ORDER BY id LIMIT 1",
+        clientRow.id
+      ) : null;
+
+      // Diagnostic: show all scenarios and streams
+      const allScenarios = mcDb.all('SELECT id, name, branch_id, stream_id, is_default FROM scenarios ORDER BY id');
+      const allStreams = clientRow ? platformDb.all('SELECT id, name FROM business_streams WHERE client_id = ? ORDER BY id', clientRow.id) : [];
+
+      const clinicStreamId = clinicStreamRow?.id;
+      // Find scenario matching clinic stream
+      let scenario = clinicStreamId
+        ? mcDb.get('SELECT id FROM scenarios WHERE stream_id = ? LIMIT 1', clinicStreamId)
+        : mcDb.get('SELECT id FROM scenarios WHERE stream_id IS NOT NULL ORDER BY id LIMIT 1');
+      if (!scenario) scenario = mcDb.get('SELECT id FROM scenarios ORDER BY id LIMIT 1');
+      if (!scenario) return res.status(404).json({ error: 'No scenario found', allScenarios, allStreams });
 
       const scenarioId = scenario.id;
 
@@ -625,30 +637,28 @@ async function start() {
       ];
 
       // Insert items and build id map (name -> new id for values linking)
-      mcDb.beginBatch();
       const newIds: Record<string, number> = {};
       for (const item of ITEMS) {
-        mcDb.run(
+        const r = mcDb.run(
           `INSERT INTO forecast_items (scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta)
            VALUES (?, ?, ?, ?, ?, 0, 'month', '2026-04', 0, 0, ?, null, ?)`,
           scenarioId, item.category, item.name, item.item_type, item.entry_mode, item.sort_order, item.meta || null
         );
-        const newId = mcDb.get('SELECT last_insert_rowid() as id')?.id;
-        newIds[item.name] = newId;
+        newIds[item.name] = r.lastInsertRowid;
       }
-      mcDb.endBatch();
 
       // Insert Consultation share personnel — linked to Consultation Revenue
       const consultRevId = newIds['Consultation Revenue'];
       const consultShareMeta = JSON.stringify({stepValues:{headcount:{"2026-04":5,"2026-05":5,"2026-06":5,"2026-07":5,"2026-08":5,"2026-09":5,"2026-10":5,"2026-11":5,"2026-12":5,"2027-01":5,"2027-02":5,"2027-03":5},salary_per:{"2026-04":310034,"2026-05":321927,"2026-06":272733,"2026-07":370852,"2026-08":310304,"2026-09":275706,"2026-10":318413,"2026-11":332739,"2026-12":318413,"2027-01":308683,"2027-02":314900,"2027-03":314089}},stepEntryModes:{headcount:"constant",salary_per:"pct_specific"},stepConstants:{headcount:{amount:5,period:"month",startMonth:"2026-04"},salary_per:{amount:0,period:"month",startMonth:"2026-04"}},linkedRevenueId:consultRevId,percentOfStream:0,percentStartMonth:"2026-04",labor_type:"direct_labor",staffing_type:"contract",annual_raise_pct:0,percent_of_revenue:30,pct_revenue_start_month:"2026-04",linked_revenue_id:consultRevId});
-      mcDb.run(
+      const r2 = mcDb.run(
         `INSERT INTO forecast_items (scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta)
          VALUES (?, 'personnel', 'Consultation Share', 'group', 'varying', 0, 'month', '2026-04', 0, 0, 1, null, ?)`,
         scenarioId, consultShareMeta
       );
-      const consultShareId = mcDb.get('SELECT last_insert_rowid() as id')?.id;
-      mcDb.run(`INSERT INTO forecast_items (scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, sort_order, meta)
-        VALUES (?, 'personnel', 'New Employee', 'group', 'varying', 0, 'month', '2026-04', 2, ?)`,
+      const consultShareId = r2.lastInsertRowid;
+      mcDb.run(
+        `INSERT INTO forecast_items (scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta)
+         VALUES (?, 'personnel', 'New Employee', 'group', 'varying', 0, 'month', '2026-04', 0, 0, 2, null, ?)`,
         scenarioId, JSON.stringify({labor_type:"regular_labor",staffing_type:"on_staff"})
       );
 
@@ -673,8 +683,9 @@ async function start() {
 
       const itemCount = mcDb.get('SELECT COUNT(*) as n FROM forecast_items WHERE scenario_id = ?', scenarioId)?.n;
       const valCount  = mcDb.get('SELECT COUNT(*) as n FROM forecast_values fv JOIN forecast_items fi ON fv.item_id = fi.id WHERE fi.scenario_id = ?', scenarioId)?.n;
+      const allItems = mcDb.all('SELECT id, scenario_id, category, name FROM forecast_items WHERE scenario_id = ?', scenarioId);
       console.log(`[Inject Forecast] ✅ Restored ${itemCount} items + ${valCount} values into scenario ${scenarioId}`);
-      res.json({ ok: true, scenarioId, items: itemCount, values: valCount });
+      res.json({ ok: true, scenarioId, items: itemCount, values: valCount, clinicStreamId, allScenarios, allStreams, newIds, insertedItems: allItems });
     } catch (e: any) {
       console.error('[Inject Forecast] Error:', e);
       res.status(500).json({ error: e.message });
