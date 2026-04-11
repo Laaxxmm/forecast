@@ -790,10 +790,11 @@ router.get('/variance', async (req, res) => {
   const startMonth = fy.start_date.slice(0, 7);
   const endMonth = fy.end_date.slice(0, 7);
 
-  // Build budget rows from forecast module
+  // Build budget rows from forecast module (prefer stream-specific scenario)
   const scenario = db.get(
-    `SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where} LIMIT 1`,
-    fy_id, ...bf.params, ...sf.params
+    `SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}
+     ORDER BY CASE WHEN stream_id IS NOT NULL THEN 0 ELSE 1 END, id LIMIT 1`,
+    fy_id, ...bf.params
   );
 
   let budgetRows: any[] = [];

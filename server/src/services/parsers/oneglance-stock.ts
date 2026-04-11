@@ -49,7 +49,8 @@ const COLUMN_MAP: Record<string, string> = {
 };
 
 export function parseOneglanceStock(filePath: string) {
-  const workbook = XLSX.readFile(filePath);
+  // raw: true prevents XLSX from auto-converting date strings to serial numbers
+  const workbook = XLSX.readFile(filePath, { raw: true });
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
   const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true }) as any[][];

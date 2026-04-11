@@ -71,7 +71,8 @@ export function parseTuriaInvoices(filePath: string): {
   rows: TuriaInvoiceRow[];
   summary: { totalRows: number; totalAmount: number; dateRange: { start: string; end: string } | null; warnings: string[] };
 } {
-  const workbook = XLSX.readFile(filePath);
+  // raw: true prevents XLSX from auto-converting date strings to serial numbers
+  const workbook = XLSX.readFile(filePath, { raw: true });
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
   const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: true });

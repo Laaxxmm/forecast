@@ -43,12 +43,20 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), uploa
     const branchId = getBranchIdForInsert(req);
     const { rows, summary } = parseHealthplix(req.file.path);
 
-    const importLog = db.run(
+    // Dedup: delete existing clinic rows for the months being imported
+    const clinicMonthsToReplace = [...new Set(rows.map(r => r.bill_month).filter(Boolean))];
+    if (clinicMonthsToReplace.length > 0) {
+      const ph = clinicMonthsToReplace.map(() => '?').join(',');
+      db.run(`DELETE FROM clinic_actuals WHERE bill_month IN (${ph})`, ...clinicMonthsToReplace);
+    }
+
+    db.run(
       `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       'HEALTHPLIX', req.file.originalname, rows.length,
       summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
     );
+    const importId = db.get("SELECT id FROM import_logs WHERE source = 'HEALTHPLIX' ORDER BY id DESC LIMIT 1")?.id || 0;
 
     db.beginBatch();
     try {
@@ -58,7 +66,7 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), uploa
             billed, paid, discount, tax, refund, due, addl_disc, item_price, item_disc,
             department, service_name, billed_doctor, service_owner)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          importLog.lastInsertRowid, branchId, r.bill_date, r.bill_month, r.patient_id, r.patient_name,
+          importId, branchId, r.bill_date, r.bill_month, r.patient_id, r.patient_name,
           r.order_number, r.billed, r.paid, r.discount, r.tax, r.refund, r.due,
           r.addl_disc, r.item_price, r.item_disc, r.department, r.service_name,
           r.billed_doctor, r.service_owner
@@ -77,13 +85,12 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), uploa
     const bf = branchFilter(req);
     const clinicStreamId = await resolveStreamId(req, 'clinic');
     const activeScenario = db.get(
-      `SELECT s.id FROM scenarios s
-       JOIN financial_years fy ON s.fy_id = fy.id
-       WHERE fy.is_active = 1 AND s.is_default = 1${bf.where} LIMIT 1`,
-      ...bf.params
+      `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
+       WHERE fy.is_active = 1 AND (s.stream_id = ? OR s.is_default = 1)
+       ORDER BY CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id LIMIT 1`,
+      clinicStreamId, clinicStreamId
     );
     if (activeScenario) {
-      // Clear old Clinic Revenue entries before re-syncing (prevents stale month data)
       db.run(
         `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Clinic Revenue'${bf.where}`,
         activeScenario.id, ...bf.params
@@ -106,7 +113,7 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), uploa
     }
 
     fs.unlinkSync(req.file.path);
-    res.json({ importId: importLog.lastInsertRowid, ...summary });
+    res.json({ importId, ...summary });
   } catch (err: any) {
     if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
     res.status(400).json({ error: isProd ? 'Import failed' : err.message });
@@ -122,12 +129,20 @@ router.post('/oneglance-sales', requireAdmin, requireIntegration('oneglance'), u
     const { rows: allRows, summary } = parseOneglanceSales(req.file.path);
     const rows = allRows.filter(r => !r.bill_month || r.bill_month <= currentMonth);
 
-    const importLog = db.run(
+    // Dedup: delete existing sales rows for the months being imported
+    const salesMonths = [...new Set(rows.map(r => r.bill_month).filter(Boolean))];
+    if (salesMonths.length > 0) {
+      const ph = salesMonths.map(() => '?').join(',');
+      db.run(`DELETE FROM pharmacy_sales_actuals WHERE bill_month IN (${ph})`, ...salesMonths);
+    }
+
+    db.run(
       `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       'ONEGLANCE_SALES', req.file.originalname, rows.length,
       summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
     );
+    const importId = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_SALES' ORDER BY id DESC LIMIT 1")?.id || 0;
 
     db.beginBatch();
     try {
@@ -137,7 +152,7 @@ router.post('/oneglance-sales', requireAdmin, requireIntegration('oneglance'), u
             batch_no, hsn_code, tax_pct, patient_id, patient_name, referred_by,
             qty, sales_amount, purchase_amount, purchase_tax, sales_tax, profit)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          importLog.lastInsertRowid, branchId, r.bill_no, r.bill_date, r.bill_month, r.drug_name,
+          importId, branchId, r.bill_no, r.bill_date, r.bill_month, r.drug_name,
           r.batch_no, r.hsn_code, r.tax_pct, r.patient_id, r.patient_name, r.referred_by,
           r.qty, r.sales_amount, r.purchase_amount, r.purchase_tax, r.sales_tax, r.profit
         );
@@ -149,13 +164,12 @@ router.post('/oneglance-sales', requireAdmin, requireIntegration('oneglance'), u
     const bf = branchFilter(req);
     const pharmaStreamId = await resolveStreamId(req, 'pharmacy');
     const activeScenario = db.get(
-      `SELECT s.id FROM scenarios s
-       JOIN financial_years fy ON s.fy_id = fy.id
-       WHERE fy.is_active = 1 AND s.is_default = 1${bf.where} LIMIT 1`,
-      ...bf.params
+      `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
+       WHERE fy.is_active = 1 AND (s.stream_id = ? OR s.is_default = 1)
+       ORDER BY CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id LIMIT 1`,
+      pharmaStreamId, pharmaStreamId
     );
     if (activeScenario) {
-      // Clear old Pharmacy Revenue entries before re-syncing (prevents stale month data)
       db.run(
         `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Pharmacy Revenue'${bf.where}`,
         activeScenario.id, ...bf.params
@@ -178,7 +192,7 @@ router.post('/oneglance-sales', requireAdmin, requireIntegration('oneglance'), u
     }
 
     fs.unlinkSync(req.file.path);
-    res.json({ importId: importLog.lastInsertRowid, ...summary });
+    res.json({ importId, ...summary });
   } catch (err: any) {
     if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
     res.status(400).json({ error: isProd ? 'Import failed' : err.message });
@@ -194,12 +208,20 @@ router.post('/oneglance-purchase', requireAdmin, requireIntegration('oneglance')
     const { rows: allRows, summary } = parseOneglancePurchase(req.file.path);
     const rows = allRows.filter(r => !r.invoice_month || r.invoice_month <= currentMonth);
 
-    const importLog = db.run(
+    // Dedup: delete existing purchase rows for the months being imported
+    const purchaseMonths = [...new Set(rows.map(r => r.invoice_month).filter(Boolean))];
+    if (purchaseMonths.length > 0) {
+      const ph = purchaseMonths.map(() => '?').join(',');
+      db.run(`DELETE FROM pharmacy_purchase_actuals WHERE invoice_month IN (${ph})`, ...purchaseMonths);
+    }
+
+    db.run(
       `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       'ONEGLANCE_PURCHASE', req.file.originalname, rows.length,
       summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
     );
+    const importId = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_PURCHASE' ORDER BY id DESC LIMIT 1")?.id || 0;
 
     db.beginBatch();
     try {
@@ -210,7 +232,7 @@ router.post('/oneglance-purchase', requireAdmin, requireIntegration('oneglance')
             mrp, rate, discount_amount, net_purchase_value, net_sales_value, tax_pct, tax_amount,
             purchase_qty, purchase_value, sales_value, profit, profit_pct)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          importLog.lastInsertRowid, branchId, r.invoice_no, r.invoice_date, r.invoice_month,
+          importId, branchId, r.invoice_no, r.invoice_date, r.invoice_month,
           r.stockiest_name, r.mfg_name, r.drug_name, r.batch_no, r.hsn_code,
           r.batch_qty, r.free_qty, r.mrp, r.rate, r.discount_amount,
           r.net_purchase_value, r.net_sales_value, r.tax_pct, r.tax_amount,
@@ -221,7 +243,7 @@ router.post('/oneglance-purchase', requireAdmin, requireIntegration('oneglance')
     } catch (e) { db.rollbackBatch(); throw e; }
 
     fs.unlinkSync(req.file.path);
-    res.json({ importId: importLog.lastInsertRowid, ...summary });
+    res.json({ importId, ...summary });
   } catch (err: any) {
     if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
     res.status(400).json({ error: isProd ? 'Import failed' : err.message });
@@ -239,12 +261,13 @@ router.post('/oneglance-stock', requireAdmin, requireIntegration('oneglance'), u
     // Replace existing snapshot for the same date & branch
     db.run('DELETE FROM pharmacy_stock_actuals WHERE snapshot_date = ? AND branch_id IS ?', snapshotDate, branchId);
 
-    const importLog = db.run(
+    db.run(
       `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       'ONEGLANCE_STOCK', req.file.originalname, rows.length,
       snapshotDate, snapshotDate, 'completed', branchId
     );
+    const importId = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_STOCK' ORDER BY id DESC LIMIT 1")?.id || 0;
 
     db.beginBatch();
     try {
@@ -254,7 +277,7 @@ router.post('/oneglance-stock', requireAdmin, requireIntegration('oneglance'), u
             received_date, expiry_date, avl_qty, strips, purchase_price, purchase_tax,
             purchase_value, stock_value, branch_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          importLog.lastInsertRowid, snapshotDate, r.drug_name, r.batch_no,
+          importId, snapshotDate, r.drug_name, r.batch_no,
           r.received_date, r.expiry_date, r.avl_qty, r.strips,
           r.purchase_price, r.purchase_tax, r.purchase_value, r.stock_value, branchId
         );
@@ -263,7 +286,7 @@ router.post('/oneglance-stock', requireAdmin, requireIntegration('oneglance'), u
     } catch (e) { db.rollbackBatch(); throw e; }
 
     fs.unlinkSync(req.file.path);
-    res.json({ importId: importLog.lastInsertRowid, ...summary });
+    res.json({ importId, ...summary });
   } catch (err: any) {
     if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
     res.status(400).json({ error: isProd ? 'Import failed' : err.message });
@@ -277,12 +300,20 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), upload.single('
     const branchId = getBranchIdForInsert(req);
     const { rows, summary } = parseTuriaInvoices(req.file.path);
 
-    const importLog = db.run(
+    // Dedup: delete existing turia rows for the months being imported
+    const turiaMonths = [...new Set(rows.map(r => r.invoice_month).filter(Boolean))];
+    if (turiaMonths.length > 0) {
+      const ph = turiaMonths.map(() => '?').join(',');
+      db.run(`DELETE FROM turia_invoices WHERE invoice_month IN (${ph})`, ...turiaMonths);
+    }
+
+    db.run(
       `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       'TURIA', req.file.originalname, rows.length,
       summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
     );
+    const importId = db.get("SELECT id FROM import_logs WHERE source = 'TURIA' ORDER BY id DESC LIMIT 1")?.id || 0;
 
     db.beginBatch();
     try {
@@ -291,7 +322,7 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), upload.single('
           `INSERT INTO turia_invoices (import_id, branch_id, invoice_id, billing_org, client_name, gstin,
             service, sac_code, invoice_date, invoice_month, due_date, total_amount, status)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          importLog.lastInsertRowid, branchId, r.invoice_id, r.billing_org, r.client_name, r.gstin,
+          importId, branchId, r.invoice_id, r.billing_org, r.client_name, r.gstin,
           r.service, r.sac_code, r.invoice_date, r.invoice_month, r.due_date,
           r.total_amount, r.status
         );
@@ -304,8 +335,9 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), upload.single('
     const consultStreamId = await resolveStreamId(req, 'consultancy');
     const activeScenario = db.get(
       `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
-       WHERE fy.is_active = 1 AND s.is_default = 1${bf.where} LIMIT 1`,
-      ...bf.params
+       WHERE fy.is_active = 1 AND (s.stream_id = ? OR s.is_default = 1)
+       ORDER BY CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id LIMIT 1`,
+      consultStreamId, consultStreamId
     );
     if (activeScenario) {
       // Clear old Consultancy Revenue entries before re-syncing (prevents stale month data)
@@ -332,7 +364,7 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), upload.single('
     }
 
     fs.unlinkSync(req.file.path);
-    res.json({ importId: importLog.lastInsertRowid, ...summary });
+    res.json({ importId, ...summary });
   } catch (err: any) {
     if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
     res.status(400).json({ error: isProd ? 'Import failed' : err.message });

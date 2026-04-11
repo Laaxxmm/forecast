@@ -562,12 +562,13 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
       db.run('DELETE FROM pharmacy_stock_actuals WHERE snapshot_date = ? AND branch_id IS ?',
         snapshotDate, branchId);
 
-      const importLog = db.run(
+      db.run(
         `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         'ONEGLANCE_STOCK_SYNC', result.stockFile.filename, rows.length,
         snapshotDate, snapshotDate, 'completed', branchId
       );
+      const stockImportId = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_STOCK_SYNC' ORDER BY id DESC LIMIT 1")?.id || 0;
 
       db.beginBatch();
       try {
@@ -577,7 +578,7 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
               received_date, expiry_date, avl_qty, strips, purchase_price, purchase_tax,
               purchase_value, stock_value, branch_id)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            importLog.lastInsertRowid, snapshotDate, r.drug_name, r.batch_no,
+            stockImportId, snapshotDate, r.drug_name, r.batch_no,
             r.received_date, r.expiry_date, r.avl_qty, r.strips,
             r.purchase_price, r.purchase_tax, r.purchase_value, r.stock_value, branchId
           );
@@ -739,12 +740,21 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Req
 
     state.progress = { step: 'saving', message: `Saving ${rows.length} invoices to database...`, pct: 92 };
 
-    const importLog = db.run(
+    // Dedup: delete existing turia rows for the months being imported
+    const turiaMonthsToReplace = [...new Set(rows.map((r: any) => r.invoice_month).filter(Boolean))];
+    if (turiaMonthsToReplace.length > 0) {
+      const ph = turiaMonthsToReplace.map(() => '?').join(',');
+      db.run(`DELETE FROM turia_invoices WHERE invoice_month IN (${ph})`, ...turiaMonthsToReplace);
+      console.log(`[turia-sync] Cleared existing data for months: ${turiaMonthsToReplace.join(', ')}`);
+    }
+
+    db.run(
       `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       'TURIA_SYNC', result.filename, rows.length,
       summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
     );
+    const turiaImportId = db.get("SELECT id FROM import_logs WHERE source = 'TURIA_SYNC' ORDER BY id DESC LIMIT 1")?.id || 0;
 
     db.beginBatch();
     try {
@@ -753,7 +763,7 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Req
           `INSERT INTO turia_invoices (import_id, invoice_id, billing_org, client_name, gstin, service,
             sac_code, invoice_date, invoice_month, due_date, total_amount, status, branch_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          importLog.lastInsertRowid, r.invoice_id, r.billing_org, r.client_name, r.gstin,
+          turiaImportId, r.invoice_id, r.billing_org, r.client_name, r.gstin,
           r.service, r.sac_code, r.invoice_date, r.invoice_month, r.due_date,
           r.total_amount, r.status, branchId
         );
@@ -762,33 +772,28 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Req
     } catch (e) { db.rollbackBatch(); throw e; }
 
     // Auto-sync consultancy revenue to dashboard_actuals
-    // First try: active scenario in active FY
+    const bf = branchFilter(req);
+    const platformDb = await getPlatformHelper();
+    const consultStream = req.clientId ? platformDb.get(
+      "SELECT id FROM business_streams WHERE client_id = ? AND (LOWER(name) LIKE '%consult%' OR LOWER(name) LIKE '%turia%') AND is_active = 1 LIMIT 1",
+      req.clientId
+    ) : null;
+    const consultStreamId = consultStream?.id || null;
+    // Find stream-specific scenario first, fall back to default
     let activeScenario = db.get(
-      `SELECT s.id, s.name, fy.label as fy_label FROM scenarios s
-       JOIN financial_years fy ON s.fy_id = fy.id
-       WHERE fy.is_active = 1 AND s.is_default = 1 LIMIT 1`
+      `SELECT s.id, s.name FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
+       WHERE fy.is_active = 1 AND (s.stream_id = ? OR s.is_default = 1)
+       ORDER BY CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id LIMIT 1`,
+      consultStreamId, consultStreamId
     );
-
-    // Fallback: any default scenario if no active FY found
     if (!activeScenario) {
-      activeScenario = db.get(
-        `SELECT s.id, s.name FROM scenarios s WHERE s.is_default = 1 LIMIT 1`
-      );
-      console.log('Turia: No active FY found, using fallback scenario:', activeScenario?.id || 'NONE');
-    }
-
-    // Last resort: any scenario at all
-    if (!activeScenario) {
-      activeScenario = db.get('SELECT id, name FROM scenarios LIMIT 1');
-      console.log('Turia: No default scenario, using any scenario:', activeScenario?.id || 'NONE');
+      activeScenario = db.get('SELECT id, name FROM scenarios WHERE is_default = 1 LIMIT 1');
     }
 
     if (activeScenario) {
       console.log(`Turia: Using scenario ${activeScenario.id} (${activeScenario.name}) for dashboard_actuals`);
 
       // Aggregate ALL turia_invoices (not just current import) by month
-      // Use branch filter only if multi-branch mode is active
-      const bf = branchFilter(req);
       const turiaMonthly = db.all(
         `SELECT invoice_month as month, COALESCE(SUM(total_amount), 0) as total
          FROM turia_invoices WHERE invoice_month IS NOT NULL AND invoice_month != ''${bf.where}
@@ -803,11 +808,11 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Req
         if (!row.month) continue;
         console.log(`Turia:   month=${row.month}, total=${row.total}`);
         db.run(
-          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, updated_at)
-           VALUES (?, 'revenue', 'Consultancy Revenue', ?, ?, ?, datetime('now'))
+          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+           VALUES (?, 'revenue', 'Consultancy Revenue', ?, ?, ?, ?, datetime('now'))
            ON CONFLICT(scenario_id, category, item_name, month)
-           DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
-          activeScenario.id, row.month, row.total, branchId
+           DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
+          activeScenario.id, row.month, row.total, branchId, consultStreamId
         );
         syncedCount++;
       }
@@ -837,7 +842,7 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Req
       message: `Turia sync completed — ${rows.length} invoices imported, ${totalActualRows} monthly actuals synced`,
       pct: 100,
       result: {
-        importId: importLog.lastInsertRowid,
+        importId: turiaImportId,
         ...summary,
       },
     };
