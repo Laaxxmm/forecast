@@ -585,6 +585,102 @@ async function start() {
     console.error('Backup creation failed:', e);
   }
 
+  // ── One-time forecast data restore endpoint ──────────────────────────────────
+  // Call: POST /api/internal/inject-forecast  with header X-Token: magna-restore-2026
+  // Can be called multiple times safely (idempotent via INSERT OR REPLACE).
+  // Remove this endpoint after successful restore.
+  app.post('/api/internal/inject-forecast', async (req: any, res: any) => {
+    if (req.headers['x-token'] !== 'magna-restore-2026') {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    try {
+      const mcDb = await getClientHelper('magnacode');
+
+      // Find Clinic scenario (stream_id=2 is Clinic based on platform DB seed)
+      // Try by name + stream presence, fall back to any scenario
+      let scenario = mcDb.get(`SELECT id FROM scenarios WHERE stream_id IS NOT NULL ORDER BY id LIMIT 1`);
+      // Prefer the one most likely to be Clinic (stream_id=2)
+      const clinicScenario = mcDb.get(`SELECT id FROM scenarios WHERE stream_id = 2 LIMIT 1`);
+      if (clinicScenario) scenario = clinicScenario;
+      if (!scenario) return res.status(404).json({ error: 'No scenario found — ensure scenarios are set up first' });
+
+      const scenarioId = scenario.id;
+
+      // Clear any existing items in this scenario (clean slate for restore)
+      mcDb.run('DELETE FROM forecast_items WHERE scenario_id = ?', scenarioId);
+
+      // Define items to restore (from magna_tracker.db legacy export)
+      const ITEMS = [
+        { category: 'revenue', name: 'Consultation Revenue', item_type: 'unit_sales', entry_mode: 'varying', sort_order: 1,
+          meta: JSON.stringify({stepValues:{units:{"2026-04":1147,"2026-05":1191,"2026-06":1009,"2026-07":1372,"2026-08":1148,"2026-09":1020,"2026-10":1178,"2026-11":1231,"2026-12":1178,"2027-01":1142,"2027-02":1165,"2027-03":1162},prices:{"2026-04":901,"2026-05":901,"2026-06":901,"2026-07":901,"2026-08":901,"2026-09":901,"2026-10":901,"2026-11":901,"2026-12":901,"2027-01":901,"2027-02":901,"2027-03":901}},stepEntryModes:{units:"varying",prices:"constant"},stepConstants:{units:{amount:0,period:"month",startMonth:"2026-04"},prices:{amount:901,period:"month",startMonth:"2026-04"}}}) },
+        { category: 'revenue', name: 'Diagnostics Revenue', item_type: 'unit_sales', entry_mode: 'varying', sort_order: 2,
+          meta: JSON.stringify({stepValues:{units:{"2026-04":1032,"2026-05":845,"2026-06":689,"2026-07":970,"2026-08":909,"2026-09":744,"2026-10":960,"2026-11":1071,"2026-12":881,"2027-01":917,"2027-02":788,"2027-03":891},prices:{"2026-04":2087,"2026-05":2087,"2026-06":2087,"2026-07":2087,"2026-08":2087,"2026-09":2087,"2026-10":2087,"2026-11":2087,"2026-12":2087,"2027-01":2087,"2027-02":2087,"2027-03":2087}},stepEntryModes:{units:"varying",prices:"constant"},stepConstants:{units:{amount:0,period:"month",startMonth:"2026-04"},prices:{amount:2087,period:"month",startMonth:"2026-04"}}}) },
+        { category: 'revenue', name: 'New Patient-based Revenue', item_type: 'unit_sales', entry_mode: 'varying', sort_order: 3, meta: null },
+        { category: 'direct_costs', name: 'Directors Remuneration', item_type: 'general_cost', entry_mode: 'constant', sort_order: 1,
+          meta: JSON.stringify({stepValues:{cost:{"2026-04":350000,"2026-05":350000,"2026-06":350000,"2026-07":350000,"2026-08":350000,"2026-09":350000,"2026-10":350000,"2026-11":350000,"2026-12":350000,"2027-01":350000,"2027-02":350000,"2027-03":350000}},stepEntryModes:{cost:"constant"},stepConstants:{cost:{amount:350000,period:"month",startMonth:"2026-04"}},linkedRevenueId:null,percentOfStream:0,percentStartMonth:"2026-04"}) },
+        { category: 'direct_costs', name: 'New Specific Cost', item_type: 'specific_cost', entry_mode: 'varying', sort_order: 2, meta: null },
+        { category: 'expenses', name: 'New Expense', item_type: 'other', entry_mode: 'varying', sort_order: 1,
+          meta: JSON.stringify({stepValues:{amount:{"2026-04":50000}},stepEntryModes:{amount:"varying"},stepConstants:{amount:{amount:0,period:"month",startMonth:"2026-04"}},linkedRevenueId:null,percentOfStream:0,percentStartMonth:"2026-04",labor_type:"regular_labor",staffing_type:"on_staff",annual_raise_pct:0,percent_of_revenue:0,pct_revenue_start_month:"2026-04",linked_revenue_id:null,oneTimeMonth:"2026-04",oneTimeAmount:0}) },
+        { category: 'expenses', name: 'New Expense 2', item_type: 'other', entry_mode: 'varying', sort_order: 2, meta: null },
+      ];
+
+      // Insert items and build id map (name -> new id for values linking)
+      mcDb.beginBatch();
+      const newIds: Record<string, number> = {};
+      for (const item of ITEMS) {
+        mcDb.run(
+          `INSERT INTO forecast_items (scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta)
+           VALUES (?, ?, ?, ?, ?, 0, 'month', '2026-04', 0, 0, ?, null, ?)`,
+          scenarioId, item.category, item.name, item.item_type, item.entry_mode, item.sort_order, item.meta || null
+        );
+        const newId = mcDb.get('SELECT last_insert_rowid() as id')?.id;
+        newIds[item.name] = newId;
+      }
+      mcDb.endBatch();
+
+      // Insert Consultation share personnel — linked to Consultation Revenue
+      const consultRevId = newIds['Consultation Revenue'];
+      const consultShareMeta = JSON.stringify({stepValues:{headcount:{"2026-04":5,"2026-05":5,"2026-06":5,"2026-07":5,"2026-08":5,"2026-09":5,"2026-10":5,"2026-11":5,"2026-12":5,"2027-01":5,"2027-02":5,"2027-03":5},salary_per:{"2026-04":310034,"2026-05":321927,"2026-06":272733,"2026-07":370852,"2026-08":310304,"2026-09":275706,"2026-10":318413,"2026-11":332739,"2026-12":318413,"2027-01":308683,"2027-02":314900,"2027-03":314089}},stepEntryModes:{headcount:"constant",salary_per:"pct_specific"},stepConstants:{headcount:{amount:5,period:"month",startMonth:"2026-04"},salary_per:{amount:0,period:"month",startMonth:"2026-04"}},linkedRevenueId:consultRevId,percentOfStream:0,percentStartMonth:"2026-04",labor_type:"direct_labor",staffing_type:"contract",annual_raise_pct:0,percent_of_revenue:30,pct_revenue_start_month:"2026-04",linked_revenue_id:consultRevId});
+      mcDb.run(
+        `INSERT INTO forecast_items (scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta)
+         VALUES (?, 'personnel', 'Consultation Share', 'group', 'varying', 0, 'month', '2026-04', 0, 0, 1, null, ?)`,
+        scenarioId, consultShareMeta
+      );
+      const consultShareId = mcDb.get('SELECT last_insert_rowid() as id')?.id;
+      mcDb.run(`INSERT INTO forecast_items (scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, sort_order, meta)
+        VALUES (?, 'personnel', 'New Employee', 'group', 'varying', 0, 'month', '2026-04', 2, ?)`,
+        scenarioId, JSON.stringify({labor_type:"regular_labor",staffing_type:"on_staff"})
+      );
+
+      // Insert forecast_values
+      const MONTHS = ['2026-04','2026-05','2026-06','2026-07','2026-08','2026-09','2026-10','2026-11','2026-12','2027-01','2027-02','2027-03'];
+      const CONSULT_REV = [1033447,1073091,909109,1236172,1034348,919020,1061378,1109131,1061378,1028942,1049665,1046962];
+      const DIAG_REV    = [2153784,1763515,1437943,2024390,1897083,1552728,2003520,2235177,1838647,1913779,1644556,1859517];
+      const DIR_REM     = [350000,350000,350000,350000,350000,350000,350000,350000,350000,350000,350000,350000];
+      const CONSULT_SHR = [1550170,1609635,1363665,1854260,1551520,1378530,1592065,1663695,1592065,1543415,1574500,1570445];
+      const EXPENSE_1   = [50000,0,0,0,0,0,0,0,0,0,0,0];
+
+      mcDb.beginBatch();
+      for (let i = 0; i < 12; i++) {
+        const m = MONTHS[i];
+        mcDb.run('INSERT OR REPLACE INTO forecast_values (item_id, month, amount) VALUES (?,?,?)', newIds['Consultation Revenue'], m, CONSULT_REV[i]);
+        mcDb.run('INSERT OR REPLACE INTO forecast_values (item_id, month, amount) VALUES (?,?,?)', newIds['Diagnostics Revenue'], m, DIAG_REV[i]);
+        mcDb.run('INSERT OR REPLACE INTO forecast_values (item_id, month, amount) VALUES (?,?,?)', newIds['Directors Remuneration'], m, DIR_REM[i]);
+        mcDb.run('INSERT OR REPLACE INTO forecast_values (item_id, month, amount) VALUES (?,?,?)', consultShareId, m, CONSULT_SHR[i]);
+        mcDb.run('INSERT OR REPLACE INTO forecast_values (item_id, month, amount) VALUES (?,?,?)', newIds['New Expense'], m, EXPENSE_1[i]);
+      }
+      mcDb.endBatch();
+
+      const itemCount = mcDb.get('SELECT COUNT(*) as n FROM forecast_items WHERE scenario_id = ?', scenarioId)?.n;
+      const valCount  = mcDb.get('SELECT COUNT(*) as n FROM forecast_values fv JOIN forecast_items fi ON fv.item_id = fi.id WHERE fi.scenario_id = ?', scenarioId)?.n;
+      console.log(`[Inject Forecast] ✅ Restored ${itemCount} items + ${valCount} values into scenario ${scenarioId}`);
+      res.json({ ok: true, scenarioId, items: itemCount, values: valCount });
+    } catch (e: any) {
+      console.error('[Inject Forecast] Error:', e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   console.log('Database initialized and seeded');
   app.listen(PORT, () => {
     console.log(`Magna Tracker server running on port ${PORT}`);
