@@ -293,6 +293,33 @@ async function start() {
     console.error('[Pharmacy Guard] Failed:', e);
   }
 
+  // ── One-time actuals reset (clean slate) ──
+  // Wipes all imported actuals, import logs, and dashboard actuals for magnacode.
+  // Preserves: users, passwords, settings, integrations, scenarios, FY, dashboard cards.
+  try {
+    const mcDb = await getClientHelper('magnacode');
+    const resetDone = mcDb.get("SELECT value FROM app_settings WHERE key = 'actuals_reset_v2'");
+    if (!resetDone) {
+      console.log('[Actuals Reset] Running one-time clean slate for magnacode...');
+      mcDb.run('DELETE FROM clinic_actuals');
+      mcDb.run('DELETE FROM pharmacy_sales_actuals');
+      mcDb.run('DELETE FROM pharmacy_purchase_actuals');
+      mcDb.run('DELETE FROM pharmacy_stock_actuals');
+      mcDb.run('DELETE FROM turia_invoices');
+      mcDb.run('DELETE FROM dashboard_actuals');
+      mcDb.run('DELETE FROM import_logs');
+      mcDb.run("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('actuals_reset_v2', '1')");
+      // Also purge .bak to prevent crash recovery from restoring old data
+      const bakPath = path.join(process.env.DATA_DIR || '/data', 'clients', 'magnacode.db.bak');
+      if (fs.existsSync(bakPath)) {
+        try { fs.unlinkSync(bakPath); } catch {}
+      }
+      console.log('[Actuals Reset] All actuals wiped. Settings/config preserved.');
+    }
+  } catch (e) {
+    console.error('[Actuals Reset] Failed:', e);
+  }
+
   // 2. Initialize existing client databases (ensure schemas + seed data are up to date)
   const clients = platformDb.all('SELECT slug FROM clients WHERE is_active = 1');
   for (const client of clients) {
