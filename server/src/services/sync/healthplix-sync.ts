@@ -417,57 +417,74 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
 
     // Find and click the download icon next to pagination "1 - N of N"
+    // The correct icon is in the Bills table row, NOT in the Billing Summary above
     let dlClicked = false;
     for (let attempt = 0; attempt < 3 && !dlClicked; attempt++) {
       if (attempt > 0) {
         await page.waitForTimeout(3000);
         await page.waitForLoadState('load', { timeout: 10_000 }).catch(() => {});
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+        await page.waitForTimeout(1000);
       }
       try {
         const result = await page.evaluate(() => {
-          // Find the pagination text element "X - Y of Z"
-          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          // Find the pagination element by checking innerText of small elements
+          const candidates = document.querySelectorAll('span, div, td, p, li, small');
           let paginationEl: Element | null = null;
-          while (walker.nextNode()) {
-            const text = walker.currentNode.textContent?.trim() || '';
-            if (/^\d+\s*-\s*\d+\s+of\s+\d+$/.test(text)) {
-              paginationEl = walker.currentNode.parentElement;
+          for (const el of candidates) {
+            const text = (el.innerText || el.textContent || '').trim();
+            if (text.length < 30 && /\d+\s*-\s*\d+\s+of\s+\d+/.test(text)) {
+              paginationEl = el;
               break;
             }
           }
-          if (!paginationEl) return null;
 
-          // The download icon is a sibling or nearby element in the same row
-          // Walk up max 3 levels to find the row container
-          let row: Element | null = paginationEl;
-          for (let i = 0; i < 3; i++) {
-            row = row?.parentElement || null;
-            if (!row) break;
-            // Look for download-like icons in this container
-            const icons = row.querySelectorAll('a, button, i, svg');
-            for (const icon of icons) {
-              const cls = (icon.className?.toString?.() || '').toLowerCase();
-              const tag = icon.tagName.toLowerCase();
-              // Match download icon classes (fa-download, etc.) or SVG download icons
-              if (cls.includes('download') || cls.includes('fa-download') || cls.includes('file-download')) {
-                // Click the icon or its parent <a>/<button>
-                const clickTarget = icon.closest('a, button') || icon;
-                (clickTarget as HTMLElement).click();
-                return 'pagination-icon';
-              }
-              // Also check for standalone SVG/link after the > arrow (last clickable in row)
-              if (tag === 'a' && (icon as HTMLAnchorElement).href?.includes('javascript')) {
-                // Could be a download link
+          if (paginationEl) {
+            // Get pagination position to find nearby download icon
+            const pRect = paginationEl.getBoundingClientRect();
+
+            // Find all download-like icons and pick the one closest to pagination
+            const allIcons = document.querySelectorAll(
+              'i.fa-download, i.fa-file-download, i.fa-file-excel, ' +
+              'a i.fa-download, button i.fa-download, ' +
+              '[class*="fa-download"], [class*="file-download"], ' +
+              'a[download], a[href*="download"]'
+            );
+            let bestIcon: Element | null = null;
+            let bestDist = Infinity;
+            for (const icon of allIcons) {
+              const iRect = (icon as HTMLElement).getBoundingClientRect();
+              if (iRect.width === 0 || iRect.height === 0) continue;
+              // Distance from pagination to icon (should be on same row, so check Y proximity)
+              const dy = Math.abs(iRect.top - pRect.top);
+              const dx = Math.abs(iRect.left - pRect.right);
+              if (dy < 50) { // same row (within 50px vertically)
+                const dist = dx + dy;
+                if (dist < bestDist) {
+                  bestDist = dist;
+                  bestIcon = icon;
+                }
               }
             }
-            // If row has enough child elements, the download is likely the last icon
-            if (icons.length >= 3) {
-              const lastIcon = icons[icons.length - 1];
-              const clickTarget = lastIcon.closest('a, button') || lastIcon;
+            if (bestIcon) {
+              const clickTarget = bestIcon.closest('a, button') || bestIcon;
               (clickTarget as HTMLElement).click();
-              return 'pagination-last-icon';
+              return `proximity-match(dist=${Math.round(bestDist)})`;
+            }
+
+            // Fallback: walk up from pagination and click the last <a> or <button> sibling
+            let container = paginationEl.parentElement;
+            for (let depth = 0; depth < 2 && container; depth++) {
+              const links = container.querySelectorAll('a, button');
+              if (links.length >= 2) {
+                // The download is the last clickable after < and > arrows
+                (links[links.length - 1] as HTMLElement).click();
+                return `last-sibling(depth=${depth})`;
+              }
+              container = container.parentElement;
             }
           }
+
           return null;
         });
         if (result) {
