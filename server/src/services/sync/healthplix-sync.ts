@@ -369,19 +369,28 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     // noWaitAfter: don't wait for navigation — GET BILLS can trigger a long reload
     await getBillsBtn.click({ timeout: 30_000, noWaitAfter: true });
 
-    // Wait for report to load — short networkidle, don't block forever
-    await page.waitForTimeout(3000);
-    try {
-      await page.waitForLoadState('networkidle', { timeout: 30_000 });
-    } catch {
-      console.log('[HP Sync] networkidle after GET BILLS timed out, proceeding');
+    // Wait for report to actually load — poll for pagination or download icon (up to 120s)
+    // Healthplix can take a while to generate the report after GET BILLS
+    progress(opts, 'generate', 'Waiting for report to generate...', 72);
+    const reportReady = await page.waitForFunction(() => {
+      // Check if pagination text appeared (e.g. "1 - 77 of 77")
+      const bodyText = document.body.innerText;
+      if (/\d+\s*-\s*\d+\s+of\s+\d+/.test(bodyText)) return true;
+      // Check if a download icon appeared
+      if (document.querySelector('.fa-download, .fa-file-download, [class*="download-icon"], [title*="ownload"]')) return true;
+      // Check if a Bills tab appeared
+      if (document.querySelector('[class*="tab"]:has-text("Bills")') || bodyText.includes('Bills') && bodyText.includes('Collections')) return true;
+      return false;
+    }, { timeout: 120_000 }).catch(() => null);
+
+    if (reportReady) {
+      progress(opts, 'generate', 'Bills loaded', 78);
+    } else {
+      console.log('[HP Sync] Report indicators not found after 120s, trying download anyway');
+      progress(opts, 'generate', 'Report may still be loading, attempting download...', 78);
     }
-    progress(opts, 'generate', 'Bills loaded', 78);
 
     // ── Step 7: Download the report ──
-    // After GET BILLS, a detailed Bills table loads below with tabs (Bills, Collections, etc.)
-    // The download icon (⬇) is in the top-right of the Bills table, near pagination "1 - N of N"
-    // We need to scroll down to the table area first
     progress(opts, 'download', 'Looking for download button...', 80);
 
     // Scroll down to find the detailed Bills table
