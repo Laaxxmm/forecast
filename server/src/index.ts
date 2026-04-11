@@ -170,6 +170,63 @@ app.post('/api/cleanup-pharmacy', async (_req, res) => {
   }
 });
 
+// ─── Clinic dedup cleanup (wipe duplicated clinic rows, keep one copy) ───────
+app.post('/api/cleanup-clinic', async (_req, res) => {
+  try {
+    const mcDb = await getClientHelper('magnacode');
+    const before = mcDb.get('SELECT COUNT(*) as n FROM clinic_actuals')?.n || 0;
+    // Keep only the latest import's rows; remove rows from older imports for the same months
+    const latestImport = mcDb.get(
+      "SELECT id FROM import_logs WHERE source IN ('HEALTHPLIX_SYNC','HEALTHPLIX') ORDER BY id DESC LIMIT 1"
+    );
+    if (latestImport) {
+      mcDb.run('DELETE FROM clinic_actuals WHERE import_id != ?', latestImport.id);
+      // Clean old import logs too
+      mcDb.run("DELETE FROM import_logs WHERE source IN ('HEALTHPLIX_SYNC','HEALTHPLIX') AND id != ?", latestImport.id);
+    }
+    const after = mcDb.get('SELECT COUNT(*) as n FROM clinic_actuals')?.n || 0;
+
+    // Also clear and rebuild clinic dashboard_actuals from the de-duped data
+    mcDb.run("DELETE FROM dashboard_actuals WHERE item_name LIKE 'Clinic%'");
+    const platformDb = await getPlatformHelper();
+    const clientRow = platformDb.get("SELECT id FROM clients WHERE slug = 'magnacode'");
+    let clinicStreamId: number | null = null;
+    let scenarioId: number | null = null;
+    if (clientRow) {
+      const clinicStream = platformDb.get(
+        "SELECT id FROM business_streams WHERE client_id = ? AND (LOWER(name) LIKE '%clinic%' OR LOWER(name) LIKE '%health%') LIMIT 1",
+        clientRow.id
+      );
+      clinicStreamId = clinicStream?.id || null;
+    }
+    const scenario = mcDb.get(
+      `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
+       WHERE fy.is_active = 1 AND (s.stream_id = ? OR s.is_default = 1)
+       ORDER BY CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id LIMIT 1`,
+      clinicStreamId, clinicStreamId
+    );
+    scenarioId = scenario?.id || null;
+    if (scenarioId) {
+      const months = mcDb.all(
+        `SELECT bill_month as month, COALESCE(SUM(item_price), 0) as total
+         FROM clinic_actuals WHERE bill_month IS NOT NULL GROUP BY bill_month`
+      );
+      for (const row of months) {
+        mcDb.run(
+          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, stream_id, updated_at)
+           VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, datetime('now'))
+           ON CONFLICT(scenario_id, category, item_name, month)
+           DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
+          scenarioId, row.month, row.total, clinicStreamId
+        );
+      }
+    }
+    res.json({ before, after, removed: before - after, scenarioId, clinicStreamId });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── Auth (no tenant needed — login determines tenant) ──────────────────────
 app.use('/api/auth', authRoutes);
 

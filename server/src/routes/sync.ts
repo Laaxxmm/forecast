@@ -161,6 +161,15 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async
 
     state.progress = { step: 'saving', message: `Saving ${rows.length} rows to database...`, pct: 95 };
 
+    // ── Deduplication: delete existing clinic rows for the months being imported ──
+    const clinicMonthsToReplace = [...new Set(rows.map((r: any) => r.bill_month).filter(Boolean))];
+    if (clinicMonthsToReplace.length > 0) {
+      const ph = clinicMonthsToReplace.map(() => '?').join(',');
+      db.run(`DELETE FROM clinic_actuals WHERE bill_month IN (${ph})`, ...clinicMonthsToReplace);
+      db.run(`DELETE FROM import_logs WHERE source IN ('HEALTHPLIX_SYNC','HEALTHPLIX') AND id IN (SELECT id FROM import_logs WHERE source IN ('HEALTHPLIX_SYNC','HEALTHPLIX'))`);
+      console.log(`[hp-sync] Cleared existing clinic data for months: ${clinicMonthsToReplace.join(', ')}`);
+    }
+
     // Insert into DB (same logic as import.ts)
     const importLog = db.run(
       `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
@@ -193,22 +202,21 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async
     }
 
     // Auto-sync actuals to dashboard for the active scenario
+    const bf = branchFilter(req);
+    const platformDb = await getPlatformHelper();
+    const clinicStream = req.clientId ? platformDb.get(
+      "SELECT id FROM business_streams WHERE client_id = ? AND (LOWER(name) LIKE '%clinic%' OR LOWER(name) LIKE '%health%') AND is_active = 1 LIMIT 1",
+      req.clientId
+    ) : null;
+    const clinicStreamId = clinicStream?.id || null;
+    // Find the scenario for the clinic stream (not just any default)
     const activeScenario = db.get(
-      `SELECT s.id FROM scenarios s
-       JOIN financial_years fy ON s.fy_id = fy.id
-       WHERE fy.is_active = 1 AND s.is_default = 1
-       LIMIT 1`
+      `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
+       WHERE fy.is_active = 1 AND (s.stream_id = ? OR s.is_default = 1)
+       ORDER BY CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id LIMIT 1`,
+      clinicStreamId, clinicStreamId
     );
     if (activeScenario) {
-      // Aggregate clinic revenue into dashboard_actuals (branch-scoped)
-      const bf = branchFilter(req);
-      // Look up the clinic stream_id to tag dashboard entries
-      const platformDb = await getPlatformHelper();
-      const clinicStream = req.clientId ? platformDb.get(
-        "SELECT id FROM business_streams WHERE client_id = ? AND (LOWER(name) LIKE '%clinic%' OR LOWER(name) LIKE '%health%') AND is_active = 1 LIMIT 1",
-        req.clientId
-      ) : null;
-      const clinicStreamId = clinicStream?.id || null;
       // Clear old Clinic Revenue entries before re-syncing (prevents stale month data)
       db.run(
         `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Clinic Revenue'${bf.where}`,
