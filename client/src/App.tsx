@@ -32,6 +32,7 @@ import TableViewPage from './pages/vcfo/TableViewPage';
 import AdjustmentsPage from './pages/vcfo/AdjustmentsPage';
 import PublishCloudPage from './pages/vcfo/PublishCloudPage';
 import VcfoForecastViewPage from './pages/vcfo/VcfoForecastViewPage';
+import OperationalInsightsPage from './pages/OperationalInsightsPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const [auth, setAuth] = useState<boolean | null>(null);
@@ -111,6 +112,7 @@ export default function App() {
           <Route path="/actuals" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><DashboardPage /></ModuleRoute></ClientRoute>} />
           <Route path="/forecast/*" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><ForecastModulePage /></ModuleRoute></ClientRoute>} />
           <Route path="/analysis/*" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><DashboardModulePage /></ModuleRoute></ClientRoute>} />
+          <Route path="/insights" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><OperationalInsightsPage /></ModuleRoute></ClientRoute>} />
           <Route path="/import" element={<ClientRoute><ClientAdminRoute><ModuleRoute moduleKey="forecast_ops"><ImportPage /></ModuleRoute></ClientAdminRoute></ClientRoute>} />
           <Route path="/stream/:streamId" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><StreamDetailPage /></ModuleRoute></ClientRoute>} />
           {/* VCFO Portal — internal module */}

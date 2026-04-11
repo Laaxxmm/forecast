@@ -872,4 +872,295 @@ router.get('/variance', async (req, res) => {
   res.json(variance);
 });
 
+// ── Operational Insights (COO decision dashboard) ──────────────────────
+router.get('/operational-insights', async (req, res) => {
+  const db = req.tenantDb!;
+  const bf = branchFilter(req);
+
+  const fy = db.get('SELECT * FROM financial_years WHERE is_active = 1');
+  if (!fy) return res.json({ error: 'No active FY' });
+
+  const platformDb = await getPlatformHelper();
+  const clientStreams = platformDb.all(
+    'SELECT id, name, icon, color FROM business_streams WHERE client_id = ? AND is_active = 1 ORDER BY sort_order',
+    req.clientId
+  );
+
+  // Date calculations
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const dayOfMonth = now.getDate();
+  const daysElapsed = dayOfMonth;
+  const daysRemaining = daysInMonth - dayOfMonth;
+
+  // Last month for trend comparison (same # of days elapsed)
+  const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const lastMonth = `${lastMonthDate.getFullYear()}-${String(lastMonthDate.getMonth() + 1).padStart(2, '0')}`;
+  const lastMonthCutoffDay = Math.min(dayOfMonth, new Date(lastMonthDate.getFullYear(), lastMonthDate.getMonth() + 1, 0).getDate());
+
+  // Week boundaries (Monday-based)
+  const todayDay = now.getDay(); // 0=Sun
+  const mondayOffset = todayDay === 0 ? 6 : todayDay - 1;
+  const thisMonday = new Date(now);
+  thisMonday.setDate(now.getDate() - mondayOffset);
+  const lastSunday = new Date(thisMonday);
+  lastSunday.setDate(thisMonday.getDate() - 1);
+  const lastMonday = new Date(lastSunday);
+  lastMonday.setDate(lastSunday.getDate() - 6);
+
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  const thisMondayStr = fmt(thisMonday);
+  const todayStr = fmt(now);
+  const lastMondayStr = fmt(lastMonday);
+  const lastSundayStr = fmt(lastSunday);
+
+  // FY month range for forecast
+  const startMonth = fy.start_date.slice(0, 7);
+  const endMonth = fy.end_date.slice(0, 7);
+
+  const streamsResult: any[] = [];
+  let combinedMtdRevenue = 0;
+  let combinedTargetRevenue = 0;
+  const actions: any[] = [];
+
+  for (const stream of clientStreams) {
+    const nameLower = stream.name.toLowerCase();
+    const isClinic = nameLower.includes('clinic') || nameLower.includes('health');
+    const isPharmacy = nameLower.includes('pharma');
+
+    // Rule 4: stream-specific scenario lookup
+    const scenario = db.get(
+      `SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1
+       AND (stream_id = ? OR stream_id IS NULL)${bf.where}
+       ORDER BY CASE WHEN stream_id = ? THEN 0 ELSE 1 END, id LIMIT 1`,
+      fy.id, stream.id, ...bf.params, stream.id
+    );
+
+    // ── Forecast target for current month ──
+    let monthlyTarget = 0;
+    let unitTarget = 0;
+    let targetItemName = '';
+    if (scenario) {
+      const revenueItems = db.all(
+        "SELECT * FROM forecast_items WHERE scenario_id = ? AND category = 'revenue'",
+        scenario.id
+      );
+      for (const item of revenueItems) {
+        const meta = typeof item.meta === 'string' ? JSON.parse(item.meta) : item.meta;
+        const sv = meta?.stepValues || {};
+        let amt = 0;
+        if (item.item_type === 'unit_sales') {
+          const units = sv.units?.[currentMonth] || 0;
+          const prices = sv.prices?.[currentMonth] || 0;
+          amt = units * prices;
+          unitTarget += units;
+        } else if (item.item_type === 'recurring') {
+          amt = sv.amount?.[currentMonth] || 0;
+        } else {
+          const key = Object.keys(sv).find(k => sv[k]?.[currentMonth] !== undefined);
+          amt = key ? (sv[key][currentMonth] || 0) : 0;
+        }
+        monthlyTarget += amt;
+        if (!targetItemName && amt > 0) targetItemName = item.name;
+      }
+    }
+
+    // ── MTD Actuals ──
+    let mtdPatients = 0, mtdRevenue = 0, mtdTransactions = 0, mtdProfit = 0, mtdCogs = 0;
+
+    if (isClinic) {
+      const r = db.get(
+        `SELECT COUNT(DISTINCT patient_id) as patients, COALESCE(SUM(item_price), 0) as revenue, COUNT(*) as txns
+         FROM clinic_actuals WHERE bill_month = ?${bf.where}`,
+        currentMonth, ...bf.params
+      );
+      mtdPatients = r?.patients || 0;
+      mtdRevenue = r?.revenue || 0;
+      mtdTransactions = r?.txns || 0;
+    } else if (isPharmacy) {
+      const r = db.get(
+        `SELECT COUNT(DISTINCT bill_no) as txns, COALESCE(SUM(sales_amount), 0) as revenue,
+                COALESCE(SUM(profit), 0) as profit, COALESCE(SUM(purchase_amount), 0) as cogs
+         FROM pharmacy_sales_actuals WHERE bill_month = ?${bf.where}`,
+        currentMonth, ...bf.params
+      );
+      mtdRevenue = r?.revenue || 0;
+      mtdTransactions = r?.txns || 0;
+      mtdProfit = r?.profit || 0;
+      mtdCogs = r?.cogs || 0;
+    }
+
+    // ── Last month same-period (for trend) ──
+    let lastMonthMtdRevenue = 0, lastMonthMtdPatients = 0;
+    if (isClinic) {
+      const r = db.get(
+        `SELECT COUNT(DISTINCT patient_id) as patients, COALESCE(SUM(item_price), 0) as revenue
+         FROM clinic_actuals WHERE bill_month = ? AND CAST(SUBSTR(bill_date, 9, 2) AS INTEGER) <= ?${bf.where}`,
+        lastMonth, lastMonthCutoffDay, ...bf.params
+      );
+      lastMonthMtdRevenue = r?.revenue || 0;
+      lastMonthMtdPatients = r?.patients || 0;
+    } else if (isPharmacy) {
+      const r = db.get(
+        `SELECT COALESCE(SUM(sales_amount), 0) as revenue
+         FROM pharmacy_sales_actuals WHERE bill_month = ? AND CAST(SUBSTR(bill_date, 9, 2) AS INTEGER) <= ?${bf.where}`,
+        lastMonth, lastMonthCutoffDay, ...bf.params
+      );
+      lastMonthMtdRevenue = r?.revenue || 0;
+    }
+
+    // ── Weekly data ──
+    let thisWeek: any = { patients: 0, revenue: 0, transactions: 0, profit: 0, avgTicket: 0 };
+    let lastWeek: any = { patients: 0, revenue: 0, transactions: 0, profit: 0, avgTicket: 0 };
+
+    if (isClinic) {
+      const tw = db.get(
+        `SELECT COUNT(DISTINCT patient_id) as patients, COALESCE(SUM(item_price), 0) as revenue, COUNT(*) as txns
+         FROM clinic_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where}`,
+        thisMondayStr, todayStr, ...bf.params
+      );
+      thisWeek = { patients: tw?.patients || 0, revenue: tw?.revenue || 0, transactions: tw?.txns || 0, profit: 0, avgTicket: (tw?.patients || 0) > 0 ? Math.round((tw?.revenue || 0) / tw.patients) : 0 };
+
+      const lw = db.get(
+        `SELECT COUNT(DISTINCT patient_id) as patients, COALESCE(SUM(item_price), 0) as revenue, COUNT(*) as txns
+         FROM clinic_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where}`,
+        lastMondayStr, lastSundayStr, ...bf.params
+      );
+      lastWeek = { patients: lw?.patients || 0, revenue: lw?.revenue || 0, transactions: lw?.txns || 0, profit: 0, avgTicket: (lw?.patients || 0) > 0 ? Math.round((lw?.revenue || 0) / lw.patients) : 0 };
+    } else if (isPharmacy) {
+      const tw = db.get(
+        `SELECT COUNT(DISTINCT bill_no) as txns, COALESCE(SUM(sales_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
+         FROM pharmacy_sales_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where}`,
+        thisMondayStr, todayStr, ...bf.params
+      );
+      thisWeek = { patients: 0, revenue: tw?.revenue || 0, transactions: tw?.txns || 0, profit: tw?.profit || 0, avgTicket: (tw?.txns || 0) > 0 ? Math.round((tw?.revenue || 0) / tw.txns) : 0 };
+
+      const lw = db.get(
+        `SELECT COUNT(DISTINCT bill_no) as txns, COALESCE(SUM(sales_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
+         FROM pharmacy_sales_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where}`,
+        lastMondayStr, lastSundayStr, ...bf.params
+      );
+      lastWeek = { patients: 0, revenue: lw?.revenue || 0, transactions: lw?.txns || 0, profit: lw?.profit || 0, avgTicket: (lw?.txns || 0) > 0 ? Math.round((lw?.revenue || 0) / lw.txns) : 0 };
+    }
+
+    // ── Daily breakdown for chart ──
+    let daily: any[] = [];
+    if (isClinic) {
+      daily = db.all(
+        `SELECT bill_date as date, COUNT(DISTINCT patient_id) as patients, COALESCE(SUM(item_price), 0) as revenue
+         FROM clinic_actuals WHERE bill_month = ?${bf.where} GROUP BY bill_date ORDER BY bill_date`,
+        currentMonth, ...bf.params
+      );
+    } else if (isPharmacy) {
+      daily = db.all(
+        `SELECT bill_date as date, COUNT(DISTINCT bill_no) as transactions, COALESCE(SUM(sales_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
+         FROM pharmacy_sales_actuals WHERE bill_month = ?${bf.where} GROUP BY bill_date ORDER BY bill_date`,
+        currentMonth, ...bf.params
+      );
+    }
+
+    // ── Pace calculations ──
+    const dailyRate = daysElapsed > 0 ? mtdRevenue / daysElapsed : 0;
+    const projected = dailyRate * daysInMonth;
+    const requiredRate = daysRemaining > 0 ? (monthlyTarget - mtdRevenue) / daysRemaining : 0;
+    const pctOfTarget = monthlyTarget > 0 ? (projected / monthlyTarget) * 100 : 0;
+    const rag = monthlyTarget === 0 ? 'GREY' : pctOfTarget >= 95 ? 'GREEN' : pctOfTarget >= 80 ? 'AMBER' : 'RED';
+
+    // Build cards
+    const cards: any[] = [];
+    if (isClinic) {
+      const patientDailyRate = daysElapsed > 0 ? mtdPatients / daysElapsed : 0;
+      const patientProjected = Math.round(patientDailyRate * daysInMonth);
+      const patientPctTarget = unitTarget > 0 ? (patientProjected / unitTarget) * 100 : 0;
+      const patientRag = unitTarget === 0 ? 'GREY' : patientPctTarget >= 95 ? 'GREEN' : patientPctTarget >= 80 ? 'AMBER' : 'RED';
+
+      cards.push({
+        label: 'Patients', mtd: mtdPatients, target: unitTarget, projected: patientProjected,
+        dailyRate: Math.round(patientDailyRate * 10) / 10, requiredRate: unitTarget > 0 && daysRemaining > 0 ? Math.round(((unitTarget - mtdPatients) / daysRemaining) * 10) / 10 : 0,
+        rag: patientRag, lastMonthMtd: lastMonthMtdPatients, unit: 'count',
+      });
+      cards.push({
+        label: 'Revenue', mtd: mtdRevenue, target: monthlyTarget, projected: Math.round(projected),
+        dailyRate: Math.round(dailyRate), requiredRate: Math.round(requiredRate),
+        rag, lastMonthMtd: lastMonthMtdRevenue, unit: 'currency',
+      });
+    } else if (isPharmacy) {
+      cards.push({
+        label: 'Sales', mtd: mtdRevenue, target: monthlyTarget, projected: Math.round(projected),
+        dailyRate: Math.round(dailyRate), requiredRate: Math.round(requiredRate),
+        rag, lastMonthMtd: lastMonthMtdRevenue, unit: 'currency',
+      });
+      cards.push({
+        label: 'Profit', mtd: mtdProfit, target: 0, projected: daysElapsed > 0 ? Math.round((mtdProfit / daysElapsed) * daysInMonth) : 0,
+        dailyRate: daysElapsed > 0 ? Math.round(mtdProfit / daysElapsed) : 0, requiredRate: 0,
+        rag: 'GREY', lastMonthMtd: 0, unit: 'currency',
+      });
+      if (mtdRevenue > 0) {
+        cards.push({
+          label: 'Margin', mtd: Math.round((mtdProfit / mtdRevenue) * 10000) / 100, target: 0, projected: 0,
+          dailyRate: 0, requiredRate: 0, rag: 'GREY', lastMonthMtd: 0, unit: 'percent',
+        });
+      }
+    }
+
+    combinedMtdRevenue += mtdRevenue;
+    combinedTargetRevenue += monthlyTarget;
+
+    // ── Action items ──
+    if (rag === 'RED' && monthlyTarget > 0) {
+      const gap = monthlyTarget - mtdRevenue;
+      actions.push({ severity: 'RED', stream: stream.name, message: `${stream.name} revenue is ${Math.round(pctOfTarget)}% of target. Need ₹${Math.round(requiredRate).toLocaleString('en-IN')}/day to recover (gap: ₹${Math.round(gap).toLocaleString('en-IN')})` });
+    }
+    if (lastWeek.revenue > 0 && thisWeek.revenue > 0) {
+      const wowChange = ((thisWeek.revenue - lastWeek.revenue) / lastWeek.revenue) * 100;
+      if (wowChange < -15) {
+        actions.push({ severity: 'AMBER', stream: stream.name, message: `${stream.name} revenue dropped ${Math.abs(Math.round(wowChange))}% vs last week` });
+      }
+    }
+
+    // Check departments with zero activity (clinic only)
+    if (isClinic) {
+      const activeDepts = db.all(
+        `SELECT DISTINCT department FROM clinic_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where} AND department IS NOT NULL AND department != ''`,
+        thisMondayStr, todayStr, ...bf.params
+      );
+      const allDepts = db.all(
+        `SELECT DISTINCT department FROM clinic_actuals WHERE bill_month = ?${bf.where} AND department IS NOT NULL AND department != ''`,
+        lastMonth, ...bf.params
+      );
+      const activeSet = new Set(activeDepts.map((d: any) => d.department));
+      for (const dept of allDepts) {
+        if (!activeSet.has(dept.department)) {
+          actions.push({ severity: 'INFO', stream: stream.name, message: `${dept.department}: no patients this week` });
+        }
+      }
+    }
+
+    streamsResult.push({
+      name: stream.name, streamId: stream.id, icon: stream.icon, color: stream.color,
+      cards, thisWeek, lastWeek, daily,
+    });
+  }
+
+  // Combined
+  const combinedProjected = daysElapsed > 0 ? (combinedMtdRevenue / daysElapsed) * daysInMonth : 0;
+  const combinedPct = combinedTargetRevenue > 0 ? (combinedProjected / combinedTargetRevenue) * 100 : 0;
+  const combinedRag = combinedTargetRevenue === 0 ? 'GREY' : combinedPct >= 95 ? 'GREEN' : combinedPct >= 80 ? 'AMBER' : 'RED';
+
+  res.json({
+    month: currentMonth,
+    monthLabel: now.toLocaleString('en-IN', { month: 'long', year: 'numeric' }),
+    daysElapsed, daysInMonth, daysRemaining,
+    streams: streamsResult,
+    combined: {
+      mtdRevenue: combinedMtdRevenue,
+      targetRevenue: combinedTargetRevenue,
+      projectedRevenue: Math.round(combinedProjected),
+      rag: combinedRag,
+    },
+    actions,
+  });
+});
+
 export default router;
