@@ -21,10 +21,30 @@ export function getClientsDir(): string {
 // ── DbHelper ────────────────────────────────────────────────────────────────
 
 export class DbHelper {
+  private _batchMode = false;
   constructor(private db: Database, private saveFn?: () => void) {}
 
   private save() {
+    if (!this._batchMode) this.saveFn?.();
+  }
+
+  /** Start batch mode — suppresses disk saves until endBatch(). Use for bulk inserts. */
+  beginBatch() {
+    this._batchMode = true;
+    this.db.run('BEGIN TRANSACTION');
+  }
+
+  /** End batch mode — commits transaction and saves to disk once. */
+  endBatch() {
+    this.db.run('COMMIT');
+    this._batchMode = false;
     this.saveFn?.();
+  }
+
+  /** Rollback batch on error. */
+  rollbackBatch() {
+    try { this.db.run('ROLLBACK'); } catch {}
+    this._batchMode = false;
   }
 
   run(sql: string, ...params: any[]) {

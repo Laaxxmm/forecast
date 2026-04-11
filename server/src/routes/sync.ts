@@ -169,18 +169,22 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async
       summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
     );
 
-    for (const r of rows) {
-      db.run(
-        `INSERT INTO clinic_actuals (import_id, bill_date, bill_month, patient_id, patient_name, order_number,
-          billed, paid, discount, tax, refund, due, addl_disc, item_price, item_disc,
-          department, service_name, billed_doctor, service_owner, branch_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        importLog.lastInsertRowid, r.bill_date, r.bill_month, r.patient_id, r.patient_name,
-        r.order_number, r.billed, r.paid, r.discount, r.tax, r.refund, r.due,
-        r.addl_disc, r.item_price, r.item_disc, r.department, r.service_name,
-        r.billed_doctor, r.service_owner, branchId
-      );
-    }
+    db.beginBatch();
+    try {
+      for (const r of rows) {
+        db.run(
+          `INSERT INTO clinic_actuals (import_id, bill_date, bill_month, patient_id, patient_name, order_number,
+            billed, paid, discount, tax, refund, due, addl_disc, item_price, item_disc,
+            department, service_name, billed_doctor, service_owner, branch_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          importLog.lastInsertRowid, r.bill_date, r.bill_month, r.patient_id, r.patient_name,
+          r.order_number, r.billed, r.paid, r.discount, r.tax, r.refund, r.due,
+          r.addl_disc, r.item_price, r.item_disc, r.department, r.service_name,
+          r.billed_doctor, r.service_owner, branchId
+        );
+      }
+      db.endBatch();
+    } catch (e) { db.rollbackBatch(); throw e; }
 
     // Auto-add doctors
     const doctors = [...new Set(rows.map((r: any) => r.billed_doctor).filter((d: any) => d && d !== '-'))];
@@ -394,17 +398,21 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
         summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
       );
 
-      for (const r of rows) {
-        db.run(
-          `INSERT INTO pharmacy_sales_actuals (import_id, bill_no, bill_date, bill_month, drug_name, batch_no,
-            hsn_code, tax_pct, patient_id, patient_name, referred_by, qty, sales_amount,
-            purchase_amount, purchase_tax, sales_tax, profit, branch_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          importLog.lastInsertRowid, r.bill_no, r.bill_date, r.bill_month, r.drug_name, r.batch_no,
-          r.hsn_code, r.tax_pct, r.patient_id, r.patient_name, r.referred_by, r.qty,
-          r.sales_amount, r.purchase_amount, r.purchase_tax, r.sales_tax, r.profit, branchId
-        );
-      }
+      db.beginBatch();
+      try {
+        for (const r of rows) {
+          db.run(
+            `INSERT INTO pharmacy_sales_actuals (import_id, bill_no, bill_date, bill_month, drug_name, batch_no,
+              hsn_code, tax_pct, patient_id, patient_name, referred_by, qty, sales_amount,
+              purchase_amount, purchase_tax, sales_tax, profit, branch_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            importLog.lastInsertRowid, r.bill_no, r.bill_date, r.bill_month, r.drug_name, r.batch_no,
+            r.hsn_code, r.tax_pct, r.patient_id, r.patient_name, r.referred_by, r.qty,
+            r.sales_amount, r.purchase_amount, r.purchase_tax, r.sales_tax, r.profit, branchId
+          );
+        }
+        db.endBatch();
+      } catch (e) { db.rollbackBatch(); throw e; }
       totalRows += rows.length;
 
       // Auto-sync pharmacy revenue to dashboard_actuals (branch-scoped)
@@ -472,20 +480,24 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
         summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
       );
 
-      for (const r of rows) {
-        db.run(
-          `INSERT INTO pharmacy_purchase_actuals (import_id, invoice_no, invoice_date, invoice_month,
-            stockiest_name, mfg_name, drug_name, batch_no, hsn_code, batch_qty, free_qty, mrp, rate,
-            discount_amount, net_purchase_value, net_sales_value, tax_pct, tax_amount,
-            purchase_qty, purchase_value, sales_value, profit, profit_pct, branch_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          importLog.lastInsertRowid, r.invoice_no, r.invoice_date, r.invoice_month,
-          r.stockiest_name, r.mfg_name, r.drug_name, r.batch_no, r.hsn_code,
-          r.batch_qty, r.free_qty, r.mrp, r.rate, r.discount_amount,
-          r.net_purchase_value, r.net_sales_value, r.tax_pct, r.tax_amount,
-          r.purchase_qty, r.purchase_value, r.sales_value, r.profit, r.profit_pct, branchId
-        );
-      }
+      db.beginBatch();
+      try {
+        for (const r of rows) {
+          db.run(
+            `INSERT INTO pharmacy_purchase_actuals (import_id, invoice_no, invoice_date, invoice_month,
+              stockiest_name, mfg_name, drug_name, batch_no, hsn_code, batch_qty, free_qty, mrp, rate,
+              discount_amount, net_purchase_value, net_sales_value, tax_pct, tax_amount,
+              purchase_qty, purchase_value, sales_value, profit, profit_pct, branch_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            importLog.lastInsertRowid, r.invoice_no, r.invoice_date, r.invoice_month,
+            r.stockiest_name, r.mfg_name, r.drug_name, r.batch_no, r.hsn_code,
+            r.batch_qty, r.free_qty, r.mrp, r.rate, r.discount_amount,
+            r.net_purchase_value, r.net_sales_value, r.tax_pct, r.tax_amount,
+            r.purchase_qty, r.purchase_value, r.sales_value, r.profit, r.profit_pct, branchId
+          );
+        }
+        db.endBatch();
+      } catch (e) { db.rollbackBatch(); throw e; }
       totalRows += rows.length;
 
       try { fs.unlinkSync(result.purchaseFile.filePath); } catch {}
@@ -508,17 +520,21 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
         snapshotDate, snapshotDate, 'completed', branchId
       );
 
-      for (const r of rows) {
-        db.run(
-          `INSERT INTO pharmacy_stock_actuals (import_id, snapshot_date, drug_name, batch_no,
-            received_date, expiry_date, avl_qty, strips, purchase_price, purchase_tax,
-            purchase_value, stock_value, branch_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          importLog.lastInsertRowid, snapshotDate, r.drug_name, r.batch_no,
-          r.received_date, r.expiry_date, r.avl_qty, r.strips,
-          r.purchase_price, r.purchase_tax, r.purchase_value, r.stock_value, branchId
-        );
-      }
+      db.beginBatch();
+      try {
+        for (const r of rows) {
+          db.run(
+            `INSERT INTO pharmacy_stock_actuals (import_id, snapshot_date, drug_name, batch_no,
+              received_date, expiry_date, avl_qty, strips, purchase_price, purchase_tax,
+              purchase_value, stock_value, branch_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            importLog.lastInsertRowid, snapshotDate, r.drug_name, r.batch_no,
+            r.received_date, r.expiry_date, r.avl_qty, r.strips,
+            r.purchase_price, r.purchase_tax, r.purchase_value, r.stock_value, branchId
+          );
+        }
+        db.endBatch();
+      } catch (e) { db.rollbackBatch(); throw e; }
       totalRows += rows.length;
 
       try { fs.unlinkSync(result.stockFile.filePath); } catch {}
@@ -681,16 +697,20 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Req
       summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
     );
 
-    for (const r of rows) {
-      db.run(
-        `INSERT INTO turia_invoices (import_id, invoice_id, billing_org, client_name, gstin, service,
-          sac_code, invoice_date, invoice_month, due_date, total_amount, status, branch_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        importLog.lastInsertRowid, r.invoice_id, r.billing_org, r.client_name, r.gstin,
-        r.service, r.sac_code, r.invoice_date, r.invoice_month, r.due_date,
-        r.total_amount, r.status, branchId
-      );
-    }
+    db.beginBatch();
+    try {
+      for (const r of rows) {
+        db.run(
+          `INSERT INTO turia_invoices (import_id, invoice_id, billing_org, client_name, gstin, service,
+            sac_code, invoice_date, invoice_month, due_date, total_amount, status, branch_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          importLog.lastInsertRowid, r.invoice_id, r.billing_org, r.client_name, r.gstin,
+          r.service, r.sac_code, r.invoice_date, r.invoice_month, r.due_date,
+          r.total_amount, r.status, branchId
+        );
+      }
+      db.endBatch();
+    } catch (e) { db.rollbackBatch(); throw e; }
 
     // Auto-sync consultancy revenue to dashboard_actuals
     // First try: active scenario in active FY
