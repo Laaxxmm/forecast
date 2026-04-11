@@ -4,7 +4,7 @@ import {
   LayoutDashboard, TrendingUp, Upload, Settings, LogOut, BarChart3, Building2, ArrowLeftRight,
   ChevronLeft, MapPin, ChevronDown, Sun, Moon, ArrowRight, ShieldCheck, RefreshCw,
   FileText, Scale, Receipt, ClipboardCheck, Landmark, FolderOpen, BookOpen, FileSpreadsheet,
-  Calculator, FileSearch, Cog, Table2, Download, Cloud, Sliders, Activity,
+  Calculator, FileSearch, Cog, Table2, Download, Cloud, Sliders, Activity, PieChart,
 } from 'lucide-react';
 import api from '../../api/client';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -15,6 +15,7 @@ const forecastLinks = [
   { to: '/forecast', icon: TrendingUp, label: 'Forecast', clientAdminOnly: false },
   { to: '/analysis', icon: BarChart3, label: 'Analysis', clientAdminOnly: false },
   { to: '/insights', icon: Activity, label: 'Insights', clientAdminOnly: false },
+  { to: '/revenue-sharing', icon: PieChart, label: 'Rev. Sharing', clientAdminOnly: false },
 ];
 
 // VCFO Portal navigation — matches original TallyVision sidebar exactly

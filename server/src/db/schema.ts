@@ -921,4 +921,29 @@ export function initializeSchema(db: DbHelper) {
       `);
     }
   } catch { /* migration already done or table is new */ }
+
+  // ── Revenue Sharing tables ──
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS revenue_sharing_categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      source TEXT NOT NULL DEFAULT 'clinic',
+      match_department TEXT,
+      match_keyword TEXT,
+      match_mode TEXT NOT NULL DEFAULT 'contains',
+      priority INTEGER NOT NULL DEFAULT 0,
+      is_active INTEGER DEFAULT 1
+    );
+    CREATE TABLE IF NOT EXISTS revenue_sharing_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      doctor_id INTEGER NOT NULL REFERENCES doctors(id),
+      category_id INTEGER NOT NULL REFERENCES revenue_sharing_categories(id) ON DELETE CASCADE,
+      doctor_pct REAL NOT NULL DEFAULT 0,
+      magna_pct REAL NOT NULL DEFAULT 0,
+      is_active INTEGER DEFAULT 1,
+      UNIQUE(doctor_id, category_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_rs_rules_doctor ON revenue_sharing_rules(doctor_id, is_active);
+    CREATE INDEX IF NOT EXISTS idx_rs_rules_category ON revenue_sharing_rules(category_id);
+  `);
 }

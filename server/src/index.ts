@@ -24,6 +24,7 @@ import dashboardRoutes from './routes/dashboard.js';
 import forecastModuleRoutes from './routes/forecast-module.js';
 import dashboardActualsRoutes from './routes/dashboard-actuals.js';
 import syncRoutes from './routes/sync.js';
+import revenueSharingRoutes from './routes/revenue-sharing.js';
 import dbViewerRoutes from './routes/db-viewer.js';
 import vcfoTallySyncRoutes from './routes/vcfo/tally-sync.js';
 import vcfoDashboardRoutes from './routes/vcfo/dashboard.js';
@@ -250,6 +251,7 @@ app.use('/api/dashboard', ...forecastOps, dashboardRoutes);
 app.use('/api/forecast-module', ...forecastOps, forecastModuleRoutes);
 app.use('/api/dashboard-actuals', ...forecastOps, dashboardActualsRoutes);
 app.use('/api/sync', ...forecastOps, requireAdmin, syncRoutes);
+app.use('/api/revenue-sharing', ...forecastOps, revenueSharingRoutes);
 app.use('/api/db', requireAuth, resolveTenant, resolveBranch, requireAdmin, dbViewerRoutes);
 
 // ─── VCFO Portal routes ───────────────────────────────────────────────────────
