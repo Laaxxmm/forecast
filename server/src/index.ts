@@ -243,22 +243,35 @@ async function start() {
   console.log('Platform database initialized');
 
   // ── Permanent pharmacy data guard ──
-  // Runs EVERY startup: if pharmacy_sales_actuals has data but no OneGlance
-  // import logs exist, the data is stale (restored from crash recovery).
-  // Delete it. This guard stops running once a real sync imports fresh data.
+  // Runs EVERY startup. Detects phantom pharmacy data from crash recovery
+  // and wipes it. Two detection methods:
+  //   1) pharmacy data exists but no OG import logs → stale data
+  //   2) pharmacy_sales has data for FUTURE months → phantom data from old .bak
+  // Also deletes OG import_logs during cleanup so crash recovery can't
+  // re-introduce stale import records that bypass check #1.
   try {
     const mcDb = await getClientHelper('magnacode');
     const ogImports = mcDb.get("SELECT COUNT(*) as n FROM import_logs WHERE source LIKE 'ONEGLANCE%'")?.n || 0;
     const pharmaSales = mcDb.get('SELECT COUNT(*) as n FROM pharmacy_sales_actuals')?.n || 0;
     const pharmaDash = mcDb.get("SELECT COUNT(*) as n FROM dashboard_actuals WHERE item_name LIKE 'Pharmacy%'")?.n || 0;
+    const currentMonth = new Date().toISOString().slice(0, 7); // e.g. "2026-04"
+    const futureData = mcDb.get(
+      "SELECT COUNT(*) as n FROM pharmacy_sales_actuals WHERE bill_month > ?",
+      currentMonth
+    )?.n || 0;
 
-    if (ogImports === 0 && (pharmaSales > 0 || pharmaDash > 0)) {
-      console.log(`[Pharmacy Guard] Stale data detected (${pharmaSales} sales, ${pharmaDash} dashboard rows, 0 imports) — wiping`);
+    const noImportsButData = ogImports === 0 && (pharmaSales > 0 || pharmaDash > 0);
+    const hasFuturePhantom = futureData > 0;
+
+    if (noImportsButData || hasFuturePhantom) {
+      console.log(`[Pharmacy Guard] Phantom data detected — sales=${pharmaSales}, dashboard=${pharmaDash}, ogImports=${ogImports}, futureRows=${futureData} — wiping`);
       mcDb.run('DELETE FROM pharmacy_sales_actuals');
       mcDb.run('DELETE FROM pharmacy_purchase_actuals');
       mcDb.run('DELETE FROM pharmacy_stock_actuals');
       mcDb.run("DELETE FROM dashboard_actuals WHERE item_name LIKE 'Pharmacy%'");
-      // Also catch entries with pharmacy stream_id or NULL stream_id that aren't clinic
+      // Delete OG import_logs so crash recovery can't re-bypass this guard
+      mcDb.run("DELETE FROM import_logs WHERE source LIKE 'ONEGLANCE%'");
+      // Also catch entries with pharmacy stream_id
       const clientRow = platformDb.get("SELECT id FROM clients WHERE slug = 'magnacode'");
       if (clientRow) {
         const pharmaStream = platformDb.get(
@@ -269,7 +282,12 @@ async function start() {
           mcDb.run('DELETE FROM dashboard_actuals WHERE stream_id = ?', pharmaStream.id);
         }
       }
-      console.log('[Pharmacy Guard] Stale pharmacy data removed');
+      // Delete .bak file so crash recovery can't restore phantom data again
+      const bakPath = path.join(process.env.DATA_DIR || '/data', 'clients', 'magnacode.db.bak');
+      if (fs.existsSync(bakPath)) {
+        try { fs.unlinkSync(bakPath); console.log('[Pharmacy Guard] Deleted stale .bak file'); } catch {}
+      }
+      console.log('[Pharmacy Guard] All phantom pharmacy data + stale import logs removed');
     }
   } catch (e) {
     console.error('[Pharmacy Guard] Failed:', e);
