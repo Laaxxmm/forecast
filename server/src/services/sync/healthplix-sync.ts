@@ -391,69 +391,82 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     }
 
     // ── Step 7: Download the report ──
+    // The Bills table is below the Billing Summary section.
+    // The correct download icon is next to "1 - N of N" pagination text.
+    // DO NOT click download icons in the Billing Summary (Billed, Outstanding, etc.)
     progress(opts, 'download', 'Looking for download button...', 80);
 
-    // Ensure page is fully stable — wait for load + extra settle time
+    // Ensure page is stable
     await page.waitForLoadState('load', { timeout: 30_000 }).catch(() => {});
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(2000);
 
-    // Scroll down to find the detailed Bills table
-    await page.evaluate(() => window.scrollBy(0, 500)).catch(() => {});
+    // Scroll down past Billing Summary to the Bills table area
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+    await page.waitForTimeout(1000);
+
+    // Wait for pagination text "X - Y of Z" to appear (means Bills table loaded)
+    try {
+      await page.waitForFunction(() => {
+        return /\d+\s*-\s*\d+\s+of\s+\d+/.test(document.body.innerText || '');
+      }, { timeout: 30_000 });
+    } catch {
+      console.log('[HP Sync] Pagination text not found, trying download anyway');
+    }
     await page.waitForTimeout(1000);
 
     const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
 
-    // Find download icon near the PAGINATION text (the correct one for the report)
-    // Retry up to 3 times to handle late page navigations
+    // Find and click the download icon next to pagination "1 - N of N"
     let dlClicked = false;
     for (let attempt = 0; attempt < 3 && !dlClicked; attempt++) {
       if (attempt > 0) {
         await page.waitForTimeout(3000);
-        await page.waitForLoadState('load', { timeout: 15_000 }).catch(() => {});
+        await page.waitForLoadState('load', { timeout: 10_000 }).catch(() => {});
       }
       try {
         const result = await page.evaluate(() => {
-          // Strategy 1: Find download icon near pagination text like "1 - 77 of 77"
-          const allEls = document.querySelectorAll('*');
-          for (const el of allEls) {
-            const text = el.textContent?.trim() || '';
+          // Find the pagination text element "X - Y of Z"
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          let paginationEl: Element | null = null;
+          while (walker.nextNode()) {
+            const text = walker.currentNode.textContent?.trim() || '';
             if (/^\d+\s*-\s*\d+\s+of\s+\d+$/.test(text)) {
-              // Walk up to find a container with a download icon
-              let container: Element | null = el;
-              for (let depth = 0; depth < 5 && container; depth++) {
-                container = container.parentElement;
-                if (!container) break;
-                const icons = container.querySelectorAll('a, button, i, svg, [class*="download"], [title*="ownload"]');
-                for (const icon of icons) {
-                  const cls = (icon.className?.toString?.() || '').toLowerCase();
-                  const title = (icon.getAttribute('title') || '').toLowerCase();
-                  if (cls.includes('download') || cls.includes('fa-download') || cls.includes('file-download') ||
-                      title.includes('download')) {
-                    (icon as HTMLElement).click();
-                    return 'pagination-download';
-                  }
-                }
-              }
+              paginationEl = walker.currentNode.parentElement;
+              break;
             }
           }
+          if (!paginationEl) return null;
 
-          // Strategy 2: Find download icons, prefer ones lower on the page (report area)
-          const dlIcons = Array.from(document.querySelectorAll('.fa-download, .fa-file-download, .fa-file-excel, [class*="download-icon"]'));
-          const visible = dlIcons.filter(el => {
-            const rect = (el as HTMLElement).getBoundingClientRect();
-            return rect.width > 0 && rect.height > 0 && rect.top > 200; // below header area
-          });
-          if (visible.length > 0) {
-            // Click the last visible one (most likely in the report table area)
-            (visible[visible.length - 1] as HTMLElement).click();
-            return 'lower-download-icon';
-          }
-
-          // Strategy 3: Any download element
-          const dlBtns = document.querySelectorAll('[title*="ownload"], [title*="xport"]');
-          if (dlBtns.length > 0) {
-            (dlBtns[dlBtns.length - 1] as HTMLElement).click();
-            return 'generic-download';
+          // The download icon is a sibling or nearby element in the same row
+          // Walk up max 3 levels to find the row container
+          let row: Element | null = paginationEl;
+          for (let i = 0; i < 3; i++) {
+            row = row?.parentElement || null;
+            if (!row) break;
+            // Look for download-like icons in this container
+            const icons = row.querySelectorAll('a, button, i, svg');
+            for (const icon of icons) {
+              const cls = (icon.className?.toString?.() || '').toLowerCase();
+              const tag = icon.tagName.toLowerCase();
+              // Match download icon classes (fa-download, etc.) or SVG download icons
+              if (cls.includes('download') || cls.includes('fa-download') || cls.includes('file-download')) {
+                // Click the icon or its parent <a>/<button>
+                const clickTarget = icon.closest('a, button') || icon;
+                (clickTarget as HTMLElement).click();
+                return 'pagination-icon';
+              }
+              // Also check for standalone SVG/link after the > arrow (last clickable in row)
+              if (tag === 'a' && (icon as HTMLAnchorElement).href?.includes('javascript')) {
+                // Could be a download link
+              }
+            }
+            // If row has enough child elements, the download is likely the last icon
+            if (icons.length >= 3) {
+              const lastIcon = icons[icons.length - 1];
+              const clickTarget = lastIcon.closest('a, button') || lastIcon;
+              (clickTarget as HTMLElement).click();
+              return 'pagination-last-icon';
+            }
           }
           return null;
         });
@@ -468,7 +481,7 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
 
     if (!dlClicked) {
       await saveDebugScreenshot('download-btn-not-found');
-      throw new Error('Could not find download button on Healthplix report page');
+      throw new Error('Could not find download button near pagination in Healthplix Bills table');
     }
 
     progress(opts, 'download', 'Downloading file...', 85);
