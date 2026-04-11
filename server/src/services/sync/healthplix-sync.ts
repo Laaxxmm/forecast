@@ -18,7 +18,7 @@ export interface SyncResult {
   filename: string;
 }
 
-const TIMEOUT = 120_000; // 2 minutes — Healthplix can be slow
+const TIMEOUT = 45_000;
 
 function progress(opts: SyncOptions, step: string, msg: string, pct: number) {
   opts.onProgress?.(step, msg, pct);
@@ -366,11 +366,16 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     // ── Step 6: Click GET BILLS ──
     progress(opts, 'generate', 'Clicking GET BILLS...', 70);
     const getBillsBtn = page.locator('button:has-text("GET BILLS"), button:has-text("Get Bills"), button:has-text("GENERATE"), input[value="GET BILLS"], input[value="GENERATE"]').first();
-    await getBillsBtn.click({ timeout: TIMEOUT });
+    // noWaitAfter: don't wait for navigation — GET BILLS can trigger a long reload
+    await getBillsBtn.click({ timeout: 30_000, noWaitAfter: true });
 
-    // Wait for report to load
+    // Wait for report to load — short networkidle, don't block forever
     await page.waitForTimeout(3000);
-    await page.waitForLoadState('networkidle', { timeout: 180_000 });
+    try {
+      await page.waitForLoadState('networkidle', { timeout: 30_000 });
+    } catch {
+      console.log('[HP Sync] networkidle after GET BILLS timed out, proceeding');
+    }
     progress(opts, 'generate', 'Bills loaded', 78);
 
     // ── Step 7: Download the report ──
@@ -383,7 +388,7 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     await page.evaluate(() => window.scrollBy(0, 500));
     await page.waitForTimeout(1000);
 
-    const downloadPromise = page.waitForEvent('download', { timeout: 180_000 });
+    const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
 
     // Look for the download icon near the pagination area in the Bills detail table
     const dlClicked = await page.evaluate(() => {
