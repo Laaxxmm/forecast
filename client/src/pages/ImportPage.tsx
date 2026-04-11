@@ -397,104 +397,71 @@ export default function ImportPage() {
 
       {/* SYNC MODE */}
       {mode === 'sync' && !result && (
-        <div className="card mb-5">
+        <div className="card !p-4 mb-4">
+          {/* Source tabs */}
           {([showHpSync, showOgSync, showTuriaSync].filter(Boolean).length > 1) && (
-            <div className="flex gap-3 mb-5">
+            <div className="flex gap-2 mb-3">
               {showHpSync && (
                 <button
                   onClick={() => { setSyncSource('healthplix'); setSyncStatus(null); setError(''); }}
                   disabled={syncing}
-                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex-1 ${
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                     syncSource === 'healthplix'
-                      ? 'bg-accent-500/10 border-2 border-accent-500/50 text-accent-400'
-                      : 'bg-dark-600 border border-dark-400/50 text-theme-muted hover:border-dark-300'
+                      ? 'bg-accent-500/10 ring-1 ring-accent-500/50 text-accent-400'
+                      : 'bg-dark-600 border border-dark-400/40 text-theme-muted hover:border-dark-300'
                   }`}
                 >
-                  <Stethoscope size={18} /> Healthplix
-                  <span className="text-xs text-theme-faint ml-auto">Clinic</span>
+                  <Stethoscope size={14} /> Healthplix
+                  <span className="text-[10px] text-theme-faint">· Clinic</span>
                 </button>
               )}
               {showOgSync && (
                 <button
                   onClick={() => { setSyncSource('oneglance'); setSyncStatus(null); setError(''); }}
                   disabled={syncing}
-                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex-1 ${
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                     syncSource === 'oneglance'
-                      ? 'bg-purple-500/10 border-2 border-purple-500/50 text-purple-400'
-                      : 'bg-dark-600 border border-dark-400/50 text-theme-muted hover:border-dark-300'
+                      ? 'bg-purple-500/10 ring-1 ring-purple-500/50 text-purple-400'
+                      : 'bg-dark-600 border border-dark-400/40 text-theme-muted hover:border-dark-300'
                   }`}
                 >
-                  <Pill size={18} /> Oneglance
-                  <span className="text-xs text-theme-faint ml-auto">Pharmacy</span>
+                  <Pill size={14} /> Oneglance
+                  <span className="text-[10px] text-theme-faint">· Pharmacy</span>
                 </button>
               )}
               {showTuriaSync && (
                 <button
                   onClick={() => { setSyncSource('turia'); setSyncStatus(null); setError(''); }}
                   disabled={syncing}
-                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex-1 ${
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                     syncSource === 'turia'
-                      ? 'bg-blue-500/10 border-2 border-blue-500/50 text-blue-400'
-                      : 'bg-dark-600 border border-dark-400/50 text-theme-muted hover:border-dark-300'
+                      ? 'bg-blue-500/10 ring-1 ring-blue-500/50 text-blue-400'
+                      : 'bg-dark-600 border border-dark-400/40 text-theme-muted hover:border-dark-300'
                   }`}
                 >
-                  <Briefcase size={18} /> Turia
-                  <span className="text-xs text-theme-faint ml-auto">Consultancy</span>
+                  <Briefcase size={14} /> Turia
+                  <span className="text-[10px] text-theme-faint">· Consultancy</span>
                 </button>
               )}
             </div>
           )}
 
-          <div className="flex items-center gap-3 mb-4">
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-              syncSource === 'healthplix' ? 'bg-accent-500/10' : syncSource === 'turia' ? 'bg-blue-500/10' : 'bg-purple-500/10'
-            }`}>
-              {syncSource === 'healthplix'
-                ? <Stethoscope size={20} className="text-accent-400" />
-                : syncSource === 'turia'
-                ? <Briefcase size={20} className="text-blue-400" />
-                : <Pill size={20} className="text-purple-400" />
-              }
-            </div>
-            <div>
-              <h3 className="font-semibold text-theme-heading">
-                Sync from {syncSource === 'healthplix' ? 'Healthplix' : syncSource === 'turia' ? 'Turia' : 'Oneglance'}
-              </h3>
-              <p className="text-sm text-theme-faint">
-                {syncSource === 'healthplix'
-                  ? 'Auto-fetch clinic billing report via browser automation'
-                  : syncSource === 'turia'
-                  ? 'Auto-fetch consultancy invoices via OTP-based login'
-                  : 'Auto-fetch pharmacy sales/purchase reports via browser automation'
-                }
-              </p>
-            </div>
-          </div>
-
           {hasCredentials === false && (
-            <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3 mb-4 flex items-center gap-3">
-              <SettingsIcon size={18} className="text-amber-400 flex-shrink-0" />
-              <div className="flex-1">
-                <p className="text-sm text-amber-300 font-medium">
-                  {syncSource === 'healthplix' ? 'Healthplix' : syncSource === 'turia' ? 'Turia' : 'Oneglance'} credentials not configured
-                </p>
-                <p className="text-xs text-amber-400/60 mt-0.5">Set up your login details in Settings first</p>
-              </div>
-              <Link to="/settings" className="text-sm text-accent-400 hover:text-accent-300 font-medium whitespace-nowrap">
-                Go to Settings
-              </Link>
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 mb-3 flex items-center gap-2 text-sm">
+              <SettingsIcon size={14} className="text-amber-400 flex-shrink-0" />
+              <span className="text-amber-300 text-xs flex-1">
+                {syncSource === 'healthplix' ? 'Healthplix' : syncSource === 'turia' ? 'Turia' : 'Oneglance'} credentials not set
+              </span>
+              <Link to="/settings" className="text-xs text-accent-400 hover:text-accent-300 font-medium">Settings</Link>
             </div>
           )}
 
           {hasCredentials && (
             <>
-              {/* Date range for HP/OG, FY selector for Turia */}
               {syncSource === 'turia' ? (
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-theme-muted mb-1.5">
-                    <Calendar size={14} className="inline mr-1" /> Financial Year
-                  </label>
-                  <select value={turiaFY} onChange={e => setTuriaFY(e.target.value)} className="input w-full" disabled={syncing}>
+                <div className="mb-3">
+                  <label className="block text-xs font-medium text-theme-muted mb-1">Financial Year</label>
+                  <select value={turiaFY} onChange={e => setTuriaFY(e.target.value)} className="input w-48 text-sm" disabled={syncing}>
                     <option value="2023-24">2023-24</option>
                     <option value="2024-25">2024-25</option>
                     <option value="2025-26">2025-26</option>
@@ -502,56 +469,47 @@ export default function ImportPage() {
                   </select>
                 </div>
               ) : (
-                <>
-                  <div className="grid grid-cols-2 gap-4 mb-4">
-                    <div>
-                      <label className="block text-sm font-medium text-theme-muted mb-1.5">
-                        <Calendar size={14} className="inline mr-1" /> From Date
-                      </label>
-                      <input type="date" value={syncDates.from} onChange={e => setSyncDates(d => ({ ...d, from: e.target.value }))} className="input w-full" disabled={syncing} />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-theme-muted mb-1.5">
-                        <Calendar size={14} className="inline mr-1" /> To Date
-                      </label>
-                      <input type="date" value={syncDates.to} onChange={e => setSyncDates(d => ({ ...d, to: e.target.value }))} className="input w-full" disabled={syncing} />
-                    </div>
+                <div className="flex items-end gap-3 mb-3 flex-wrap">
+                  <div>
+                    <label className="block text-xs font-medium text-theme-muted mb-1">From</label>
+                    <input type="date" value={syncDates.from} onChange={e => setSyncDates(d => ({ ...d, from: e.target.value }))} className="input text-sm" disabled={syncing} />
                   </div>
-
-                  <div className="flex gap-2 mb-4">
+                  <div>
+                    <label className="block text-xs font-medium text-theme-muted mb-1">To</label>
+                    <input type="date" value={syncDates.to} onChange={e => setSyncDates(d => ({ ...d, to: e.target.value }))} className="input text-sm" disabled={syncing} />
+                  </div>
+                  <div className="flex gap-1.5">
                     {[
                       { label: 'Last Month', fn: () => { const d = getDefaultDates(); setSyncDates({ from: d.from, to: d.to }); }},
                       { label: 'This Month', fn: () => { const now = new Date(); const first = new Date(now.getFullYear(), now.getMonth(), 1); setSyncDates({ from: fmtDate(first), to: fmtDate(now) }); }},
-                      { label: 'Last 3 Months', fn: () => { const now = new Date(); const start = new Date(now.getFullYear(), now.getMonth() - 3, 1); setSyncDates({ from: fmtDate(start), to: fmtDate(now) }); }},
+                      { label: '3 Months', fn: () => { const now = new Date(); const start = new Date(now.getFullYear(), now.getMonth() - 3, 1); setSyncDates({ from: fmtDate(start), to: fmtDate(now) }); }},
                     ].map(p => (
                       <button key={p.label} onClick={p.fn} disabled={syncing}
-                        className="text-xs px-3 py-1.5 rounded-full bg-dark-600 text-theme-muted hover:bg-dark-500 hover:text-theme-secondary transition-all border border-dark-400/50"
+                        className="text-[10px] px-2 py-1 rounded bg-dark-600 text-theme-muted hover:bg-dark-500 transition-all border border-dark-400/40"
                       >{p.label}</button>
                     ))}
                   </div>
-                </>
+                </div>
               )}
 
               {syncSource === 'oneglance' && (
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-theme-muted mb-2">Report Type</label>
-                  <div className="flex gap-2">
-                    {([
-                      { key: 'both' as const, label: 'Sales & Purchase' },
-                      { key: 'sales' as const, label: 'Sales Only' },
-                      { key: 'purchase' as const, label: 'Purchase Only' },
-                      { key: 'stock' as const, label: 'Stock Only' },
-                      { key: 'all' as const, label: 'All Reports' },
-                    ]).map(rt => (
-                      <button key={rt.key} onClick={() => setOgReportType(rt.key)} disabled={syncing}
-                        className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all ${
-                          ogReportType === rt.key
-                            ? 'bg-purple-500/15 text-purple-400 border border-purple-500/30'
-                            : 'bg-dark-600 text-theme-muted border border-dark-400/50 hover:border-dark-300'
-                        }`}
-                      >{rt.label}</button>
-                    ))}
-                  </div>
+                <div className="flex items-center gap-2 mb-3 flex-wrap">
+                  <span className="text-xs text-theme-muted">Report:</span>
+                  {([
+                    { key: 'both' as const, label: 'Sales+Purchase' },
+                    { key: 'sales' as const, label: 'Sales' },
+                    { key: 'purchase' as const, label: 'Purchase' },
+                    { key: 'stock' as const, label: 'Stock' },
+                    { key: 'all' as const, label: 'All' },
+                  ]).map(rt => (
+                    <button key={rt.key} onClick={() => setOgReportType(rt.key)} disabled={syncing}
+                      className={`px-2 py-1 rounded text-[11px] font-medium transition-all ${
+                        ogReportType === rt.key
+                          ? 'bg-purple-500/15 text-purple-400 ring-1 ring-purple-500/30'
+                          : 'bg-dark-600 text-theme-muted border border-dark-400/40 hover:border-dark-300'
+                      }`}
+                    >{rt.label}</button>
+                  ))}
                 </div>
               )}
 
@@ -571,31 +529,25 @@ export default function ImportPage() {
                 />
               )}
 
-              {/* Turia OTP input — shown when sync is waiting for OTP */}
               {syncSource === 'turia' && syncing && syncStatus?.status === 'waiting_otp' && (
-                <div className="mb-4 bg-blue-500/10 border border-blue-500/20 rounded-xl p-4">
-                  <div className="flex items-center gap-2 mb-3">
-                    <KeyRound size={16} className="text-blue-400" />
-                    <p className="text-sm font-medium text-blue-300">Enter OTP</p>
+                <div className="mb-3 bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <KeyRound size={14} className="text-blue-400" />
+                    <p className="text-xs font-medium text-blue-300">Enter OTP sent to your phone</p>
                   </div>
-                  <p className="text-xs text-blue-400/70 mb-3">An OTP has been sent to your registered phone number. Enter it below to continue.</p>
-                  <div className="flex gap-3">
+                  <div className="flex gap-2">
                     <input
                       type="text"
                       value={turiaOtp}
                       onChange={e => setTuriaOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                      placeholder="Enter OTP"
-                      className="input flex-1"
+                      placeholder="OTP"
+                      className="input flex-1 text-sm"
                       maxLength={6}
                       autoFocus
                       onKeyDown={e => { if (e.key === 'Enter') submitOtp(); }}
                     />
-                    <button
-                      onClick={submitOtp}
-                      disabled={otpSubmitting || turiaOtp.length < 4}
-                      className="btn-primary flex items-center gap-2"
-                    >
-                      {otpSubmitting ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
+                    <button onClick={submitOtp} disabled={otpSubmitting || turiaOtp.length < 4} className="btn-primary text-sm py-1.5 flex items-center gap-1.5">
+                      {otpSubmitting ? <RefreshCw size={12} className="animate-spin" /> : <Check size={12} />}
                       Verify
                     </button>
                   </div>
@@ -603,20 +555,18 @@ export default function ImportPage() {
               )}
 
               {error && !syncing && !syncStatus?.step && (
-                <div className="mt-2 mb-4 bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-xl flex items-center gap-2 text-sm">
-                  <AlertCircle size={16} /> {error}
+                <div className="mb-3 bg-red-500/10 border border-red-500/20 text-red-400 px-3 py-2 rounded-lg flex items-center gap-2 text-xs">
+                  <AlertCircle size={14} /> {error}
                 </div>
               )}
 
-              <div className="flex gap-3">
-                <button
-                  onClick={startSync}
-                  disabled={syncing || (syncSource !== 'turia' && (!syncDates.from || !syncDates.to))}
-                  className="btn-primary flex items-center gap-2"
-                >
-                  {syncing ? <><RefreshCw size={16} className="animate-spin" /> Syncing...</> : <><Cloud size={16} /> Sync Now</>}
-                </button>
-              </div>
+              <button
+                onClick={startSync}
+                disabled={syncing || (syncSource !== 'turia' && (!syncDates.from || !syncDates.to))}
+                className="btn-primary text-sm py-2 flex items-center gap-2"
+              >
+                {syncing ? <><RefreshCw size={14} className="animate-spin" /> Syncing...</> : <><Cloud size={14} /> Sync Now</>}
+              </button>
             </>
           )}
         </div>
