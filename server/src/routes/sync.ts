@@ -386,10 +386,15 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
 
     let totalRows = 0;
 
+    // Current month — reject any rows with future months (OneGlance CSVs contain bad dates)
+    const currentMonth = new Date().toISOString().slice(0, 7);
+
     // Parse and save Sales report
     if (result.salesFile) {
       ogState.progress = { step: 'parsing', message: 'Parsing sales report...', pct: 87 };
-      const { rows, summary } = parseOneglanceSales(result.salesFile.filePath);
+      const { rows: allRows, summary } = parseOneglanceSales(result.salesFile.filePath);
+      const rows = allRows.filter(r => !r.bill_month || r.bill_month <= currentMonth);
+      console.log(`[oneglance-sync] Sales: ${allRows.length} total rows, ${rows.length} after filtering future months (dropped ${allRows.length - rows.length})`);
 
       const importLog = db.run(
         `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
@@ -471,7 +476,9 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
     // Parse and save Purchase report
     if (result.purchaseFile) {
       ogState.progress = { step: 'parsing', message: 'Parsing purchase report...', pct: 92 };
-      const { rows, summary } = parseOneglancePurchase(result.purchaseFile.filePath);
+      const { rows: allPurchaseRows, summary } = parseOneglancePurchase(result.purchaseFile.filePath);
+      const rows = allPurchaseRows.filter(r => !r.invoice_month || r.invoice_month <= currentMonth);
+      console.log(`[oneglance-sync] Purchase: ${allPurchaseRows.length} total rows, ${rows.length} after filtering future months`);
 
       const importLog = db.run(
         `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)

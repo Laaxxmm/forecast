@@ -118,7 +118,9 @@ router.post('/oneglance-sales', requireAdmin, requireIntegration('oneglance'), u
   try {
     const db = req.tenantDb!;
     const branchId = getBranchIdForInsert(req);
-    const { rows, summary } = parseOneglanceSales(req.file.path);
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const { rows: allRows, summary } = parseOneglanceSales(req.file.path);
+    const rows = allRows.filter(r => !r.bill_month || r.bill_month <= currentMonth);
 
     const importLog = db.run(
       `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
@@ -188,7 +190,9 @@ router.post('/oneglance-purchase', requireAdmin, requireIntegration('oneglance')
   try {
     const db = req.tenantDb!;
     const branchId = getBranchIdForInsert(req);
-    const { rows, summary } = parseOneglancePurchase(req.file.path);
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const { rows: allRows, summary } = parseOneglancePurchase(req.file.path);
+    const rows = allRows.filter(r => !r.invoice_month || r.invoice_month <= currentMonth);
 
     const importLog = db.run(
       `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
