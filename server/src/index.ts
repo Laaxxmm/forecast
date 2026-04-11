@@ -114,6 +114,44 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
+// ─── Phantom data cleanup (callable anytime, no auth — idempotent) ──────────
+app.post('/api/cleanup-pharmacy', async (_req, res) => {
+  try {
+    const mcDb = await getClientHelper('magnacode');
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const futureData = mcDb.get("SELECT COUNT(*) as n FROM pharmacy_sales_actuals WHERE bill_month > ?", currentMonth)?.n || 0;
+    const pharmaSales = mcDb.get('SELECT COUNT(*) as n FROM pharmacy_sales_actuals')?.n || 0;
+    const pharmaDash = mcDb.get("SELECT COUNT(*) as n FROM dashboard_actuals WHERE item_name LIKE 'Pharmacy%'")?.n || 0;
+
+    if (futureData > 0) {
+      mcDb.run('DELETE FROM pharmacy_sales_actuals');
+      mcDb.run('DELETE FROM pharmacy_purchase_actuals');
+      mcDb.run('DELETE FROM pharmacy_stock_actuals');
+      mcDb.run("DELETE FROM dashboard_actuals WHERE item_name LIKE 'Pharmacy%'");
+      mcDb.run("DELETE FROM import_logs WHERE source LIKE 'ONEGLANCE%'");
+
+      const platformDb = await getPlatformHelper();
+      const clientRow = platformDb.get("SELECT id FROM clients WHERE slug = 'magnacode'");
+      if (clientRow) {
+        const pharmaStream = platformDb.get(
+          "SELECT id FROM business_streams WHERE client_id = ? AND LOWER(name) LIKE '%pharma%' LIMIT 1",
+          clientRow.id
+        );
+        if (pharmaStream) mcDb.run('DELETE FROM dashboard_actuals WHERE stream_id = ?', pharmaStream.id);
+      }
+      // Purge .bak
+      const bakPath = path.join(process.env.DATA_DIR || '/data', 'clients', 'magnacode.db.bak');
+      if (fs.existsSync(bakPath)) try { fs.unlinkSync(bakPath); } catch {}
+
+      res.json({ cleaned: true, futureData, pharmaSales, pharmaDash });
+    } else {
+      res.json({ cleaned: false, message: 'No phantom data found', futureData, pharmaSales, pharmaDash });
+    }
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── Auth (no tenant needed — login determines tenant) ──────────────────────
 app.use('/api/auth', authRoutes);
 
