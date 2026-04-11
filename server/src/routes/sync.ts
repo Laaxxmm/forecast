@@ -170,13 +170,16 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async
       console.log(`[hp-sync] Cleared existing clinic data for months: ${clinicMonthsToReplace.join(', ')}`);
     }
 
-    // Insert into DB (same logic as import.ts)
-    const importLog = db.run(
+    // Insert into DB
+    db.run(
       `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       'HEALTHPLIX_SYNC', result.filename, rows.length,
       summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
     );
+    // sql.js lastInsertRowid is unreliable after save(); use SELECT instead
+    const importLogRow = db.get("SELECT id FROM import_logs WHERE source = 'HEALTHPLIX_SYNC' ORDER BY id DESC LIMIT 1");
+    const importId = importLogRow?.id || 0;
 
     db.beginBatch();
     try {
@@ -186,7 +189,7 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async
             billed, paid, discount, tax, refund, due, addl_disc, item_price, item_disc,
             department, service_name, billed_doctor, service_owner, branch_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          importLog.lastInsertRowid, r.bill_date, r.bill_month, r.patient_id, r.patient_name,
+          importId, r.bill_date, r.bill_month, r.patient_id, r.patient_name,
           r.order_number, r.billed, r.paid, r.discount, r.tax, r.refund, r.due,
           r.addl_disc, r.item_price, r.item_disc, r.department, r.service_name,
           r.billed_doctor, r.service_owner, branchId
@@ -421,12 +424,14 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
         console.log(`[oneglance-sync] Cleared existing sales data for months: ${salesMonthsToReplace.join(', ')}`);
       }
 
-      const importLog = db.run(
+      db.run(
         `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         'ONEGLANCE_SALES_SYNC', result.salesFile.filename, rows.length,
         summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
       );
+      const salesImportRow = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_SALES_SYNC' ORDER BY id DESC LIMIT 1");
+      const salesImportId = salesImportRow?.id || 0;
 
       db.beginBatch();
       try {
@@ -436,7 +441,7 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
               hsn_code, tax_pct, patient_id, patient_name, referred_by, qty, sales_amount,
               purchase_amount, purchase_tax, sales_tax, profit, branch_id)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            importLog.lastInsertRowid, r.bill_no, r.bill_date, r.bill_month, r.drug_name, r.batch_no,
+            salesImportId, r.bill_no, r.bill_date, r.bill_month, r.drug_name, r.batch_no,
             r.hsn_code, r.tax_pct, r.patient_id, r.patient_name, r.referred_by, r.qty,
             r.sales_amount, r.purchase_amount, r.purchase_tax, r.sales_tax, r.profit, branchId
           );
@@ -515,12 +520,14 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
         console.log(`[oneglance-sync] Cleared existing purchase data for months: ${purchaseMonthsToReplace.join(', ')}`);
       }
 
-      const importLog = db.run(
+      db.run(
         `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         'ONEGLANCE_PURCHASE_SYNC', result.purchaseFile.filename, rows.length,
         summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
       );
+      const purchaseImportRow = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_PURCHASE_SYNC' ORDER BY id DESC LIMIT 1");
+      const purchaseImportId = purchaseImportRow?.id || 0;
 
       db.beginBatch();
       try {
@@ -531,7 +538,7 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
               discount_amount, net_purchase_value, net_sales_value, tax_pct, tax_amount,
               purchase_qty, purchase_value, sales_value, profit, profit_pct, branch_id)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            importLog.lastInsertRowid, r.invoice_no, r.invoice_date, r.invoice_month,
+            purchaseImportId, r.invoice_no, r.invoice_date, r.invoice_month,
             r.stockiest_name, r.mfg_name, r.drug_name, r.batch_no, r.hsn_code,
             r.batch_qty, r.free_qty, r.mrp, r.rate, r.discount_amount,
             r.net_purchase_value, r.net_sales_value, r.tax_pct, r.tax_amount,
