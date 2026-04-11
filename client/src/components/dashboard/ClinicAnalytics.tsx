@@ -230,18 +230,24 @@ export default function ClinicAnalytics({ isVisible }: ClinicAnalyticsProps) {
                 <div className="flex-1 text-center">
                   <div className="text-2xl font-bold text-teal-400">{formatNumber(patientFlow.totalAppointment)}</div>
                   <div className="text-xs text-theme-faint mt-1">Appointment Patients</div>
+                  {patientFlow.totalAppointmentRevenue > 0 && (
+                    <div className="text-xs text-teal-400/70 mt-0.5">{formatINR(patientFlow.totalAppointmentRevenue)}</div>
+                  )}
                 </div>
                 <ArrowRight className="text-theme-faint shrink-0" size={20} />
                 <div className="flex-1 space-y-3">
                   {[
-                    { label: 'Other Services', value: patientFlow.crossToOther, color: 'text-blue-400' },
-                    { label: 'Lab Tests', value: patientFlow.crossToLab, color: 'text-purple-400' },
-                    { label: 'Both Lab + Other', value: patientFlow.crossToBoth, color: 'text-amber-400' },
-                    { label: 'Appointment Only', value: patientFlow.apptOnly, color: 'text-theme-faint' },
+                    { label: 'Other Services', value: patientFlow.crossToOther, revenue: patientFlow.crossToOtherRevenue, color: 'text-blue-400' },
+                    { label: 'Lab Tests', value: patientFlow.crossToLab, revenue: patientFlow.crossToLabRevenue, color: 'text-purple-400' },
+                    { label: 'Both Lab + Other', value: patientFlow.crossToBoth, revenue: patientFlow.crossToBothRevenue, color: 'text-amber-400' },
+                    { label: 'Appointment Only', value: patientFlow.apptOnly, revenue: patientFlow.apptOnlyRevenue, color: 'text-theme-faint' },
                   ].map((f, i) => (
                     <div key={i} className="flex items-center justify-between bg-dark-600/50 rounded-lg px-3 py-2">
                       <span className={`text-xs font-medium ${f.color}`}>{f.label}</span>
-                      <span className="text-sm font-bold text-theme-heading">{formatNumber(f.value)}</span>
+                      <div className="text-right">
+                        <span className="text-sm font-bold text-theme-heading">{formatNumber(f.value)}</span>
+                        {f.revenue > 0 && <div className="text-[10px] text-theme-muted">{formatINR(f.revenue)}</div>}
+                      </div>
                     </div>
                   ))}
                 </div>

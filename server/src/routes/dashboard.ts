@@ -316,15 +316,25 @@ router.get('/clinic-analytics', async (req, res) => {
 
   // Cross-sell funnel (from appointment patients)
   const apptSet = deptSets.filter((p: any) => p.deptSet.has(APPT));
-  const crossToOther = apptSet.filter((p: any) => p.deptSet.has(OTHER) && !p.deptSet.has(LAB)).length;
-  const crossToLab = apptSet.filter((p: any) => p.deptSet.has(LAB) && !p.deptSet.has(OTHER)).length;
-  const crossToBoth = apptSet.filter((p: any) => p.deptSet.has(LAB) && p.deptSet.has(OTHER)).length;
-  const apptOnly = apptSet.filter((p: any) => p.dept_count === 1).length;
+  const otherGroup = apptSet.filter((p: any) => p.deptSet.has(OTHER) && !p.deptSet.has(LAB));
+  const labGroup = apptSet.filter((p: any) => p.deptSet.has(LAB) && !p.deptSet.has(OTHER));
+  const bothGroup = apptSet.filter((p: any) => p.deptSet.has(LAB) && p.deptSet.has(OTHER));
+  const apptOnlyGroup = apptSet.filter((p: any) => p.dept_count === 1);
+  const crossToOther = otherGroup.length;
+  const crossToLab = labGroup.length;
+  const crossToBoth = bothGroup.length;
+  const apptOnly = apptOnlyGroup.length;
+  const sumRev = (arr: any[]) => arr.reduce((s: number, p: any) => s + (p.total_revenue || 0), 0);
 
   // Patient flow from appointment
   const patientFlow = {
     totalAppointment: apptPatients,
+    totalAppointmentRevenue: apptSet.reduce((s: number, p: any) => s + (p.total_revenue || 0), 0),
     crossToOther, crossToLab, crossToBoth, apptOnly,
+    crossToOtherRevenue: sumRev(otherGroup),
+    crossToLabRevenue: sumRev(labGroup),
+    crossToBothRevenue: sumRev(bothGroup),
+    apptOnlyRevenue: sumRev(apptOnlyGroup),
   };
 
   // Doctor cross-sell analysis
