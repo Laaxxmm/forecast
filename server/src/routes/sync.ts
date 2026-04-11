@@ -250,7 +250,7 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async
       message: 'Sync completed successfully',
       pct: 100,
       result: {
-        importId: importLog.lastInsertRowid,
+        importId,
         ...summary,
       },
     };
