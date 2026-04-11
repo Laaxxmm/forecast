@@ -124,11 +124,10 @@ app.post('/api/cleanup-pharmacy', async (_req, res) => {
     const pharmaDash = mcDb.get("SELECT COUNT(*) as n FROM dashboard_actuals WHERE item_name LIKE 'Pharmacy%'")?.n || 0;
 
     // Also check for phantom past months (e.g. Jan-Mar from date format bug)
-    // Any pharmacy sales month before the earliest real import date is phantom
-    const earliestImport = mcDb.get("SELECT MIN(date_range_start) as m FROM import_logs WHERE source LIKE 'ONEGLANCE%' AND date_range_start IS NOT NULL");
-    const phantomPastMonths = earliestImport?.m
-      ? (mcDb.get('SELECT COUNT(*) as n FROM pharmacy_sales_actuals WHERE bill_month < ?', earliestImport.m)?.n || 0)
-      : 0;
+    // Any pharmacy sales month before the active FY start is phantom
+    const activeFy = mcDb.get('SELECT start_date FROM financial_years WHERE is_active = 1');
+    const fyStart = activeFy?.start_date?.slice(0, 7) || currentMonth;
+    const phantomPastMonths = mcDb.get('SELECT COUNT(*) as n FROM pharmacy_sales_actuals WHERE bill_month < ?', fyStart)?.n || 0;
 
     if (futureData > 0 || phantomPastMonths > 0) {
       // Wipe all pharmacy data and import logs for a clean slate
