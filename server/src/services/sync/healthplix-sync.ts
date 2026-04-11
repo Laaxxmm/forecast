@@ -366,20 +366,20 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     // ── Step 6: Click GET BILLS ──
     progress(opts, 'generate', 'Clicking GET BILLS...', 70);
     const getBillsBtn = page.locator('button:has-text("GET BILLS"), button:has-text("Get Bills"), button:has-text("GENERATE"), input[value="GET BILLS"], input[value="GENERATE"]').first();
-    // noWaitAfter: don't wait for navigation — GET BILLS can trigger a long reload
+    // noWaitAfter: don't block on navigation triggered by GET BILLS
     await getBillsBtn.click({ timeout: 30_000, noWaitAfter: true });
 
-    // Wait for report to actually load — poll for pagination or download icon (up to 120s)
-    // Healthplix can take a while to generate the report after GET BILLS
+    // Wait for the page to settle after GET BILLS triggers a navigation/reload
     progress(opts, 'generate', 'Waiting for report to generate...', 72);
+    await page.waitForLoadState('domcontentloaded', { timeout: 120_000 }).catch(() => {});
+    await page.waitForTimeout(3000);
+
+    // Now poll for report content (pagination, download icon, or Bills tab)
     const reportReady = await page.waitForFunction(() => {
-      // Check if pagination text appeared (e.g. "1 - 77 of 77")
-      const bodyText = document.body.innerText;
+      const bodyText = document.body.innerText || '';
       if (/\d+\s*-\s*\d+\s+of\s+\d+/.test(bodyText)) return true;
-      // Check if a download icon appeared
       if (document.querySelector('.fa-download, .fa-file-download, [class*="download-icon"], [title*="ownload"]')) return true;
-      // Check if a Bills tab appeared
-      if (document.querySelector('[class*="tab"]:has-text("Bills")') || bodyText.includes('Bills') && bodyText.includes('Collections')) return true;
+      if (bodyText.includes('Bills') && bodyText.includes('Collections')) return true;
       return false;
     }, { timeout: 120_000 }).catch(() => null);
 
@@ -387,7 +387,7 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
       progress(opts, 'generate', 'Bills loaded', 78);
     } else {
       console.log('[HP Sync] Report indicators not found after 120s, trying download anyway');
-      progress(opts, 'generate', 'Report may still be loading, attempting download...', 78);
+      progress(opts, 'generate', 'Attempting download...', 78);
     }
 
     // ── Step 7: Download the report ──
