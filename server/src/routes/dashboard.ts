@@ -36,8 +36,9 @@ router.get('/overview', async (req, res) => {
     req.clientId
   );
 
-  const scenario = db.get(
-    `SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where} LIMIT 1`,
+  // Default scenario (for legacy untagged revenue and custom cards)
+  const defaultScenario = db.get(
+    `SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where} ORDER BY id LIMIT 1`,
     fy.id, ...bf.params
   );
 
@@ -48,6 +49,14 @@ router.get('/overview', async (req, res) => {
   const streamDataMap: Record<number, any> = {};
 
   for (const stream of clientStreams) {
+    // Find the best scenario for THIS stream (prefer stream-specific, fall back to default)
+    const scenario = db.get(
+      `SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1
+       AND (stream_id = ? OR stream_id IS NULL)${bf.where}
+       ORDER BY CASE WHEN stream_id = ? THEN 0 ELSE 1 END, id LIMIT 1`,
+      fy.id, stream.id, ...bf.params, stream.id
+    );
+
     const revenue = scenario ? db.get(
       `SELECT COALESCE(SUM(amount), 0) as total
        FROM dashboard_actuals
@@ -85,13 +94,13 @@ router.get('/overview', async (req, res) => {
   }
 
   // Legacy untagged revenue
-  if (scenario) {
+  if (defaultScenario) {
     const untagged = db.get(
       `SELECT COALESCE(SUM(amount), 0) as total
        FROM dashboard_actuals
        WHERE scenario_id = ? AND category = 'revenue' AND month >= ? AND month <= ?${bf.where}
        AND stream_id IS NULL`,
-      scenario.id, startMonth, endMonth, ...bf.params
+      defaultScenario.id, startMonth, endMonth, ...bf.params
     );
     if (untagged?.total > 0 && clientStreams.length === 0) {
       totalRevenue += untagged.total;
@@ -172,12 +181,12 @@ router.get('/overview', async (req, res) => {
         budget = sd.budget_total;
         subtitle = value > 0 ? `vs ${budget} budget` : 'No data yet';
       }
-    } else if (card.card_type === 'custom' && scenario) {
+    } else if (card.card_type === 'custom' && defaultScenario) {
       const catData = db.get(
         `SELECT COALESCE(SUM(amount), 0) as total
          FROM dashboard_actuals
          WHERE scenario_id = ? AND category = ? AND month >= ? AND month <= ?${bf.where}`,
-        scenario.id, card.category, startMonth, endMonth, ...bf.params
+        defaultScenario.id, card.category, startMonth, endMonth, ...bf.params
       );
       value = catData?.total || 0;
       subtitle = card.category.replace(/_/g, ' ');
