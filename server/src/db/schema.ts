@@ -922,6 +922,14 @@ export function initializeSchema(db: DbHelper) {
     }
   } catch { /* migration already done or table is new */ }
 
+  // Migration: add file_path column to import_logs
+  try {
+    const cols = db.all("PRAGMA table_info('import_logs')");
+    if (!cols.find((c: any) => c.name === 'file_path')) {
+      db.exec("ALTER TABLE import_logs ADD COLUMN file_path TEXT");
+    }
+  } catch { /* already exists */ }
+
   // ── Revenue Sharing tables ──
   db.exec(`
     CREATE TABLE IF NOT EXISTS revenue_sharing_categories (

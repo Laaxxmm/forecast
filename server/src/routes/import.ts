@@ -51,10 +51,10 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), uploa
     }
 
     db.run(
-      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       'HEALTHPLIX', req.file.originalname, rows.length,
-      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
+      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId, req.file.path
     );
     const importId = db.get("SELECT id FROM import_logs WHERE source = 'HEALTHPLIX' ORDER BY id DESC LIMIT 1")?.id || 0;
 
@@ -112,7 +112,6 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), uploa
       }
     }
 
-    fs.unlinkSync(req.file.path);
     res.json({ importId, ...summary });
   } catch (err: any) {
     if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
@@ -137,10 +136,10 @@ router.post('/oneglance-sales', requireAdmin, requireIntegration('oneglance'), u
     }
 
     db.run(
-      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       'ONEGLANCE_SALES', req.file.originalname, rows.length,
-      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
+      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId, req.file.path
     );
     const importId = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_SALES' ORDER BY id DESC LIMIT 1")?.id || 0;
 
@@ -191,7 +190,6 @@ router.post('/oneglance-sales', requireAdmin, requireIntegration('oneglance'), u
       }
     }
 
-    fs.unlinkSync(req.file.path);
     res.json({ importId, ...summary });
   } catch (err: any) {
     if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
@@ -216,10 +214,10 @@ router.post('/oneglance-purchase', requireAdmin, requireIntegration('oneglance')
     }
 
     db.run(
-      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       'ONEGLANCE_PURCHASE', req.file.originalname, rows.length,
-      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
+      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId, req.file.path
     );
     const importId = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_PURCHASE' ORDER BY id DESC LIMIT 1")?.id || 0;
 
@@ -242,7 +240,6 @@ router.post('/oneglance-purchase', requireAdmin, requireIntegration('oneglance')
       db.endBatch();
     } catch (e) { db.rollbackBatch(); throw e; }
 
-    fs.unlinkSync(req.file.path);
     res.json({ importId, ...summary });
   } catch (err: any) {
     if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
@@ -262,10 +259,10 @@ router.post('/oneglance-stock', requireAdmin, requireIntegration('oneglance'), u
     db.run('DELETE FROM pharmacy_stock_actuals WHERE snapshot_date = ? AND branch_id IS ?', snapshotDate, branchId);
 
     db.run(
-      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       'ONEGLANCE_STOCK', req.file.originalname, rows.length,
-      snapshotDate, snapshotDate, 'completed', branchId
+      snapshotDate, snapshotDate, 'completed', branchId, req.file.path
     );
     const importId = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_STOCK' ORDER BY id DESC LIMIT 1")?.id || 0;
 
@@ -285,7 +282,6 @@ router.post('/oneglance-stock', requireAdmin, requireIntegration('oneglance'), u
       db.endBatch();
     } catch (e) { db.rollbackBatch(); throw e; }
 
-    fs.unlinkSync(req.file.path);
     res.json({ importId, ...summary });
   } catch (err: any) {
     if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
@@ -308,10 +304,10 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), upload.single('
     }
 
     db.run(
-      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       'TURIA', req.file.originalname, rows.length,
-      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
+      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId, req.file.path
     );
     const importId = db.get("SELECT id FROM import_logs WHERE source = 'TURIA' ORDER BY id DESC LIMIT 1")?.id || 0;
 
@@ -363,7 +359,6 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), upload.single('
       }
     }
 
-    fs.unlinkSync(req.file.path);
     res.json({ importId, ...summary });
   } catch (err: any) {
     if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
@@ -454,6 +449,14 @@ router.delete('/:id', requireAdmin, async (req, res) => {
   }
 
   res.json({ ok: true });
+});
+
+router.get('/download/:id', async (req, res) => {
+  const db = req.tenantDb!;
+  const log = db.get('SELECT file_path, filename FROM import_logs WHERE id = ?', req.params.id);
+  if (!log || !log.file_path) return res.status(404).json({ error: 'File not available for download' });
+  if (!fs.existsSync(log.file_path)) return res.status(404).json({ error: 'File no longer exists on disk' });
+  res.download(log.file_path, log.filename || `import-${req.params.id}`);
 });
 
 export default router;

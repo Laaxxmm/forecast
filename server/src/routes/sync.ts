@@ -172,10 +172,10 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async
 
     // Insert into DB
     db.run(
-      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       'HEALTHPLIX_SYNC', result.filename, rows.length,
-      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
+      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId, result.filePath
     );
     // sql.js lastInsertRowid is unreliable after save(); use SELECT instead
     const importLogRow = db.get("SELECT id FROM import_logs WHERE source = 'HEALTHPLIX_SYNC' ORDER BY id DESC LIMIT 1");
@@ -242,8 +242,7 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async
       }
     }
 
-    // Clean up downloaded file
-    try { fs.unlinkSync(result.filePath); } catch {}
+    // Keep downloaded file for later download from Import History
 
     state.progress = {
       step: 'complete',
@@ -425,10 +424,10 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
       }
 
       db.run(
-        `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         'ONEGLANCE_SALES_SYNC', result.salesFile.filename, rows.length,
-        summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
+        summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId, result.salesFile.filePath
       );
       const salesImportRow = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_SALES_SYNC' ORDER BY id DESC LIMIT 1");
       const salesImportId = salesImportRow?.id || 0;
@@ -502,7 +501,7 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
         }
       }
 
-      try { fs.unlinkSync(result.salesFile.filePath); } catch {}
+      // Keep file for download from Import History
     }
 
     // Parse and save Purchase report
@@ -521,10 +520,10 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
       }
 
       db.run(
-        `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         'ONEGLANCE_PURCHASE_SYNC', result.purchaseFile.filename, rows.length,
-        summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
+        summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId, result.purchaseFile.filePath
       );
       const purchaseImportRow = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_PURCHASE_SYNC' ORDER BY id DESC LIMIT 1");
       const purchaseImportId = purchaseImportRow?.id || 0;
@@ -549,7 +548,7 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
       } catch (e) { db.rollbackBatch(); throw e; }
       totalRows += rows.length;
 
-      try { fs.unlinkSync(result.purchaseFile.filePath); } catch {}
+      // Keep file for download from Import History
     }
 
     // Parse and save Stock report
@@ -563,10 +562,10 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
         snapshotDate, branchId);
 
       db.run(
-        `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         'ONEGLANCE_STOCK_SYNC', result.stockFile.filename, rows.length,
-        snapshotDate, snapshotDate, 'completed', branchId
+        snapshotDate, snapshotDate, 'completed', branchId, result.stockFile.filePath
       );
       const stockImportId = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_STOCK_SYNC' ORDER BY id DESC LIMIT 1")?.id || 0;
 
@@ -587,7 +586,7 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
       } catch (e) { db.rollbackBatch(); throw e; }
       totalRows += rows.length;
 
-      try { fs.unlinkSync(result.stockFile.filePath); } catch {}
+      // Keep file for download from Import History
     }
 
     ogState.progress = {
@@ -749,10 +748,10 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Req
     }
 
     db.run(
-      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       'TURIA_SYNC', result.filename, rows.length,
-      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId
+      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId, result.filePath
     );
     const turiaImportId = db.get("SELECT id FROM import_logs WHERE source = 'TURIA_SYNC' ORDER BY id DESC LIMIT 1")?.id || 0;
 
@@ -829,7 +828,7 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Req
       console.error('Turia: Create a scenario in the Forecast module to enable automatic actuals sync.');
     }
 
-    try { fs.unlinkSync(result.filePath); } catch {}
+    // Keep file for download from Import History
 
     // Count how many rows are in turia_invoices and dashboard_actuals for reporting
     const totalTuriaRows = db.get('SELECT COUNT(*) as cnt FROM turia_invoices')?.cnt || 0;
