@@ -87,21 +87,10 @@ function getStepStatus(stepKey: string, currentStep: string, isError: boolean, s
   return 'pending';
 }
 
-function SyncStepTracker({ status, steps }: { status: { step: string; message: string; pct: number; error?: string }; steps: typeof HP_SYNC_STEPS }) {
+function SyncStepTracker({ status, steps }: { status: { step: string; message: string; pct: number; error?: string; lastStep?: string }; steps: typeof HP_SYNC_STEPS }) {
   const isError = status.step === 'error';
-  const errorStep = isError ? (
-    status.message?.includes('login') || status.message?.includes('Login') ? 'login' :
-    status.message?.includes('clinic') ? 'clinic' :
-    status.message?.includes('menu') || status.message?.includes('report') || status.message?.includes('Frontdesk') ? 'navigate' :
-    status.message?.includes('date') || status.message?.includes('calendar') ? 'dates' :
-    status.message?.includes('generat') ? 'generate' :
-    status.message?.includes('download') || status.message?.includes('Download') ? 'download' :
-    status.message?.includes('pars') ? 'parsing' :
-    status.message?.includes('sav') || status.message?.includes('database') ? 'saving' :
-    status.message?.includes('sales') || status.message?.includes('Sales') ? 'sales' :
-    status.message?.includes('purchase') || status.message?.includes('Purchase') ? 'purchase' :
-    'login'
-  ) : status.step;
+  // Use the tracked last successful step instead of guessing from error message
+  const errorStep = isError ? (status.lastStep || 'login') : status.step;
   const displayStep = isError ? errorStep : status.step;
 
   return (
@@ -304,7 +293,14 @@ export default function ImportPage() {
       pollRef.current = setInterval(async () => {
         try {
           const res = await api.get(statusEndpoint);
-          setSyncStatus(res.data);
+          setSyncStatus((prev: any) => {
+            const d = res.data;
+            // Preserve the last successful step so error UI keeps completed checkpoints
+            if (d.step === 'error' || d.status === 'error') {
+              return { ...d, lastStep: prev?.step && prev.step !== 'error' ? prev.step : prev?.lastStep };
+            }
+            return d;
+          });
           if (res.data.status === 'complete') {
             clearInterval(pollRef.current!); pollRef.current = null;
             setTimeout(() => { setSyncing(false); setResult(res.data.result); loadHistory(); }, 1500);
