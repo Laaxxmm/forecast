@@ -1001,7 +1001,7 @@ router.get('/operational-insights', async (req, res) => {
 
     if (isClinic) {
       const r = db.get(
-        `SELECT COUNT(DISTINCT patient_id) as patients, COALESCE(SUM(item_price), 0) as revenue, COUNT(*) as txns
+        `SELECT COUNT(DISTINCT COALESCE(NULLIF(patient_id, ''), patient_name)) as patients, COALESCE(SUM(item_price), 0) as revenue, COUNT(*) as txns
          FROM clinic_actuals WHERE bill_month = ?${bf.where}`,
         currentMonth, ...bf.params
       );
@@ -1017,12 +1017,12 @@ router.get('/operational-insights', async (req, res) => {
       ];
       for (const cat of catDefs) {
         const cr = db.get(
-          `SELECT COUNT(DISTINCT patient_id) as patients, COALESCE(SUM(item_price), 0) as revenue
+          `SELECT COUNT(DISTINCT COALESCE(NULLIF(patient_id, ''), patient_name)) as patients, COALESCE(SUM(item_price), 0) as revenue
            FROM clinic_actuals WHERE bill_month = ? ${cat.where}${bf.where}`,
           currentMonth, ...bf.params
         );
         const lr = db.get(
-          `SELECT COALESCE(SUM(item_price), 0) as revenue, COUNT(DISTINCT patient_id) as patients
+          `SELECT COALESCE(SUM(item_price), 0) as revenue, COUNT(DISTINCT COALESCE(NULLIF(patient_id, ''), patient_name)) as patients
            FROM clinic_actuals WHERE bill_month = ? AND CAST(SUBSTR(bill_date, 9, 2) AS INTEGER) <= ? ${cat.where}${bf.where}`,
           lastMonth, lastMonthCutoffDay, ...bf.params
         );
@@ -1048,7 +1048,7 @@ router.get('/operational-insights', async (req, res) => {
     let lastMonthMtdRevenue = 0, lastMonthMtdPatients = 0;
     if (isClinic) {
       const r = db.get(
-        `SELECT COUNT(DISTINCT patient_id) as patients, COALESCE(SUM(item_price), 0) as revenue
+        `SELECT COUNT(DISTINCT COALESCE(NULLIF(patient_id, ''), patient_name)) as patients, COALESCE(SUM(item_price), 0) as revenue
          FROM clinic_actuals WHERE bill_month = ? AND CAST(SUBSTR(bill_date, 9, 2) AS INTEGER) <= ?${bf.where}`,
         lastMonth, lastMonthCutoffDay, ...bf.params
       );
@@ -1069,14 +1069,14 @@ router.get('/operational-insights', async (req, res) => {
 
     if (isClinic) {
       const tw = db.get(
-        `SELECT COUNT(DISTINCT patient_id) as patients, COALESCE(SUM(item_price), 0) as revenue, COUNT(*) as txns
+        `SELECT COUNT(DISTINCT COALESCE(NULLIF(patient_id, ''), patient_name)) as patients, COALESCE(SUM(item_price), 0) as revenue, COUNT(*) as txns
          FROM clinic_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where}`,
         thisMondayStr, todayStr, ...bf.params
       );
       thisWeek = { patients: tw?.patients || 0, revenue: tw?.revenue || 0, transactions: tw?.txns || 0, profit: 0, avgTicket: (tw?.patients || 0) > 0 ? Math.round((tw?.revenue || 0) / tw.patients) : 0 };
 
       const lw = db.get(
-        `SELECT COUNT(DISTINCT patient_id) as patients, COALESCE(SUM(item_price), 0) as revenue, COUNT(*) as txns
+        `SELECT COUNT(DISTINCT COALESCE(NULLIF(patient_id, ''), patient_name)) as patients, COALESCE(SUM(item_price), 0) as revenue, COUNT(*) as txns
          FROM clinic_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where}`,
         lastMondayStr, lastSundayStr, ...bf.params
       );
@@ -1101,7 +1101,7 @@ router.get('/operational-insights', async (req, res) => {
     let daily: any[] = [];
     if (isClinic) {
       daily = db.all(
-        `SELECT bill_date as date, COUNT(DISTINCT patient_id) as patients, COALESCE(SUM(item_price), 0) as revenue
+        `SELECT bill_date as date, COUNT(DISTINCT COALESCE(NULLIF(patient_id, ''), patient_name)) as patients, COALESCE(SUM(item_price), 0) as revenue
          FROM clinic_actuals WHERE bill_month = ?${bf.where} GROUP BY bill_date ORDER BY bill_date`,
         currentMonth, ...bf.params
       );

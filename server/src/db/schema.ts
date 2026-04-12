@@ -840,7 +840,7 @@ export function initializeSchema(db: DbHelper) {
       bill_month,
       department,
       COUNT(*) as transaction_count,
-      COUNT(DISTINCT patient_id) as unique_patients,
+      COUNT(DISTINCT COALESCE(NULLIF(patient_id, ''), patient_name)) as unique_patients,
       COALESCE(SUM(item_price), 0) as total_revenue,
       COALESCE(SUM(discount), 0) as total_discount,
       COALESCE(SUM(tax), 0) as total_tax
