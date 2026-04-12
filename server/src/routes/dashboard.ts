@@ -979,6 +979,9 @@ router.get('/operational-insights', async (req, res) => {
     // ── MTD Actuals ──
     let mtdPatients = 0, mtdRevenue = 0, mtdTransactions = 0, mtdProfit = 0, mtdCogs = 0;
 
+    // Per-category breakdown for clinic KPI cards
+    let clinicCatBreakdown: { label: string; patients: number; revenue: number; lastRevenue: number }[] = [];
+
     if (isClinic) {
       const r = db.get(
         `SELECT COUNT(DISTINCT patient_id) as patients, COALESCE(SUM(item_price), 0) as revenue, COUNT(*) as txns
@@ -988,6 +991,28 @@ router.get('/operational-insights', async (req, res) => {
       mtdPatients = r?.patients || 0;
       mtdRevenue = r?.revenue || 0;
       mtdTransactions = r?.txns || 0;
+
+      // Category breakdown: Consultation / Diagnostics / Other
+      const catDefs = [
+        { label: 'Consultation', where: "AND department = 'APPOINTMENT'" },
+        { label: 'Diagnostics', where: "AND department = 'LAB TEST'" },
+        { label: 'Other Revenue', where: "AND (department NOT IN ('APPOINTMENT', 'LAB TEST') OR department IS NULL)" },
+      ];
+      for (const cat of catDefs) {
+        const cr = db.get(
+          `SELECT COUNT(DISTINCT patient_id) as patients, COALESCE(SUM(item_price), 0) as revenue
+           FROM clinic_actuals WHERE bill_month = ? ${cat.where}${bf.where}`,
+          currentMonth, ...bf.params
+        );
+        const lr = db.get(
+          `SELECT COALESCE(SUM(item_price), 0) as revenue
+           FROM clinic_actuals WHERE bill_month = ? AND CAST(SUBSTR(bill_date, 9, 2) AS INTEGER) <= ? ${cat.where}${bf.where}`,
+          lastMonth, lastMonthCutoffDay, ...bf.params
+        );
+        clinicCatBreakdown.push({
+          label: cat.label, patients: cr?.patients || 0, revenue: cr?.revenue || 0, lastRevenue: lr?.revenue || 0,
+        });
+      }
     } else if (isPharmacy) {
       const r = db.get(
         `SELECT COUNT(DISTINCT bill_no) as txns, COALESCE(SUM(sales_amount), 0) as revenue,
@@ -1080,21 +1105,17 @@ router.get('/operational-insights', async (req, res) => {
     // Build cards
     const cards: any[] = [];
     if (isClinic) {
-      const patientDailyRate = daysElapsed > 0 ? mtdPatients / daysElapsed : 0;
-      const patientProjected = Math.round(patientDailyRate * daysInMonth);
-      const patientPctTarget = unitTarget > 0 ? (patientProjected / unitTarget) * 100 : 0;
-      const patientRag = unitTarget === 0 ? 'GREY' : patientPctTarget >= 95 ? 'GREEN' : patientPctTarget >= 80 ? 'AMBER' : 'RED';
-
-      cards.push({
-        label: 'Patients', mtd: mtdPatients, target: unitTarget, projected: patientProjected,
-        dailyRate: Math.round(patientDailyRate * 10) / 10, requiredRate: unitTarget > 0 && daysRemaining > 0 ? Math.round(((unitTarget - mtdPatients) / daysRemaining) * 10) / 10 : 0,
-        rag: patientRag, lastMonthMtd: lastMonthMtdPatients, unit: 'count',
-      });
-      cards.push({
-        label: 'Revenue', mtd: mtdRevenue, target: monthlyTarget, projected: Math.round(projected),
-        dailyRate: Math.round(dailyRate), requiredRate: Math.round(requiredRate),
-        rag, lastMonthMtd: lastMonthMtdRevenue, unit: 'currency',
-      });
+      // Build per-category revenue cards (Consultation, Diagnostics, Other Revenue)
+      for (const cat of clinicCatBreakdown) {
+        const catDailyRate = daysElapsed > 0 ? cat.revenue / daysElapsed : 0;
+        const catProjected = Math.round(catDailyRate * daysInMonth);
+        cards.push({
+          label: cat.label, mtd: cat.revenue, target: 0, projected: catProjected,
+          dailyRate: Math.round(catDailyRate), requiredRate: 0,
+          rag: 'GREY', lastMonthMtd: cat.lastRevenue, unit: 'currency',
+          patients: cat.patients,
+        });
+      }
     } else if (isPharmacy) {
       cards.push({
         label: 'Sales', mtd: mtdRevenue, target: monthlyTarget, projected: Math.round(projected),

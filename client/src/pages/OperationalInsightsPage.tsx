@@ -13,6 +13,7 @@ interface CardData {
   label: string; mtd: number; target: number; projected: number;
   dailyRate: number; requiredRate: number; rag: string;
   lastMonthMtd: number; unit: string;
+  patients?: number;
 }
 interface WeekData { patients: number; revenue: number; transactions: number; profit: number; avgTicket: number; }
 interface StreamData {
@@ -164,7 +165,7 @@ function StreamSection({ stream, daysInMonth, daysElapsed, daysRemaining, dailyT
       </h2>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className={`grid gap-3 ${isClinic ? 'grid-cols-3' : 'grid-cols-2 lg:grid-cols-4'}`}>
         {stream.cards.map(card => (
           <PaceCard key={card.label} card={card} daysInMonth={daysInMonth} daysElapsed={daysElapsed} daysRemaining={daysRemaining} />
         ))}
@@ -189,9 +190,13 @@ function PaceCard({ card, daysInMonth, daysElapsed, daysRemaining }: {
     <div className="card p-3 space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-[11px] font-medium text-theme-muted uppercase tracking-wider">{card.label}</span>
-        <span className={`w-2 h-2 rounded-full ${RAG_DOT[card.rag]}`} />
+        {card.rag !== 'GREY' && <span className={`w-2 h-2 rounded-full ${RAG_DOT[card.rag]}`} />}
+        {card.rag === 'GREY' && card.lastMonthMtd > 0 && <TrendBadge current={card.mtd} previous={card.lastMonthMtd} />}
       </div>
       <div className="text-xl font-bold text-theme-primary">{fmtVal(card.mtd, card.unit)}</div>
+      {card.patients !== undefined && (
+        <div className="text-[10px] text-theme-faint -mt-1">{formatNumber(card.patients)} patients</div>
+      )}
       {card.target > 0 && (
         <>
           <div className="flex items-center justify-between text-[10px]">
@@ -218,8 +223,15 @@ function PaceCard({ card, daysInMonth, daysElapsed, daysRemaining }: {
         </>
       )}
       {card.target === 0 && card.unit !== 'percent' && (
-        <div className="text-[10px] text-theme-faint">
-          Projected: {fmtVal(card.projected, card.unit)}
+        <div className="grid grid-cols-2 gap-1 text-[10px] text-theme-faint">
+          <div>
+            <div className="text-theme-muted">Pace</div>
+            <div>{fmtVal(card.dailyRate, card.unit)}/day</div>
+          </div>
+          <div>
+            <div className="text-theme-muted">Projected</div>
+            <div>{fmtVal(card.projected, card.unit)}</div>
+          </div>
         </div>
       )}
     </div>
