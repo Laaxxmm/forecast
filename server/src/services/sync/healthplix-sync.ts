@@ -415,127 +415,59 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     }
     await page.waitForTimeout(1000);
 
-    // Save debug screenshot BEFORE attempting download (for diagnostics)
-    await saveDebugScreenshot('pre-download');
+    // ── Target the exact download button: <a title="Download Report"> with Material Icons "get_app" ──
+    // The Bills tab area has: div.hx-pagination (with "1-100 of N") and sibling div.hx-input_control
+    // containing <a title="Download Report" onclick="downloadTableToCSV(...)"><i class="material-icons">get_app</i></a>
+    // If multiple exist (Summary vs Bills table), pick the LAST one (Bills table is lower on page).
 
-    // ── Collect ALL download-triggerable elements, ranked by Y-position (lowest wins) ──
-    const downloadCandidates = await page.evaluate(() => {
-      const icons: { idx: number; y: number; label: string }[] = [];
-      // Broad selector covering FA icons, SVGs, links, buttons with download-like attributes
-      const selectors = [
-        'i.fa-download', 'i.fa-file-download', 'i.fa-file-excel',
-        '[class*="fa-download"]', '[class*="file-download"]', '[class*="download"]',
-        'a[download]', 'a[href*="download"]', 'a[href*="export"]',
-        '[title*="ownload"]', '[title*="xport"]', '[title*="xcel"]',
-        '[aria-label*="ownload"]', '[aria-label*="xport"]',
-        'svg[data-icon="download"]', 'svg[data-icon="file-download"]',
-      ];
-      const seen = new Set<Element>();
-      for (const sel of selectors) {
-        document.querySelectorAll(sel).forEach(el => {
-          const clickable = el.closest('a, button') || el;
-          if (seen.has(clickable)) return;
-          seen.add(clickable);
-          const rect = (clickable as HTMLElement).getBoundingClientRect();
-          if (rect.width === 0 || rect.height === 0) return;
-          icons.push({ idx: icons.length, y: rect.top + window.scrollY, label: `${sel}@y=${Math.round(rect.top)}` });
-        });
+    const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
+
+    const clickResult = await page.evaluate(() => {
+      // Primary: exact selector from inspected DOM
+      const allLinks = document.querySelectorAll('a[title="Download Report"]');
+      if (allLinks.length > 0) {
+        // Click the LAST one (Bills table is below Billing Summary)
+        const target = allLinks[allLinks.length - 1] as HTMLElement;
+        target.click();
+        return `a[title="Download Report"] #${allLinks.length} of ${allLinks.length}`;
       }
-      // Sort by Y descending — lowest on page first (Bills table is below Summary)
-      icons.sort((a, b) => b.y - a.y);
-      return icons;
-    });
-    console.log(`[HP Sync] Found ${downloadCandidates.length} download candidates: ${JSON.stringify(downloadCandidates.map(c => c.label))}`);
-
-    // ── Try each candidate starting from the LOWEST on the page ──
-    const XLSX = await import('xlsx');
-    const EXPECTED_HEADERS = ['bill date', 'id', 'name', 'item price', 'dept', 'dept.'];
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    let savedFilePath = '';
-    let savedFilename = '';
-
-    for (let ci = 0; ci < Math.min(downloadCandidates.length, 3); ci++) {
-      const candidate = downloadCandidates[ci];
-      console.log(`[HP Sync] Trying download candidate ${ci}: ${candidate.label}`);
-      try {
-        const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
-
-        // Click the candidate by re-querying and sorting by Y to get the right one
-        await page.evaluate((targetIdx) => {
-          const selectors = [
-            'i.fa-download', 'i.fa-file-download', 'i.fa-file-excel',
-            '[class*="fa-download"]', '[class*="file-download"]', '[class*="download"]',
-            'a[download]', 'a[href*="download"]', 'a[href*="export"]',
-            '[title*="ownload"]', '[title*="xport"]', '[title*="xcel"]',
-            '[aria-label*="ownload"]', '[aria-label*="xport"]',
-            'svg[data-icon="download"]', 'svg[data-icon="file-download"]',
-          ];
-          const seen = new Set<Element>();
-          const all: { el: Element; y: number }[] = [];
-          for (const sel of selectors) {
-            document.querySelectorAll(sel).forEach(el => {
-              const clickable = el.closest('a, button') || el;
-              if (seen.has(clickable)) return;
-              seen.add(clickable);
-              const rect = (clickable as HTMLElement).getBoundingClientRect();
-              if (rect.width === 0 || rect.height === 0) return;
-              all.push({ el: clickable, y: rect.top + window.scrollY });
-            });
-          }
-          all.sort((a, b) => b.y - a.y);
-          if (all[targetIdx]) (all[targetIdx].el as HTMLElement).click();
-        }, ci);
-
-        progress(opts, 'download', `Downloading file (attempt ${ci + 1})...`, 85);
-        const download = await downloadPromise;
-
-        const filename = `healthplix-sync-${timestamp}${ci > 0 ? `-attempt${ci + 1}` : ''}.xlsx`;
-        const filePath = path.join(downloadDir, filename);
-        await download.saveAs(filePath);
-
-        // ── VALIDATE: check if the file has the expected columns ──
-        try {
-          const wb = XLSX.readFile(filePath, { raw: true });
-          const sheet = wb.Sheets[wb.SheetNames[0]];
-          const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true }) as any[][];
-          let valid = false;
-          for (let i = 0; i < Math.min(rawData.length, 10); i++) {
-            const row = rawData[i];
-            if (!row) continue;
-            let matchCount = 0;
-            for (const cell of row) {
-              const cellStr = String(cell ?? '').toLowerCase().trim();
-              if (EXPECTED_HEADERS.includes(cellStr)) matchCount++;
-            }
-            if (matchCount >= 4) { valid = true; break; }
-          }
-          if (valid) {
-            console.log(`[HP Sync] ✓ File validated with correct headers (candidate ${ci})`);
-            savedFilePath = filePath;
-            savedFilename = filename;
-            break; // success!
-          } else {
-            console.log(`[HP Sync] ✗ File from candidate ${ci} has wrong headers, trying next...`);
-            // Keep the bad file for debugging but try next candidate
-          }
-        } catch (valErr) {
-          console.log(`[HP Sync] ✗ Could not validate file from candidate ${ci}: ${(valErr as Error).message}`);
+      // Fallback: Material Icons "get_app"
+      const icons = document.querySelectorAll('i.material-icons');
+      for (let i = icons.length - 1; i >= 0; i--) {
+        if ((icons[i].textContent || '').trim() === 'get_app') {
+          const clickable = icons[i].closest('a, button') || icons[i];
+          (clickable as HTMLElement).click();
+          return `material-icon:get_app #${i}`;
         }
-      } catch (dlErr) {
-        console.log(`[HP Sync] Download candidate ${ci} failed: ${(dlErr as Error).message}`);
       }
-    }
+      // Last resort: onclick containing downloadTableToCSV
+      const onclickEls = document.querySelectorAll('[onclick*="downloadTableToCSV"]');
+      if (onclickEls.length > 0) {
+        (onclickEls[onclickEls.length - 1] as HTMLElement).click();
+        return `onclick:downloadTableToCSV #${onclickEls.length}`;
+      }
+      return null;
+    });
 
-    if (!savedFilePath) {
-      await saveDebugScreenshot('all-downloads-failed');
-      throw new Error('Could not download the correct Bills table report. All download icons returned wrong data. Check debug screenshots.');
+    if (!clickResult) {
+      await saveDebugScreenshot('download-btn-not-found');
+      throw new Error('Could not find Download Report button (a[title="Download Report"] or material-icons get_app)');
     }
+    console.log(`[HP Sync] Download clicked: ${clickResult}`);
 
-    progress(opts, 'download', 'File downloaded and validated', 90);
+    progress(opts, 'download', 'Downloading file...', 85);
+    const download = await downloadPromise;
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const filename = `healthplix-sync-${timestamp}.xlsx`;
+    const filePath = path.join(downloadDir, filename);
+    await download.saveAs(filePath);
+
+    progress(opts, 'download', 'File downloaded', 90);
     progress(opts, 'complete', 'Download complete!', 100);
 
     await browser.close();
-    return { filePath: savedFilePath, filename: savedFilename };
+    return { filePath, filename };
   } catch (err: any) {
     // Save debug screenshot before closing
     try {
