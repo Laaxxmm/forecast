@@ -415,73 +415,28 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     }
     await page.waitForTimeout(1000);
 
-    // ── Target the download button anchored to the Bills tab pagination ──
-    // DOM structure (from inspected page):
-    //   <div class="hx-pagination hx-right-paging">  ← contains "1 - 100 of 155"
-    //   <div class="hx-input_control ...">            ← sibling
-    //     <a title="Download Report" onclick="downloadTableToCSV($(this).parent());">
-    //       <i class="material-icons hx-text-20">get_app</i>
-    //     </a>
-    // Multiple tabs (Bills, Collections, Outstanding, etc.) each have their own download button.
-    // We MUST click the one in the active Bills tab — identified by being a sibling of the
-    // visible pagination element that contains "X - Y of Z" text.
+    // ── Click the exact Bills export button ──
+    // From inspecting the live DOM:
+    //   <a onclick="exportTable('exportBills');">
+    //     <i class="material-icons">get_app</i>
+    //   </a>
+    // Other tabs have: exportTable('exportPayments'), etc.
+    // The Bills tab button is the ONLY one with onclick containing 'exportBills'.
 
     const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
 
     const clickResult = await page.evaluate(() => {
-      // Strategy 1: Find pagination "X - Y of Z", then find download link in the SAME parent container
-      const paginationDivs = document.querySelectorAll('.hx-pagination, [class*="pagination"]');
-      for (const pDiv of paginationDivs) {
-        const text = (pDiv.textContent || '').trim();
-        if (!/\d+\s*-\s*\d+\s+of\s+\d+/.test(text)) continue;
-        // Check this pagination is visible (not in a hidden tab)
-        const rect = (pDiv as HTMLElement).getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) continue;
-
-        // Walk up to find the shared parent and look for the download link
-        let container = pDiv.parentElement;
-        for (let depth = 0; depth < 5 && container; depth++) {
-          const dlLink = container.querySelector('a[title="Download Report"]') as HTMLElement;
-          if (dlLink) {
-            dlLink.click();
-            return `pagination-sibling(depth=${depth}, text="${text.slice(0, 30)}")`;
-          }
-          container = container.parentElement;
-        }
+      // Primary: exact onclick selector
+      const billsExport = document.querySelector('a[onclick*="exportBills"]') as HTMLElement;
+      if (billsExport) {
+        billsExport.click();
+        return 'a[onclick*="exportBills"]';
       }
-
-      // Strategy 2: Find VISIBLE a[title="Download Report"] (active tab's button is visible)
-      const allLinks = document.querySelectorAll('a[title="Download Report"]');
-      for (const link of allLinks) {
-        const rect = (link as HTMLElement).getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0 && rect.top > 200) {
-          // Visible and below the top area (not in header) — likely the Bills table one
-          (link as HTMLElement).click();
-          return `visible-download-report(y=${Math.round(rect.top)})`;
-        }
+      // Fallback: call the function directly
+      if (typeof (window as any).exportTable === 'function') {
+        (window as any).exportTable('exportBills');
+        return 'direct:exportTable("exportBills")';
       }
-
-      // Strategy 3: Find visible material-icons "get_app"
-      const icons = document.querySelectorAll('i.material-icons');
-      for (const icon of icons) {
-        if ((icon.textContent || '').trim() !== 'get_app') continue;
-        const rect = (icon as HTMLElement).getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) continue;
-        const clickable = icon.closest('a, button') || icon;
-        (clickable as HTMLElement).click();
-        return `visible-material-get_app(y=${Math.round(rect.top)})`;
-      }
-
-      // Strategy 4: onclick containing downloadTableToCSV (visible only)
-      const onclickEls = document.querySelectorAll('[onclick*="downloadTableToCSV"]');
-      for (const el of onclickEls) {
-        const rect = (el as HTMLElement).getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-          (el as HTMLElement).click();
-          return `visible-downloadTableToCSV(y=${Math.round(rect.top)})`;
-        }
-      }
-
       return null;
     });
 
