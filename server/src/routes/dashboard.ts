@@ -951,6 +951,12 @@ router.get('/operational-insights', async (req, res) => {
     let monthlyTarget = 0;
     let unitTarget = 0;
     let targetItemName = '';
+    // Per-category targets for clinic (Consultation / Diagnostics / Other Revenue)
+    const catTargets: Record<string, { units: number; revenue: number }> = {
+      'Consultation': { units: 0, revenue: 0 },
+      'Diagnostics': { units: 0, revenue: 0 },
+      'Other Revenue': { units: 0, revenue: 0 },
+    };
     if (scenario) {
       const revenueItems = db.all(
         "SELECT * FROM forecast_items WHERE scenario_id = ? AND category = 'revenue'",
@@ -960,8 +966,9 @@ router.get('/operational-insights', async (req, res) => {
         const meta = typeof item.meta === 'string' ? JSON.parse(item.meta) : item.meta;
         const sv = meta?.stepValues || {};
         let amt = 0;
+        let units = 0;
         if (item.item_type === 'unit_sales') {
-          const units = sv.units?.[currentMonth] || 0;
+          units = sv.units?.[currentMonth] || 0;
           const prices = sv.prices?.[currentMonth] || 0;
           amt = units * prices;
           unitTarget += units;
@@ -973,6 +980,16 @@ router.get('/operational-insights', async (req, res) => {
         }
         monthlyTarget += amt;
         if (!targetItemName && amt > 0) targetItemName = item.name;
+
+        // Map forecast item to clinic category by name
+        if (isClinic) {
+          const n = (item.name || '').toLowerCase();
+          let cat = 'Other Revenue';
+          if (n.includes('consult') || n.includes('appointment') || n.includes('opd')) cat = 'Consultation';
+          else if (n.includes('lab') || n.includes('diagnostic') || n.includes('test')) cat = 'Diagnostics';
+          catTargets[cat].revenue += amt;
+          catTargets[cat].units += units;
+        }
       }
     }
 
@@ -980,7 +997,7 @@ router.get('/operational-insights', async (req, res) => {
     let mtdPatients = 0, mtdRevenue = 0, mtdTransactions = 0, mtdProfit = 0, mtdCogs = 0;
 
     // Per-category breakdown for clinic KPI cards
-    let clinicCatBreakdown: { label: string; patients: number; revenue: number; lastRevenue: number }[] = [];
+    let clinicCatBreakdown: { label: string; patients: number; revenue: number; lastRevenue: number; lastPatients: number }[] = [];
 
     if (isClinic) {
       const r = db.get(
@@ -1005,12 +1022,13 @@ router.get('/operational-insights', async (req, res) => {
           currentMonth, ...bf.params
         );
         const lr = db.get(
-          `SELECT COALESCE(SUM(item_price), 0) as revenue
+          `SELECT COALESCE(SUM(item_price), 0) as revenue, COUNT(DISTINCT patient_id) as patients
            FROM clinic_actuals WHERE bill_month = ? AND CAST(SUBSTR(bill_date, 9, 2) AS INTEGER) <= ? ${cat.where}${bf.where}`,
           lastMonth, lastMonthCutoffDay, ...bf.params
         );
         clinicCatBreakdown.push({
-          label: cat.label, patients: cr?.patients || 0, revenue: cr?.revenue || 0, lastRevenue: lr?.revenue || 0,
+          label: cat.label, patients: cr?.patients || 0, revenue: cr?.revenue || 0,
+          lastRevenue: lr?.revenue || 0, lastPatients: lr?.patients || 0,
         });
       }
     } else if (isPharmacy) {
@@ -1105,15 +1123,32 @@ router.get('/operational-insights', async (req, res) => {
     // Build cards
     const cards: any[] = [];
     if (isClinic) {
-      // Build per-category revenue cards (Consultation, Diagnostics, Other Revenue)
+      // Build 2 cards per category: Patients + Revenue (with targets from catTargets)
       for (const cat of clinicCatBreakdown) {
-        const catDailyRate = daysElapsed > 0 ? cat.revenue / daysElapsed : 0;
-        const catProjected = Math.round(catDailyRate * daysInMonth);
+        const ct = catTargets[cat.label] || { units: 0, revenue: 0 };
+
+        // Card 1: Patients
+        const patDaily = daysElapsed > 0 ? cat.patients / daysElapsed : 0;
+        const patProj = Math.round(patDaily * daysInMonth);
+        const patNeed = ct.units > 0 && daysRemaining > 0 ? Math.round((ct.units - cat.patients) / daysRemaining) : 0;
+        const patPct = ct.units > 0 ? (patProj / ct.units) * 100 : 0;
+        const patRag = ct.units === 0 ? 'GREY' : patPct >= 95 ? 'GREEN' : patPct >= 80 ? 'AMBER' : 'RED';
         cards.push({
-          label: cat.label, mtd: cat.revenue, target: 0, projected: catProjected,
-          dailyRate: Math.round(catDailyRate), requiredRate: 0,
-          rag: 'GREY', lastMonthMtd: cat.lastRevenue, unit: 'currency',
-          patients: cat.patients,
+          label: 'Patients', mtd: cat.patients, target: ct.units, projected: patProj,
+          dailyRate: Math.round(patDaily), requiredRate: patNeed,
+          rag: patRag, lastMonthMtd: cat.lastPatients, unit: 'count', category: cat.label,
+        });
+
+        // Card 2: Revenue
+        const revDaily = daysElapsed > 0 ? cat.revenue / daysElapsed : 0;
+        const revProj = Math.round(revDaily * daysInMonth);
+        const revNeed = ct.revenue > 0 && daysRemaining > 0 ? Math.round((ct.revenue - cat.revenue) / daysRemaining) : 0;
+        const revPct = ct.revenue > 0 ? (revProj / ct.revenue) * 100 : 0;
+        const revRag = ct.revenue === 0 ? 'GREY' : revPct >= 95 ? 'GREEN' : revPct >= 80 ? 'AMBER' : 'RED';
+        cards.push({
+          label: 'Revenue', mtd: cat.revenue, target: ct.revenue, projected: revProj,
+          dailyRate: Math.round(revDaily), requiredRate: revNeed,
+          rag: revRag, lastMonthMtd: cat.lastRevenue, unit: 'currency', category: cat.label,
         });
       }
     } else if (isPharmacy) {

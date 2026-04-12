@@ -13,7 +13,7 @@ interface CardData {
   label: string; mtd: number; target: number; projected: number;
   dailyRate: number; requiredRate: number; rag: string;
   lastMonthMtd: number; unit: string;
-  patients?: number;
+  category?: string;
 }
 interface WeekData { patients: number; revenue: number; transactions: number; profit: number; avgTicket: number; }
 interface StreamData {
@@ -165,11 +165,32 @@ function StreamSection({ stream, daysInMonth, daysElapsed, daysRemaining, dailyT
       </h2>
 
       {/* KPI Cards */}
-      <div className={`grid gap-3 ${isClinic ? 'grid-cols-3' : 'grid-cols-2 lg:grid-cols-4'}`}>
-        {stream.cards.map(card => (
-          <PaceCard key={card.label} card={card} daysInMonth={daysInMonth} daysElapsed={daysElapsed} daysRemaining={daysRemaining} />
-        ))}
-      </div>
+      {isClinic ? (
+        // Group clinic cards by category: 2 cards per row (Patients + Revenue)
+        (() => {
+          const categories = [...new Set(stream.cards.map(c => c.category).filter(Boolean))] as string[];
+          return (
+            <div className="space-y-3">
+              {categories.map(cat => (
+                <div key={cat}>
+                  <div className="text-[11px] font-medium text-theme-muted uppercase tracking-wider mb-1.5">{cat}</div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {stream.cards.filter(c => c.category === cat).map(card => (
+                      <PaceCard key={card.label} card={card} daysInMonth={daysInMonth} daysElapsed={daysElapsed} daysRemaining={daysRemaining} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })()
+      ) : (
+        <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
+          {stream.cards.map(card => (
+            <PaceCard key={card.label} card={card} daysInMonth={daysInMonth} daysElapsed={daysElapsed} daysRemaining={daysRemaining} />
+          ))}
+        </div>
+      )}
 
       {/* Weekly + Chart Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -194,9 +215,6 @@ function PaceCard({ card, daysInMonth, daysElapsed, daysRemaining }: {
         {card.rag === 'GREY' && card.lastMonthMtd > 0 && <TrendBadge current={card.mtd} previous={card.lastMonthMtd} />}
       </div>
       <div className="text-xl font-bold text-theme-primary">{fmtVal(card.mtd, card.unit)}</div>
-      {card.patients !== undefined && (
-        <div className="text-[10px] text-theme-faint -mt-1">{formatNumber(card.patients)} patients</div>
-      )}
       {card.target > 0 && (
         <>
           <div className="flex items-center justify-between text-[10px]">
