@@ -278,9 +278,12 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
       await loginBtn.click();
       console.log(`[HP Sync] Login button clicked`);
 
-      // Wait for navigation after login
+      // Wait for navigation after login (login causes page redirect)
+      await page.waitForLoadState('load', { timeout: 60_000 }).catch(() => {
+        console.log('[HP Sync] Post-login load timed out, continuing...');
+      });
       await page.waitForTimeout(3000);
-      await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => {
+      await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {
         console.log('[HP Sync] Post-login networkidle timed out, continuing...');
       });
 
@@ -288,18 +291,29 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
       const postLoginUrl = page.url();
       console.log(`[HP Sync] Post-login URL: ${postLoginUrl}`);
 
-      // Check for login error messages
-      const errorText = await page.evaluate(() => {
-        const els = document.querySelectorAll('.alert-danger, .error, [class*="error"], [class*="alert"], .text-danger');
-        for (const el of els) {
-          const text = (el as HTMLElement).innerText?.trim();
-          if (text && text.length > 3 && text.length < 200) return text;
+      // Check for login error messages (wrap in try/catch — navigation may destroy context)
+      try {
+        const errorText = await page.evaluate(() => {
+          const els = document.querySelectorAll('.alert-danger, .error, [class*="error"], [class*="alert"], .text-danger');
+          for (const el of els) {
+            const text = (el as HTMLElement).innerText?.trim();
+            if (text && text.length > 3 && text.length < 200) return text;
+          }
+          return '';
+        });
+        if (errorText) {
+          await saveDebugScreenshot('login-error');
+          throw new Error(`Login failed: ${errorText}`);
         }
-        return '';
-      });
-      if (errorText) {
-        await saveDebugScreenshot('login-error');
-        throw new Error(`Login failed: ${errorText}`);
+      } catch (e: any) {
+        // "Execution context was destroyed" means page navigated → login succeeded
+        if (e.message?.includes('Execution context was destroyed') || e.message?.includes('navigation')) {
+          console.log('[HP Sync] Context destroyed after login click — login succeeded, page navigated');
+          await page.waitForLoadState('load', { timeout: 30_000 }).catch(() => {});
+          await page.waitForTimeout(2000);
+        } else {
+          throw e; // Re-throw non-navigation errors
+        }
       }
 
       progress(opts, 'login', 'Logged in successfully', 20);
@@ -392,62 +406,105 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     }
 
     // ── Step 7: Extract data from the #viewAllBillDetails DataTable ──
-    // The visible Bills table (#viewAllBillDetails) has ALL columns including ID
-    // (patient_id). DataTables stores all rows in memory regardless of pagination,
-    // so we can extract all rows via the DataTables API.
-    // The hidden #exportBills table is missing the ID column, so we avoid it.
+    // Primary: #viewAllBillDetails DataTable (has ID column for patient_id)
+    // Fallback: #exportBills DOM table (no ID column, but always present)
     progress(opts, 'download', 'Extracting Bills table data...', 80);
 
-    await page.waitForLoadState('load', { timeout: 30_000 }).catch(() => {});
+    // Wait for all network activity to settle before reading the DOM
+    await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => {
+      console.log('[HP Sync] networkidle timed out before extraction, continuing...');
+    });
     await page.waitForTimeout(2000);
 
-    // Wait for the DataTable to be initialized with data
+    // Wait for either DataTable or exportBills to have data
     try {
       await page.waitForFunction(() => {
+        // Check DataTable
         const $ = (window as any).jQuery;
-        if (!$ || !$.fn.dataTable) return false;
-        const t = $('#viewAllBillDetails');
-        return t.length > 0 && t.DataTable().rows().count() > 0;
+        if ($ && $.fn.dataTable) {
+          const t = $('#viewAllBillDetails');
+          if (t.length > 0 && t.DataTable().rows().count() > 0) return true;
+        }
+        // Check exportBills fallback
+        const eb = document.getElementById('exportBills');
+        if (eb && eb.querySelectorAll('tr').length > 1) return true;
+        return false;
       }, { timeout: 60_000 });
     } catch {
-      console.log('[HP Sync] viewAllBillDetails DataTable not ready after 60s, trying anyway');
+      console.log('[HP Sync] No table data found after 60s, trying anyway');
     }
     await page.waitForTimeout(1000);
 
-    // Read all rows from the DataTable (includes all paginated rows)
-    const tableData = await page.evaluate(() => {
-      const $ = (window as any).jQuery;
-      if (!$ || !$.fn.dataTable) return null;
-      const dt = $('#viewAllBillDetails').DataTable();
-      if (!dt || dt.rows().count() === 0) return null;
+    // Try primary: DataTable API (has all columns including ID)
+    let tableData: string[][] | null = null;
+    try {
+      tableData = await page.evaluate(() => {
+        const $ = (window as any).jQuery;
+        if (!$ || !$.fn.dataTable) return null;
+        const t = $('#viewAllBillDetails');
+        if (!t.length) return null;
+        const dt = t.DataTable();
+        if (!dt || dt.rows().count() === 0) return null;
 
-      // Extract headers
-      const headers: string[] = dt.columns().header().toArray()
-        .map((h: HTMLElement) => h.textContent?.trim() || '');
+        const headers: string[] = dt.columns().header().toArray()
+          .map((h: HTMLElement) => h.textContent?.trim() || '');
 
-      // Extract all row data from DOM nodes (works regardless of DataTable data source)
-      const rows: string[][] = [];
-      dt.rows().every(function(this: any) {
-        const node = this.node();
-        if (!node) return;
-        const cells: string[] = [];
-        node.querySelectorAll('td').forEach((td: HTMLElement) => {
-          cells.push(td.textContent?.trim() || '');
-        });
-        rows.push(cells);
+        const nodes = dt.rows().nodes();
+        const rows: string[][] = [];
+        for (let i = 0; i < nodes.length; i++) {
+          const cells: string[] = [];
+          nodes[i].querySelectorAll('td').forEach((td: HTMLElement) => {
+            cells.push(td.textContent?.trim() || '');
+          });
+          rows.push(cells);
+        }
+        return [headers, ...rows];
       });
-
-      return [headers, ...rows];
-    });
-
-    if (!tableData || tableData.length < 2) {
-      await saveDebugScreenshot('datatable-empty');
-      throw new Error(`viewAllBillDetails DataTable ${!tableData ? 'not found' : `has only ${tableData.length} rows`}`);
+      if (tableData && tableData.length > 1) {
+        console.log(`[HP Sync] DataTable: ${tableData.length - 1} rows, ${tableData[0].length} cols`);
+      }
+    } catch (e: any) {
+      console.log(`[HP Sync] DataTable extraction failed: ${e.message}`);
+      // If context was destroyed (page navigated), wait for new page to settle
+      if (e.message?.includes('context') || e.message?.includes('navigation')) {
+        console.log('[HP Sync] Page navigated during extraction, waiting for recovery...');
+        await page.waitForLoadState('load', { timeout: 30_000 }).catch(() => {});
+        await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
+        await page.waitForTimeout(3000);
+      }
     }
 
-    console.log(`[HP Sync] Extracted ${tableData.length - 1} rows from viewAllBillDetails (${tableData[0].length} cols)`);
-    console.log(`[HP Sync] Header: ${tableData[0].join(', ')}`);
+    // Fallback: read #exportBills DOM table (missing ID column but reliable)
+    if (!tableData || tableData.length < 2) {
+      console.log('[HP Sync] Falling back to #exportBills DOM table');
+      try {
+        tableData = await page.evaluate(() => {
+          const table = document.getElementById('exportBills');
+          if (!table) return null;
+          const rows: string[][] = [];
+          table.querySelectorAll('tr').forEach(tr => {
+            const cells: string[] = [];
+            tr.querySelectorAll('th, td').forEach(cell => {
+              cells.push((cell as HTMLElement).textContent?.trim() || '');
+            });
+            if (cells.length > 0) rows.push(cells);
+          });
+          return rows;
+        });
+        if (tableData && tableData.length > 1) {
+          console.log(`[HP Sync] exportBills fallback: ${tableData.length - 1} rows, ${tableData[0].length} cols`);
+        }
+      } catch (e: any) {
+        console.log(`[HP Sync] exportBills extraction also failed: ${e.message}`);
+      }
+    }
 
+    if (!tableData || tableData.length < 2) {
+      await saveDebugScreenshot('extraction-failed');
+      throw new Error(`Could not extract Bills data from either DataTable or exportBills`);
+    }
+
+    console.log(`[HP Sync] Header: ${tableData[0].join(', ')}`);
     progress(opts, 'download', `Extracted ${tableData.length - 1} bill rows`, 85);
 
     // Create a proper XLSX file from the extracted data
