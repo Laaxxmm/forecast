@@ -2,7 +2,6 @@ import { chromium, type Page, type BrowserContext } from 'playwright';
 import path from 'path';
 import fs from 'fs';
 import { execSync } from 'child_process';
-import * as XLSX from 'xlsx';
 
 export interface SyncOptions {
   username: string;
@@ -405,122 +404,62 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
       progress(opts, 'generate', 'Attempting download...', 78);
     }
 
-    // ── Step 7: Extract data from the #viewAllBillDetails DataTable ──
-    // Primary: #viewAllBillDetails DataTable (has ID column for patient_id)
-    // Fallback: #exportBills DOM table (no ID column, but always present)
-    progress(opts, 'download', 'Extracting Bills table data...', 80);
+    // ── Step 7: Click the export button and download the CSV ──
+    // exportTable('exportBills') calls $('#exportBills').tableToCSV() which
+    // generates a data:text/csv URI and triggers a download.
+    progress(opts, 'download', 'Clicking download button...', 80);
 
-    // Wait for all network activity to settle before reading the DOM
-    await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => {
-      console.log('[HP Sync] networkidle timed out before extraction, continuing...');
-    });
+    await page.waitForLoadState('load', { timeout: 30_000 }).catch(() => {});
     await page.waitForTimeout(2000);
 
-    // Wait for either DataTable or exportBills to have data
+    // Scroll to bottom to ensure Bills table is in view
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+    await page.waitForTimeout(1500);
+
+    // Wait for pagination text (confirms Bills table has loaded)
     try {
       await page.waitForFunction(() => {
-        // Check DataTable
-        const $ = (window as any).jQuery;
-        if ($ && $.fn.dataTable) {
-          const t = $('#viewAllBillDetails');
-          if (t.length > 0 && t.DataTable().rows().count() > 0) return true;
-        }
-        // Check exportBills fallback
-        const eb = document.getElementById('exportBills');
-        if (eb && eb.querySelectorAll('tr').length > 1) return true;
-        return false;
-      }, { timeout: 60_000 });
+        return /\d+\s*-\s*\d+\s+of\s+\d+/.test(document.body.innerText || '');
+      }, { timeout: 30_000 });
     } catch {
-      console.log('[HP Sync] No table data found after 60s, trying anyway');
+      console.log('[HP Sync] Pagination text not found, trying download anyway');
     }
     await page.waitForTimeout(1000);
 
-    // Try primary: DataTable API (has all columns including ID)
-    let tableData: string[][] | null = null;
-    try {
-      tableData = await page.evaluate(() => {
-        const $ = (window as any).jQuery;
-        if (!$ || !$.fn.dataTable) return null;
-        const t = $('#viewAllBillDetails');
-        if (!t.length) return null;
-        const dt = t.DataTable();
-        if (!dt || dt.rows().count() === 0) return null;
+    // Click the Bills export button: <a onclick="exportTable('exportBills');">
+    const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
 
-        const headers: string[] = dt.columns().header().toArray()
-          .map((h: HTMLElement) => h.textContent?.trim() || '');
-
-        const nodes = dt.rows().nodes();
-        const rows: string[][] = [];
-        for (let i = 0; i < nodes.length; i++) {
-          const cells: string[] = [];
-          nodes[i].querySelectorAll('td').forEach((td: HTMLElement) => {
-            cells.push(td.textContent?.trim() || '');
-          });
-          rows.push(cells);
-        }
-        return [headers, ...rows];
-      });
-      if (tableData && tableData.length > 1) {
-        console.log(`[HP Sync] DataTable: ${tableData.length - 1} rows, ${tableData[0].length} cols`);
+    const clickResult = await page.evaluate(() => {
+      const billsExport = document.querySelector('a[onclick*="exportBills"]') as HTMLElement;
+      if (billsExport) {
+        billsExport.click();
+        return 'a[onclick*="exportBills"]';
       }
-    } catch (e: any) {
-      console.log(`[HP Sync] DataTable extraction failed: ${e.message}`);
-      // If context was destroyed (page navigated), wait for new page to settle
-      if (e.message?.includes('context') || e.message?.includes('navigation')) {
-        console.log('[HP Sync] Page navigated during extraction, waiting for recovery...');
-        await page.waitForLoadState('load', { timeout: 30_000 }).catch(() => {});
-        await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
-        await page.waitForTimeout(3000);
+      if (typeof (window as any).exportTable === 'function') {
+        (window as any).exportTable('exportBills');
+        return 'direct:exportTable("exportBills")';
       }
+      return null;
+    });
+
+    if (!clickResult) {
+      await saveDebugScreenshot('download-btn-not-found');
+      throw new Error('Could not find exportBills button');
     }
+    console.log(`[HP Sync] Download clicked: ${clickResult}`);
 
-    // Fallback: read #exportBills DOM table (missing ID column but reliable)
-    if (!tableData || tableData.length < 2) {
-      console.log('[HP Sync] Falling back to #exportBills DOM table');
-      try {
-        tableData = await page.evaluate(() => {
-          const table = document.getElementById('exportBills');
-          if (!table) return null;
-          const rows: string[][] = [];
-          table.querySelectorAll('tr').forEach(tr => {
-            const cells: string[] = [];
-            tr.querySelectorAll('th, td').forEach(cell => {
-              cells.push((cell as HTMLElement).textContent?.trim() || '');
-            });
-            if (cells.length > 0) rows.push(cells);
-          });
-          return rows;
-        });
-        if (tableData && tableData.length > 1) {
-          console.log(`[HP Sync] exportBills fallback: ${tableData.length - 1} rows, ${tableData[0].length} cols`);
-        }
-      } catch (e: any) {
-        console.log(`[HP Sync] exportBills extraction also failed: ${e.message}`);
-      }
-    }
-
-    if (!tableData || tableData.length < 2) {
-      await saveDebugScreenshot('extraction-failed');
-      throw new Error(`Could not extract Bills data from either DataTable or exportBills`);
-    }
-
-    console.log(`[HP Sync] Header: ${tableData[0].join(', ')}`);
-    progress(opts, 'download', `Extracted ${tableData.length - 1} bill rows`, 85);
-
-    // Create a proper XLSX file from the extracted data
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(tableData);
-    XLSX.utils.book_append_sheet(wb, ws, 'Bills');
+    progress(opts, 'download', 'Downloading file...', 85);
+    const download = await downloadPromise;
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const filename = `healthplix-sync-${timestamp}.xlsx`;
+    const filename = `healthplix-sync-${timestamp}.csv`;
     const filePath = path.join(downloadDir, filename);
-    XLSX.writeFile(wb, filePath);
+    await download.saveAs(filePath);
 
     const fileSize = fs.statSync(filePath).size;
-    console.log(`[HP Sync] Saved XLSX: ${filePath} (${fileSize} bytes, ${tableData.length - 1} data rows)`);
+    console.log(`[HP Sync] Saved: ${filePath} (${fileSize} bytes)`);
 
-    progress(opts, 'download', 'File saved', 90);
+    progress(opts, 'download', 'File downloaded', 90);
     progress(opts, 'complete', 'Download complete!', 100);
 
     await browser.close();
