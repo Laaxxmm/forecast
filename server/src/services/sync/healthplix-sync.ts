@@ -391,20 +391,21 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     }
 
     // ── Step 7: Download the report ──
-    // The Bills table is below the Billing Summary section.
-    // The correct download icon is next to "1 - N of N" pagination text.
-    // DO NOT click download icons in the Billing Summary (Billed, Outstanding, etc.)
+    // The page has TWO sections:
+    //   1. Billing Summary (top) — totals like Billed, Outstanding, etc. with its own download
+    //   2. Bills table (bottom) — line-item details with pagination "X - Y of Z" and download
+    // We MUST download from the Bills TABLE (bottom), NOT the Billing Summary (top).
+    // Strategy: scroll to bottom, find ALL download icons, pick the LOWEST one on the page.
     progress(opts, 'download', 'Looking for download button...', 80);
 
-    // Ensure page is stable
     await page.waitForLoadState('load', { timeout: 30_000 }).catch(() => {});
     await page.waitForTimeout(2000);
 
-    // Scroll down past Billing Summary to the Bills table area
+    // Scroll fully to bottom to ensure Bills table is in view
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1500);
 
-    // Wait for pagination text "X - Y of Z" to appear (means Bills table loaded)
+    // Wait for pagination text (confirms Bills table has loaded)
     try {
       await page.waitForFunction(() => {
         return /\d+\s*-\s*\d+\s+of\s+\d+/.test(document.body.innerText || '');
@@ -414,107 +415,127 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     }
     await page.waitForTimeout(1000);
 
-    const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
+    // Save debug screenshot BEFORE attempting download (for diagnostics)
+    await saveDebugScreenshot('pre-download');
 
-    // Find and click the download icon next to pagination "1 - N of N"
-    // The correct icon is in the Bills table row, NOT in the Billing Summary above
-    let dlClicked = false;
-    for (let attempt = 0; attempt < 3 && !dlClicked; attempt++) {
-      if (attempt > 0) {
-        await page.waitForTimeout(3000);
-        await page.waitForLoadState('load', { timeout: 10_000 }).catch(() => {});
-        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
-        await page.waitForTimeout(1000);
-      }
-      try {
-        const result = await page.evaluate(() => {
-          // Find the pagination element by checking innerText of small elements
-          const candidates = document.querySelectorAll('span, div, td, p, li, small');
-          let paginationEl: Element | null = null;
-          for (const el of candidates) {
-            const text = (el.innerText || el.textContent || '').trim();
-            if (text.length < 30 && /\d+\s*-\s*\d+\s+of\s+\d+/.test(text)) {
-              paginationEl = el;
-              break;
-            }
-          }
-
-          if (paginationEl) {
-            // Get pagination position to find nearby download icon
-            const pRect = paginationEl.getBoundingClientRect();
-
-            // Find all download-like icons and pick the one closest to pagination
-            const allIcons = document.querySelectorAll(
-              'i.fa-download, i.fa-file-download, i.fa-file-excel, ' +
-              'a i.fa-download, button i.fa-download, ' +
-              '[class*="fa-download"], [class*="file-download"], ' +
-              'a[download], a[href*="download"]'
-            );
-            let bestIcon: Element | null = null;
-            let bestDist = Infinity;
-            for (const icon of allIcons) {
-              const iRect = (icon as HTMLElement).getBoundingClientRect();
-              if (iRect.width === 0 || iRect.height === 0) continue;
-              // Distance from pagination to icon (should be on same row, so check Y proximity)
-              const dy = Math.abs(iRect.top - pRect.top);
-              const dx = Math.abs(iRect.left - pRect.right);
-              if (dy < 50) { // same row (within 50px vertically)
-                const dist = dx + dy;
-                if (dist < bestDist) {
-                  bestDist = dist;
-                  bestIcon = icon;
-                }
-              }
-            }
-            if (bestIcon) {
-              const clickTarget = bestIcon.closest('a, button') || bestIcon;
-              (clickTarget as HTMLElement).click();
-              return `proximity-match(dist=${Math.round(bestDist)})`;
-            }
-
-            // Fallback: walk up from pagination and click the last <a> or <button> sibling
-            let container = paginationEl.parentElement;
-            for (let depth = 0; depth < 2 && container; depth++) {
-              const links = container.querySelectorAll('a, button');
-              if (links.length >= 2) {
-                // The download is the last clickable after < and > arrows
-                (links[links.length - 1] as HTMLElement).click();
-                return `last-sibling(depth=${depth})`;
-              }
-              container = container.parentElement;
-            }
-          }
-
-          return null;
+    // ── Collect ALL download-triggerable elements, ranked by Y-position (lowest wins) ──
+    const downloadCandidates = await page.evaluate(() => {
+      const icons: { idx: number; y: number; label: string }[] = [];
+      // Broad selector covering FA icons, SVGs, links, buttons with download-like attributes
+      const selectors = [
+        'i.fa-download', 'i.fa-file-download', 'i.fa-file-excel',
+        '[class*="fa-download"]', '[class*="file-download"]', '[class*="download"]',
+        'a[download]', 'a[href*="download"]', 'a[href*="export"]',
+        '[title*="ownload"]', '[title*="xport"]', '[title*="xcel"]',
+        '[aria-label*="ownload"]', '[aria-label*="xport"]',
+        'svg[data-icon="download"]', 'svg[data-icon="file-download"]',
+      ];
+      const seen = new Set<Element>();
+      for (const sel of selectors) {
+        document.querySelectorAll(sel).forEach(el => {
+          const clickable = el.closest('a, button') || el;
+          if (seen.has(clickable)) return;
+          seen.add(clickable);
+          const rect = (clickable as HTMLElement).getBoundingClientRect();
+          if (rect.width === 0 || rect.height === 0) return;
+          icons.push({ idx: icons.length, y: rect.top + window.scrollY, label: `${sel}@y=${Math.round(rect.top)}` });
         });
-        if (result) {
-          dlClicked = true;
-          console.log(`[HP Sync] Download clicked: ${result} (attempt ${attempt + 1})`);
+      }
+      // Sort by Y descending — lowest on page first (Bills table is below Summary)
+      icons.sort((a, b) => b.y - a.y);
+      return icons;
+    });
+    console.log(`[HP Sync] Found ${downloadCandidates.length} download candidates: ${JSON.stringify(downloadCandidates.map(c => c.label))}`);
+
+    // ── Try each candidate starting from the LOWEST on the page ──
+    const XLSX = await import('xlsx');
+    const EXPECTED_HEADERS = ['bill date', 'id', 'name', 'item price', 'dept', 'dept.'];
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    let savedFilePath = '';
+    let savedFilename = '';
+
+    for (let ci = 0; ci < Math.min(downloadCandidates.length, 3); ci++) {
+      const candidate = downloadCandidates[ci];
+      console.log(`[HP Sync] Trying download candidate ${ci}: ${candidate.label}`);
+      try {
+        const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
+
+        // Click the candidate by re-querying and sorting by Y to get the right one
+        await page.evaluate((targetIdx) => {
+          const selectors = [
+            'i.fa-download', 'i.fa-file-download', 'i.fa-file-excel',
+            '[class*="fa-download"]', '[class*="file-download"]', '[class*="download"]',
+            'a[download]', 'a[href*="download"]', 'a[href*="export"]',
+            '[title*="ownload"]', '[title*="xport"]', '[title*="xcel"]',
+            '[aria-label*="ownload"]', '[aria-label*="xport"]',
+            'svg[data-icon="download"]', 'svg[data-icon="file-download"]',
+          ];
+          const seen = new Set<Element>();
+          const all: { el: Element; y: number }[] = [];
+          for (const sel of selectors) {
+            document.querySelectorAll(sel).forEach(el => {
+              const clickable = el.closest('a, button') || el;
+              if (seen.has(clickable)) return;
+              seen.add(clickable);
+              const rect = (clickable as HTMLElement).getBoundingClientRect();
+              if (rect.width === 0 || rect.height === 0) return;
+              all.push({ el: clickable, y: rect.top + window.scrollY });
+            });
+          }
+          all.sort((a, b) => b.y - a.y);
+          if (all[targetIdx]) (all[targetIdx].el as HTMLElement).click();
+        }, ci);
+
+        progress(opts, 'download', `Downloading file (attempt ${ci + 1})...`, 85);
+        const download = await downloadPromise;
+
+        const filename = `healthplix-sync-${timestamp}${ci > 0 ? `-attempt${ci + 1}` : ''}.xlsx`;
+        const filePath = path.join(downloadDir, filename);
+        await download.saveAs(filePath);
+
+        // ── VALIDATE: check if the file has the expected columns ──
+        try {
+          const wb = XLSX.readFile(filePath, { raw: true });
+          const sheet = wb.Sheets[wb.SheetNames[0]];
+          const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true }) as any[][];
+          let valid = false;
+          for (let i = 0; i < Math.min(rawData.length, 10); i++) {
+            const row = rawData[i];
+            if (!row) continue;
+            let matchCount = 0;
+            for (const cell of row) {
+              const cellStr = String(cell ?? '').toLowerCase().trim();
+              if (EXPECTED_HEADERS.includes(cellStr)) matchCount++;
+            }
+            if (matchCount >= 4) { valid = true; break; }
+          }
+          if (valid) {
+            console.log(`[HP Sync] ✓ File validated with correct headers (candidate ${ci})`);
+            savedFilePath = filePath;
+            savedFilename = filename;
+            break; // success!
+          } else {
+            console.log(`[HP Sync] ✗ File from candidate ${ci} has wrong headers, trying next...`);
+            // Keep the bad file for debugging but try next candidate
+          }
+        } catch (valErr) {
+          console.log(`[HP Sync] ✗ Could not validate file from candidate ${ci}: ${(valErr as Error).message}`);
         }
-      } catch (e) {
-        console.log(`[HP Sync] Download attempt ${attempt + 1} failed: ${(e as Error).message}`);
+      } catch (dlErr) {
+        console.log(`[HP Sync] Download candidate ${ci} failed: ${(dlErr as Error).message}`);
       }
     }
 
-    if (!dlClicked) {
-      await saveDebugScreenshot('download-btn-not-found');
-      throw new Error('Could not find download button near pagination in Healthplix Bills table');
+    if (!savedFilePath) {
+      await saveDebugScreenshot('all-downloads-failed');
+      throw new Error('Could not download the correct Bills table report. All download icons returned wrong data. Check debug screenshots.');
     }
 
-    progress(opts, 'download', 'Downloading file...', 85);
-    const download = await downloadPromise;
-    progress(opts, 'download', 'File downloaded', 90);
-
-    // Save the file
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const filename = `healthplix-sync-${timestamp}.xlsx`;
-    const filePath = path.join(downloadDir, filename);
-    await download.saveAs(filePath);
-
+    progress(opts, 'download', 'File downloaded and validated', 90);
     progress(opts, 'complete', 'Download complete!', 100);
 
     await browser.close();
-    return { filePath, filename };
+    return { filePath: savedFilePath, filename: savedFilename };
   } catch (err: any) {
     // Save debug screenshot before closing
     try {
