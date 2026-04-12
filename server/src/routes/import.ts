@@ -451,6 +451,116 @@ router.delete('/:id', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+router.get('/sync-tracker', async (req, res) => {
+  const db = req.tenantDb!;
+  const bf = branchFilter(req);
+  const now = new Date();
+  const monthParam = (req.query.month as string) || now.toISOString().slice(0, 7);
+  const [yr, mo] = monthParam.split('-').map(Number);
+  const daysInMonth = new Date(yr, mo, 0).getDate();
+  const firstDay = `${monthParam}-01`;
+  const lastDay = `${monthParam}-${String(daysInMonth).padStart(2, '0')}`;
+  const todayStr = now.toISOString().slice(0, 10);
+
+  // Q1–Q3: daily data coverage
+  const clinicDays = db.all(
+    `SELECT bill_date as date, COUNT(*) as row_count, COALESCE(SUM(item_price),0) as revenue
+     FROM clinic_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where} GROUP BY bill_date`,
+    firstDay, lastDay, ...bf.params
+  );
+  const salesDays = db.all(
+    `SELECT bill_date as date, COUNT(*) as row_count, COALESCE(SUM(sales_amount),0) as revenue
+     FROM pharmacy_sales_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where} GROUP BY bill_date`,
+    firstDay, lastDay, ...bf.params
+  );
+  const purchaseDays = db.all(
+    `SELECT invoice_date as date, COUNT(*) as row_count, COALESCE(SUM(purchase_value),0) as total
+     FROM pharmacy_purchase_actuals WHERE invoice_date >= ? AND invoice_date <= ?${bf.where} GROUP BY invoice_date`,
+    firstDay, lastDay, ...bf.params
+  );
+
+  // Q4: last sync timestamps
+  const syncRows = db.all(
+    `SELECT source, MAX(created_at) as last_sync_at FROM import_logs
+     WHERE source IN ('HEALTHPLIX','HEALTHPLIX_SYNC','ONEGLANCE_SALES','ONEGLANCE_SALES_SYNC',
+       'ONEGLANCE_PURCHASE','ONEGLANCE_PURCHASE_SYNC','ONEGLANCE_STOCK','ONEGLANCE_STOCK_SYNC','TURIA','TURIA_SYNC')
+       AND status = 'completed'${bf.where} GROUP BY source`,
+    ...bf.params
+  );
+
+  // Q5: latest stock snapshot
+  const stockRow = db.get(
+    `SELECT MAX(snapshot_date) as latest FROM pharmacy_stock_actuals WHERE 1=1${bf.where}`,
+    ...bf.params
+  );
+
+  // Build lookup maps
+  const clinicMap: Record<string, any> = {};
+  for (const r of clinicDays) if (r.date) clinicMap[r.date] = { has: true, rows: r.row_count, rev: r.revenue };
+  const salesMap: Record<string, any> = {};
+  for (const r of salesDays) if (r.date) salesMap[r.date] = { has: true, rows: r.row_count, rev: r.revenue };
+  const purchaseMap: Record<string, any> = {};
+  for (const r of purchaseDays) if (r.date) purchaseMap[r.date] = { has: true, rows: r.row_count, total: r.total };
+
+  // Sync timestamps — merge HP/HP_SYNC etc. into single per-integration latest
+  const syncMap: Record<string, string> = {};
+  for (const r of syncRows) {
+    const key = r.source.replace('_SYNC', '');
+    if (!syncMap[key] || r.last_sync_at > syncMap[key]) syncMap[key] = r.last_sync_at;
+  }
+
+  // Build per-day response + compute gaps
+  const days: Record<string, any> = {};
+  const gaps: Record<string, string[]> = { clinic: [], sales: [], purchase: [] };
+  let clinicCovered = 0, clinicExpected = 0;
+  let salesCovered = 0, salesExpected = 0;
+  let purchaseCovered = 0, purchaseExpected = 0;
+
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${monthParam}-${String(d).padStart(2, '0')}`;
+    const dow = new Date(yr, mo - 1, d).getDay(); // 0=Sun
+    const isPast = dateStr <= todayStr;
+    const noData = { has: false, rows: 0, rev: 0 };
+
+    days[dateStr] = {
+      dow,
+      clinic: clinicMap[dateStr] || { ...noData },
+      sales: salesMap[dateStr] || { ...noData },
+      purchase: purchaseMap[dateStr] || { has: false, rows: 0, total: 0 },
+    };
+
+    if (isPast) {
+      // Clinic: skip Sundays
+      if (dow !== 0) {
+        clinicExpected++;
+        if (clinicMap[dateStr]) clinicCovered++;
+        else gaps.clinic.push(dateStr);
+      }
+      // Sales & Purchase: every day
+      salesExpected++;
+      purchaseExpected++;
+      if (salesMap[dateStr]) salesCovered++;
+      else gaps.sales.push(dateStr);
+      if (purchaseMap[dateStr]) purchaseCovered++;
+      else gaps.purchase.push(dateStr);
+    }
+  }
+
+  res.json({
+    month: monthParam,
+    today: todayStr,
+    days,
+    summary: {
+      clinic: { covered: clinicCovered, expected: clinicExpected, pct: clinicExpected ? Math.round(clinicCovered / clinicExpected * 1000) / 10 : 100, lastSync: syncMap['HEALTHPLIX'] || null },
+      sales: { covered: salesCovered, expected: salesExpected, pct: salesExpected ? Math.round(salesCovered / salesExpected * 1000) / 10 : 100, lastSync: syncMap['ONEGLANCE_SALES'] || null },
+      purchase: { covered: purchaseCovered, expected: purchaseExpected, pct: purchaseExpected ? Math.round(purchaseCovered / purchaseExpected * 1000) / 10 : 100, lastSync: syncMap['ONEGLANCE_PURCHASE'] || null },
+      stock: { latestSnapshot: stockRow?.latest || null, lastSync: syncMap['ONEGLANCE_STOCK'] || null },
+      turia: { lastSync: syncMap['TURIA'] || null },
+    },
+    gaps,
+  });
+});
+
 router.get('/download/:id', async (req, res) => {
   const db = req.tenantDb!;
   const log = db.get('SELECT file_path, filename FROM import_logs WHERE id = ?', req.params.id);

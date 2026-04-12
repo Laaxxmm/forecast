@@ -3,7 +3,7 @@ import api from '../api/client';
 import { Stethoscope, Pill, ShoppingCart, Upload, CheckCircle, AlertCircle, Trash2,
          RefreshCw, Cloud, Settings as SettingsIcon, Calendar,
          LogIn, Building2, FileSearch, CalendarRange, Download, Database, Check, XCircle,
-         Phone, KeyRound, Briefcase, Package } from 'lucide-react';
+         Phone, KeyRound, Briefcase, Package, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 type Source = 'healthplix' | 'oneglance-sales' | 'oneglance-purchase' | 'oneglance-stock' | 'turia';
@@ -173,6 +173,18 @@ function SyncStepTracker({ status, steps }: { status: { step: string; message: s
   );
 }
 
+function relativeTime(dateStr: string | null): string {
+  if (!dateStr) return 'Never';
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 export default function ImportPage() {
   const [mode, setMode] = useState<Mode>('upload');
   const [selected, setSelected] = useState<Source | null>(null);
@@ -204,6 +216,22 @@ export default function ImportPage() {
   const [turiaFY, setTuriaFY] = useState('2025-26');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const hasCredentials = syncSource === 'healthplix' ? hasHpCreds : syncSource === 'oneglance' ? hasOgCreds : hasTuriaCreds;
+
+  // Sync Tracker state
+  const [trackerMonth, setTrackerMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [trackerData, setTrackerData] = useState<any>(null);
+
+  useEffect(() => {
+    api.get('/import/sync-tracker', { params: { month: trackerMonth } })
+      .then(r => setTrackerData(r.data))
+      .catch(() => setTrackerData(null));
+  }, [trackerMonth]);
+
+  const navigateMonth = (dir: -1 | 1) => {
+    const [y, m] = trackerMonth.split('-').map(Number);
+    const d = new Date(y, m - 1 + dir, 1);
+    setTrackerMonth(d.toISOString().slice(0, 7));
+  };
 
   const loadHistory = useCallback(() => {
     api.get('/import/history').then(res => setHistory(res.data));
@@ -592,6 +620,187 @@ export default function ImportPage() {
           </button>
         </div>
       )}
+
+      {/* Sync Tracker */}
+      {trackerData && (() => {
+        const [yr, mo] = trackerMonth.split('-').map(Number);
+        const daysInMonth = new Date(yr, mo, 0).getDate();
+        const firstDow = new Date(yr, mo - 1, 1).getDay();
+        const startOffset = firstDow === 0 ? 6 : firstDow - 1; // Mon-start
+        const monthLabel = new Date(yr, mo - 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+        const cells: (null | { day: number; date: string; dow: number; clinic: any; sales: any; purchase: any })[] = [];
+        for (let i = 0; i < startOffset; i++) cells.push(null);
+        for (let d = 1; d <= daysInMonth; d++) {
+          const dateStr = `${trackerMonth}-${String(d).padStart(2, '0')}`;
+          const dd = trackerData.days[dateStr] || { dow: new Date(yr, mo - 1, d).getDay(), clinic: { has: false }, sales: { has: false }, purchase: { has: false } };
+          cells.push({ day: d, date: dateStr, ...dd });
+        }
+        const s = trackerData.summary;
+
+        return (
+          <div className="card !p-4 mb-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <CalendarDays size={15} className="text-accent-400" />
+                <h3 className="font-semibold text-theme-heading text-sm">Sync Tracker</h3>
+              </div>
+              <div className="flex items-center gap-1">
+                <button onClick={() => navigateMonth(-1)} className="p-1 rounded hover:bg-dark-600 text-theme-faint hover:text-theme-heading transition-colors"><ChevronLeft size={16} /></button>
+                <span className="text-xs font-medium text-theme-heading w-28 text-center">{monthLabel}</span>
+                <button onClick={() => navigateMonth(1)} className="p-1 rounded hover:bg-dark-600 text-theme-faint hover:text-theme-heading transition-colors"><ChevronRight size={16} /></button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-[1fr_260px] gap-4">
+              {/* Calendar Grid */}
+              <div>
+                <div className="grid grid-cols-7 gap-[3px]">
+                  {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => (
+                    <div key={d} className="text-[10px] font-medium text-theme-faint text-center py-1">{d}</div>
+                  ))}
+                  {cells.map((cell, i) =>
+                    cell === null ? <div key={`e-${i}`} className="h-10" /> : (() => {
+                      const isFuture = cell.date > trackerData.today;
+                      const isSunday = cell.dow === 0;
+                      const isToday = cell.date === trackerData.today;
+                      const clinicGap = !cell.clinic?.has && !isSunday && !isFuture && showHpSync;
+                      const salesGap = !cell.sales?.has && !isFuture && showOgSync;
+                      const purchaseGap = !cell.purchase?.has && !isFuture && showOgSync;
+                      const hasGap = clinicGap || salesGap || purchaseGap;
+                      return (
+                        <div
+                          key={cell.date}
+                          className={`h-10 rounded-md flex flex-col items-center justify-center transition-all ${
+                            isFuture ? 'bg-dark-800/40 opacity-30' :
+                            isToday ? 'ring-1 ring-accent-500 bg-accent-500/5' :
+                            hasGap ? 'bg-red-500/5 border border-red-500/15' :
+                            'bg-dark-700'
+                          } ${isSunday && !isFuture ? 'opacity-60' : ''}`}
+                          title={isFuture ? '' : `${cell.date}\nClinic: ${cell.clinic?.rows || 0} rows\nSales: ${cell.sales?.rows || 0} rows\nPurchase: ${cell.purchase?.rows || 0} rows`}
+                        >
+                          <span className={`text-[11px] leading-none ${isToday ? 'font-bold text-accent-400' : 'text-theme-secondary'}`}>{cell.day}</span>
+                          {!isFuture && (
+                            <div className="flex gap-[3px] mt-1">
+                              {showHpSync && (
+                                <div className={`w-[5px] h-[5px] rounded-full ${cell.clinic?.has ? 'bg-accent-500' : isSunday ? 'bg-dark-500' : 'bg-dark-500 ring-1 ring-red-500/40'}`} />
+                              )}
+                              {showOgSync && (
+                                <>
+                                  <div className={`w-[5px] h-[5px] rounded-full ${cell.sales?.has ? 'bg-purple-500' : 'bg-dark-500 ring-1 ring-red-500/40'}`} />
+                                  <div className={`w-[5px] h-[5px] rounded-full ${cell.purchase?.has ? 'bg-amber-500' : 'bg-dark-500 ring-1 ring-red-500/40'}`} />
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()
+                  )}
+                </div>
+                {/* Legend */}
+                <div className="flex gap-4 mt-2.5 text-[10px] text-theme-faint">
+                  {showHpSync && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-accent-500" /> Clinic</span>}
+                  {showOgSync && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-purple-500" /> Pharma Sales</span>}
+                  {showOgSync && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" /> Pharma Purchase</span>}
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-dark-500 ring-1 ring-red-500/40" /> Missing</span>
+                </div>
+              </div>
+
+              {/* Summary Cards */}
+              <div className="space-y-2">
+                {showHpSync && (
+                  <div className="bg-dark-700 rounded-lg p-2.5">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-1.5">
+                        <Stethoscope size={12} className="text-accent-400" />
+                        <span className="text-[11px] font-medium text-theme-heading">Clinic</span>
+                      </div>
+                      <span className="text-[10px] text-theme-faint">{relativeTime(s.clinic.lastSync)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 bg-dark-800 rounded-full h-1.5">
+                        <div className={`h-1.5 rounded-full transition-all ${s.clinic.pct >= 95 ? 'bg-accent-500' : s.clinic.pct >= 70 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${Math.min(s.clinic.pct, 100)}%` }} />
+                      </div>
+                      <span className={`text-[11px] font-bold ${s.clinic.pct >= 95 ? 'text-accent-400' : s.clinic.pct >= 70 ? 'text-amber-400' : 'text-red-400'}`}>{s.clinic.covered}/{s.clinic.expected}</span>
+                    </div>
+                    {trackerData.gaps.clinic.length > 0 && (
+                      <p className="text-[9px] text-red-400/70 mt-1 truncate">Missing: {trackerData.gaps.clinic.map((g: string) => g.slice(8)).join(', ')}</p>
+                    )}
+                  </div>
+                )}
+
+                {showOgSync && (
+                  <div className="bg-dark-700 rounded-lg p-2.5">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-1.5">
+                        <Pill size={12} className="text-purple-400" />
+                        <span className="text-[11px] font-medium text-theme-heading">Pharma Sales</span>
+                      </div>
+                      <span className="text-[10px] text-theme-faint">{relativeTime(s.sales.lastSync)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 bg-dark-800 rounded-full h-1.5">
+                        <div className={`h-1.5 rounded-full transition-all ${s.sales.pct >= 95 ? 'bg-purple-500' : s.sales.pct >= 70 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${Math.min(s.sales.pct, 100)}%` }} />
+                      </div>
+                      <span className={`text-[11px] font-bold ${s.sales.pct >= 95 ? 'text-purple-400' : s.sales.pct >= 70 ? 'text-amber-400' : 'text-red-400'}`}>{s.sales.covered}/{s.sales.expected}</span>
+                    </div>
+                    {trackerData.gaps.sales.length > 0 && (
+                      <p className="text-[9px] text-red-400/70 mt-1 truncate">Missing: {trackerData.gaps.sales.map((g: string) => g.slice(8)).join(', ')}</p>
+                    )}
+                  </div>
+                )}
+
+                {showOgSync && (
+                  <div className="bg-dark-700 rounded-lg p-2.5">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-1.5">
+                        <ShoppingCart size={12} className="text-amber-400" />
+                        <span className="text-[11px] font-medium text-theme-heading">Pharma Purchase</span>
+                      </div>
+                      <span className="text-[10px] text-theme-faint">{relativeTime(s.purchase.lastSync)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 bg-dark-800 rounded-full h-1.5">
+                        <div className={`h-1.5 rounded-full transition-all ${s.purchase.pct >= 95 ? 'bg-amber-500' : s.purchase.pct >= 70 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${Math.min(s.purchase.pct, 100)}%` }} />
+                      </div>
+                      <span className={`text-[11px] font-bold ${s.purchase.pct >= 95 ? 'text-amber-400' : s.purchase.pct >= 70 ? 'text-amber-400' : 'text-red-400'}`}>{s.purchase.covered}/{s.purchase.expected}</span>
+                    </div>
+                    {trackerData.gaps.purchase.length > 0 && (
+                      <p className="text-[9px] text-red-400/70 mt-1 truncate">Missing: {trackerData.gaps.purchase.map((g: string) => g.slice(8)).join(', ')}</p>
+                    )}
+                  </div>
+                )}
+
+                {showOgSync && s.stock && (
+                  <div className="bg-dark-700 rounded-lg p-2.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Package size={12} className="text-purple-300" />
+                        <span className="text-[11px] font-medium text-theme-heading">Stock Snapshot</span>
+                      </div>
+                      <span className="text-[10px] text-theme-faint">{relativeTime(s.stock.lastSync)}</span>
+                    </div>
+                    <p className="text-[10px] text-theme-secondary mt-1">Latest: <span className="font-medium text-theme-heading">{s.stock.latestSnapshot || 'None'}</span></p>
+                  </div>
+                )}
+
+                {showTuriaSync && s.turia && (
+                  <div className="bg-dark-700 rounded-lg p-2.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Briefcase size={12} className="text-blue-400" />
+                        <span className="text-[11px] font-medium text-theme-heading">Turia</span>
+                      </div>
+                      <span className="text-[10px] text-theme-faint">{relativeTime(s.turia.lastSync)}</span>
+                    </div>
+                    <p className="text-[10px] text-theme-secondary mt-1">Invoices synced periodically</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Import History */}
       <div className="card !p-4">
