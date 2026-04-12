@@ -124,7 +124,36 @@ export default function OperationalInsightsPage() {
         </div>
       )}
 
-      {/* Stream Sections */}
+      {/* Unified KPI Grid — 4 columns: Clinic categories + Pharmacy */}
+      {(() => {
+        const clinicStream = streams.find(s => s.name.toLowerCase().includes('clinic'));
+        const pharmacyStream = streams.find(s => s.name.toLowerCase().includes('pharma'));
+        const clinicCats = clinicStream
+          ? ([...new Set(clinicStream.cards.map(c => c.category).filter(Boolean))] as string[])
+          : [];
+        return (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {clinicCats.map(cat => (
+              <div key={cat} className="space-y-2">
+                <div className="text-[11px] font-semibold text-theme-muted uppercase tracking-wider">{cat}</div>
+                {clinicStream!.cards.filter(c => c.category === cat).map(card => (
+                  <PaceCard key={card.label} card={card} daysInMonth={daysInMonth} daysElapsed={daysElapsed} daysRemaining={daysRemaining} />
+                ))}
+              </div>
+            ))}
+            {pharmacyStream && (
+              <div className="space-y-2">
+                <div className="text-[11px] font-semibold text-theme-muted uppercase tracking-wider">Pharmacy</div>
+                {pharmacyStream.cards.map(card => (
+                  <PaceCard key={card.label} card={card} daysInMonth={daysInMonth} daysElapsed={daysElapsed} daysRemaining={daysRemaining} />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Per-stream Weekly + Chart */}
       {streams.map(stream => (
         <StreamSection key={stream.streamId} stream={stream} daysInMonth={daysInMonth} daysElapsed={daysElapsed} daysRemaining={daysRemaining} dailyTargetLine={dailyTargetLine} />
       ))}
@@ -163,34 +192,6 @@ function StreamSection({ stream, daysInMonth, daysElapsed, daysRemaining, dailyT
         <StreamIcon size={16} className="text-accent-400" />
         {stream.name}
       </h2>
-
-      {/* KPI Cards */}
-      {isClinic ? (
-        // Group clinic cards by category: 2 cards per row (Patients + Revenue)
-        (() => {
-          const categories = [...new Set(stream.cards.map(c => c.category).filter(Boolean))] as string[];
-          return (
-            <div className="space-y-3">
-              {categories.map(cat => (
-                <div key={cat}>
-                  <div className="text-[11px] font-medium text-theme-muted uppercase tracking-wider mb-1.5">{cat}</div>
-                  <div className="grid grid-cols-2 gap-3">
-                    {stream.cards.filter(c => c.category === cat).map(card => (
-                      <PaceCard key={card.label} card={card} daysInMonth={daysInMonth} daysElapsed={daysElapsed} daysRemaining={daysRemaining} />
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          );
-        })()
-      ) : (
-        <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
-          {stream.cards.map(card => (
-            <PaceCard key={card.label} card={card} daysInMonth={daysInMonth} daysElapsed={daysElapsed} daysRemaining={daysRemaining} />
-          ))}
-        </div>
-      )}
 
       {/* Weekly + Chart Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
