@@ -426,6 +426,15 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     }
     await page.waitForTimeout(1000);
 
+    // Check how many rows the exportBills table has before clicking
+    const preClickInfo = await page.evaluate(() => {
+      const eb = document.getElementById('exportBills');
+      const rows = eb ? eb.querySelectorAll('tr').length : -1;
+      const btn = document.querySelector('a[onclick*="exportBills"]');
+      return { tableRows: rows, buttonFound: !!btn };
+    }).catch(() => ({ tableRows: -1, buttonFound: false }));
+    console.log(`[HP Sync] Pre-click: exportBills rows=${preClickInfo.tableRows}, button=${preClickInfo.buttonFound}`);
+
     // Click the Bills export button: <a onclick="exportTable('exportBills');">
     const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
 
@@ -457,7 +466,13 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     await download.saveAs(filePath);
 
     const fileSize = fs.statSync(filePath).size;
-    console.log(`[HP Sync] Saved: ${filePath} (${fileSize} bytes)`);
+    const filePreview = fs.readFileSync(filePath, 'utf-8');
+    const lineCount = filePreview.split('\n').filter(l => l.trim()).length;
+    console.log(`[HP Sync] Saved: ${filePath} (${fileSize} bytes, ${lineCount} non-empty lines)`);
+    console.log(`[HP Sync] First 500 chars: ${filePreview.substring(0, 500)}`);
+    if (fileSize < 100) {
+      console.log(`[HP Sync] WARNING: File appears empty or too small`);
+    }
 
     progress(opts, 'download', 'File downloaded', 90);
     progress(opts, 'complete', 'Download complete!', 100);
