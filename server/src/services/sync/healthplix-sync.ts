@@ -2,6 +2,7 @@ import { chromium, type Page, type BrowserContext } from 'playwright';
 import path from 'path';
 import fs from 'fs';
 import { execSync } from 'child_process';
+import * as XLSX from 'xlsx';
 
 export interface SyncOptions {
   username: string;
@@ -390,71 +391,71 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
       progress(opts, 'generate', 'Attempting download...', 78);
     }
 
-    // ── Step 7: Download the report ──
-    // The page has TWO sections:
-    //   1. Billing Summary (top) — totals like Billed, Outstanding, etc. with its own download
-    //   2. Bills table (bottom) — line-item details with pagination "X - Y of Z" and download
-    // We MUST download from the Bills TABLE (bottom), NOT the Billing Summary (top).
-    // Strategy: scroll to bottom, find ALL download icons, pick the LOWEST one on the page.
-    progress(opts, 'download', 'Looking for download button...', 80);
+    // ── Step 7: Extract data directly from the #exportBills table ──
+    // Healthplix's exportTable('exportBills') uses tableToCSV() which creates a
+    // data:text/csv URI download. This is unreliable with Playwright (data URI
+    // downloads may not trigger the 'download' event consistently).
+    // Instead, we read the #exportBills TABLE directly from the DOM — it contains
+    // ALL rows (not paginated) — and create our own XLSX file.
+    progress(opts, 'download', 'Extracting Bills table data...', 80);
 
     await page.waitForLoadState('load', { timeout: 30_000 }).catch(() => {});
     await page.waitForTimeout(2000);
 
-    // Scroll fully to bottom to ensure Bills table is in view
+    // Scroll to bottom to ensure Bills table is rendered
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
     await page.waitForTimeout(1500);
 
-    // Wait for pagination text (confirms Bills table has loaded)
+    // Wait for the #exportBills table to have data rows
     try {
       await page.waitForFunction(() => {
-        return /\d+\s*-\s*\d+\s+of\s+\d+/.test(document.body.innerText || '');
-      }, { timeout: 30_000 });
+        const t = document.getElementById('exportBills');
+        return t && t.querySelectorAll('tr').length > 1;
+      }, { timeout: 60_000 });
     } catch {
-      console.log('[HP Sync] Pagination text not found, trying download anyway');
+      console.log('[HP Sync] exportBills table not populated after 60s, trying anyway');
     }
     await page.waitForTimeout(1000);
 
-    // ── Click the exact Bills export button ──
-    // From inspecting the live DOM:
-    //   <a onclick="exportTable('exportBills');">
-    //     <i class="material-icons">get_app</i>
-    //   </a>
-    // Other tabs have: exportTable('exportPayments'), etc.
-    // The Bills tab button is the ONLY one with onclick containing 'exportBills'.
-
-    const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
-
-    const clickResult = await page.evaluate(() => {
-      // Primary: exact onclick selector
-      const billsExport = document.querySelector('a[onclick*="exportBills"]') as HTMLElement;
-      if (billsExport) {
-        billsExport.click();
-        return 'a[onclick*="exportBills"]';
-      }
-      // Fallback: call the function directly
-      if (typeof (window as any).exportTable === 'function') {
-        (window as any).exportTable('exportBills');
-        return 'direct:exportTable("exportBills")';
-      }
-      return null;
+    // Read all rows from #exportBills table
+    const tableData = await page.evaluate(() => {
+      const table = document.getElementById('exportBills');
+      if (!table) return null;
+      const rows: string[][] = [];
+      table.querySelectorAll('tr').forEach(tr => {
+        const cells: string[] = [];
+        tr.querySelectorAll('th, td').forEach(cell => {
+          cells.push((cell as HTMLElement).textContent?.trim() || '');
+        });
+        if (cells.length > 0) rows.push(cells);
+      });
+      return rows;
     });
 
-    if (!clickResult) {
-      await saveDebugScreenshot('download-btn-not-found');
-      throw new Error('Could not find Download Report button (a[title="Download Report"] or material-icons get_app)');
+    if (!tableData || tableData.length < 2) {
+      await saveDebugScreenshot('export-table-empty');
+      throw new Error(`#exportBills table ${!tableData ? 'not found in DOM' : `has only ${tableData.length} rows`}`);
     }
-    console.log(`[HP Sync] Download clicked: ${clickResult}`);
 
-    progress(opts, 'download', 'Downloading file...', 85);
-    const download = await downloadPromise;
+    console.log(`[HP Sync] Extracted ${tableData.length} rows from #exportBills (${tableData[0].length} cols)`);
+    console.log(`[HP Sync] Header: ${tableData[0].join(', ')}`);
+
+    progress(opts, 'download', `Extracted ${tableData.length - 1} bill rows`, 85);
+
+    // Create a proper XLSX file from the extracted data
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(tableData);
+    XLSX.utils.book_append_sheet(wb, ws, 'Bills');
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const filename = `healthplix-sync-${timestamp}.xlsx`;
     const filePath = path.join(downloadDir, filename);
-    await download.saveAs(filePath);
+    XLSX.writeFile(wb, filePath);
 
-    progress(opts, 'download', 'File downloaded', 90);
+    const fileSize = fs.statSync(filePath).size;
+    console.log(`[HP Sync] Saved XLSX: ${filePath} (${fileSize} bytes, ${tableData.length - 1} data rows)`);
+
+    progress(opts, 'download', 'File saved', 90);
     progress(opts, 'complete', 'Download complete!', 100);
 
     await browser.close();
