@@ -845,35 +845,32 @@ export default function ImportPage() {
                       {log.date_range_start && log.date_range_end ? `${log.date_range_start} → ${log.date_range_end}` : '-'}
                     </td>
                     <td className="py-1.5 px-2 text-theme-faint">{new Date(log.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}</td>
-                    <td className="py-1.5 px-2 text-right flex items-center justify-end gap-1.5">
-                      {log.file_path && (
-                        <button
-                          onClick={() => {
-                            const baseUrl = api.defaults.baseURL || '';
-                            const token = localStorage.getItem('token');
-                            const url = `${baseUrl}/import/download/${log.id}`;
-                            const a = document.createElement('a');
-                            // Use fetch to download with auth header
-                            fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-                              .then(r => {
-                                if (!r.ok) throw new Error('Download failed');
-                                return r.blob();
-                              })
-                              .then(blob => {
-                                const blobUrl = URL.createObjectURL(blob);
-                                a.href = blobUrl;
-                                a.download = log.filename || `import-${log.id}`;
-                                a.click();
-                                URL.revokeObjectURL(blobUrl);
-                              })
-                              .catch(() => alert('File not available for download'));
-                          }}
-                          className="text-accent-400/40 hover:text-accent-400 transition-colors"
-                          title="Download file"
-                        >
-                          <Download size={13} />
-                        </button>
-                      )}
+                    <td className="py-1.5 px-2 text-right flex items-center justify-end gap-2">
+                      <button
+                        onClick={() => {
+                          const baseUrl = api.defaults.baseURL || '';
+                          const token = localStorage.getItem('token');
+                          const url = `${baseUrl}/import/download/${log.id}`;
+                          fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+                            .then(r => {
+                              if (!r.ok) throw new Error('Download failed');
+                              return r.blob();
+                            })
+                            .then(blob => {
+                              const blobUrl = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = blobUrl;
+                              a.download = log.filename || `import-${log.id}`;
+                              a.click();
+                              URL.revokeObjectURL(blobUrl);
+                            })
+                            .catch(() => alert('Source file not available — re-sync to enable downloads'));
+                        }}
+                        className="text-accent-400 hover:text-accent-300 transition-colors"
+                        title="Download source file"
+                      >
+                        <Download size={14} />
+                      </button>
                       <button onClick={() => handleDelete(log.id)} className="text-red-400/40 hover:text-red-400 transition-colors">
                         <Trash2 size={13} />
                       </button>
