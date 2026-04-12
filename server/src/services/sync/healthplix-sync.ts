@@ -391,53 +391,61 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
       progress(opts, 'generate', 'Attempting download...', 78);
     }
 
-    // ── Step 7: Extract data directly from the #exportBills table ──
-    // Healthplix's exportTable('exportBills') uses tableToCSV() which creates a
-    // data:text/csv URI download. This is unreliable with Playwright (data URI
-    // downloads may not trigger the 'download' event consistently).
-    // Instead, we read the #exportBills TABLE directly from the DOM — it contains
-    // ALL rows (not paginated) — and create our own XLSX file.
+    // ── Step 7: Extract data from the #viewAllBillDetails DataTable ──
+    // The visible Bills table (#viewAllBillDetails) has ALL columns including ID
+    // (patient_id). DataTables stores all rows in memory regardless of pagination,
+    // so we can extract all rows via the DataTables API.
+    // The hidden #exportBills table is missing the ID column, so we avoid it.
     progress(opts, 'download', 'Extracting Bills table data...', 80);
 
     await page.waitForLoadState('load', { timeout: 30_000 }).catch(() => {});
     await page.waitForTimeout(2000);
 
-    // Scroll to bottom to ensure Bills table is rendered
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
-    await page.waitForTimeout(1500);
-
-    // Wait for the #exportBills table to have data rows
+    // Wait for the DataTable to be initialized with data
     try {
       await page.waitForFunction(() => {
-        const t = document.getElementById('exportBills');
-        return t && t.querySelectorAll('tr').length > 1;
+        const $ = (window as any).jQuery;
+        if (!$ || !$.fn.dataTable) return false;
+        const t = $('#viewAllBillDetails');
+        return t.length > 0 && t.DataTable().rows().count() > 0;
       }, { timeout: 60_000 });
     } catch {
-      console.log('[HP Sync] exportBills table not populated after 60s, trying anyway');
+      console.log('[HP Sync] viewAllBillDetails DataTable not ready after 60s, trying anyway');
     }
     await page.waitForTimeout(1000);
 
-    // Read all rows from #exportBills table
+    // Read all rows from the DataTable (includes all paginated rows)
     const tableData = await page.evaluate(() => {
-      const table = document.getElementById('exportBills');
-      if (!table) return null;
+      const $ = (window as any).jQuery;
+      if (!$ || !$.fn.dataTable) return null;
+      const dt = $('#viewAllBillDetails').DataTable();
+      if (!dt || dt.rows().count() === 0) return null;
+
+      // Extract headers
+      const headers: string[] = dt.columns().header().toArray()
+        .map((h: HTMLElement) => h.textContent?.trim() || '');
+
+      // Extract all row data from DOM nodes (works regardless of DataTable data source)
       const rows: string[][] = [];
-      table.querySelectorAll('tr').forEach(tr => {
+      dt.rows().every(function(this: any) {
+        const node = this.node();
+        if (!node) return;
         const cells: string[] = [];
-        tr.querySelectorAll('th, td').forEach(cell => {
-          cells.push((cell as HTMLElement).textContent?.trim() || '');
+        node.querySelectorAll('td').forEach((td: HTMLElement) => {
+          cells.push(td.textContent?.trim() || '');
         });
-        if (cells.length > 0) rows.push(cells);
+        rows.push(cells);
       });
-      return rows;
+
+      return [headers, ...rows];
     });
 
     if (!tableData || tableData.length < 2) {
-      await saveDebugScreenshot('export-table-empty');
-      throw new Error(`#exportBills table ${!tableData ? 'not found in DOM' : `has only ${tableData.length} rows`}`);
+      await saveDebugScreenshot('datatable-empty');
+      throw new Error(`viewAllBillDetails DataTable ${!tableData ? 'not found' : `has only ${tableData.length} rows`}`);
     }
 
-    console.log(`[HP Sync] Extracted ${tableData.length} rows from #exportBills (${tableData[0].length} cols)`);
+    console.log(`[HP Sync] Extracted ${tableData.length - 1} rows from viewAllBillDetails (${tableData[0].length} cols)`);
     console.log(`[HP Sync] Header: ${tableData[0].join(', ')}`);
 
     progress(opts, 'download', `Extracted ${tableData.length - 1} bill rows`, 85);
