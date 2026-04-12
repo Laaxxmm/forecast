@@ -393,9 +393,9 @@ router.delete('/:id', requireAdmin, async (req, res) => {
   if (activeScenario) {
     const branchId = getBranchIdForInsert(req);
 
-    // Clear all revenue entries then rebuild from remaining source data
+    // Clear all synced entries (revenue + direct_costs) then rebuild from remaining source data
     db.run(
-      `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue'${bf.where}`,
+      `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category IN ('revenue', 'direct_costs')${bf.where}`,
       activeScenario.id, ...bf.params
     );
 
@@ -427,6 +427,21 @@ router.delete('/:id', requireAdmin, async (req, res) => {
       db.run(
         `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
          VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?, ?, datetime('now'))`,
+        activeScenario.id, row.month, row.total, branchId, pharmaStreamId
+      );
+    }
+
+    // Re-sync Pharmacy COGS from remaining data
+    const pharmaCogs = db.all(
+      `SELECT bill_month as month, COALESCE(SUM(purchase_amount), 0) as total
+       FROM pharmacy_sales_actuals WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where} GROUP BY bill_month`,
+      ...bf.params
+    );
+    for (const row of pharmaCogs) {
+      if (!row.month || row.total === 0) continue;
+      db.run(
+        `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+         VALUES (?, 'direct_costs', 'Pharmacy COGS', ?, ?, ?, ?, datetime('now'))`,
         activeScenario.id, row.month, row.total, branchId, pharmaStreamId
       );
     }
