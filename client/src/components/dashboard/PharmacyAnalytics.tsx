@@ -10,7 +10,6 @@ import {
   ChevronLeft, ChevronRight, DollarSign, Users, FileText, Gift,
   BarChart3, Layers, ArrowRightLeft, Warehouse, Clock, Download,
 } from 'lucide-react';
-import api from '../../api/client';
 import { downloadXlsx, PURCHASE_COLUMNS, SALES_COLUMNS, STOCK_COLUMNS,
   PHARMA_PURCHASE_EXPORT_COLUMNS, PHARMA_SALES_EXPORT_COLUMNS } from '../../utils/xlsxExport';
 
