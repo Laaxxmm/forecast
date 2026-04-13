@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, Truck, Shield, Info } from 'lucide-react';
+import { X, Truck, Shield, TrendingUp, Info } from 'lucide-react';
 
 interface Props {
   open: boolean;
@@ -10,7 +10,7 @@ interface Props {
 
 export interface AssetConfig {
   name: string;
-  assetType: 'long_term' | 'current';
+  assetType: 'long_term' | 'current' | 'investment';
   usefulLife: string;
   customLifeValue?: number;
   planToSell: boolean;
@@ -48,18 +48,18 @@ const CURRENT_LIFE_OPTIONS = [
 
 export default function AssetCreateModal({ open, onClose, onCreate }: Props) {
   const [name, setName] = useState('');
-  const [assetType, setAssetType] = useState<'long_term' | 'current'>('long_term');
+  const [assetType, setAssetType] = useState<'long_term' | 'current' | 'investment'>('long_term');
   const [usefulLife, setUsefulLife] = useState('forever');
   const [customLifeValue, setCustomLifeValue] = useState(5);
   const [planToSell, setPlanToSell] = useState(false);
 
   if (!open) return null;
 
-  const lifeOptions = assetType === 'long_term' ? LONG_TERM_LIFE_OPTIONS : CURRENT_LIFE_OPTIONS;
+  const lifeOptions = assetType === 'current' ? CURRENT_LIFE_OPTIONS : LONG_TERM_LIFE_OPTIONS;
 
-  const handleTypeChange = (type: 'long_term' | 'current') => {
+  const handleTypeChange = (type: 'long_term' | 'current' | 'investment') => {
     setAssetType(type);
-    setUsefulLife(type === 'long_term' ? 'forever' : 'full');
+    setUsefulLife(type === 'current' ? 'full' : 'forever');
     setPlanToSell(false);
   };
 
@@ -110,7 +110,7 @@ export default function AssetCreateModal({ open, onClose, onCreate }: Props) {
             <label className="block text-sm font-semibold text-theme-secondary mb-3">
               What type of asset is this?
             </label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <button
                 onClick={() => handleTypeChange('long_term')}
                 className={`text-left p-4 rounded-xl border-2 transition-all ${
@@ -124,7 +124,7 @@ export default function AssetCreateModal({ open, onClose, onCreate }: Props) {
                   <span className="font-semibold text-sm text-theme-heading">Long-term asset</span>
                 </div>
                 <p className="text-xs text-theme-faint leading-relaxed">
-                  Major purchases with long-lasting value — equipment, vehicles, or buildings. Not easy to convert to cash.
+                  Equipment, vehicles, or buildings. Not easy to convert to cash.
                 </p>
               </button>
               <button
@@ -140,7 +140,23 @@ export default function AssetCreateModal({ open, onClose, onCreate }: Props) {
                   <span className="font-semibold text-sm text-theme-heading">Current asset</span>
                 </div>
                 <p className="text-xs text-theme-faint leading-relaxed">
-                  Purchases whose full value you expect to get within 12 months — e.g. prepaid contracts, inventory.
+                  Full value within 12 months — prepaid contracts, inventory.
+                </p>
+              </button>
+              <button
+                onClick={() => handleTypeChange('investment')}
+                className={`text-left p-4 rounded-xl border-2 transition-all ${
+                  assetType === 'investment'
+                    ? 'border-accent-500 bg-accent-500/10'
+                    : 'border-dark-400/50 hover:border-dark-300 bg-dark-600'
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <TrendingUp size={18} className={assetType === 'investment' ? 'text-accent-400' : 'text-theme-faint'} />
+                  <span className="font-semibold text-sm text-theme-heading">Investment</span>
+                </div>
+                <p className="text-xs text-theme-faint leading-relaxed">
+                  Mutual funds, fixed deposits, or other financial instruments.
                 </p>
               </button>
             </div>
@@ -186,7 +202,7 @@ export default function AssetCreateModal({ open, onClose, onCreate }: Props) {
           </div>
 
           {/* Plan to Sell */}
-          {assetType === 'long_term' && (
+          {(assetType === 'long_term' || assetType === 'investment') && (
             <div>
               <div className="flex items-center gap-1.5 mb-2">
                 <label className="text-sm font-semibold text-theme-secondary">

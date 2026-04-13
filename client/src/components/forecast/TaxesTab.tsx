@@ -29,7 +29,7 @@ interface TaxConfig {
 
 function getDefaultConfig(settings: Record<string, any>): TaxConfig {
   return {
-    income_tax_rate: settings.income_tax_rate ?? 0,
+    income_tax_rate: settings.income_tax_rate ?? 25,
     income_tax_frequency: settings.income_tax_frequency ?? 'annually',
     income_tax_custom_months: settings.income_tax_custom_months ?? [],
     sales_tax_rate: settings.sales_tax_rate ?? 18,

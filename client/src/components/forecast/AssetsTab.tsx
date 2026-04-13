@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, GripVertical, FileDown, ChevronDown, ChevronRight, X, StickyNote } from 'lucide-react';
+import { Plus, GripVertical, FileDown, ChevronDown, ChevronRight, StickyNote } from 'lucide-react';
 import api from '../../api/client';
 import { Scenario, ForecastItem, getMonthLabel, formatRs } from '../../pages/ForecastModulePage';
 import ItemEditForm from './ItemEditForm';
@@ -25,11 +25,10 @@ export default function AssetsTab({ category, label, scenario, months, viewMode,
   const [editingItem, setEditingItem] = useState<ForecastItem | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
-  const [showInlineAdd, setShowInlineAdd] = useState(false);
-  const [inlineAddName, setInlineAddName] = useState('');
 
   const currentAssets = items.filter(i => i.item_type === 'current');
   const longTermAssets = items.filter(i => i.item_type === 'long_term');
+  const investmentAssets = items.filter(i => i.item_type === 'investment');
 
   // Calculate section totals
   const calcSectionTotals = (sectionItems: ForecastItem[]) => {
@@ -42,9 +41,10 @@ export default function AssetsTab({ category, label, scenario, months, viewMode,
 
   const currentTotals = calcSectionTotals(currentAssets);
   const longTermTotals = calcSectionTotals(longTermAssets);
+  const investmentTotals = calcSectionTotals(investmentAssets);
   const grandTotals: Record<string, number> = {};
   months.forEach(m => {
-    grandTotals[m] = (currentTotals[m] || 0) + (longTermTotals[m] || 0);
+    grandTotals[m] = (currentTotals[m] || 0) + (longTermTotals[m] || 0) + (investmentTotals[m] || 0);
   });
 
   const toggleSection = (section: string) => {
@@ -52,8 +52,8 @@ export default function AssetsTab({ category, label, scenario, months, viewMode,
   };
 
   const collapseAll = () => {
-    const allCollapsed = Object.values(collapsedSections).filter(Boolean).length >= 2;
-    setCollapsedSections({ current: !allCollapsed, long_term: !allCollapsed });
+    const allCollapsed = Object.values(collapsedSections).filter(Boolean).length >= 3;
+    setCollapsedSections({ current: !allCollapsed, long_term: !allCollapsed, investment: !allCollapsed });
   };
 
   const handleCreate = async (config: AssetConfig) => {
@@ -79,27 +79,6 @@ export default function AssetsTab({ category, label, scenario, months, viewMode,
       }
     } catch (err) {
       console.error('Failed to create asset:', err);
-    }
-  };
-
-  const handleInlineAdd = async () => {
-    if (!inlineAddName.trim() || !scenario) return;
-    try {
-      const res = await api.post('/forecast-module/items', {
-        scenario_id: scenario.id,
-        category: 'assets',
-        name: inlineAddName.trim(),
-        item_type: 'long_term',
-        entry_mode: 'varying',
-        start_month: months[0],
-        meta: { useful_life: '5', plan_to_sell: false },
-      });
-      setShowInlineAdd(false);
-      setInlineAddName('');
-      await onReload();
-      if (res.data?.id) setEditingItem(res.data);
-    } catch (err) {
-      console.error('Failed to add asset:', err);
     }
   };
 
@@ -324,47 +303,8 @@ export default function AssetsTab({ category, label, scenario, months, viewMode,
             {/* Long-term Assets Section */}
             {renderSectionHeader('long_term', 'Long-term assets', longTermAssets, longTermTotals)}
 
-            {/* Add new row */}
-            {!readOnly && (
-              <tr className="border-b border-dark-400/30">
-                <td className="py-2.5 px-4 sticky left-0 bg-dark-700 z-10" colSpan={months.length + 2}>
-                  {showInlineAdd ? (
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center border border-dark-400 rounded-lg overflow-hidden">
-                        <input
-                          autoFocus
-                          value={inlineAddName}
-                          onChange={e => setInlineAddName(e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter' && inlineAddName.trim()) handleInlineAdd();
-                            if (e.key === 'Escape') { setShowInlineAdd(false); setInlineAddName(''); }
-                          }}
-                          placeholder="Enter a new forecast item"
-                          className="bg-transparent px-3 py-1.5 text-sm text-theme-secondary placeholder:text-theme-faint outline-none w-64"
-                        />
-                        <button
-                          onClick={() => inlineAddName.trim() && handleInlineAdd()}
-                          className="px-3 py-1.5 text-xs font-medium text-theme-muted border-l border-dark-400 hover:bg-dark-600 whitespace-nowrap"
-                        >
-                          Enter to Add
-                        </button>
-                      </div>
-                      <button onClick={() => { setShowInlineAdd(false); setInlineAddName(''); }} className="p-1 text-theme-faint hover:text-theme-secondary">
-                        <X size={16} />
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setShowInlineAdd(true)}
-                      className="flex items-center gap-2 text-sm text-accent-400 hover:text-accent-300"
-                    >
-                      <Plus size={14} />
-                      Add new asset
-                    </button>
-                  )}
-                </td>
-              </tr>
-            )}
+            {/* Investments Section */}
+            {renderSectionHeader('investment', 'Investments', investmentAssets, investmentTotals)}
 
             {/* Grand Totals */}
             <tr className="border-t-2 border-accent-500/30 bg-dark-600 font-semibold">

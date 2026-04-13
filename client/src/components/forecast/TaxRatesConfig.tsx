@@ -15,7 +15,7 @@ export default function TaxRatesConfig({ scenario, settings, revenueItems, onExi
   const [saving, setSaving] = useState(false);
 
   // Income tax state
-  const [incomeTaxRate, setIncomeTaxRate] = useState<number>(settings.income_tax_rate ?? 0);
+  const [incomeTaxRate, setIncomeTaxRate] = useState<number>(settings.income_tax_rate ?? 25);
   const [incomeTaxFrequency, setIncomeTaxFrequency] = useState<string>(settings.income_tax_frequency ?? 'annually');
   const [incomeTaxCustomMonths, setIncomeTaxCustomMonths] = useState<number[]>(settings.income_tax_custom_months ?? []);
 

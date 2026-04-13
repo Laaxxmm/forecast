@@ -69,6 +69,7 @@ const CATEGORY_CONFIG: Record<string, { addLabel: string; itemTypes: { value: st
     itemTypes: [
       { value: 'long_term', label: 'Long-term asset', description: 'Equipment, vehicles, buildings' },
       { value: 'current', label: 'Current asset', description: 'Assets consumed within 12 months' },
+      { value: 'investment', label: 'Investment', description: 'Mutual funds, FDs, financial instruments' },
     ],
     showChart: false,
   },
