@@ -5,6 +5,7 @@ import { Stethoscope, Pill, ShoppingCart, Upload, CheckCircle, AlertCircle, Tras
          LogIn, Building2, FileSearch, CalendarRange, Download, Database, Check, XCircle,
          Phone, KeyRound, Briefcase, Package, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { downloadXlsx, CLINIC_EXPORT_COLUMNS, PHARMA_SALES_EXPORT_COLUMNS, PHARMA_PURCHASE_EXPORT_COLUMNS, STOCK_COLUMNS } from '../utils/xlsxExport';
 
 type Source = 'healthplix' | 'oneglance-sales' | 'oneglance-purchase' | 'oneglance-stock' | 'turia';
 type Mode = 'upload' | 'sync';
@@ -798,6 +799,9 @@ export default function ImportPage() {
         );
       })()}
 
+      {/* Download Report */}
+      <DownloadReportSection />
+
       {/* Import History */}
       <div className="card !p-4">
         <h3 className="font-semibold text-theme-heading text-sm mb-3">Import History</h3>
@@ -841,32 +845,7 @@ export default function ImportPage() {
                       {log.date_range_start && log.date_range_end ? `${log.date_range_start} → ${log.date_range_end}` : '-'}
                     </td>
                     <td className="py-1.5 px-2 text-theme-faint">{new Date(log.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}</td>
-                    <td className="py-1.5 px-2 text-right flex items-center justify-end gap-2">
-                      <button
-                        onClick={() => {
-                          const baseUrl = api.defaults.baseURL || '';
-                          const token = localStorage.getItem('token');
-                          const url = `${baseUrl}/import/download/${log.id}`;
-                          fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-                            .then(r => {
-                              if (!r.ok) throw new Error('Download failed');
-                              return r.blob();
-                            })
-                            .then(blob => {
-                              const blobUrl = URL.createObjectURL(blob);
-                              const a = document.createElement('a');
-                              a.href = blobUrl;
-                              a.download = log.filename || `import-${log.id}`;
-                              a.click();
-                              URL.revokeObjectURL(blobUrl);
-                            })
-                            .catch(() => alert('Source file not available — re-sync to enable downloads'));
-                        }}
-                        className="text-accent-400 hover:text-accent-300 transition-colors"
-                        title="Download source file"
-                      >
-                        <Download size={14} />
-                      </button>
+                    <td className="py-1.5 px-2 text-right">
                       <button onClick={() => handleDelete(log.id)} className="text-red-400/40 hover:text-red-400 transition-colors">
                         <Trash2 size={13} />
                       </button>
@@ -877,6 +856,111 @@ export default function ImportPage() {
             </table>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── Download Report Section ─────────────────────────────────────────────────
+
+const EXPORT_SOURCES = [
+  { key: 'clinic', label: 'Clinic (Healthplix)', icon: Stethoscope },
+  { key: 'pharma-sales', label: 'Pharmacy Sales', icon: Pill },
+  { key: 'pharma-purchase', label: 'Pharmacy Purchase', icon: ShoppingCart },
+  { key: 'pharma-stock', label: 'Pharmacy Stock', icon: Package },
+] as const;
+
+const EXPORT_COLUMNS: Record<string, any> = {
+  'clinic': CLINIC_EXPORT_COLUMNS,
+  'pharma-sales': PHARMA_SALES_EXPORT_COLUMNS,
+  'pharma-purchase': PHARMA_PURCHASE_EXPORT_COLUMNS,
+  'pharma-stock': STOCK_COLUMNS,
+};
+
+const EXPORT_FILENAMES: Record<string, string> = {
+  'clinic': 'Clinic_Report',
+  'pharma-sales': 'Pharmacy_Sales_Report',
+  'pharma-purchase': 'Pharmacy_Purchase_Report',
+  'pharma-stock': 'Pharmacy_Stock_Report',
+};
+
+function DownloadReportSection() {
+  const [source, setSource] = useState<string>('clinic');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = async () => {
+    if (source !== 'pharma-stock' && (!from || !to)) {
+      alert('Please select both From and To dates');
+      return;
+    }
+    setDownloading(true);
+    try {
+      const params: any = {};
+      if (source !== 'pharma-stock') {
+        params.from = from;
+        params.to = to;
+      } else {
+        params.from = '2000-01-01';
+        params.to = '2099-12-31';
+      }
+      const res = await api.get(`/import/export/${source}`, { params });
+      const { rows, count } = res.data;
+      if (!rows || count === 0) {
+        alert('No data found for the selected period');
+        return;
+      }
+      const dateSuffix = source === 'pharma-stock' ? 'latest' : `${from}_to_${to}`;
+      downloadXlsx(rows, EXPORT_COLUMNS[source], `${EXPORT_FILENAMES[source]}_${dateSuffix}`);
+    } catch {
+      alert('Failed to download report');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <div className="card !p-4 mb-4">
+      <h3 className="font-semibold text-theme-heading text-sm mb-3 flex items-center gap-2">
+        <Download size={15} /> Download Report
+      </h3>
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-theme-faint font-medium block mb-1">Source</label>
+          <div className="flex gap-1">
+            {EXPORT_SOURCES.map(s => {
+              const Icon = s.icon;
+              return (
+                <button key={s.key} onClick={() => setSource(s.key)}
+                  className={`px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 transition-colors ${
+                    source === s.key ? 'bg-accent-500/20 text-accent-400 font-medium' : 'bg-dark-600/50 text-theme-faint hover:text-theme-secondary'
+                  }`}>
+                  <Icon size={13} /> {s.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        {source !== 'pharma-stock' && (
+          <>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-theme-faint font-medium block mb-1">From</label>
+              <input type="date" value={from} onChange={e => setFrom(e.target.value)}
+                className="input text-sm py-1.5 px-2 w-36" />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-theme-faint font-medium block mb-1">To</label>
+              <input type="date" value={to} onChange={e => setTo(e.target.value)}
+                className="input text-sm py-1.5 px-2 w-36" />
+            </div>
+          </>
+        )}
+        <button onClick={handleDownload} disabled={downloading}
+          className="btn btn-primary text-sm px-4 py-1.5 flex items-center gap-1.5">
+          <Download size={14} />
+          {downloading ? 'Downloading...' : 'Download XLSX'}
+        </button>
       </div>
     </div>
   );

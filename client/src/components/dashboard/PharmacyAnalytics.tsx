@@ -10,7 +10,9 @@ import {
   ChevronLeft, ChevronRight, DollarSign, Users, FileText, Gift,
   BarChart3, Layers, ArrowRightLeft, Warehouse, Clock, Download,
 } from 'lucide-react';
-import { downloadXlsx, PURCHASE_COLUMNS, SALES_COLUMNS, STOCK_COLUMNS } from '../../utils/xlsxExport';
+import api from '../../api/client';
+import { downloadXlsx, PURCHASE_COLUMNS, SALES_COLUMNS, STOCK_COLUMNS,
+  PHARMA_PURCHASE_EXPORT_COLUMNS, PHARMA_SALES_EXPORT_COLUMNS } from '../../utils/xlsxExport';
 
 const COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#06b6d4', '#f97316', '#84cc16'];
 const CHART_STYLE = { backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '12px' };
@@ -124,13 +126,13 @@ export default function PharmacyAnalytics({ isVisible }: PharmacyAnalyticsProps)
 
       {/* Tab Content */}
       {activeTab === 'purchases' && data.purchases && (
-        <PurchasesTab data={data.purchases} isVisible={isVisible} search={search} setSearch={setSearch} page={page} setPage={setPage} pageSize={PAGE_SIZE} />
+        <PurchasesTab data={data.purchases} isVisible={isVisible} search={search} setSearch={setSearch} page={page} setPage={setPage} pageSize={PAGE_SIZE} fyStart={data.fyStart} fyEnd={data.fyEnd} />
       )}
       {activeTab === 'sales' && data.sales && (
-        <SalesTab data={data.sales} isVisible={isVisible} search={search} setSearch={setSearch} page={page} setPage={setPage} pageSize={PAGE_SIZE} />
+        <SalesTab data={data.sales} isVisible={isVisible} search={search} setSearch={setSearch} page={page} setPage={setPage} pageSize={PAGE_SIZE} fyStart={data.fyStart} fyEnd={data.fyEnd} />
       )}
       {activeTab === 'stock' && data.stock && (
-        <StockTab data={data.stock} isVisible={isVisible} search={search} setSearch={setSearch} page={page} setPage={setPage} pageSize={PAGE_SIZE} />
+        <StockTab data={data.stock} isVisible={isVisible} search={search} setSearch={setSearch} page={page} setPage={setPage} pageSize={PAGE_SIZE} fyStart={data.fyStart} fyEnd={data.fyEnd} />
       )}
       {activeTab === 'cross' && data.crossInsights && (
         <CrossTab data={data.crossInsights} isVisible={isVisible} />
@@ -191,9 +193,22 @@ interface TabProps {
   page: number;
   setPage: (fn: (p: number) => number) => void;
   pageSize: number;
+  fyStart?: string;
+  fyEnd?: string;
 }
 
-function PurchasesTab({ data, isVisible, search, setSearch, page, setPage, pageSize }: TabProps) {
+async function exportFromDb(source: string, columns: any[], filename: string, fyStart?: string, fyEnd?: string) {
+  try {
+    const from = fyStart || '2000-01-01';
+    const to = fyEnd || '2099-12-31';
+    const res = await api.get(`/import/export/${source}`, { params: { from, to } });
+    const { rows, count } = res.data;
+    if (!rows || count === 0) { alert('No data found'); return; }
+    downloadXlsx(rows, columns, filename);
+  } catch { alert('Download failed'); }
+}
+
+function PurchasesTab({ data, isVisible, search, setSearch, page, setPage, pageSize, fyStart, fyEnd }: TabProps) {
   const { kpi, monthlyTrend, topStockists, topManufacturers, topProducts, profitMarginDist, freeQtyAnalysis, table } = data;
 
   const cardKeys = ['pharma_total_purchase', 'pharma_total_invoices', 'pharma_unique_stockists', 'pharma_unique_products', 'pharma_total_free_qty', 'pharma_total_tax'];
@@ -363,7 +378,7 @@ function PurchasesTab({ data, isVisible, search, setSearch, page, setPage, pageS
               <p className="text-xs text-theme-faint">{formatNumber(filteredTable.length)} records</p>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={() => downloadXlsx(filteredTable, PURCHASE_COLUMNS, 'Purchase_Details')}
+              <button onClick={() => exportFromDb('pharma-purchase', PHARMA_PURCHASE_EXPORT_COLUMNS, 'Purchase_Details', fyStart, fyEnd)}
                 className="btn btn-sm btn-ghost flex items-center gap-1.5 text-xs text-theme-faint hover:text-accent-500" title="Download XLSX">
                 <Download size={14} /> Download
               </button>
@@ -414,7 +429,7 @@ function PurchasesTab({ data, isVisible, search, setSearch, page, setPage, pageS
 
 // ── SALES TAB ────────────────────────────────────────────────────────────────
 
-function SalesTab({ data, isVisible, search, setSearch, page, setPage, pageSize }: TabProps) {
+function SalesTab({ data, isVisible, search, setSearch, page, setPage, pageSize, fyStart, fyEnd }: TabProps) {
   const { kpi, monthlyTrend, topDrugsBySales, topDrugsByProfit, referralAnalysis, topPatients, table } = data;
 
   const cardKeys = ['pharma_total_sales', 'pharma_total_cogs', 'pharma_total_profit', 'pharma_profit_margin', 'pharma_total_bills', 'pharma_unique_patients'];
@@ -595,7 +610,7 @@ function SalesTab({ data, isVisible, search, setSearch, page, setPage, pageSize 
               <p className="text-xs text-theme-faint">{formatNumber(filteredTable.length)} records</p>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={() => downloadXlsx(filteredTable, SALES_COLUMNS, 'Sales_Details')}
+              <button onClick={() => exportFromDb('pharma-sales', PHARMA_SALES_EXPORT_COLUMNS, 'Sales_Details', fyStart, fyEnd)}
                 className="btn btn-sm btn-ghost flex items-center gap-1.5 text-xs text-theme-faint hover:text-accent-500" title="Download XLSX">
                 <Download size={14} /> Download
               </button>
@@ -643,7 +658,7 @@ function SalesTab({ data, isVisible, search, setSearch, page, setPage, pageSize 
 
 // ── STOCK TAB ────────────────────────────────────────────────────────────────
 
-function StockTab({ data, isVisible, search, setSearch, page, setPage, pageSize }: TabProps) {
+function StockTab({ data, isVisible, search, setSearch, page, setPage, pageSize, fyStart, fyEnd }: TabProps) {
   const { kpi, topProducts, expiryZones, table } = data;
 
   const cardKeys = ['pharma_stock_value', 'pharma_stock_skus', 'pharma_near_expiry', 'pharma_expired_items', 'pharma_total_batches'];
@@ -763,7 +778,7 @@ function StockTab({ data, isVisible, search, setSearch, page, setPage, pageSize 
               <p className="text-xs text-theme-faint">{formatNumber(filteredTable.length)} items</p>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={() => downloadXlsx(filteredTable, STOCK_COLUMNS, 'Stock_Details')}
+              <button onClick={() => exportFromDb('pharma-stock', STOCK_COLUMNS, 'Stock_Details')}
                 className="btn btn-sm btn-ghost flex items-center gap-1.5 text-xs text-theme-faint hover:text-accent-500" title="Download XLSX">
                 <Download size={14} /> Download
               </button>

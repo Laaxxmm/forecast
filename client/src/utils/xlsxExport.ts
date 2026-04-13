@@ -81,3 +81,58 @@ export const STOCK_COLUMNS: Column[] = [
   { header: 'Purchase Price', key: 'purchase_price', width: 15, format: 'currency' },
   { header: 'Stock Value', key: 'stock_value', width: 15, format: 'currency' },
 ];
+
+// ── Full export columns (from DB, used by Import page download) ───────────
+
+export const CLINIC_EXPORT_COLUMNS: Column[] = [
+  { header: 'Bill Date', key: 'bill_date', width: 12, format: 'date' },
+  { header: 'Patient ID', key: 'patient_id', width: 12 },
+  { header: 'Patient Name', key: 'patient_name', width: 22 },
+  { header: 'Order #', key: 'order_number', width: 14 },
+  { header: 'Department', key: 'department', width: 18 },
+  { header: 'Service', key: 'service_name', width: 30 },
+  { header: 'Billed Doctor', key: 'billed_doctor', width: 20 },
+  { header: 'Service Owner', key: 'service_owner', width: 20 },
+  { header: 'Billed', key: 'billed', width: 12, format: 'currency' },
+  { header: 'Paid', key: 'paid', width: 12, format: 'currency' },
+  { header: 'Discount', key: 'discount', width: 12, format: 'currency' },
+  { header: 'Tax', key: 'tax', width: 10, format: 'currency' },
+  { header: 'Refund', key: 'refund', width: 10, format: 'currency' },
+  { header: 'Due', key: 'due', width: 10, format: 'currency' },
+  { header: 'Item Price', key: 'item_price', width: 12, format: 'currency' },
+  { header: 'Item Discount', key: 'item_disc', width: 12, format: 'currency' },
+];
+
+export const PHARMA_PURCHASE_EXPORT_COLUMNS: Column[] = [
+  { header: 'Invoice', key: 'invoice_no', width: 15 },
+  { header: 'Date', key: 'invoice_date', width: 12, format: 'date' },
+  { header: 'Stockist', key: 'stockiest_name', width: 30 },
+  { header: 'Manufacturer', key: 'mfg_name', width: 25 },
+  { header: 'Drug', key: 'drug_name', width: 35 },
+  { header: 'Batch', key: 'batch_no', width: 12 },
+  { header: 'HSN Code', key: 'hsn_code', width: 10 },
+  { header: 'Batch Qty', key: 'batch_qty', width: 10, format: 'number' },
+  { header: 'Free Qty', key: 'free_qty', width: 10, format: 'number' },
+  { header: 'MRP', key: 'mrp', width: 12, format: 'currency' },
+  { header: 'Rate', key: 'rate', width: 12, format: 'currency' },
+  { header: 'Discount', key: 'discount_amount', width: 12, format: 'currency' },
+  { header: 'Purchase Value', key: 'purchase_value', width: 15, format: 'currency' },
+  { header: 'Net Purchase', key: 'net_purchase_value', width: 15, format: 'currency' },
+  { header: 'Tax', key: 'tax_amount', width: 12, format: 'currency' },
+  { header: 'Margin %', key: 'profit_pct', width: 10, format: 'percent' },
+];
+
+export const PHARMA_SALES_EXPORT_COLUMNS: Column[] = [
+  { header: 'Bill #', key: 'bill_no', width: 10 },
+  { header: 'Date', key: 'bill_date', width: 12, format: 'date' },
+  { header: 'Patient', key: 'patient_name', width: 25 },
+  { header: 'Drug', key: 'drug_name', width: 35 },
+  { header: 'Batch', key: 'batch_no', width: 12 },
+  { header: 'HSN Code', key: 'hsn_code', width: 10 },
+  { header: 'Qty', key: 'qty', width: 8, format: 'number' },
+  { header: 'Sales', key: 'sales_amount', width: 14, format: 'currency' },
+  { header: 'COGS', key: 'purchase_amount', width: 14, format: 'currency' },
+  { header: 'Tax', key: 'sales_tax', width: 12, format: 'currency' },
+  { header: 'Profit', key: 'profit', width: 14, format: 'currency' },
+  { header: 'Referred By', key: 'referred_by', width: 20 },
+];

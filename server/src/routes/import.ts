@@ -584,4 +584,70 @@ router.get('/download/:id', async (req, res) => {
   res.download(log.file_path, log.filename || `import-${req.params.id}`);
 });
 
+// ── Export data from DB as JSON (client generates XLSX) ─────────────────────
+
+router.get('/export/:source', async (req, res) => {
+  const db = req.tenantDb!;
+  const { source } = req.params;
+  const { from, to } = req.query as { from?: string; to?: string };
+  if (!from || !to) return res.status(400).json({ error: 'from and to query params required' });
+
+  const bf = branchFilter(req);
+
+  try {
+    let rows: any[] = [];
+
+    switch (source) {
+      case 'clinic':
+        rows = db.all(
+          `SELECT bill_date, patient_id, patient_name, order_number, department, service_name,
+            billed_doctor, service_owner, billed, paid, discount, tax, refund, due,
+            addl_disc, item_price, item_disc
+           FROM clinic_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where}
+           ORDER BY bill_date, patient_name`,
+          from, to, ...bf.params
+        );
+        break;
+
+      case 'pharma-sales':
+        rows = db.all(
+          `SELECT bill_no, bill_date, patient_name, drug_name, batch_no, hsn_code,
+            qty, sales_amount, purchase_amount, sales_tax, profit, referred_by
+           FROM pharmacy_sales_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where}
+           ORDER BY bill_date, bill_no`,
+          from, to, ...bf.params
+        );
+        break;
+
+      case 'pharma-purchase':
+        rows = db.all(
+          `SELECT invoice_no, invoice_date, stockiest_name, mfg_name, drug_name, batch_no,
+            hsn_code, batch_qty, free_qty, mrp, rate, discount_amount,
+            purchase_value, net_purchase_value, tax_amount, profit_pct
+           FROM pharmacy_purchase_actuals WHERE invoice_date >= ? AND invoice_date <= ?${bf.where}
+           ORDER BY invoice_date, invoice_no`,
+          from, to, ...bf.params
+        );
+        break;
+
+      case 'pharma-stock':
+        rows = db.all(
+          `SELECT drug_name, batch_no, received_date, expiry_date, avl_qty, strips,
+            purchase_price, stock_value, snapshot_date
+           FROM pharmacy_stock_actuals${bf.where ? ' WHERE 1=1' + bf.where : ''}
+           ORDER BY stock_value DESC`,
+          ...bf.params
+        );
+        break;
+
+      default:
+        return res.status(400).json({ error: 'Invalid source' });
+    }
+
+    res.json({ rows, count: rows.length });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 export default router;

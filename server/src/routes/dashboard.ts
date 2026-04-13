@@ -255,9 +255,10 @@ router.get('/clinic-analytics', async (req, res) => {
     return res.json({ hasData: false });
   }
 
-  // Patient-level aggregation
+  // Patient-level aggregation (use patient_name as fallback when patient_id is NULL)
   const patients = db.all(
-    `SELECT patient_id, patient_name,
+    `SELECT COALESCE(NULLIF(patient_id, ''), patient_name) as patient_key,
+      patient_name,
       GROUP_CONCAT(DISTINCT department) as departments,
       COUNT(DISTINCT department) as dept_count,
       COALESCE(SUM(item_price), 0) as total_revenue,
@@ -267,8 +268,8 @@ router.get('/clinic-analytics', async (req, res) => {
       COUNT(DISTINCT order_number) as visits
      FROM clinic_actuals
      WHERE bill_month >= ? AND bill_month <= ?
-       AND patient_id IS NOT NULL AND patient_id != ''${bf.where}
-     GROUP BY patient_id`,
+       AND COALESCE(NULLIF(patient_id, ''), patient_name) IS NOT NULL${bf.where}
+     GROUP BY COALESCE(NULLIF(patient_id, ''), patient_name)`,
     startMonth, endMonth, ...bf.params
   );
 
@@ -339,11 +340,11 @@ router.get('/clinic-analytics', async (req, res) => {
 
   // Doctor cross-sell analysis
   const doctorRows = db.all(
-    `SELECT billed_doctor, patient_id, department
+    `SELECT billed_doctor, COALESCE(NULLIF(patient_id, ''), patient_name) as patient_key, department
      FROM clinic_actuals
      WHERE bill_month >= ? AND bill_month <= ?
        AND billed_doctor IS NOT NULL AND billed_doctor != '-' AND billed_doctor != ''${bf.where}
-     GROUP BY billed_doctor, patient_id, department`,
+     GROUP BY billed_doctor, COALESCE(NULLIF(patient_id, ''), patient_name), department`,
     startMonth, endMonth, ...bf.params
   );
 
@@ -352,11 +353,11 @@ router.get('/clinic-analytics', async (req, res) => {
   for (const r of doctorRows as any[]) {
     if (r.department !== APPT) continue;
     if (!doctorPatients[r.billed_doctor]) doctorPatients[r.billed_doctor] = new Set();
-    doctorPatients[r.billed_doctor].add(r.patient_id);
+    doctorPatients[r.billed_doctor].add(r.patient_key);
   }
 
   // For each doctor, find which of their appointment patients also got lab/other
-  const patientDeptLookup = new Map(deptSets.map((p: any) => [p.patient_id, p.deptSet]));
+  const patientDeptLookup = new Map(deptSets.map((p: any) => [p.patient_key, p.deptSet]));
   const doctorCrossSell = Object.entries(doctorPatients)
     .map(([doctor, pids]) => {
       const total = pids.size;
@@ -373,8 +374,8 @@ router.get('/clinic-analytics', async (req, res) => {
   // Patient table data (top 200 for initial load)
   const patientTable = patients
     .map((p: any) => ({
-      patient_id: p.patient_id,
-      patient_name: p.patient_name,
+      patient_id: p.patient_key,
+      patient_name: p.patient_name || p.patient_key,
       departments: p.departments,
       total_billed: p.total_billed,
       total_paid: p.total_paid,
@@ -430,7 +431,7 @@ router.get('/pharmacy-analytics', async (req, res) => {
     return res.json({ hasData: false });
   }
 
-  const result: any = { hasData: true, hasSales, hasPurchases, hasStock };
+  const result: any = { hasData: true, hasSales, hasPurchases, hasStock, fyStart: fy.start_date, fyEnd: fy.end_date };
 
   // ── PURCHASES TAB ──────────────────────────────────────────────────────────
   if (hasPurchases) {
