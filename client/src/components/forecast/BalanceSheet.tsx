@@ -60,6 +60,10 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
 
   const employeeBenefitsPct = settings.employee_benefits_pct || 0;
 
+  // Tax rates from settings (same source as TaxesTab)
+  const incomeTaxRate = settings.income_tax_rate ?? 25;
+  const salesTaxRate = settings.sales_tax_rate ?? 18;
+
   // AR/AP settings
   const arGlobalDays = settings.ar_global_days || 30;
   const apGlobalDays = settings.ap_global_days || 30;
@@ -102,10 +106,15 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
     return data;
   }, [items, allValues, months, employeeBenefitsPct, financingItems]);
 
+  // Long-term asset items for depreciation & investments
+  const longTermAssetItems = useMemo(() => items.filter(i => i.category === 'assets' && i.item_type === 'long_term'), [items]);
+  const investmentAssetItems = useMemo(() => items.filter(i => i.category === 'assets' && i.item_type === 'investment'), [items]);
+
   // Cumulative calculations for balance sheet
   const balanceData = useMemo(() => {
     const data: Record<string, {
       cash: number; accountsReceivable: number; otherCurrentAssets: number;
+      fixedAssets: number; investmentAssets: number;
       longTermAssets: number; accumulatedDepreciation: number;
       currentAssets: number; longTermAssetsNet: number; totalAssets: number;
       accountsPayable: number; incomeTaxesPayable: number; salesTaxesPayable: number;
@@ -117,7 +126,8 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
     let cumulativeCash = ib.cash || 0;
     let cumulativeDepreciation = ib.accumulated_depreciation || 0;
     let cumulativeEarnings = 0;
-    let cumulativeAssetPurchases = ib.long_term_assets || 0;
+    let cumulativeFixedAssets = ib.long_term_assets || 0;
+    let cumulativeInvestmentAssets = 0;
 
     // Initial AR/AP values
     const initialAR = ib.accounts_receivable || 0;
@@ -134,9 +144,16 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
     months.forEach((m, idx) => {
       const md = monthData[m];
 
-      // Cash = initial + cumulative net profit + financing inflows - asset purchases - dividends
+      // Income tax accrual from settings rate
+      const netProfitBeforeTax = md.revenue - md.directCosts - md.personnel - md.employeeTaxes - md.expenses;
+      const incomeTaxAccrued = netProfitBeforeTax > 0 ? Math.round(netProfitBeforeTax * incomeTaxRate / 100) : 0;
+
+      // Sales tax accrual from settings rate
+      const salesTaxAccrued = Math.round(md.revenue * salesTaxRate / 100);
+
+      // Cash = initial + cumulative net profit + financing inflows - asset purchases - dividends - taxes
       const cashInflow = md.revenue;
-      const cashOutflow = md.directCosts + md.personnel + md.employeeTaxes + md.expenses + md.taxes;
+      const cashOutflow = md.directCosts + md.personnel + md.employeeTaxes + md.expenses;
       const netOperatingCash = cashInflow - cashOutflow;
 
       cumulativeCash += netOperatingCash - md.assetPurchases + md.investmentReceipts - md.loanRepayments - md.dividends;
@@ -156,14 +173,20 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
         otherCurrentAssets = remaining > 0 ? initialOtherCurrentAssets * (remaining / periods) : 0;
       }
 
-      // Long-term assets (cumulative purchases)
-      cumulativeAssetPurchases += md.assetPurchases;
-      const longTermAssets = cumulativeAssetPurchases;
+      // Fixed assets (long_term type purchases)
+      const ltPurchases = longTermAssetItems.reduce((s, i) => s + (allValues[i.id]?.[m] || 0), 0);
+      cumulativeFixedAssets += ltPurchases;
 
-      // Accumulated depreciation: simplified monthly depreciation
+      // Investment assets (investment type purchases)
+      const invPurchases = investmentAssetItems.reduce((s, i) => s + (allValues[i.id]?.[m] || 0), 0);
+      cumulativeInvestmentAssets += invPurchases;
+
+      const longTermAssets = cumulativeFixedAssets + cumulativeInvestmentAssets;
+
+      // Accumulated depreciation: monthly depreciation on fixed assets only
       const depPeriod = ib.depreciation_period;
-      if (depPeriod && depPeriod !== 'forever' && longTermAssets > 0) {
-        const monthlyDep = longTermAssets / (parseInt(depPeriod) * 12);
+      if (depPeriod && depPeriod !== 'forever' && cumulativeFixedAssets > 0) {
+        const monthlyDep = cumulativeFixedAssets / (parseFloat(depPeriod) * 12);
         cumulativeDepreciation += monthlyDep;
       }
 
@@ -174,9 +197,9 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
         ? initialAP + totalCostsPaid * apFraction
         : totalCostsPaid * apFraction;
 
-      // Tax payables: simplified - from tax items
-      const incomeTaxesPayable = idx === 0 ? initialIncomeTaxPayable + md.taxes : md.taxes;
-      const salesTaxesPayable = idx === 0 ? initialSalesTaxPayable : 0;
+      // Tax payables: auto-calculated from settings rates
+      const incomeTaxesPayable = idx === 0 ? initialIncomeTaxPayable + incomeTaxAccrued : incomeTaxAccrued;
+      const salesTaxesPayable = idx === 0 ? initialSalesTaxPayable + salesTaxAccrued : salesTaxAccrued;
 
       // Long-term liabilities from financing (loans outstanding)
       const loanItems = financingItems.filter(i => i.item_type === 'loan');
@@ -221,6 +244,8 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
         cash: cumulativeCash,
         accountsReceivable,
         otherCurrentAssets,
+        fixedAssets: cumulativeFixedAssets,
+        investmentAssets: cumulativeInvestmentAssets,
         longTermAssets,
         accumulatedDepreciation: -cumulativeDepreciation,
         currentAssets,
@@ -240,7 +265,7 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
       };
     });
     return data;
-  }, [monthData, months, ib, arGlobalDays, apGlobalDays, financingItems, allValues]);
+  }, [monthData, months, ib, arGlobalDays, apGlobalDays, financingItems, allValues, incomeTaxRate, salesTaxRate, longTermAssetItems, investmentAssetItems]);
 
   // Initial balance values
   const initialValues: Record<string, number> = useMemo(() => {
@@ -325,10 +350,16 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
       getInitial: () => iv.ltAssetsNet,
     });
     rows.push({
-      id: 'lt_assets_gross', label: 'Long-Term Assets', kind: 'leaf', level: 2,
+      id: 'fixed_assets', label: 'Fixed Assets', kind: 'leaf', level: 2,
       parentId: 'lt_assets',
-      getValue: m => bd[m]?.longTermAssets || 0,
+      getValue: m => bd[m]?.fixedAssets || 0,
       getInitial: () => iv.ltAssets,
+    });
+    rows.push({
+      id: 'investment_assets', label: 'Investments', kind: 'leaf', level: 2,
+      parentId: 'lt_assets',
+      getValue: m => bd[m]?.investmentAssets || 0,
+      getInitial: () => 0,
     });
     rows.push({
       id: 'acc_dep', label: 'Accumulated Depreciation', kind: 'leaf', level: 2,

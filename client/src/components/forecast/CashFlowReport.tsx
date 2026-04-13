@@ -57,6 +57,13 @@ export default function CashFlowReport({ items, allValues, months, viewMode, set
   const investmentItems = useMemo(() => financingItems.filter(i => i.item_type === 'investment'), [financingItems]);
   const creditItems = useMemo(() => financingItems.filter(i => i.item_type === 'line_of_credit' || i.item_type === 'other'), [financingItems]);
 
+  // Tax rates from settings (same source as TaxesTab)
+  const incomeTaxRate = settings.income_tax_rate ?? 25;
+  const salesTaxRate = settings.sales_tax_rate ?? 18;
+
+  // Long-term asset items for depreciation
+  const longTermAssetItems = useMemo(() => items.filter(i => i.category === 'assets' && i.item_type === 'long_term'), [items]);
+
   // Monthly calculation cache
   const monthData = useMemo(() => {
     const data: Record<string, {
@@ -74,8 +81,9 @@ export default function CashFlowReport({ items, allValues, months, viewMode, set
     let prevCashEnd = ib.cash || 0;
     let prevAR = ib.accounts_receivable || 0;
     let prevAP = ib.accounts_payable || 0;
-    let prevIncomeTax = ib.income_taxes_payable || 0;
-    let prevSalesTax = ib.sales_taxes_payable || 0;
+    let prevIncomeTaxPayable = ib.income_taxes_payable || 0;
+    let prevSalesTaxPayable = ib.sales_taxes_payable || 0;
+    let cumulativeLTAssets = ib.long_term_assets || 0;
 
     months.forEach(m => {
       const revenue = sumCategory(items, 'revenue', allValues, m);
@@ -83,15 +91,30 @@ export default function CashFlowReport({ items, allValues, months, viewMode, set
       const personnel = sumCategory(items, 'personnel', allValues, m);
       const employeeTaxes = Math.round(personnel * (employeeBenefitsPct / 100));
       const expenses = sumCategory(items, 'expenses', allValues, m);
-      const taxes = sumCategory(items, 'taxes', allValues, m);
       const assetsPurchased = sumCategory(items, 'assets', allValues, m);
       const dividends = sumCategory(items, 'dividends', allValues, m);
 
-      const totalExpenses = directCosts + personnel + employeeTaxes + expenses + taxes;
-      const netProfit = revenue - totalExpenses;
+      // Track cumulative long-term asset purchases for depreciation
+      const ltPurchases = longTermAssetItems.reduce((s, i) => s + (allValues[i.id]?.[m] || 0), 0);
+      cumulativeLTAssets += ltPurchases;
 
-      // Depreciation (simplified — from asset settings or zero)
-      const depreciation = 0; // TODO: derive from asset depreciation schedules
+      // Depreciation: from initial_balances.depreciation_period applied to cumulative LT assets
+      const depPeriod = ib.depreciation_period;
+      let depreciation = 0;
+      if (depPeriod && depPeriod !== 'forever' && cumulativeLTAssets > 0) {
+        depreciation = Math.round(cumulativeLTAssets / (parseFloat(depPeriod) * 12));
+      }
+
+      const totalOpex = directCosts + personnel + employeeTaxes + expenses;
+      const netProfitBeforeTax = revenue - totalOpex;
+
+      // Income tax accrual from settings rate (same as TaxesTab)
+      const incomeTaxAccrued = netProfitBeforeTax > 0 ? Math.round(netProfitBeforeTax * incomeTaxRate / 100) : 0;
+
+      // Sales tax accrual from settings rate
+      const salesTaxAccrued = Math.round(revenue * salesTaxRate / 100);
+
+      const netProfit = netProfitBeforeTax - incomeTaxAccrued;
 
       // AR/AP changes based on cash flow assumptions
       const arFraction = (arGlobalCreditPct / 100) * Math.min(arGlobalDays / 30, 1);
@@ -104,13 +127,14 @@ export default function CashFlowReport({ items, allValues, months, viewMode, set
       const changeAP = currentAP - prevAP;
       prevAP = currentAP;
 
-      // Tax payable changes
-      const currentIncomeTax = taxes;
-      const changeIncomeTax = currentIncomeTax - prevIncomeTax;
-      prevIncomeTax = currentIncomeTax;
+      // Tax payable changes (accrued this month — tracks balance sheet payable)
+      const currentIncomeTaxPayable = incomeTaxAccrued;
+      const changeIncomeTax = currentIncomeTaxPayable - prevIncomeTaxPayable;
+      prevIncomeTaxPayable = currentIncomeTaxPayable;
 
-      const changeSalesTax = 0 - prevSalesTax;
-      prevSalesTax = 0;
+      const currentSalesTaxPayable = salesTaxAccrued;
+      const changeSalesTax = currentSalesTaxPayable - prevSalesTaxPayable;
+      prevSalesTaxPayable = currentSalesTaxPayable;
 
       const netCashOps = netProfit + depreciation - changeAR + changeAP + changeIncomeTax + changeSalesTax;
 
@@ -147,7 +171,7 @@ export default function CashFlowReport({ items, allValues, months, viewMode, set
       };
     });
     return data;
-  }, [items, allValues, months, ib, employeeBenefitsPct, arGlobalDays, apGlobalDays, arGlobalCreditPct, apGlobalCreditPct, loanItems, investmentItems, creditItems]);
+  }, [items, allValues, months, ib, employeeBenefitsPct, arGlobalDays, apGlobalDays, arGlobalCreditPct, apGlobalCreditPct, loanItems, investmentItems, creditItems, incomeTaxRate, salesTaxRate, longTermAssetItems]);
 
   // Build row hierarchy
   const cfRows: CFRow[] = useMemo(() => {
