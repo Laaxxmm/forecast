@@ -126,7 +126,7 @@ export default function DashboardPage() {
   const isClinicVisible = (key: string) => {
     if (!clinicStreamId) return false;
     const entry = chartVis.find((v: any) => v.element_key === key && v.scope === clinicStreamId);
-    return entry ? !!entry.is_visible : false;
+    return entry ? !!entry.is_visible : true;
   };
 
   // Pharmacy stream visibility helper

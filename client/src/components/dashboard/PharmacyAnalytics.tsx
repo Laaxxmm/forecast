@@ -8,8 +8,9 @@ import { formatINR, formatNumber, getMonthLabel } from '../../utils/format';
 import {
   Pill, ShoppingCart, TrendingUp, Package, AlertTriangle, Search,
   ChevronLeft, ChevronRight, DollarSign, Users, FileText, Gift,
-  BarChart3, Layers, ArrowRightLeft, Warehouse, Clock,
+  BarChart3, Layers, ArrowRightLeft, Warehouse, Clock, Download,
 } from 'lucide-react';
+import { downloadXlsx, PURCHASE_COLUMNS, SALES_COLUMNS, STOCK_COLUMNS } from '../../utils/xlsxExport';
 
 const COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#06b6d4', '#f97316', '#84cc16'];
 const CHART_STYLE = { backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '12px' };
@@ -361,10 +362,16 @@ function PurchasesTab({ data, isVisible, search, setSearch, page, setPage, pageS
               <h3 className="text-sm font-semibold text-theme-heading">Purchase Details</h3>
               <p className="text-xs text-theme-faint">{formatNumber(filteredTable.length)} records</p>
             </div>
-            <div className="relative">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-faint" />
-              <input type="text" value={search} onChange={e => { setSearch(e.target.value); setPage(() => 0); }}
-                placeholder="Search drug, stockist..." className="input text-sm pl-9 w-64" />
+            <div className="flex items-center gap-2">
+              <button onClick={() => downloadXlsx(filteredTable, PURCHASE_COLUMNS, 'Purchase_Details')}
+                className="btn btn-sm btn-ghost flex items-center gap-1.5 text-xs text-theme-faint hover:text-accent-500" title="Download XLSX">
+                <Download size={14} /> Download
+              </button>
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-faint" />
+                <input type="text" value={search} onChange={e => { setSearch(e.target.value); setPage(() => 0); }}
+                  placeholder="Search drug, stockist..." className="input text-sm pl-9 w-64" />
+              </div>
             </div>
           </div>
           <div className="overflow-x-auto">
@@ -587,10 +594,16 @@ function SalesTab({ data, isVisible, search, setSearch, page, setPage, pageSize 
               <h3 className="text-sm font-semibold text-theme-heading">Sales Details</h3>
               <p className="text-xs text-theme-faint">{formatNumber(filteredTable.length)} records</p>
             </div>
-            <div className="relative">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-faint" />
-              <input type="text" value={search} onChange={e => { setSearch(e.target.value); setPage(() => 0); }}
-                placeholder="Search drug, patient..." className="input text-sm pl-9 w-64" />
+            <div className="flex items-center gap-2">
+              <button onClick={() => downloadXlsx(filteredTable, SALES_COLUMNS, 'Sales_Details')}
+                className="btn btn-sm btn-ghost flex items-center gap-1.5 text-xs text-theme-faint hover:text-accent-500" title="Download XLSX">
+                <Download size={14} /> Download
+              </button>
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-faint" />
+                <input type="text" value={search} onChange={e => { setSearch(e.target.value); setPage(() => 0); }}
+                  placeholder="Search drug, patient..." className="input text-sm pl-9 w-64" />
+              </div>
             </div>
           </div>
           <div className="overflow-x-auto">
@@ -749,10 +762,16 @@ function StockTab({ data, isVisible, search, setSearch, page, setPage, pageSize 
               <h3 className="text-sm font-semibold text-theme-heading">Stock Details</h3>
               <p className="text-xs text-theme-faint">{formatNumber(filteredTable.length)} items</p>
             </div>
-            <div className="relative">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-faint" />
-              <input type="text" value={search} onChange={e => { setSearch(e.target.value); setPage(() => 0); }}
-                placeholder="Search drug, batch..." className="input text-sm pl-9 w-64" />
+            <div className="flex items-center gap-2">
+              <button onClick={() => downloadXlsx(filteredTable, STOCK_COLUMNS, 'Stock_Details')}
+                className="btn btn-sm btn-ghost flex items-center gap-1.5 text-xs text-theme-faint hover:text-accent-500" title="Download XLSX">
+                <Download size={14} /> Download
+              </button>
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-faint" />
+                <input type="text" value={search} onChange={e => { setSearch(e.target.value); setPage(() => 0); }}
+                  placeholder="Search drug, batch..." className="input text-sm pl-9 w-64" />
+              </div>
             </div>
           </div>
           <div className="overflow-x-auto">
