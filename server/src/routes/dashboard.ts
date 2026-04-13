@@ -250,10 +250,24 @@ router.get('/clinic-analytics', async (req, res) => {
   const startMonth = fy.start_date.slice(0, 7);
   const endMonth = fy.end_date.slice(0, 7);
 
-  // Check table exists
-  try { db.get('SELECT 1 FROM clinic_actuals LIMIT 1'); } catch {
+  // Check table exists and diagnose data
+  let totalRows = 0;
+  try {
+    totalRows = db.get('SELECT COUNT(*) as n FROM clinic_actuals')?.n || 0;
+  } catch {
+    console.log('[clinic-analytics] clinic_actuals table does not exist');
     return res.json({ hasData: false });
   }
+  const rowsInFy = db.get(
+    `SELECT COUNT(*) as n FROM clinic_actuals WHERE bill_month >= ? AND bill_month <= ?${bf.where}`,
+    startMonth, endMonth, ...bf.params
+  )?.n || 0;
+  const rowsWithPid = db.get(
+    `SELECT COUNT(*) as n FROM clinic_actuals WHERE bill_month >= ? AND bill_month <= ? AND patient_id IS NOT NULL AND patient_id != ''${bf.where}`,
+    startMonth, endMonth, ...bf.params
+  )?.n || 0;
+  const sampleRow = db.get(`SELECT patient_id, patient_name, bill_month, department FROM clinic_actuals LIMIT 1`);
+  console.log(`[clinic-analytics] FY: ${startMonth} to ${endMonth}, totalRows=${totalRows}, rowsInFy=${rowsInFy}, rowsWithPid=${rowsWithPid}, sample=${JSON.stringify(sampleRow)}`);
 
   // Patient-level aggregation
   const patients = db.all(
@@ -272,6 +286,7 @@ router.get('/clinic-analytics', async (req, res) => {
     startMonth, endMonth, ...bf.params
   );
 
+  console.log(`[clinic-analytics] patients found: ${patients.length}`);
   if (patients.length === 0) return res.json({ hasData: false });
 
   // Department sets per patient
