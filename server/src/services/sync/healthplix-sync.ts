@@ -404,9 +404,10 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
       progress(opts, 'generate', 'Attempting download...', 78);
     }
 
-    // ── Step 7: Click the export button and download the CSV ──
-    // exportTable('exportBills') calls $('#exportBills').tableToCSV() which
-    // generates a data:text/csv URI and triggers a download.
+    // ── Step 7: Click the "Download Report" button in the Bills tab ──
+    // The Bills tab has a "Download Report" button (a[title="Download Report"])
+    // which calls downloadTableToCSV() and includes ALL columns (ID, Addl. Disc,
+    // Item Disc, Service Owner) that are missing from the old exportTable('exportBills').
     progress(opts, 'download', 'Clicking download button...', 80);
 
     await page.waitForLoadState('load', { timeout: 30_000 }).catch(() => {});
@@ -426,36 +427,39 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     }
     await page.waitForTimeout(1000);
 
-    // Check how many rows the exportBills table has before clicking
-    const preClickInfo = await page.evaluate(() => {
-      const eb = document.getElementById('exportBills');
-      const rows = eb ? eb.querySelectorAll('tr').length : -1;
-      const btn = document.querySelector('a[onclick*="exportBills"]');
-      return { tableRows: rows, buttonFound: !!btn };
-    }).catch(() => ({ tableRows: -1, buttonFound: false }));
-    console.log(`[HP Sync] Pre-click: exportBills rows=${preClickInfo.tableRows}, button=${preClickInfo.buttonFound}`);
+    // Ensure the Bills tab is active (it should be by default)
+    await page.evaluate(() => {
+      const billsTab = document.querySelector('a.nav-link.active');
+      if (!billsTab || !billsTab.textContent?.includes('Bills')) {
+        const tabs = document.querySelectorAll('a.nav-link');
+        for (const t of tabs) {
+          if (t.textContent?.trim() === 'Bills') { (t as HTMLElement).click(); break; }
+        }
+      }
+    }).catch(() => {});
+    await page.waitForTimeout(500);
 
-    // Click the Bills export button: <a onclick="exportTable('exportBills');">
+    // Check for the "Download Report" button
+    const preClickInfo = await page.evaluate(() => {
+      const btn = document.querySelector('a[title="Download Report"]');
+      return { downloadReportFound: !!btn };
+    }).catch(() => ({ downloadReportFound: false }));
+    console.log(`[HP Sync] Pre-click: downloadReport=${preClickInfo.downloadReportFound}`);
+
+    if (!preClickInfo.downloadReportFound) {
+      await saveDebugScreenshot('download-btn-not-found');
+      throw new Error('Could not find "Download Report" button on Bills tab. Healthplix UI may have changed.');
+    }
+
+    // Click the "Download Report" button (Bills tab, first instance)
+    // This uses downloadTableToCSV() which includes ALL columns (ID, Addl. Disc, etc.)
     const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
 
-    const clickResult = await page.evaluate(() => {
-      const billsExport = document.querySelector('a[onclick*="exportBills"]') as HTMLElement;
-      if (billsExport) {
-        billsExport.click();
-        return 'a[onclick*="exportBills"]';
-      }
-      if (typeof (window as any).exportTable === 'function') {
-        (window as any).exportTable('exportBills');
-        return 'direct:exportTable("exportBills")';
-      }
-      return null;
+    await page.evaluate(() => {
+      const btn = document.querySelector('a[title="Download Report"]') as HTMLElement;
+      btn.click();
     });
-
-    if (!clickResult) {
-      await saveDebugScreenshot('download-btn-not-found');
-      throw new Error('Could not find exportBills button');
-    }
-    console.log(`[HP Sync] Download clicked: ${clickResult}`);
+    console.log(`[HP Sync] Download clicked: a[title="Download Report"]`);
 
     progress(opts, 'download', 'Downloading file...', 85);
     const download = await downloadPromise;
