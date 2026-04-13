@@ -74,20 +74,27 @@ router.get('/overview', async (req, res) => {
       scenario.id, startMonth, endMonth, ...bf.params, stream.id
     ) : [];
 
-    const budget = db.get(
-      `SELECT COALESCE(SUM(amount), 0) as total FROM budgets
-       WHERE fy_id = ? AND business_unit = ? AND metric = 'revenue'${bf.where}`,
-      fy.id, stream.name, ...bf.params
-    );
+    // Get forecast revenue for this stream from forecast_values
+    let forecastTotal = 0;
+    if (scenario) {
+      const forecast = db.get(
+        `SELECT COALESCE(SUM(fv.amount), 0) as total
+         FROM forecast_values fv
+         JOIN forecast_items fi ON fv.item_id = fi.id
+         WHERE fi.scenario_id = ? AND fi.category = 'revenue'
+           AND fv.month >= ? AND fv.month <= ?`,
+        scenario.id, startMonth, endMonth
+      );
+      forecastTotal = forecast?.total || 0;
+    }
 
     const streamTotal = revenue?.total || 0;
-    const budgetTotal = budget?.total || 0;
     totalRevenue += streamTotal;
-    totalBudget += budgetTotal;
+    totalBudget += forecastTotal;
 
     const streamData = {
       id: stream.id, name: stream.name, icon: stream.icon, color: stream.color,
-      total_revenue: streamTotal, budget_total: budgetTotal, monthly,
+      total_revenue: streamTotal, budget_total: forecastTotal, monthly,
     };
     streams.push(streamData);
     streamDataMap[stream.id] = streamData;
@@ -179,7 +186,7 @@ router.get('/overview', async (req, res) => {
       if (sd) {
         value = sd.total_revenue;
         budget = sd.budget_total;
-        subtitle = value > 0 ? `vs ${budget} budget` : 'No data yet';
+        subtitle = value > 0 ? `vs ${budget} forecast` : 'No data yet';
       }
     } else if (card.card_type === 'custom' && defaultScenario) {
       const catData = db.get(
@@ -231,7 +238,7 @@ router.get('/overview', async (req, res) => {
 
   res.json({
     fy, streams, cards: filteredCards, chartVisibility,
-    combined: { total_revenue: combinedRevenue, total_budget: combinedBudget },
+    combined: { total_revenue: combinedRevenue, total_budget: combinedBudget, total_forecast: combinedBudget },
   });
 });
 

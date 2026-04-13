@@ -188,7 +188,7 @@ export default function DashboardPage() {
                   title={card.title}
                   value={formatINR(card.value)}
                   subtitle={card.subtitle === 'No data yet' ? card.subtitle :
-                    card.budget > 0 ? `vs ${formatINR(card.budget)} budget` :
+                    card.budget > 0 ? `vs ${formatINR(card.budget)} forecast` :
                     card.subtitle || undefined}
                   icon={CardIcon}
                   color={card.color || 'accent'}
@@ -223,7 +223,7 @@ export default function DashboardPage() {
                     key={stream.id}
                     title={`${stream.name} Revenue`}
                     value={formatINR(stream.total_revenue)}
-                    subtitle={stream.total_revenue > 0 ? `vs ${formatINR(stream.budget_total)} budget` : 'No data yet'}
+                    subtitle={stream.total_revenue > 0 ? `vs ${formatINR(stream.budget_total)} forecast` : 'No data yet'}
                     icon={StreamIcon}
                     color={stream.color || 'blue'}
                     trend={trend}

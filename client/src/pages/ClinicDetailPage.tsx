@@ -115,11 +115,11 @@ export default function ClinicDetailPage() {
         )}
       </div>
 
-      {/* Budget vs Actual */}
+      {/* Forecast vs Actual */}
       <div className="card mb-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h3 className="text-sm font-semibold text-theme-heading mb-1">Budget vs Actual</h3>
+            <h3 className="text-sm font-semibold text-theme-heading mb-1">Forecast vs Actual</h3>
             <p className="text-xs text-theme-faint">Performance against forecast</p>
           </div>
           {streamNames.length > 0 && (
@@ -134,7 +134,7 @@ export default function ClinicDetailPage() {
           <>
             <div className="grid grid-cols-3 gap-4 mb-6">
               <div className="bg-dark-600 rounded-xl p-3.5 text-center">
-                <p className="text-[10px] text-theme-faint uppercase tracking-wider mb-1">Budget</p>
+                <p className="text-[10px] text-theme-faint uppercase tracking-wider mb-1">Forecast</p>
                 <p className="text-lg font-bold text-theme-primary">{formatINR(bvaSummary.totalBudget)}</p>
               </div>
               <div className="bg-dark-600 rounded-xl p-3.5 text-center">
@@ -157,13 +157,13 @@ export default function ClinicDetailPage() {
                 <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
                 <Tooltip formatter={(v: number) => formatINR(v)} contentStyle={chartTooltipStyle} />
                 <Legend />
-                <Bar dataKey="budget" name="Budget" fill="#475569" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="budget" name="Forecast" fill="#475569" radius={[6, 6, 0, 0]} />
                 <Bar dataKey="actual" name="Actual" fill="#10b981" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </>
         ) : (
-          <p className="text-theme-faint text-center py-16 text-sm">Set a budget in Forecast to see comparison</p>
+          <p className="text-theme-faint text-center py-16 text-sm">Add revenue items in Forecast to see comparison</p>
         )}
       </div>
 
