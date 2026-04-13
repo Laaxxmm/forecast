@@ -51,6 +51,19 @@ function TrendBadge({ current, previous }: { current: number; previous: number }
   );
 }
 
+function VariationBadge({ actual, forecast }: { actual: number; forecast: number }) {
+  if (!forecast) return null;
+  const diff = actual - forecast;
+  const pct = (diff / forecast) * 100;
+  const positive = diff >= 0;
+  return (
+    <span className={`inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded ${positive ? 'text-emerald-400 bg-emerald-500/10' : 'text-red-400 bg-red-500/10'}`}>
+      {positive ? <ArrowUp size={10} /> : <ArrowDown size={10} />}
+      {Math.abs(Math.round(pct * 10) / 10)}%
+    </span>
+  );
+}
+
 export default function OperationalInsightsPage() {
   const [data, setData] = useState<InsightsData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -216,7 +229,7 @@ function PaceCard({ card, daysInMonth, daysElapsed, daysRemaining }: {
         {card.rag === 'GREY' && card.lastMonthMtd > 0 && <TrendBadge current={card.mtd} previous={card.lastMonthMtd} />}
       </div>
       <div className="text-xl font-bold text-theme-primary">{fmtVal(card.mtd, card.unit)}</div>
-      {card.target > 0 && (
+      {card.target > 0 && card.unit !== 'percent' && (
         <>
           <div className="flex items-center justify-between text-[10px]">
             <span className="text-theme-faint">Target: {fmtVal(card.target, card.unit)}</span>
@@ -240,6 +253,12 @@ function PaceCard({ card, daysInMonth, daysElapsed, daysRemaining }: {
             </div>
           </div>
         </>
+      )}
+      {card.target > 0 && card.unit === 'percent' && (
+        <div className="flex items-center justify-between text-[10px]">
+          <span className="text-theme-faint">Forecast: {card.target}%</span>
+          <VariationBadge actual={card.mtd} forecast={card.target} />
+        </div>
       )}
       {card.target === 0 && card.unit !== 'percent' && (
         <div className="grid grid-cols-2 gap-1 text-[10px] text-theme-faint">

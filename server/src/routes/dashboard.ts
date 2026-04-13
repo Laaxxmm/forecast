@@ -1021,6 +1021,33 @@ router.get('/operational-insights', async (req, res) => {
       }
     }
 
+    // ── Forecast direct_costs target (for Gross Profit / Gross Margin) ──
+    let monthlyCostTarget = 0;
+    if (scenario) {
+      const costItems = db.all(
+        "SELECT * FROM forecast_items WHERE scenario_id = ? AND category = 'direct_costs'",
+        scenario.id
+      );
+      for (const item of costItems) {
+        const meta = typeof item.meta === 'string' ? JSON.parse(item.meta) : item.meta;
+        const sv = meta?.stepValues || {};
+        let amt = 0;
+        if (item.item_type === 'unit_sales') {
+          const units = sv.units?.[currentMonth] || 0;
+          const prices = sv.prices?.[currentMonth] || 0;
+          amt = units * prices;
+        } else if (item.item_type === 'recurring') {
+          amt = sv.amount?.[currentMonth] || 0;
+        } else {
+          const key = Object.keys(sv).find(k => sv[k]?.[currentMonth] !== undefined);
+          amt = key ? (sv[key][currentMonth] || 0) : 0;
+        }
+        monthlyCostTarget += amt;
+      }
+    }
+    const grossProfitTarget = monthlyTarget - monthlyCostTarget;
+    const forecastGrossMargin = monthlyTarget > 0 ? Math.round((grossProfitTarget / monthlyTarget) * 10000) / 100 : 0;
+
     // ── MTD Actuals ──
     let mtdPatients = 0, mtdRevenue = 0, mtdTransactions = 0, mtdProfit = 0, mtdCogs = 0;
 
@@ -1073,7 +1100,7 @@ router.get('/operational-insights', async (req, res) => {
     }
 
     // ── Last month same-period (for trend) ──
-    let lastMonthMtdRevenue = 0, lastMonthMtdPatients = 0;
+    let lastMonthMtdRevenue = 0, lastMonthMtdPatients = 0, lastMonthMtdProfit = 0;
     if (isClinic) {
       const r = db.get(
         `SELECT COUNT(DISTINCT COALESCE(NULLIF(patient_id, ''), patient_name)) as patients, COALESCE(SUM(item_price), 0) as revenue
@@ -1084,11 +1111,12 @@ router.get('/operational-insights', async (req, res) => {
       lastMonthMtdPatients = r?.patients || 0;
     } else if (isPharmacy) {
       const r = db.get(
-        `SELECT COALESCE(SUM(sales_amount), 0) as revenue
+        `SELECT COALESCE(SUM(sales_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
          FROM pharmacy_sales_actuals WHERE bill_month = ? AND CAST(SUBSTR(bill_date, 9, 2) AS INTEGER) <= ?${bf.where}`,
         lastMonth, lastMonthCutoffDay, ...bf.params
       );
       lastMonthMtdRevenue = r?.revenue || 0;
+      lastMonthMtdProfit = r?.profit || 0;
     }
 
     // ── Weekly data ──
@@ -1185,14 +1213,22 @@ router.get('/operational-insights', async (req, res) => {
         dailyRate: Math.round(dailyRate), requiredRate: Math.round(requiredRate),
         rag, lastMonthMtd: lastMonthMtdRevenue, unit: 'currency',
       });
+      // Gross Profit card (with target + progress bar like Sales)
+      const gpDaily = daysElapsed > 0 ? mtdProfit / daysElapsed : 0;
+      const gpProjected = Math.round(gpDaily * daysInMonth);
+      const gpNeed = grossProfitTarget > 0 && daysRemaining > 0 ? Math.round((grossProfitTarget - mtdProfit) / daysRemaining) : 0;
+      const gpPct = grossProfitTarget > 0 ? (gpProjected / grossProfitTarget) * 100 : 0;
+      const gpRag = grossProfitTarget === 0 ? 'GREY' : gpPct >= 95 ? 'GREEN' : gpPct >= 80 ? 'AMBER' : 'RED';
       cards.push({
-        label: 'Profit', mtd: mtdProfit, target: 0, projected: daysElapsed > 0 ? Math.round((mtdProfit / daysElapsed) * daysInMonth) : 0,
-        dailyRate: daysElapsed > 0 ? Math.round(mtdProfit / daysElapsed) : 0, requiredRate: 0,
-        rag: 'GREY', lastMonthMtd: 0, unit: 'currency',
+        label: 'Gross Profit', mtd: mtdProfit, target: grossProfitTarget, projected: gpProjected,
+        dailyRate: Math.round(gpDaily), requiredRate: gpNeed,
+        rag: gpRag, lastMonthMtd: lastMonthMtdProfit, unit: 'currency',
       });
+      // Gross Margin card (with forecast comparison + variation badge)
       if (mtdRevenue > 0) {
+        const actualMargin = Math.round((mtdProfit / mtdRevenue) * 10000) / 100;
         cards.push({
-          label: 'Margin', mtd: Math.round((mtdProfit / mtdRevenue) * 10000) / 100, target: 0, projected: 0,
+          label: 'Gross Margin', mtd: actualMargin, target: forecastGrossMargin, projected: 0,
           dailyRate: 0, requiredRate: 0, rag: 'GREY', lastMonthMtd: 0, unit: 'percent',
         });
       }
