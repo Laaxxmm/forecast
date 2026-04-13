@@ -99,6 +99,7 @@ export const CLINIC_EXPORT_COLUMNS: Column[] = [
   { header: 'Tax', key: 'tax', width: 10, format: 'currency' },
   { header: 'Refund', key: 'refund', width: 10, format: 'currency' },
   { header: 'Due', key: 'due', width: 10, format: 'currency' },
+  { header: 'Addl. Discount', key: 'addl_disc', width: 12, format: 'currency' },
   { header: 'Item Price', key: 'item_price', width: 12, format: 'currency' },
   { header: 'Item Discount', key: 'item_disc', width: 12, format: 'currency' },
 ];

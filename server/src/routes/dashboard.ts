@@ -271,7 +271,7 @@ router.get('/clinic-analytics', async (req, res) => {
 
   // Patient-level aggregation
   const patients = db.all(
-    `SELECT patient_id, patient_name,
+    `SELECT COALESCE(NULLIF(patient_id, ''), patient_name) as patient_id, patient_name,
       GROUP_CONCAT(DISTINCT department) as departments,
       COUNT(DISTINCT department) as dept_count,
       COALESCE(SUM(item_price), 0) as total_revenue,
@@ -281,8 +281,8 @@ router.get('/clinic-analytics', async (req, res) => {
       COUNT(DISTINCT order_number) as visits
      FROM clinic_actuals
      WHERE bill_month >= ? AND bill_month <= ?
-       AND patient_id IS NOT NULL AND patient_id != ''${bf.where}
-     GROUP BY patient_id`,
+       AND COALESCE(NULLIF(patient_id, ''), patient_name) IS NOT NULL${bf.where}
+     GROUP BY COALESCE(NULLIF(patient_id, ''), patient_name)`,
     startMonth, endMonth, ...bf.params
   );
 
@@ -354,11 +354,11 @@ router.get('/clinic-analytics', async (req, res) => {
 
   // Doctor cross-sell analysis
   const doctorRows = db.all(
-    `SELECT billed_doctor, patient_id, department
+    `SELECT billed_doctor, COALESCE(NULLIF(patient_id, ''), patient_name) as patient_id, department
      FROM clinic_actuals
      WHERE bill_month >= ? AND bill_month <= ?
        AND billed_doctor IS NOT NULL AND billed_doctor != '-' AND billed_doctor != ''${bf.where}
-     GROUP BY billed_doctor, patient_id, department`,
+     GROUP BY billed_doctor, COALESCE(NULLIF(patient_id, ''), patient_name), department`,
     startMonth, endMonth, ...bf.params
   );
 
