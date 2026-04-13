@@ -75,6 +75,10 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), uploa
       db.endBatch();
     } catch (e) { db.rollbackBatch(); throw e; }
 
+    // Verify rows were actually inserted
+    const verifyCount = db.get('SELECT COUNT(*) as n FROM clinic_actuals WHERE import_id = ?', importId)?.n || 0;
+    console.log(`[hp-import] Post-insert verification: expected=${rows.length}, actual=${verifyCount}, importId=${importId}`);
+
     // Auto-add doctors
     const doctors = [...new Set(rows.map(r => r.billed_doctor).filter(d => d && d !== '-'))];
     for (const d of doctors) {

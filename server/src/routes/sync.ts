@@ -197,6 +197,13 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async
       db.endBatch();
     } catch (e) { db.rollbackBatch(); throw e; }
 
+    // Verify rows were actually inserted
+    const verifyCount = db.get('SELECT COUNT(*) as n FROM clinic_actuals WHERE import_id = ?', importId)?.n || 0;
+    console.log(`[hp-sync] Post-insert verification: expected=${rows.length}, actual=${verifyCount}, importId=${importId}`);
+    if (verifyCount === 0) {
+      console.error(`[hp-sync] ⚠ CRITICAL: 0 rows in clinic_actuals after batch insert — data may not have persisted`);
+    }
+
     // Auto-add doctors
     const doctors = [...new Set(rows.map((r: any) => r.billed_doctor).filter((d: any) => d && d !== '-'))];
     for (const d of doctors) {

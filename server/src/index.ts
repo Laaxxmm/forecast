@@ -348,6 +348,27 @@ app.get('/api/debug/screenshots/:name', (req, res) => {
   res.sendFile(filePath);
 });
 
+// ─── Debug: DB table status (for diagnosing data loss) ──────────────────────
+app.get('/api/debug/db-status', async (_req, res) => {
+  try {
+    const mcDb = await getClientHelper('magnacode');
+    const tables = ['clinic_actuals', 'pharmacy_sales_actuals', 'pharmacy_purchase_actuals',
+      'pharmacy_stock_actuals', 'dashboard_actuals', 'import_logs', 'turia_invoices'];
+    const counts: Record<string, number> = {};
+    for (const t of tables) {
+      try { counts[t] = mcDb.get(`SELECT COUNT(*) as n FROM ${t}`)?.n || 0; } catch { counts[t] = -1; }
+    }
+    const recentImports = mcDb.all(
+      "SELECT id, source, rows_imported, date_range_start, date_range_end, status, created_at FROM import_logs ORDER BY id DESC LIMIT 10"
+    );
+    const dashClinic = mcDb.get("SELECT COUNT(*) as n, COALESCE(SUM(amount),0) as total FROM dashboard_actuals WHERE item_name = 'Clinic Revenue'");
+    const resetFlag = mcDb.get("SELECT value FROM app_settings WHERE key = 'actuals_reset_v2'");
+    res.json({ counts, recentImports, dashClinic, resetFlag: resetFlag?.value || null });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── Static files ───────────────────────────────────────────────────────────
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
 app.use(express.static(clientDist));
@@ -414,32 +435,9 @@ async function start() {
     console.error('[Pharmacy Guard] Failed:', e);
   }
 
-  // ── One-time actuals reset (clean slate) ──
-  // Wipes all imported actuals, import logs, and dashboard actuals for magnacode.
-  // Preserves: users, passwords, settings, integrations, scenarios, FY, dashboard cards.
-  try {
-    const mcDb = await getClientHelper('magnacode');
-    const resetDone = mcDb.get("SELECT value FROM app_settings WHERE key = 'actuals_reset_v2'");
-    if (!resetDone) {
-      console.log('[Actuals Reset] Running one-time clean slate for magnacode...');
-      mcDb.run('DELETE FROM clinic_actuals');
-      mcDb.run('DELETE FROM pharmacy_sales_actuals');
-      mcDb.run('DELETE FROM pharmacy_purchase_actuals');
-      mcDb.run('DELETE FROM pharmacy_stock_actuals');
-      mcDb.run('DELETE FROM turia_invoices');
-      mcDb.run('DELETE FROM dashboard_actuals');
-      mcDb.run('DELETE FROM import_logs');
-      mcDb.run("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('actuals_reset_v2', '1')");
-      // Also purge .bak to prevent crash recovery from restoring old data
-      const bakPath = path.join(process.env.DATA_DIR || '/data', 'clients', 'magnacode.db.bak');
-      if (fs.existsSync(bakPath)) {
-        try { fs.unlinkSync(bakPath); } catch {}
-      }
-      console.log('[Actuals Reset] All actuals wiped. Settings/config preserved.');
-    }
-  } catch (e) {
-    console.error('[Actuals Reset] Failed:', e);
-  }
+  // NOTE: One-time actuals_reset_v2 has already run. Code removed to prevent
+  // accidental re-execution after crash recovery loads a backup without the flag.
+  // The flag remains in app_settings as a historical marker.
 
   // ── One-time forecast migration: magna_tracker.db → magnacode.db ──
   // Copies forecast scenario + items + values from legacy single-tenant DB into
@@ -657,6 +655,25 @@ async function start() {
     } catch (e) {
       console.error(`Failed to init client DB "${client.slug}":`, e);
     }
+  }
+
+  // ── Startup diagnostics: log table row counts so data loss is immediately visible ──
+  try {
+    const mcDb = await getClientHelper('magnacode');
+    const counts = {
+      clinic: mcDb.get('SELECT COUNT(*) as n FROM clinic_actuals')?.n || 0,
+      pharmaSales: mcDb.get('SELECT COUNT(*) as n FROM pharmacy_sales_actuals')?.n || 0,
+      pharmaPurchase: mcDb.get('SELECT COUNT(*) as n FROM pharmacy_purchase_actuals')?.n || 0,
+      pharmaStock: mcDb.get('SELECT COUNT(*) as n FROM pharmacy_stock_actuals')?.n || 0,
+      dashboard: mcDb.get('SELECT COUNT(*) as n FROM dashboard_actuals')?.n || 0,
+      importLogs: mcDb.get('SELECT COUNT(*) as n FROM import_logs')?.n || 0,
+    };
+    console.log(`[Startup Diagnostics] Table row counts: clinic=${counts.clinic}, pharmaSales=${counts.pharmaSales}, pharmaPurchase=${counts.pharmaPurchase}, pharmaStock=${counts.pharmaStock}, dashboard=${counts.dashboard}, importLogs=${counts.importLogs}`);
+    if (counts.clinic === 0 && counts.dashboard > 0) {
+      console.warn('[Startup Diagnostics] ⚠ clinic_actuals is EMPTY but dashboard_actuals has data — clinic analytics will be blank until next HP sync');
+    }
+  } catch (e) {
+    console.error('[Startup Diagnostics] Failed:', e);
   }
 
   // 3. Create daily backups (keeps last 3 days)
