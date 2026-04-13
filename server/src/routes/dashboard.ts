@@ -6,7 +6,7 @@ const router = Router();
 
 router.get('/overview', async (req, res) => {
   const db = req.tenantDb!;
-  const { fy_id } = req.query;
+  const { fy_id, startMonth: qStart, endMonth: qEnd } = req.query;
   const bf = branchFilter(req);
   const sf = streamFilter(req);
   const fy = fy_id
@@ -15,8 +15,10 @@ router.get('/overview', async (req, res) => {
 
   if (!fy) return res.json({ fy: null, streams: [], cards: [], combined: { total_revenue: 0, total_budget: 0 } });
 
-  const startMonth = fy.start_date.slice(0, 7);
-  const endMonth = fy.end_date.slice(0, 7);
+  const fyStart = fy.start_date.slice(0, 7);
+  const fyEnd = fy.end_date.slice(0, 7);
+  const startMonth = (typeof qStart === 'string' && /^\d{4}-\d{2}$/.test(qStart)) ? qStart : fyStart;
+  const endMonth = (typeof qEnd === 'string' && /^\d{4}-\d{2}$/.test(qEnd)) ? qEnd : fyEnd;
 
   const platformDb = await getPlatformHelper();
   const clientStreams = platformDb.all(
@@ -246,7 +248,7 @@ router.get('/overview', async (req, res) => {
 
 router.get('/clinic-analytics', async (req, res) => {
   const db = req.tenantDb!;
-  const { fy_id } = req.query;
+  const { fy_id, startMonth: qStart, endMonth: qEnd } = req.query;
   const bf = branchFilter(req);
 
   const fy = fy_id
@@ -254,8 +256,10 @@ router.get('/clinic-analytics', async (req, res) => {
     : db.get('SELECT * FROM financial_years WHERE is_active = 1');
   if (!fy) return res.json({ error: 'No FY found' });
 
-  const startMonth = fy.start_date.slice(0, 7);
-  const endMonth = fy.end_date.slice(0, 7);
+  const fyStart = fy.start_date.slice(0, 7);
+  const fyEnd = fy.end_date.slice(0, 7);
+  const startMonth = (typeof qStart === 'string' && /^\d{4}-\d{2}$/.test(qStart)) ? qStart : fyStart;
+  const endMonth = (typeof qEnd === 'string' && /^\d{4}-\d{2}$/.test(qEnd)) ? qEnd : fyEnd;
 
   // Check table exists and diagnose data
   let totalRows = 0;
@@ -422,7 +426,7 @@ router.get('/clinic-analytics', async (req, res) => {
 
 router.get('/pharmacy-analytics', async (req, res) => {
   const db = req.tenantDb!;
-  const { fy_id } = req.query;
+  const { fy_id, startMonth: qStart, endMonth: qEnd } = req.query;
   const bf = branchFilter(req);
 
   const fy = fy_id
@@ -430,8 +434,10 @@ router.get('/pharmacy-analytics', async (req, res) => {
     : db.get('SELECT * FROM financial_years WHERE is_active = 1');
   if (!fy) return res.json({ hasData: false });
 
-  const startMonth = fy.start_date.slice(0, 7);
-  const endMonth = fy.end_date.slice(0, 7);
+  const fyStart = fy.start_date.slice(0, 7);
+  const fyEnd = fy.end_date.slice(0, 7);
+  const startMonth = (typeof qStart === 'string' && /^\d{4}-\d{2}$/.test(qStart)) ? qStart : fyStart;
+  const endMonth = (typeof qEnd === 'string' && /^\d{4}-\d{2}$/.test(qEnd)) ? qEnd : fyEnd;
 
   // Check which pharmacy tables have data in this FY
   let hasSales = false, hasPurchases = false, hasStock = false;

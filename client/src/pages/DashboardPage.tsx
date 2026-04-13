@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import api from '../api/client';
 import { formatINR, getMonthLabel } from '../utils/format';
 import ClinicAnalytics from '../components/dashboard/ClinicAnalytics';
 import PharmacyAnalytics from '../components/dashboard/PharmacyAnalytics';
+import { buildPeriodOptions } from '../components/dashboard/dashboardUtils';
 import {
   TrendingUp, TrendingDown, IndianRupee, Activity,
   BarChart3, Briefcase, RefreshCcw, GraduationCap, Store, Globe, Warehouse,
@@ -57,6 +58,7 @@ function KPICard({ title, value, subtitle, icon: Icon, trend, color = 'accent', 
 export default function DashboardPage() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [selectedPeriod, setSelectedPeriod] = useState('current_month');
 
   // Active stream filter (set by sidebar or KPI card click)
   const activeStreamId = localStorage.getItem('stream_id');
@@ -73,12 +75,30 @@ export default function DashboardPage() {
     window.location.reload();
   };
 
+  // Period filter
+  const periodOptions = useMemo(() => {
+    if (!data?.fy?.start_date) return [];
+    return buildPeriodOptions(data.fy.start_date);
+  }, [data?.fy?.start_date]);
+
+  const currentPeriod = useMemo(() => {
+    return periodOptions.find(p => p.value === selectedPeriod) || null;
+  }, [periodOptions, selectedPeriod]);
+
+  const periodStartMonth = currentPeriod?.months?.[0] || null;
+  const periodEndMonth = currentPeriod?.months?.[currentPeriod.months.length - 1] || null;
+
   useEffect(() => {
-    api.get('/dashboard/overview').then(res => {
+    const params: Record<string, string> = {};
+    if (periodStartMonth) params.startMonth = periodStartMonth;
+    if (periodEndMonth) params.endMonth = periodEndMonth;
+
+    setLoading(true);
+    api.get('/dashboard/overview', { params }).then(res => {
       setData(res.data);
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, []);
+  }, [periodStartMonth, periodEndMonth]);
 
   if (loading) return (
     <div className="flex items-center justify-center py-20">
@@ -167,13 +187,26 @@ export default function DashboardPage() {
 
   return (
     <div className="animate-fade-in">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-theme-heading">Actuals</h1>
-        <p className="text-theme-faint mt-1 text-sm">
-          {activeStreamName
-            ? `${activeStreamName} \u2014 ${data.fy?.label || 'All Time'}`
-            : `${data.fy?.label || 'All Time'} Overview`}
-        </p>
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-2xl font-bold text-theme-heading">Actuals</h1>
+          <p className="text-theme-faint mt-1 text-sm">
+            {activeStreamName
+              ? `${activeStreamName} \u2014 ${currentPeriod?.label || data.fy?.label || 'All Time'}`
+              : `${currentPeriod?.label || data.fy?.label || 'All Time'} Overview`}
+          </p>
+        </div>
+        {periodOptions.length > 0 && (
+          <select
+            value={selectedPeriod}
+            onChange={e => setSelectedPeriod(e.target.value)}
+            className="input text-sm py-2 w-64"
+          >
+            {periodOptions.map(p => (
+              <option key={p.value} value={p.value}>{p.label}</option>
+            ))}
+          </select>
+        )}
       </div>
 
       {/* KPI Cards — only in "All" mode */}
@@ -315,10 +348,10 @@ export default function DashboardPage() {
       )}
 
       {/* Clinic Analytics — only when clinic stream is active */}
-      {isClinicStream && clinicStreamId && <ClinicAnalytics isVisible={isClinicVisible} />}
+      {isClinicStream && clinicStreamId && <ClinicAnalytics isVisible={isClinicVisible} startMonth={periodStartMonth} endMonth={periodEndMonth} />}
 
       {/* Pharmacy Analytics — only when pharmacy stream is active */}
-      {isPharmaStream && pharmaStreamId && <PharmacyAnalytics isVisible={isPharmaVisible} />}
+      {isPharmaStream && pharmaStreamId && <PharmacyAnalytics isVisible={isPharmaVisible} startMonth={periodStartMonth} endMonth={periodEndMonth} />}
     </div>
   );
 }

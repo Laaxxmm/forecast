@@ -27,9 +27,11 @@ type TabKey = typeof TABS[number]['key'];
 
 interface PharmacyAnalyticsProps {
   isVisible: (key: string) => boolean;
+  startMonth?: string | null;
+  endMonth?: string | null;
 }
 
-export default function PharmacyAnalytics({ isVisible }: PharmacyAnalyticsProps) {
+export default function PharmacyAnalytics({ isVisible, startMonth, endMonth }: PharmacyAnalyticsProps) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabKey>('purchases');
@@ -38,9 +40,13 @@ export default function PharmacyAnalytics({ isVisible }: PharmacyAnalyticsProps)
   const PAGE_SIZE = 50;
 
   useEffect(() => {
-    api.get('/dashboard/pharmacy-analytics').then(res => {
+    const params: Record<string, string> = {};
+    if (startMonth) params.startMonth = startMonth;
+    if (endMonth) params.endMonth = endMonth;
+
+    setLoading(true);
+    api.get('/dashboard/pharmacy-analytics', { params }).then(res => {
       setData(res.data);
-      // Auto-select first available tab
       if (res.data?.hasData) {
         if (res.data.hasPurchases) setActiveTab('purchases');
         else if (res.data.hasSales) setActiveTab('sales');
@@ -48,7 +54,7 @@ export default function PharmacyAnalytics({ isVisible }: PharmacyAnalyticsProps)
       }
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, []);
+  }, [startMonth, endMonth]);
 
   // Reset search/page on tab change
   useEffect(() => { setSearch(''); setPage(0); }, [activeTab]);

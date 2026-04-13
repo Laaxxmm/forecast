@@ -12,9 +12,11 @@ const CHART_STYLE = { backgroundColor: '#14141f', border: '1px solid #2a2a3d', b
 
 interface ClinicAnalyticsProps {
   isVisible: (key: string) => boolean;
+  startMonth?: string | null;
+  endMonth?: string | null;
 }
 
-export default function ClinicAnalytics({ isVisible }: ClinicAnalyticsProps) {
+export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: ClinicAnalyticsProps) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -22,11 +24,16 @@ export default function ClinicAnalytics({ isVisible }: ClinicAnalyticsProps) {
   const PAGE_SIZE = 50;
 
   useEffect(() => {
-    api.get('/dashboard/clinic-analytics').then(res => {
+    const params: Record<string, string> = {};
+    if (startMonth) params.startMonth = startMonth;
+    if (endMonth) params.endMonth = endMonth;
+
+    setLoading(true);
+    api.get('/dashboard/clinic-analytics', { params }).then(res => {
       setData(res.data);
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, []);
+  }, [startMonth, endMonth]);
 
   const patientTable = data?.patientTable || [];
   const filteredPatients = useMemo(() => {
