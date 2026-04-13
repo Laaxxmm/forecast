@@ -49,7 +49,10 @@ export default function ProfitAndLoss({ items, allValues, months, viewMode, sett
   const taxItems = useMemo(() => items.filter(i => i.category === 'taxes'), [items]);
   const assetItems = useMemo(() => items.filter(i => i.category === 'assets'), [items]);
 
+  const longTermAssetItems = useMemo(() => items.filter(i => i.category === 'assets' && (i.item_type === 'long_term' || !i.item_type)), [items]);
+
   const employeeBenefitsPct = settings.employee_benefits_pct || 0;
+  const incomeTaxRate = settings.income_tax_rate ?? 25;
 
   // Monthly calculation cache
   const monthData = useMemo(() => {
@@ -59,6 +62,9 @@ export default function ProfitAndLoss({ items, allValues, months, viewMode, sett
       operatingIncome: number; interestExpense: number; incomeTaxes: number;
       depreciation: number; totalExpenses: number; netProfit: number; netProfitMargin: number;
     }> = {};
+
+    const ib = settings.initial_balances || {};
+    let cumulativeLTAssets = ib.long_term_assets || 0;
 
     months.forEach(m => {
       const revenue = sumCategory(items, 'revenue', allValues, m);
@@ -76,25 +82,32 @@ export default function ProfitAndLoss({ items, allValues, months, viewMode, sett
       // Interest from financing items (loan interest)
       const interestExpense = 0; // TODO: derive from financing items
 
-      // Income taxes from tax settings
-      const incomeTaxes = sumCategory(items, 'taxes', allValues, m);
+      // Depreciation from cumulative long-term assets
+      const ltPurchases = longTermAssetItems.reduce((s, i) => s + (allValues[i.id]?.[m] || 0), 0);
+      cumulativeLTAssets += ltPurchases;
+      const depPeriod = ib.depreciation_period;
+      let depreciation = 0;
+      if (depPeriod && depPeriod !== 'forever' && cumulativeLTAssets > 0) {
+        depreciation = Math.round(cumulativeLTAssets / (parseFloat(depPeriod) * 12));
+      }
 
-      // Depreciation from assets
-      const depreciation = 0; // TODO: derive from asset depreciation schedules
+      // Income tax from settings rate (applied to profit before tax)
+      const profitBeforeTax = operatingIncome - interestExpense - depreciation;
+      const incomeTaxes = profitBeforeTax > 0 ? Math.round(profitBeforeTax * incomeTaxRate / 100) : 0;
 
-      const totalExpenses = directCosts + totalOpex + interestExpense + incomeTaxes + depreciation;
+      const totalExpenses = directCosts + totalOpex + interestExpense + depreciation + incomeTaxes;
       const netProfit = revenue - totalExpenses;
       const netProfitMargin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
 
       data[m] = {
         revenue, directCosts, grossProfit, grossMargin,
         personnel, employeeTaxes, expenses, totalOpex,
-        operatingIncome, interestExpense, incomeTaxes,
-        depreciation, totalExpenses, netProfit, netProfitMargin,
+        operatingIncome, interestExpense, depreciation,
+        incomeTaxes, totalExpenses, netProfit, netProfitMargin,
       };
     });
     return data;
-  }, [items, allValues, months, employeeBenefitsPct]);
+  }, [items, allValues, months, employeeBenefitsPct, longTermAssetItems, incomeTaxRate, settings]);
 
   // Direct personnel assigned to direct costs vs operating expenses
   const directPersonnel = useMemo(() => personnelItems.filter(p => p.meta?.labor_type === 'direct_labor'), [personnelItems]);
@@ -191,8 +204,8 @@ export default function ProfitAndLoss({ items, allValues, months, viewMode, sett
     // Calculated summary rows
     rows.push({ id: 'operating_income', label: 'Operating Income', kind: 'calculated', level: 0, getValue: m => monthData[m]?.operatingIncome || 0 });
     rows.push({ id: 'interest_expense', label: 'Interest Expense', kind: 'calculated', level: 0, getValue: m => monthData[m]?.interestExpense || 0 });
-    rows.push({ id: 'income_taxes', label: 'Income Taxes', kind: 'calculated', level: 0, getValue: m => monthData[m]?.incomeTaxes || 0 });
     rows.push({ id: 'depreciation', label: 'Depreciation and Amortization', kind: 'calculated', level: 0, getValue: m => monthData[m]?.depreciation || 0 });
+    rows.push({ id: 'income_taxes', label: 'Income Taxes', kind: 'calculated', level: 0, getValue: m => monthData[m]?.incomeTaxes || 0 });
     rows.push({ id: 'total_expenses', label: 'Total Expenses', kind: 'calculated', level: 0, getValue: m => monthData[m]?.totalExpenses || 0 });
     rows.push({ id: 'net_profit', label: 'Net Profit', kind: 'calculated', level: 0, getValue: m => monthData[m]?.netProfit || 0 });
     rows.push({ id: 'net_profit_margin', label: 'Net Profit Margin', kind: 'percentage', level: 0, getValue: m => monthData[m]?.netProfitMargin || 0 });

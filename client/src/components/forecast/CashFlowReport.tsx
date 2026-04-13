@@ -62,7 +62,7 @@ export default function CashFlowReport({ items, allValues, months, viewMode, set
   const salesTaxRate = settings.sales_tax_rate ?? 18;
 
   // Long-term asset items for depreciation
-  const longTermAssetItems = useMemo(() => items.filter(i => i.category === 'assets' && i.item_type === 'long_term'), [items]);
+  const longTermAssetItems = useMemo(() => items.filter(i => i.category === 'assets' && (i.item_type === 'long_term' || !i.item_type)), [items]);
 
   // Monthly calculation cache
   const monthData = useMemo(() => {

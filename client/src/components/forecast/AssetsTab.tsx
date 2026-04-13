@@ -27,7 +27,7 @@ export default function AssetsTab({ category, label, scenario, months, viewMode,
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
 
   const currentAssets = items.filter(i => i.item_type === 'current');
-  const longTermAssets = items.filter(i => i.item_type === 'long_term');
+  const longTermAssets = items.filter(i => i.item_type === 'long_term' || !i.item_type);
   const investmentAssets = items.filter(i => i.item_type === 'investment');
 
   // Calculate section totals

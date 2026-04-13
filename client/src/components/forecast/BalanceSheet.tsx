@@ -107,7 +107,7 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
   }, [items, allValues, months, employeeBenefitsPct, financingItems]);
 
   // Long-term asset items for depreciation & investments
-  const longTermAssetItems = useMemo(() => items.filter(i => i.category === 'assets' && i.item_type === 'long_term'), [items]);
+  const longTermAssetItems = useMemo(() => items.filter(i => i.category === 'assets' && (i.item_type === 'long_term' || !i.item_type)), [items]);
   const investmentAssetItems = useMemo(() => items.filter(i => i.category === 'assets' && i.item_type === 'investment'), [items]);
 
   // Cumulative calculations for balance sheet
