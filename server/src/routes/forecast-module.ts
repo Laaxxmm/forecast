@@ -450,4 +450,156 @@ router.delete('/category-mapping/:id', requireWriteAccess, async (req, res) => {
   res.json({ ok: true });
 });
 
+// === BUDGET vs ACTUAL (Step 8) ===
+// Compares forecast totals from forecast_items + forecast_values against
+// real Tally totals from vcfo_trial_balance, joined via forecast_category
+// _mapping. Returns one row per (category, month) for the scenario's FY.
+//
+// Tally hierarchy: vcfo_trial_balance.group_name is the IMMEDIATE parent
+// group (e.g. "Salaries & Wages" → parent "Direct Expenses"). We walk up
+// through vcfo_account_groups.parent_group to find the top-level Tally
+// group ("Primary" is the root sentinel) so a sub-group ledger still
+// rolls into its primary group's mapping.
+//
+// Sign convention: vcfo stores credits positive / debits negative. Both
+// revenue (credit) and expense (debit) categories should display as
+// positive forecast-friendly values, so we ABS() the actuals.
+//
+// v1 limitation: when two mappings share the same Tally group (e.g.
+// expenses + personnel both map to "Indirect Expenses"), the un-filtered
+// one will double-count the filtered subset. Acceptable for first ship
+// — user can adjust mappings.
+router.get('/budget-vs-actual', async (req, res) => {
+  const db = req.tenantDb!;
+  const scenarioIdRaw = req.query.scenario_id;
+  if (!scenarioIdRaw) return res.status(400).json({ error: 'scenario_id required' });
+  const scenarioId = parseInt(String(scenarioIdRaw));
+  if (Number.isNaN(scenarioId)) return res.status(400).json({ error: 'scenario_id must be numeric' });
+
+  // Resolve FY for this scenario
+  const scenario = db.get(
+    `SELECT s.id, s.fy_id, s.name, fy.label, fy.start_date, fy.end_date
+       FROM scenarios s JOIN financial_years fy ON fy.id = s.fy_id
+      WHERE s.id = ?`,
+    scenarioId
+  );
+  if (!scenario) return res.status(404).json({ error: 'Scenario not found' });
+
+  // Build the FY months (Apr → Mar) as YYYY-MM strings
+  const startYear = parseInt(String(scenario.start_date).slice(0, 4));
+  const months: string[] = [];
+  for (let m = 4; m <= 12; m++) months.push(`${startYear}-${String(m).padStart(2, '0')}`);
+  for (let m = 1; m <= 3; m++) months.push(`${startYear + 1}-${String(m).padStart(2, '0')}`);
+  const monthStart = months[0];
+  const monthEnd = months[months.length - 1];
+
+  // ── Forecast aggregation (per category, per month) ──
+  const forecastRows = db.all(
+    `SELECT fi.category, fv.month, COALESCE(SUM(fv.amount), 0) AS total
+       FROM forecast_items fi
+       JOIN forecast_values fv ON fv.item_id = fi.id
+      WHERE fi.scenario_id = ?
+        AND fv.month BETWEEN ? AND ?
+      GROUP BY fi.category, fv.month`,
+    scenarioId, monthStart, monthEnd
+  );
+  const forecast: Record<string, Record<string, number>> = {};
+  for (const r of forecastRows) {
+    if (!forecast[r.category]) forecast[r.category] = {};
+    forecast[r.category][r.month] = Number(r.total) || 0;
+  }
+
+  // ── Actual aggregation ──
+  // Quick check: any trial-balance data at all for the tenant?
+  const tbCount = db.get('SELECT COUNT(*) AS n FROM vcfo_trial_balance').n as number;
+  const hasActuals = tbCount > 0;
+  const actual: Record<string, Record<string, number>> = {};
+
+  if (hasActuals) {
+    const mappings = db.all(
+      'SELECT id, forecast_category, tally_group_name, ledger_filter FROM forecast_category_mapping'
+    );
+
+    // Recursive CTE walking parent_group up to "Primary" (Tally's root sentinel).
+    // Returns one row per (company_id, leaf_group, root_group). Cached as a
+    // shared SQL fragment used by both the bulk filterless query and the
+    // per-mapping filtered queries.
+    const ROOTS_CTE = `
+      WITH RECURSIVE walk AS (
+        SELECT company_id, group_name AS leaf, group_name AS cur, parent_group, 0 AS d
+          FROM vcfo_account_groups
+        UNION ALL
+        SELECT w.company_id, w.leaf, g.group_name, g.parent_group, w.d + 1
+          FROM walk w
+          JOIN vcfo_account_groups g
+            ON g.company_id = w.company_id AND g.group_name = w.parent_group
+         WHERE w.parent_group IS NOT NULL AND w.parent_group != '' AND w.parent_group != 'Primary' AND w.d < 10
+      ),
+      roots AS (
+        SELECT DISTINCT company_id, leaf AS group_name, cur AS root_name
+          FROM walk
+         WHERE parent_group = 'Primary' OR parent_group IS NULL OR parent_group = ''
+      )
+    `;
+
+    // 1. Filterless mappings — single query with JOIN to mapping table.
+    const filterlessRows = db.all(
+      `${ROOTS_CTE}
+       SELECT substr(tb.period_from, 1, 7) AS month,
+              fcm.forecast_category AS category,
+              SUM(tb.closing_balance) AS total
+         FROM vcfo_trial_balance tb
+         LEFT JOIN roots r
+           ON r.company_id = tb.company_id AND r.group_name = tb.group_name
+         JOIN forecast_category_mapping fcm
+           ON fcm.tally_group_name = COALESCE(r.root_name, tb.group_name)
+          AND (fcm.ledger_filter IS NULL OR fcm.ledger_filter = '')
+        WHERE substr(tb.period_from, 1, 7) BETWEEN ? AND ?
+        GROUP BY month, category`,
+      monthStart, monthEnd
+    );
+    for (const row of filterlessRows) {
+      if (!actual[row.category]) actual[row.category] = {};
+      actual[row.category][row.month] = (actual[row.category][row.month] || 0) + Math.abs(Number(row.total) || 0);
+    }
+
+    // 2. Filtered mappings — one query per mapping (small N, usually 0–2).
+    const filtered = mappings.filter((m: any) => m.ledger_filter && String(m.ledger_filter).trim());
+    for (const m of filtered) {
+      const patterns = String(m.ledger_filter)
+        .split(',')
+        .map(p => p.trim())
+        .filter(Boolean);
+      if (patterns.length === 0) continue;
+      const likeClause = patterns.map(() => 'tb.ledger_name LIKE ?').join(' OR ');
+      const rows = db.all(
+        `${ROOTS_CTE}
+         SELECT substr(tb.period_from, 1, 7) AS month,
+                SUM(tb.closing_balance) AS total
+           FROM vcfo_trial_balance tb
+           LEFT JOIN roots r
+             ON r.company_id = tb.company_id AND r.group_name = tb.group_name
+          WHERE substr(tb.period_from, 1, 7) BETWEEN ? AND ?
+            AND COALESCE(r.root_name, tb.group_name) = ?
+            AND (${likeClause})
+          GROUP BY month`,
+        monthStart, monthEnd, m.tally_group_name, ...patterns
+      );
+      for (const row of rows) {
+        if (!actual[m.forecast_category]) actual[m.forecast_category] = {};
+        actual[m.forecast_category][row.month] = (actual[m.forecast_category][row.month] || 0) + Math.abs(Number(row.total) || 0);
+      }
+    }
+  }
+
+  res.json({
+    scenario: { id: scenario.id, name: scenario.name, fy_id: scenario.fy_id },
+    fy: { id: scenario.fy_id, label: scenario.label, start_date: scenario.start_date, end_date: scenario.end_date },
+    months,
+    forecast,
+    actual,
+    hasActuals,
+  });
+});
+
 export default router;

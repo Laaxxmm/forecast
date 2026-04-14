@@ -8,8 +8,9 @@ import BalanceSheet from '../components/forecast/BalanceSheet';
 import FinancingEditor from '../components/forecast/FinancingEditor';
 import CashFlowReport from '../components/forecast/CashFlowReport';
 import CategoryMappingEditor from '../components/forecast/CategoryMappingEditor';
+import BudgetVsActualReport from '../components/forecast/BudgetVsActualReport';
 import {
-  BarChart3, Table2, FileText, Building2, Banknote, ChevronLeft, ChevronRight, Calendar, Download, Printer, FileDown, Settings
+  BarChart3, Table2, FileText, Building2, Banknote, ChevronLeft, ChevronRight, Calendar, Download, Printer, FileDown, Settings, TrendingUp
 } from 'lucide-react';
 import DownloadPrintPanel from '../components/forecast/DownloadPrintPanel';
 import { exportAllItemsCSV } from '../components/forecast/csvExport';
@@ -58,6 +59,7 @@ const topTabs = [
   { path: 'pnl', label: 'Profit & Loss', icon: FileText },
   { path: 'balance-sheet', label: 'Balance Sheet', icon: Building2 },
   { path: 'cash-flow', label: 'Cash Flow', icon: Banknote },
+  { path: 'budget-vs-actual', label: 'Budget vs Actual', icon: TrendingUp },
   { path: 'settings/category-mapping', label: 'Settings', icon: Settings },
 ];
 
@@ -304,6 +306,9 @@ export default function ForecastModulePage() {
           } />
           <Route path="cash-flow" element={
             <CashFlowReport items={items} allValues={allValues} months={months} viewMode={viewMode} settings={settings} scenario={scenario} onReload={loadData} readOnly={readOnly} />
+          } />
+          <Route path="budget-vs-actual" element={
+            <BudgetVsActualReport scenario={scenario} viewMode={viewMode} />
           } />
           <Route path="settings/category-mapping" element={
             <CategoryMappingEditor readOnly={readOnly} />
