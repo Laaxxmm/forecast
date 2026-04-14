@@ -551,7 +551,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
                           Enter to Add
                         </button>
                       </div>
-                      <button onClick={() => { setShowInlineAdd(false); setInlineAddName(''); }} className="p-1 text-theme-faint hover:text-theme-secondary">
+                      <button onClick={() => { setShowInlineAdd(false); setInlineAddName(''); }} className="p-1 text-theme-faint hover:text-theme-secondary" title="Cancel" aria-label="Cancel">
                         <X size={16} />
                       </button>
                     </div>

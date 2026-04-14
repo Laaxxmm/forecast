@@ -100,7 +100,7 @@ export default function ItemRowMenu({ item, items, category, allValues, onEdit, 
 
   return (
     <>
-      <button onClick={handleOpen} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-dark-400 rounded">
+      <button onClick={handleOpen} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-dark-400 rounded" title="More actions" aria-label="More actions">
         <MoreVertical size={14} />
       </button>
 
@@ -174,7 +174,7 @@ export default function ItemRowMenu({ item, items, category, allValues, onEdit, 
           <div className="bg-dark-700 border border-dark-400/50 rounded-xl p-5 w-96 shadow-2xl" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-theme-heading">Note for &ldquo;{item.name}&rdquo;</h3>
-              <button onClick={() => setNoteOpen(false)} className="text-theme-faint hover:text-theme-secondary"><X size={16} /></button>
+              <button onClick={() => setNoteOpen(false)} className="text-theme-faint hover:text-theme-secondary" title="Close" aria-label="Close"><X size={16} /></button>
             </div>
             <textarea
               value={noteText}
@@ -198,7 +198,7 @@ export default function ItemRowMenu({ item, items, category, allValues, onEdit, 
           <div className="bg-dark-700 border border-dark-400/50 rounded-xl p-5 w-96 shadow-2xl" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-theme-heading">Merge &ldquo;{item.name}&rdquo; with...</h3>
-              <button onClick={() => setMergeOpen(false)} className="text-theme-faint hover:text-theme-secondary"><X size={16} /></button>
+              <button onClick={() => setMergeOpen(false)} className="text-theme-faint hover:text-theme-secondary" title="Close" aria-label="Close"><X size={16} /></button>
             </div>
             <p className="text-xs text-theme-faint mb-3">Values will be combined into the target item. &ldquo;{item.name}&rdquo; will be deleted.</p>
             <div className="max-h-48 overflow-y-auto space-y-1">

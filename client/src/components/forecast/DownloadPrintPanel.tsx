@@ -288,6 +288,14 @@ export default function DownloadPrintPanel({ open, onClose, items, allValues, mo
     setReports(prev => prev.map(r => r.key === key ? { ...r, checked: !r.checked } : r));
   };
 
+  const allReportsChecked = reports.every(r => r.checked);
+  const someReportsChecked = reports.some(r => r.checked);
+  const toggleAllReports = () => {
+    // If all or some are checked, clear. If none are checked, select all.
+    const next = !allReportsChecked;
+    setReports(prev => prev.map(r => ({ ...r, checked: next })));
+  };
+
   const generatePDF = async () => {
     setGenerating(true);
 
@@ -442,7 +450,7 @@ export default function DownloadPrintPanel({ open, onClose, items, allValues, mo
             <Printer size={20} className="text-accent-400" />
             <h2 className="text-lg font-bold text-theme-heading">Download & Print</h2>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-dark-400 rounded-lg transition-colors">
+          <button onClick={onClose} className="p-2 hover:bg-dark-400 rounded-lg transition-colors" title="Close panel" aria-label="Close panel">
             <X size={18} className="text-theme-faint" />
           </button>
         </div>
@@ -485,8 +493,28 @@ export default function DownloadPrintPanel({ open, onClose, items, allValues, mo
 
           {/* B. Reports to Include */}
           <div>
-            <h3 className="text-sm font-semibold text-theme-secondary mb-3">Reports to Include</h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-theme-secondary">Reports to Include</h3>
+              <button
+                type="button"
+                onClick={toggleAllReports}
+                className="text-xs font-medium text-accent-400 hover:text-accent-300 transition-colors"
+                title={allReportsChecked ? 'Clear all reports' : 'Select every report'}
+              >
+                {allReportsChecked ? 'Deselect all' : 'Select all'}
+              </button>
+            </div>
             <div className="space-y-1.5">
+              <label className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-dark-600 cursor-pointer transition-colors border-b border-dark-400/40 pb-2 mb-1">
+                <input
+                  type="checkbox"
+                  checked={allReportsChecked}
+                  ref={el => { if (el) el.indeterminate = !allReportsChecked && someReportsChecked; }}
+                  onChange={toggleAllReports}
+                  className="rounded text-accent-400 focus:ring-primary-500"
+                />
+                <span className="text-sm font-medium text-theme-heading">All reports</span>
+              </label>
               {reports.map(r => (
                 <label key={r.key} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-dark-600 cursor-pointer transition-colors">
                   <input

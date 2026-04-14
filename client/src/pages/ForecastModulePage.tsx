@@ -229,12 +229,34 @@ export default function ForecastModulePage() {
             >Monthly</button>
           </div>
           <div className="flex items-center gap-1 ml-3">
-            <button className="p-1.5 hover:bg-dark-600 rounded-lg text-theme-faint transition-colors"><ChevronLeft size={14} /></button>
-            <div className="flex items-center gap-1 px-2 text-sm text-theme-muted">
+            <button
+              onClick={() => {
+                const idx = fys.findIndex(f => f.id === selectedFY?.id);
+                if (idx > 0) setSelectedFY(fys[idx - 1]);
+              }}
+              disabled={!selectedFY || fys.findIndex(f => f.id === selectedFY.id) <= 0}
+              className="p-1.5 hover:bg-dark-600 rounded-lg text-theme-faint transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              title="Previous fiscal year"
+              aria-label="Previous fiscal year"
+            >
+              <ChevronLeft size={14} />
+            </button>
+            <div className="flex items-center gap-1 px-2 text-sm text-theme-muted" title="Current fiscal year">
               <Calendar size={14} />
               <span className="font-medium">{currentYear}-{String(currentYear + 1).slice(-2)}</span>
             </div>
-            <button className="p-1.5 hover:bg-dark-600 rounded-lg text-theme-faint transition-colors"><ChevronRight size={14} /></button>
+            <button
+              onClick={() => {
+                const idx = fys.findIndex(f => f.id === selectedFY?.id);
+                if (idx >= 0 && idx < fys.length - 1) setSelectedFY(fys[idx + 1]);
+              }}
+              disabled={!selectedFY || fys.findIndex(f => f.id === selectedFY.id) >= fys.length - 1}
+              className="p-1.5 hover:bg-dark-600 rounded-lg text-theme-faint transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              title="Next fiscal year"
+              aria-label="Next fiscal year"
+            >
+              <ChevronRight size={14} />
+            </button>
           </div>
         </div>
         <div className="flex items-center gap-2">
