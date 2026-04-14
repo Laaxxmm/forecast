@@ -72,17 +72,26 @@ export default function ModuleSelectPage() {
     });
   }, []);
 
-  const handleSelect = (mod: ModuleInfo) => {
+  const handleSelect = async (mod: ModuleInfo) => {
     if (!enabledModules.includes(mod.key)) return;
     if (!mod.path) return;
     localStorage.setItem('active_module', mod.key);
     // VCFO Portal is a separate sub-app (TallyVision) mounted at /vcfo/* — use a hard nav
     // so the browser loads the non-React app instead of the SPA router.
-    // Pass the current client's slug so TallyVision isolates data per-client.
+    // Mint a short-lived SSO token so TallyVision auto-binds the tenant and
+    // skips its own login screen. Server validates the HMAC, seeds its session,
+    // and redirects to /vcfo/. If the mint fails, surface the error rather than
+    // falling back to an unauthenticated ?clientSlug=… (that path is dev-only).
     if (mod.key === 'vcfo_portal') {
-      const clientSlug = localStorage.getItem('client_slug') || '';
-      const url = clientSlug ? `/vcfo/?clientSlug=${encodeURIComponent(clientSlug)}` : '/vcfo/';
-      window.location.href = url;
+      try {
+        const res = await api.post('/vcfo/sso-token');
+        const token = res.data?.token;
+        if (!token) throw new Error('No token returned');
+        window.location.href = `/vcfo/sso?token=${encodeURIComponent(token)}`;
+      } catch (err: any) {
+        console.error('VCFO SSO mint failed:', err);
+        alert('Could not open VCFO Portal. Please try signing in again.');
+      }
       return;
     }
     navigate(mod.path);

@@ -42,12 +42,17 @@ app.use(cors({
 app.use(express.json({ limit: '5mb' }));
 
 // ── Security: Session with stable secret ──
+// Use a distinct cookie name + /vcfo path so TallyVision's session cookie
+// doesn't collide with Magna_Tracker's connect.sid (both apps default to
+// that name otherwise — last Set-Cookie wins and one side logs the other
+// side out).
 const SESSION_SECRET = process.env.SESSION_SECRET || require('crypto').randomBytes(32).toString('hex');
 app.use(session({
+    name: 'tv.sid',
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
-    cookie: { httpOnly: true, sameSite: 'lax', maxAge: 24 * 60 * 60 * 1000 } // 24h
+    cookie: { httpOnly: true, sameSite: 'lax', path: '/vcfo', maxAge: 24 * 60 * 60 * 1000 },
 }));
 
 // ── Security: Standard headers ──
@@ -60,18 +65,51 @@ app.use((req, res, next) => {
 });
 
 // ── Tenant (per-client) context ──
-// Magna_Tracker navigates here with ?clientSlug=<slug>. We persist it to
-// the session so subsequent requests don't need the query. Downstream code
-// (`dbManager`, `masterDb`, `db`) reads the slug via AsyncLocalStorage and
-// routes every DB open to `TALLYVISION_DATA/<slug>/…`, isolating each
-// Magna_Tracker client's TallyVision data.
+// Slug normally lands in the session via the signed SSO redirect
+// (`/vcfo/sso?token=…` → see handler below). In non-production we also
+// accept `?clientSlug=<slug>` as an unsigned bypass so standalone
+// TallyVision works without Magna_Tracker running. In production the
+// query param is ignored — only the SSO handler (or a valid session)
+// can bind a tenant.
 app.use((req, res, next) => {
-    const fromQuery = typeof req.query.clientSlug === 'string' ? req.query.clientSlug.trim() : '';
-    if (fromQuery) {
-        req.session.tvSlug = fromQuery;
+    if (process.env.NODE_ENV !== 'production') {
+        const fromQuery = typeof req.query.clientSlug === 'string' ? req.query.clientSlug.trim() : '';
+        if (fromQuery) req.session.tvSlug = fromQuery;
     }
     const slug = (req.session && req.session.tvSlug) || null;
     return withTenant(slug, () => next());
+});
+
+// ── SSO handoff from Magna_Tracker ──
+// Verifies the HMAC-signed token, binds the tenant slug to the TallyVision
+// session, and (for client users) auto-seeds the clientUser so they don't
+// have to log in again. Super-admins skip the clientUser seed — they land
+// as full TallyVision admins within that tenant.
+const sso = require('./sso');
+app.get('/sso', (req, res) => {
+    const token = typeof req.query.token === 'string' ? req.query.token : '';
+    const payload = sso.verify(token);
+    if (!payload) {
+        return res.status(401).send('<!doctype html><meta charset="utf-8"><title>SSO failed</title>' +
+            '<style>body{font-family:system-ui;padding:40px;color:#333;max-width:560px}</style>' +
+            '<h1>Sign-in expired</h1><p>Your VCFO sign-in link is no longer valid. ' +
+            '<a href="/module-select">Return to module selection</a> and try again.</p>');
+    }
+    req.session.tvSlug = payload.slug;
+    if (payload.userType === 'client_user') {
+        req.session.clientUser = {
+            id: payload.userId,
+            username: payload.username || String(payload.userId),
+            displayName: payload.displayName || payload.username || '',
+            companyIds: Array.isArray(payload.companyIds) ? payload.companyIds : [],
+            features: payload.features && typeof payload.features === 'object' ? payload.features : {},
+        };
+    } else {
+        // super_admin / owner → TallyVision admin view. Clear any stale clientUser.
+        delete req.session.clientUser;
+    }
+    // Persist session before redirecting so the cookie lands on /vcfo/.
+    req.session.save(() => res.redirect('/vcfo/'));
 });
 
 // ===== AUTH HELPERS =====

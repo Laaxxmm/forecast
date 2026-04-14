@@ -254,16 +254,69 @@ app.use('/api/db', requireAuth, resolveTenant, resolveBranch, requireAdmin, dbVi
 // TallyVision is loaded via createRequire because our server is ESM.
 // It brings its own express-session, better-sqlite3 DB and static assets;
 // the sub-app does not run app.listen() when required (guarded in server.js).
-// Phase 2 will add SSO bridging so Magna_Tracker tokens can unlock a TV session.
+//
+// SSO bridge: /api/vcfo/sso-token mints a short-lived HMAC-signed token, and
+// the browser redirects to /vcfo/sso?token=... — TallyVision verifies the
+// signature and seeds its own session. The shared secret lives in the sso
+// module, which Node caches by absolute path — both sides get the same value.
+const requireCJS = createRequire(import.meta.url);
+let vcfoSso: { sign: (payload: any, ttlSec?: number) => string } | null = null;
 try {
-  const requireCJS = createRequire(import.meta.url);
   // Path resolves from the compiled dist/ output at runtime; src/index.ts → ../../Vcfo-app/...
   const vcfoApp = requireCJS('../../Vcfo-app/TallyVision_2.0/src/backend/server.js');
+  vcfoSso = requireCJS('../../Vcfo-app/TallyVision_2.0/src/backend/sso.js');
   app.use('/vcfo', vcfoApp);
   console.log('✓ TallyVision sub-app mounted at /vcfo');
 } catch (err: any) {
   console.warn('⚠ TallyVision sub-app not mounted:', err?.message || err);
 }
+
+// ─── SSO token mint: called by ModuleSelectPage before redirecting to /vcfo/sso
+// Auth-gated + tenant-resolved, so the token is bound to the authenticated
+// user's current client slug. TallyVision verifies + auto-seeds its session.
+app.post('/api/vcfo/sso-token', requireAuth, resolveTenant, async (req, res) => {
+  if (!vcfoSso) {
+    return res.status(503).json({ error: 'VCFO sub-app not available' });
+  }
+  if (!req.tenantSlug) {
+    return res.status(400).json({ error: 'No active client' });
+  }
+
+  // For client users, gather the company IDs + module features their
+  // TallyVision session should have access to. Super admins get an empty
+  // companyIds — they'll see all of that tenant's data inside TallyVision.
+  let companyIds: number[] = [];
+  const features: Record<string, boolean> = {};
+  if (req.userType === 'client_user' && req.session.userId) {
+    try {
+      const platformDb = await getPlatformHelper();
+      // Company scoping lives in platform DB if wired; otherwise skip.
+      // (TallyVision falls back to showing the tenant's companies anyway.)
+      try {
+        const rows = platformDb.all(
+          'SELECT company_id FROM client_user_companies WHERE user_id = ?',
+          req.session.userId
+        );
+        companyIds = rows.map((r: any) => r.company_id);
+      } catch { /* table may not exist; ignore */ }
+    } catch { /* ignore */ }
+  }
+
+  const token = vcfoSso.sign({
+    slug: req.tenantSlug,
+    userId: req.session.userId,
+    username: req.session.username,
+    displayName: req.session.displayName,
+    userType: req.userType,
+    role: req.session.role,
+    isOwner: req.isOwner,
+    clientId: req.clientId,
+    clientName: req.clientName,
+    companyIds,
+    features,
+  });
+  res.json({ token });
+});
 
 // ─── Client modules & integrations (for module selection page) ──────────────
 app.get('/api/client-modules', requireAuth, resolveTenant, async (req, res) => {
