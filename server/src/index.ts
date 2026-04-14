@@ -41,7 +41,17 @@ const allowedOrigins = isProd
 console.log('CORS allowed origins:', allowedOrigins);
 
 app.set('trust proxy', 1);
-app.use(helmet());
+// TallyVision (mounted at /vcfo) relies on inline <script> and onclick handlers,
+// which strict CSP blocks. Apply relaxed helmet (CSP disabled) for /vcfo/* only;
+// all other routes keep the full strict helmet defaults.
+const strictHelmet = helmet();
+const relaxedHelmet = helmet({ contentSecurityPolicy: false });
+app.use((req, res, next) => {
+  if (req.path === '/vcfo' || req.path.startsWith('/vcfo/')) {
+    return relaxedHelmet(req, res, next);
+  }
+  return strictHelmet(req, res, next);
+});
 app.use(cors({
   origin: (origin, cb) => {
     if (!origin) return cb(null, false);
