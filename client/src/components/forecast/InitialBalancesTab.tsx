@@ -1,7 +1,95 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { ChevronDown, ChevronRight, ArrowRight, ArrowLeft } from 'lucide-react';
 import { Scenario, formatRs } from '../../pages/ForecastModulePage';
 import api from '../../api/client';
+
+// ── CurrencyInput (module-level) ──────────────────────────────────────────
+// Defining this INSIDE the parent component (as it was previously) caused
+// every keystroke to remount the <input>, losing focus — the user had to
+// click after every digit. Hoisting it here gives it a stable identity
+// across renders. The local `draft` state lets the user type raw digits
+// without the Intl formatter fighting the cursor; we only reformat to
+// "20,09,331" once the field loses focus.
+function CurrencyInput({
+  value,
+  onChange,
+  disabled,
+  readOnly,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  disabled?: boolean;
+  readOnly?: boolean;
+}) {
+  const [focused, setFocused] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  const displayed = focused
+    ? draft
+    : value === 0
+      ? ''
+      : new Intl.NumberFormat('en-IN').format(value);
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-sm text-theme-faint font-medium">Rs</span>
+      <input
+        type="text"
+        inputMode="decimal"
+        value={displayed}
+        onFocus={() => {
+          setDraft(value === 0 ? '' : String(value));
+          setFocused(true);
+        }}
+        onChange={e => {
+          const raw = e.target.value.replace(/[^0-9.-]/g, '');
+          setDraft(raw);
+          onChange(parseFloat(raw) || 0);
+        }}
+        onBlur={() => setFocused(false)}
+        disabled={disabled || readOnly}
+        placeholder="0"
+        className={`input text-sm text-right py-2 w-44 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+      />
+    </div>
+  );
+}
+
+// ── FieldCard (module-level) ──────────────────────────────────────────────
+// Same remount-on-every-keystroke problem applied here before hoisting.
+function FieldCard({
+  title,
+  description,
+  isExpanded,
+  onToggle,
+  children,
+}: {
+  title: string;
+  description: string;
+  isExpanded: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="border-b border-dark-400/20 last:border-b-0">
+      <div className="flex items-start justify-between px-5 py-4 gap-4">
+        <div className="flex-1 min-w-0">
+          <button onClick={onToggle} className="flex items-center gap-1.5 text-left">
+            {isExpanded
+              ? <ChevronDown size={14} className="text-theme-faint flex-shrink-0 mt-0.5" />
+              : <ChevronRight size={14} className="text-theme-faint flex-shrink-0 mt-0.5" />
+            }
+            <span className="text-sm font-bold text-theme-heading">{title}</span>
+          </button>
+          {isExpanded && (
+            <p className="text-xs text-theme-faint leading-relaxed mt-1.5 ml-5">{description}</p>
+          )}
+        </div>
+        <div className="flex-shrink-0">{children}</div>
+      </div>
+    </div>
+  );
+}
 
 interface Props {
   scenario: Scenario | null;
@@ -80,20 +168,25 @@ export default function InitialBalancesTab({ scenario, months, settings, onReloa
   const totalEquity = totalAssets - totalLiabilities;
   const retainedEarnings = totalEquity - balances.paid_in_capital;
 
-  // Save to backend
-  const save = useCallback(async (updated: Balances) => {
+  // Save to backend (debounced so a 7-digit number isn't 7 API calls).
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const save = useCallback((updated: Balances) => {
     if (!scenario || scenario.id === -1 || readOnly) return;
-    try {
-      await api.post('/forecast-module/settings', {
-        scenario_id: scenario.id,
-        settings: { initial_balances: updated },
-      });
-      setSaveStatus('Saved');
-      setTimeout(() => setSaveStatus(null), 2000);
-    } catch (err) {
-      console.error('Failed to save initial balances:', err);
-    }
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      try {
+        await api.post('/forecast-module/settings', {
+          scenario_id: scenario.id,
+          settings: { initial_balances: updated },
+        });
+        setSaveStatus('Saved');
+        setTimeout(() => setSaveStatus(null), 2000);
+      } catch (err) {
+        console.error('Failed to save initial balances:', err);
+      }
+    }, 400);
   }, [scenario, readOnly]);
+  useEffect(() => () => { if (saveTimer.current) clearTimeout(saveTimer.current); }, []);
 
   const updateField = (key: keyof Balances, value: number | string) => {
     const updated = { ...balances, [key]: value };
@@ -108,52 +201,8 @@ export default function InitialBalancesTab({ scenario, months, settings, onReloa
     return `${monthNames[m - 1]} ${y}`;
   };
 
-  // Currency input component
-  const CurrencyInput = ({ value, onChange, disabled }: { value: number; onChange: (v: number) => void; disabled?: boolean }) => (
-    <div className="flex items-center gap-2">
-      <span className="text-sm text-theme-faint font-medium">Rs</span>
-      <input
-        type="text"
-        value={value === 0 ? '' : new Intl.NumberFormat('en-IN').format(value)}
-        onChange={e => {
-          const raw = e.target.value.replace(/[^0-9.-]/g, '');
-          onChange(parseFloat(raw) || 0);
-        }}
-        disabled={disabled || readOnly}
-        placeholder="0"
-        className={`input text-sm text-right py-2 w-44 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-      />
-    </div>
-  );
-
-  // Field card component
-  const FieldCard = ({ id, title, description, children }: { id: string; title: string; description: string; children: React.ReactNode }) => {
-    const isExpanded = expandedFields[id] !== false; // default expanded
-    return (
-      <div className="border-b border-dark-400/20 last:border-b-0">
-        <div className="flex items-start justify-between px-5 py-4 gap-4">
-          <div className="flex-1 min-w-0">
-            <button
-              onClick={() => toggleField(id)}
-              className="flex items-center gap-1.5 text-left"
-            >
-              {isExpanded
-                ? <ChevronDown size={14} className="text-theme-faint flex-shrink-0 mt-0.5" />
-                : <ChevronRight size={14} className="text-theme-faint flex-shrink-0 mt-0.5" />
-              }
-              <span className="text-sm font-bold text-theme-heading">{title}</span>
-            </button>
-            {isExpanded && (
-              <p className="text-xs text-theme-faint leading-relaxed mt-1.5 ml-5">{description}</p>
-            )}
-          </div>
-          <div className="flex-shrink-0">
-            {children}
-          </div>
-        </div>
-      </div>
-    );
-  };
+  // Small helper so each <FieldCard> call site stays readable after hoisting.
+  const isExpanded = (id: string) => expandedFields[id] !== false; // default expanded
 
   const TABS: { key: TabKey; label: string }[] = [
     { key: 'assets', label: 'Initial Assets' },
@@ -232,15 +281,15 @@ export default function InitialBalancesTab({ scenario, months, settings, onReloa
           </div>
 
           <div className="card overflow-hidden">
-            <FieldCard id="cash" title="Cash" description="How much cash do you have in the bank? Remember, all of these balances should be as of the start of your forecast.">
-              <CurrencyInput value={balances.cash} onChange={v => updateField('cash', v)} />
+            <FieldCard title="Cash" description="How much cash do you have in the bank? Remember, all of these balances should be as of the start of your forecast." isExpanded={isExpanded('cash')} onToggle={() => toggleField('cash')}>
+              <CurrencyInput value={balances.cash} onChange={v => updateField('cash', v)} readOnly={readOnly} />
             </FieldCard>
 
-            <FieldCard id="ar" title="Accounts Receivable" description="How much do your customers owe you for past sales on credit?">
-              <CurrencyInput value={balances.accounts_receivable} onChange={v => updateField('accounts_receivable', v)} />
+            <FieldCard title="Accounts Receivable" description="How much do your customers owe you for past sales on credit?" isExpanded={isExpanded('ar')} onToggle={() => toggleField('ar')}>
+              <CurrencyInput value={balances.accounts_receivable} onChange={v => updateField('accounts_receivable', v)} readOnly={readOnly} />
             </FieldCard>
 
-            <FieldCard id="days_get_paid" title="Days to Get Paid" description="How long will you take to collect on this initial balance — that is, to get paid for the past sales on credit that it represents?">
+            <FieldCard title="Days to Get Paid" description="How long will you take to collect on this initial balance — that is, to get paid for the past sales on credit that it represents?" isExpanded={isExpanded('days_get_paid')} onToggle={() => toggleField('days_get_paid')}>
               <select
                 value={balances.days_to_get_paid}
                 onChange={e => updateField('days_to_get_paid', Number(e.target.value))}
@@ -253,19 +302,19 @@ export default function InitialBalancesTab({ scenario, months, settings, onReloa
               </select>
             </FieldCard>
 
-            <FieldCard id="inventory" title="Inventory" description="What is the value of your unsold inventory? If you don't use inventory, just leave this at zero.">
-              <CurrencyInput value={balances.inventory} onChange={v => updateField('inventory', v)} />
+            <FieldCard title="Inventory" description="What is the value of your unsold inventory? If you don't use inventory, just leave this at zero." isExpanded={isExpanded('inventory')} onToggle={() => toggleField('inventory')}>
+              <CurrencyInput value={balances.inventory} onChange={v => updateField('inventory', v)} readOnly={readOnly} />
             </FieldCard>
 
-            <FieldCard id="lt_assets" title="Long-term Assets" description="What is the value of your fixed assets? This should be the full, original value without any depreciation applied.">
-              <CurrencyInput value={balances.long_term_assets} onChange={v => updateField('long_term_assets', v)} />
+            <FieldCard title="Long-term Assets" description="What is the value of your fixed assets? This should be the full, original value without any depreciation applied." isExpanded={isExpanded('lt_assets')} onToggle={() => toggleField('lt_assets')}>
+              <CurrencyInput value={balances.long_term_assets} onChange={v => updateField('long_term_assets', v)} readOnly={readOnly} />
             </FieldCard>
 
-            <FieldCard id="acc_dep" title="Accumulated Depreciation" description="How much depreciation have you claimed on those fixed assets so far?">
-              <CurrencyInput value={balances.accumulated_depreciation} onChange={v => updateField('accumulated_depreciation', v)} />
+            <FieldCard title="Accumulated Depreciation" description="How much depreciation have you claimed on those fixed assets so far?" isExpanded={isExpanded('acc_dep')} onToggle={() => toggleField('acc_dep')}>
+              <CurrencyInput value={balances.accumulated_depreciation} onChange={v => updateField('accumulated_depreciation', v)} readOnly={readOnly} />
             </FieldCard>
 
-            <FieldCard id="dep_period" title="Depreciation Period" description="How long do you want to spread out the depreciation on the remaining value of the long-term assets that you are starting with?">
+            <FieldCard title="Depreciation Period" description="How long do you want to spread out the depreciation on the remaining value of the long-term assets that you are starting with?" isExpanded={isExpanded('dep_period')} onToggle={() => toggleField('dep_period')}>
               <select
                 value={balances.depreciation_period}
                 onChange={e => updateField('depreciation_period', e.target.value)}
@@ -279,11 +328,11 @@ export default function InitialBalancesTab({ scenario, months, settings, onReloa
               </select>
             </FieldCard>
 
-            <FieldCard id="oca" title="Other Current Assets" description="What is the unamortized value of your other current assets?">
-              <CurrencyInput value={balances.other_current_assets} onChange={v => updateField('other_current_assets', v)} />
+            <FieldCard title="Other Current Assets" description="What is the unamortized value of your other current assets?" isExpanded={isExpanded('oca')} onToggle={() => toggleField('oca')}>
+              <CurrencyInput value={balances.other_current_assets} onChange={v => updateField('other_current_assets', v)} readOnly={readOnly} />
             </FieldCard>
 
-            <FieldCard id="amort_period" title="Amortization Period" description="Select the length of time that those assets will provide value, so we can expense a suitable portion each month. If you don't want to expense them at all, choose 'Keep at full value' instead.">
+            <FieldCard title="Amortization Period" description="Select the length of time that those assets will provide value, so we can expense a suitable portion each month. If you don't want to expense them at all, choose 'Keep at full value' instead." isExpanded={isExpanded('amort_period')} onToggle={() => toggleField('amort_period')}>
               <select
                 value={balances.amortization_period}
                 onChange={e => updateField('amortization_period', e.target.value)}
@@ -319,11 +368,11 @@ export default function InitialBalancesTab({ scenario, months, settings, onReloa
           </div>
 
           <div className="card overflow-hidden">
-            <FieldCard id="ap" title="Accounts Payable" description="How much do you owe to your suppliers for past purchases on credit?">
-              <CurrencyInput value={balances.accounts_payable} onChange={v => updateField('accounts_payable', v)} />
+            <FieldCard title="Accounts Payable" description="How much do you owe to your suppliers for past purchases on credit?" isExpanded={isExpanded('ap')} onToggle={() => toggleField('ap')}>
+              <CurrencyInput value={balances.accounts_payable} onChange={v => updateField('accounts_payable', v)} readOnly={readOnly} />
             </FieldCard>
 
-            <FieldCard id="days_pay" title="Days to Pay" description="How long will you take to pay off this initial balance — that is, to pay for the past purchases on credit that it represents?">
+            <FieldCard title="Days to Pay" description="How long will you take to pay off this initial balance — that is, to pay for the past purchases on credit that it represents?" isExpanded={isExpanded('days_pay')} onToggle={() => toggleField('days_pay')}>
               <select
                 value={balances.days_to_pay}
                 onChange={e => updateField('days_to_pay', Number(e.target.value))}
@@ -336,12 +385,12 @@ export default function InitialBalancesTab({ scenario, months, settings, onReloa
               </select>
             </FieldCard>
 
-            <FieldCard id="itp" title="Income Taxes Payable" description="How much, if anything, have you accrued toward your next income tax payment?">
-              <CurrencyInput value={balances.income_taxes_payable} onChange={v => updateField('income_taxes_payable', v)} />
+            <FieldCard title="Income Taxes Payable" description="How much, if anything, have you accrued toward your next income tax payment?" isExpanded={isExpanded('itp')} onToggle={() => toggleField('itp')}>
+              <CurrencyInput value={balances.income_taxes_payable} onChange={v => updateField('income_taxes_payable', v)} readOnly={readOnly} />
             </FieldCard>
 
-            <FieldCard id="stp" title="Sales Taxes Payable" description="How much of your cash balance is actually sales tax revenue that you will soon need to pass along to the government?">
-              <CurrencyInput value={balances.sales_taxes_payable} onChange={v => updateField('sales_taxes_payable', v)} />
+            <FieldCard title="Sales Taxes Payable" description="How much of your cash balance is actually sales tax revenue that you will soon need to pass along to the government?" isExpanded={isExpanded('stp')} onToggle={() => toggleField('stp')}>
+              <CurrencyInput value={balances.sales_taxes_payable} onChange={v => updateField('sales_taxes_payable', v)} readOnly={readOnly} />
             </FieldCard>
           </div>
 
@@ -349,15 +398,15 @@ export default function InitialBalancesTab({ scenario, months, settings, onReloa
           <div className="mt-4">
             <p className="text-xs text-theme-faint mb-3 italic">These additional items are calculated automatically:</p>
             <div className="card overflow-hidden opacity-70">
-              <FieldCard id="prepaid_rev" title="Prepaid Revenue" description="Your initial balance for prepaid revenue is calculated based on the existing customers you add in the Revenue step. This balance will convert to revenue within the first 12 months of your forecast.">
+              <FieldCard title="Prepaid Revenue" description="Your initial balance for prepaid revenue is calculated based on the existing customers you add in the Revenue step. This balance will convert to revenue within the first 12 months of your forecast." isExpanded={isExpanded('prepaid_rev')} onToggle={() => toggleField('prepaid_rev')}>
                 <CurrencyInput value={0} onChange={() => {}} disabled />
               </FieldCard>
 
-              <FieldCard id="st_debt" title="Short-term Debt" description="Your initial balances for debt are calculated automatically based on the financing you add in the Financing step. Short-term debt is associated with credit lines, credit cards, and loans that will be paid back within 12 months.">
+              <FieldCard title="Short-term Debt" description="Your initial balances for debt are calculated automatically based on the financing you add in the Financing step. Short-term debt is associated with credit lines, credit cards, and loans that will be paid back within 12 months." isExpanded={isExpanded('st_debt')} onToggle={() => toggleField('st_debt')}>
                 <CurrencyInput value={0} onChange={() => {}} disabled />
               </FieldCard>
 
-              <FieldCard id="lt_debt" title="Long-term Debt" description="Long-term debt comes from loans or other financing that will take more than 12 months to pay back.">
+              <FieldCard title="Long-term Debt" description="Long-term debt comes from loans or other financing that will take more than 12 months to pay back." isExpanded={isExpanded('lt_debt')} onToggle={() => toggleField('lt_debt')}>
                 <CurrencyInput value={0} onChange={() => {}} disabled />
               </FieldCard>
             </div>
@@ -391,11 +440,11 @@ export default function InitialBalancesTab({ scenario, months, settings, onReloa
           </div>
 
           <div className="card overflow-hidden">
-            <FieldCard id="pic" title="Paid-in Capital" description="How much money have you or others invested in the company as owners or in exchange for equity?">
-              <CurrencyInput value={balances.paid_in_capital} onChange={v => updateField('paid_in_capital', v)} />
+            <FieldCard title="Paid-in Capital" description="How much money have you or others invested in the company as owners or in exchange for equity?" isExpanded={isExpanded('pic')} onToggle={() => toggleField('pic')}>
+              <CurrencyInput value={balances.paid_in_capital} onChange={v => updateField('paid_in_capital', v)} readOnly={readOnly} />
             </FieldCard>
 
-            <FieldCard id="re" title="Retained Earnings" description="This value is calculated in our model, because that ensures that we can keep the balance sheet in balance, regardless of what you enter for your initial balances. If this value does not match your balance sheet as of the start of the forecast, that indicates that one of the other initial balances is off.">
+            <FieldCard title="Retained Earnings" description="This value is calculated in our model, because that ensures that we can keep the balance sheet in balance, regardless of what you enter for your initial balances. If this value does not match your balance sheet as of the start of the forecast, that indicates that one of the other initial balances is off." isExpanded={isExpanded('re')} onToggle={() => toggleField('re')}>
               <div className="flex items-center gap-2">
                 <span className="text-sm text-theme-faint font-medium">Rs</span>
                 <input
