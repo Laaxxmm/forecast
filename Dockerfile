@@ -28,6 +28,11 @@ RUN cd client && npm run build
 
 EXPOSE 3000
 ENV NODE_ENV=production
-# TallyVision writable data dir — set to /data/vcfo if you attach a Railway volume at /data
-ENV TALLYVISION_DATA=/app/Vcfo-app/TallyVision_2.0/data
+# TallyVision writable data dir — lives on the same Railway /data volume as Magna_Tracker.
+# Layout on the volume:
+#   /data/platform.db            ← Magna_Tracker platform DB
+#   /data/clients/<slug>.db      ← Magna_Tracker per-client DBs
+#   /data/vcfo/master.db         ← TallyVision master (users, settings)
+#   /data/vcfo/clients/*.db      ← TallyVision per-company group DBs
+ENV TALLYVISION_DATA=/data/vcfo
 CMD ["npm", "start"]
