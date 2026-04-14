@@ -22,7 +22,7 @@ const categories = [
   { key: 'financing', label: 'Financing', color: '#06b6d4' },
 ];
 
-export default function ForecastOverview({ items, allValues, months, settings: _settings, scenario: _scenario }: Props) {
+export default function ForecastOverview({ items, allValues, months, settings, scenario: _scenario }: Props) {
   const monthlyData = useMemo(() => {
     return months.map(m => {
       const revenue = items.filter(i => i.category === 'revenue').reduce((s, i) => s + (allValues[i.id]?.[m] || 0), 0);
@@ -57,18 +57,33 @@ export default function ForecastOverview({ items, allValues, months, settings: _
   });
   const lowestCash = cashData.reduce((min, d) => d.cash < min.cash ? d : min, cashData[0] || { month: '', cash: 0 });
 
-  // Category completion status
+  // Category completion status.
+  // Most categories are driven by forecast_items (Revenue, Costs, Personnel,
+  // Expenses, Assets, Dividends, Financing). Taxes is the odd one out — it's
+  // primarily driven by forecast_settings (income_tax_rate, sales_tax_rate),
+  // which BalanceSheet.tsx uses to auto-accrue tax liabilities. Manual tax
+  // line items via forecast_items.category='taxes' are rare. So the Taxes row
+  // must also honor settings, otherwise TaxesTab shows "Configured" while the
+  // checklist still shows an empty circle — the exact mismatch the user hit.
   const categoryStatus = categories.map(c => {
     const catItems = items.filter(i => i.category === c.key);
     const hasValues = catItems.some(i => {
       const vals = allValues[i.id];
       return vals && Object.values(vals).some(v => v > 0);
     });
-    return {
-      ...c,
-      status: catItems.length === 0 ? 'not_started' : hasValues ? 'complete' : 'in_progress',
-      count: catItems.length,
-    };
+
+    let status: 'not_started' | 'in_progress' | 'complete' =
+      catItems.length === 0 ? 'not_started' : hasValues ? 'complete' : 'in_progress';
+
+    // Taxes: settings-configured rates count as complete even without items.
+    // Matches TaxesTab's own "Configured" badge (see TaxesTab.tsx line 213).
+    if (c.key === 'taxes') {
+      const incomeRate = Number(settings?.income_tax_rate) || 0;
+      const salesRate = Number(settings?.sales_tax_rate) || 0;
+      if (incomeRate > 0 || salesRate > 0) status = 'complete';
+    }
+
+    return { ...c, status, count: catItems.length };
   });
 
   const chartData = monthlyData.map(r => ({
