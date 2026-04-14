@@ -104,4 +104,33 @@ export async function seedDatabase(db: DbHelper) {
   }
 
   seedRevenueSharing(db);
+  seedCategoryMapping(db);
+}
+
+/**
+ * Seed default forecast category ↔ Tally group mappings if the table is
+ * empty. Idempotent — safe to re-run on every boot. Back-fills existing
+ * clients that pre-date Step 7 without a separate migration.
+ */
+function seedCategoryMapping(db: DbHelper) {
+  const mappingCount = db.get('SELECT COUNT(*) as cnt FROM forecast_category_mapping');
+  if (mappingCount.cnt > 0) return;
+
+  const defaults: { category: string; group: string; filter: string | null }[] = [
+    { category: 'revenue', group: 'Sales Accounts', filter: null },
+    { category: 'revenue', group: 'Direct Incomes', filter: null },
+    { category: 'revenue', group: 'Indirect Incomes', filter: null },
+    { category: 'direct_costs', group: 'Purchase Accounts', filter: null },
+    { category: 'direct_costs', group: 'Direct Expenses', filter: null },
+    { category: 'personnel', group: 'Indirect Expenses', filter: 'Salary%,Wages%' },
+    { category: 'expenses', group: 'Indirect Expenses', filter: null },
+    { category: 'assets', group: 'Fixed Assets', filter: null },
+  ];
+  for (const m of defaults) {
+    db.run(
+      'INSERT OR IGNORE INTO forecast_category_mapping (forecast_category, tally_group_name, ledger_filter) VALUES (?, ?, ?)',
+      m.category, m.group, m.filter
+    );
+  }
+  console.log('[Seed] Forecast category ↔ Tally group mapping seeded');
 }

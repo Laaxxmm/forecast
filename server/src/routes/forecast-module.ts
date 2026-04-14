@@ -369,4 +369,85 @@ router.get('/summary', async (req, res) => {
   res.json({ categories, settings: settingsObj });
 });
 
+// === CATEGORY MAPPING (forecast category ↔ Tally group) ===
+// Tenant-scoped table seeded with defaults on first boot. Drives the Step 8
+// Budget vs Actual report by declaring which vcfo_* Tally groups roll up
+// into which forecast category. `ledger_filter` is an optional comma-
+// separated list of LIKE patterns for categories that carve a subset out
+// of a broader group (e.g. personnel = Indirect Expenses WHERE ledger LIKE
+// 'Salary%' OR LIKE 'Wages%').
+
+router.get('/category-mapping', async (req, res) => {
+  const db = req.tenantDb!;
+  const rows = db.all(
+    'SELECT id, forecast_category, tally_group_name, ledger_filter FROM forecast_category_mapping ORDER BY forecast_category, tally_group_name'
+  );
+  res.json(rows);
+});
+
+router.post('/category-mapping', requireWriteAccess, async (req, res) => {
+  const db = req.tenantDb!;
+  const { forecast_category, tally_group_name, ledger_filter } = req.body;
+  if (!forecast_category || !tally_group_name) {
+    return res.status(400).json({ error: 'forecast_category and tally_group_name are required' });
+  }
+  try {
+    db.run(
+      'INSERT INTO forecast_category_mapping (forecast_category, tally_group_name, ledger_filter) VALUES (?, ?, ?)',
+      String(forecast_category).trim(),
+      String(tally_group_name).trim(),
+      ledger_filter ? String(ledger_filter).trim() : null
+    );
+    const row = db.get(
+      'SELECT id, forecast_category, tally_group_name, ledger_filter FROM forecast_category_mapping WHERE forecast_category = ? AND tally_group_name = ?',
+      String(forecast_category).trim(), String(tally_group_name).trim()
+    );
+    res.status(201).json(row);
+  } catch (e: any) {
+    if (String(e?.message || '').includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Mapping already exists for this category + Tally group' });
+    }
+    throw e;
+  }
+});
+
+router.put('/category-mapping/:id', requireWriteAccess, async (req, res) => {
+  const db = req.tenantDb!;
+  const id = parseInt(req.params.id);
+  const { forecast_category, tally_group_name, ledger_filter } = req.body;
+  if (!forecast_category || !tally_group_name) {
+    return res.status(400).json({ error: 'forecast_category and tally_group_name are required' });
+  }
+  const existing = db.get('SELECT id FROM forecast_category_mapping WHERE id = ?', id);
+  if (!existing) return res.status(404).json({ error: 'Mapping not found' });
+  try {
+    db.run(
+      'UPDATE forecast_category_mapping SET forecast_category = ?, tally_group_name = ?, ledger_filter = ? WHERE id = ?',
+      String(forecast_category).trim(),
+      String(tally_group_name).trim(),
+      ledger_filter ? String(ledger_filter).trim() : null,
+      id
+    );
+    const row = db.get(
+      'SELECT id, forecast_category, tally_group_name, ledger_filter FROM forecast_category_mapping WHERE id = ?',
+      id
+    );
+    res.json(row);
+  } catch (e: any) {
+    if (String(e?.message || '').includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Another mapping already uses this category + Tally group' });
+    }
+    throw e;
+  }
+});
+
+router.delete('/category-mapping/:id', requireWriteAccess, async (req, res) => {
+  const db = req.tenantDb!;
+  const id = parseInt(req.params.id);
+  const existing = db.get('SELECT id FROM forecast_category_mapping WHERE id = ?', id);
+  if (!existing) return res.status(404).json({ error: 'Mapping not found' });
+  db.run('DELETE FROM forecast_category_mapping WHERE id = ?', id);
+  res.json({ ok: true });
+});
+
 export default router;

@@ -219,6 +219,24 @@ export function initializeSchema(db: DbHelper) {
     )
   `);
 
+  // Forecast category ↔ Tally group mapping (Step 7 of DB unification).
+  // Tenant-scoped: each client can retune which Tally groups feed which
+  // forecast category. Drives the Budget vs Actual report (Step 8) by
+  // joining forecast_items to vcfo_trial_balance / vcfo_profit_loss
+  // through `tally_group_name`. `ledger_filter` holds comma-separated
+  // LIKE patterns (e.g. 'Salary%,Wages%') for categories that carve
+  // a subset out of a broader Tally group (personnel from Indirect
+  // Expenses).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS forecast_category_mapping (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      forecast_category TEXT NOT NULL,
+      tally_group_name TEXT NOT NULL,
+      ledger_filter TEXT,
+      UNIQUE(forecast_category, tally_group_name)
+    )
+  `);
+
   // Dashboard actuals — manual entry of actual financial results
   db.exec(`
     CREATE TABLE IF NOT EXISTS dashboard_actuals (
