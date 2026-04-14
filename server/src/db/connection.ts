@@ -1,4 +1,4 @@
-import initSqlJs, { Database } from 'sql.js';
+import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 
@@ -19,101 +19,75 @@ export function getClientsDir(): string {
 }
 
 // ── DbHelper ────────────────────────────────────────────────────────────────
+//
+// Thin wrapper around better-sqlite3 that preserves the async-shaped API used
+// across every route file (`req.tenantDb.run/get/all/exec/beginBatch/...`).
+// All operations are synchronous under the hood — we just keep the existing
+// call sites working unchanged.
+//
+// sql.js quirk preserved: callers that pass `undefined` as a bind value get
+// NULL (better-sqlite3 throws on undefined by default).
+
+function coerceUndefinedToNull(params: any[]): any[] {
+  return params.map((v) => (v === undefined ? null : v));
+}
 
 export class DbHelper {
   private _batchMode = false;
-  constructor(private db: Database, private saveFn?: () => void) {}
+  constructor(private db: Database.Database) {}
 
-  private save() {
-    if (!this._batchMode) this.saveFn?.();
-  }
-
-  /** Start batch mode — suppresses disk saves until endBatch(). Use for bulk inserts. */
+  /** Start batch mode — wraps the following writes in a SQL transaction. */
   beginBatch() {
+    if (this._batchMode) return;
+    this.db.exec('BEGIN');
     this._batchMode = true;
-    this.db.run('BEGIN TRANSACTION');
   }
 
-  /** End batch mode — commits transaction and saves to disk once. */
+  /** End batch mode — commits the transaction. */
   endBatch() {
-    this.db.run('COMMIT');
+    if (!this._batchMode) return;
+    this.db.exec('COMMIT');
     this._batchMode = false;
-    this.saveFn?.();
   }
 
   /** Rollback batch on error. */
   rollbackBatch() {
-    try { this.db.run('ROLLBACK'); } catch {}
+    if (!this._batchMode) return;
+    try { this.db.exec('ROLLBACK'); } catch {}
     this._batchMode = false;
   }
 
   run(sql: string, ...params: any[]) {
     const flat = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
-    this.db.run(sql, flat);
-    this.save();
+    const bound = coerceUndefinedToNull(flat);
+    const result = this.db.prepare(sql).run(...bound);
     return {
-      lastInsertRowid: (this.db.exec("SELECT last_insert_rowid() as id")[0]?.values[0]?.[0] as number) || 0,
-      changes: this.db.getRowsModified(),
+      lastInsertRowid: Number(result.lastInsertRowid),
+      changes: result.changes,
     };
   }
 
   get(sql: string, ...params: any[]): any {
     const flat = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
-    const stmt = this.db.prepare(sql);
-    stmt.bind(flat);
-    if (stmt.step()) {
-      const cols = stmt.getColumnNames();
-      const vals = stmt.get();
-      stmt.free();
-      const row: any = {};
-      cols.forEach((c, i) => row[c] = vals[i]);
-      return row;
-    }
-    stmt.free();
-    return null;
+    const bound = coerceUndefinedToNull(flat);
+    const row = this.db.prepare(sql).get(...bound);
+    return row ?? null;
   }
 
   all(sql: string, ...params: any[]): any[] {
     const flat = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
-    const stmt = this.db.prepare(sql);
-    stmt.bind(flat);
-    const results: any[] = [];
-    while (stmt.step()) {
-      const cols = stmt.getColumnNames();
-      const vals = stmt.get();
-      const row: any = {};
-      cols.forEach((c, i) => row[c] = vals[i]);
-      results.push(row);
-    }
-    stmt.free();
-    return results;
+    const bound = coerceUndefinedToNull(flat);
+    return this.db.prepare(sql).all(...bound) as any[];
   }
 
   exec(sql: string) {
-    this.db.run(sql);
-    this.save();
+    this.db.exec(sql);
   }
 }
 
 // ── Client DB Connection Pool ───────────────────────────────────────────────
 
-const clientDbCache = new Map<string, { db: Database; helper: DbHelper }>();
-
-function saveClientDb(slug: string) {
-  const entry = clientDbCache.get(slug);
-  if (!entry) return;
-  const data = entry.db.export();
-  const dbPath = path.join(clientsDir, `${slug}.db`);
-  const tmpPath = dbPath + '.tmp';
-  const bakPath = dbPath + '.bak';
-
-  // Atomic write: temp → rename (prevents corruption if process killed mid-write)
-  fs.writeFileSync(tmpPath, Buffer.from(data));
-  if (fs.existsSync(dbPath)) {
-    try { fs.renameSync(dbPath, bakPath); } catch {}
-  }
-  fs.renameSync(tmpPath, dbPath);
-}
+const clientDbCache = new Map<string, { db: Database.Database; helper: DbHelper }>();
 
 export async function getClientHelper(slug: string): Promise<DbHelper> {
   const cached = clientDbCache.get(slug);
@@ -123,7 +97,10 @@ export async function getClientHelper(slug: string): Promise<DbHelper> {
   const bakPath = dbPath + '.bak';
   const tmpPath = dbPath + '.tmp';
 
-  // Recovery: if main DB is missing or empty (corrupted write), restore from backup
+  // Recovery: if main DB is missing or empty, restore from the most recent
+  // intact copy. (Legacy sql.js could leave a 0-byte main file on a crash
+  // during export. Kept for safety while migrated files still might predate
+  // better-sqlite3.)
   const mainExists = fs.existsSync(dbPath);
   const mainSize = mainExists ? fs.statSync(dbPath).size : 0;
   if (!mainExists || mainSize === 0) {
@@ -136,18 +113,11 @@ export async function getClientHelper(slug: string): Promise<DbHelper> {
     }
   }
 
-  const SQL = await initSqlJs();
+  const db = new Database(dbPath);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
 
-  let db: Database;
-  if (fs.existsSync(dbPath) && fs.statSync(dbPath).size > 0) {
-    const buffer = fs.readFileSync(dbPath);
-    db = new SQL.Database(buffer);
-  } else {
-    db = new SQL.Database();
-  }
-  db.run('PRAGMA foreign_keys = ON');
-
-  const helper = new DbHelper(db, () => saveClientDb(slug));
+  const helper = new DbHelper(db);
   clientDbCache.set(slug, { db, helper });
 
   console.log(`[DB] Loaded client DB: ${slug} (${dbPath})`);
@@ -166,14 +136,10 @@ export async function getHelper(): Promise<DbHelper> {
   // Try loading the old magna_tracker.db for backward compat
   const oldDbPath = path.join(dataDir, 'magna_tracker.db');
   if (fs.existsSync(oldDbPath)) {
-    const SQL = await initSqlJs();
-    const buffer = fs.readFileSync(oldDbPath);
-    const db = new SQL.Database(buffer);
-    db.run('PRAGMA foreign_keys = ON');
-    legacyHelper = new DbHelper(db, () => {
-      const data = db.export();
-      fs.writeFileSync(oldDbPath, Buffer.from(data));
-    });
+    const db = new Database(oldDbPath);
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    legacyHelper = new DbHelper(db);
     return legacyHelper;
   }
 
@@ -183,17 +149,16 @@ export async function getHelper(): Promise<DbHelper> {
 }
 
 export function saveDb() {
-  // Legacy: save the old DB if it exists, otherwise no-op
-  // Client DBs auto-save via their DbHelper saveFn
+  // Legacy no-op — better-sqlite3 writes directly to disk
 }
 
-export async function getDb(): Promise<Database> {
+export async function getDb(): Promise<Database.Database> {
   // Legacy wrapper
   const helper = await getHelper();
   return (helper as any).db;
 }
 
-/** Create daily backups for all loaded client databases (call on startup) */
+/** Create daily backups for all client databases (call on startup). */
 export function createDailyBackups() {
   const backupDir = path.join(clientsDir, 'backups');
   if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });

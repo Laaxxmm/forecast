@@ -1,4 +1,4 @@
-import initSqlJs, { Database } from 'sql.js';
+import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { DbHelper } from './connection.js';
@@ -15,24 +15,14 @@ try {
 const platformDbPath = path.join(dataDir, 'platform.db');
 console.log(`[Platform DB] Path: ${platformDbPath}`);
 
-let platformDb: Database;
-let platformHelper: DbHelper;
+let platformDb: Database.Database | null = null;
+let platformHelper: DbHelper | null = null;
 
 export function savePlatformDb() {
-  if (!platformDb) return;
-  const data = platformDb.export();
-  const tmpPath = platformDbPath + '.tmp';
-  const bakPath = platformDbPath + '.bak';
-
-  // Atomic write: temp → rename (prevents corruption if process killed mid-write)
-  fs.writeFileSync(tmpPath, Buffer.from(data));
-  if (fs.existsSync(platformDbPath)) {
-    try { fs.renameSync(platformDbPath, bakPath); } catch {}
-  }
-  fs.renameSync(tmpPath, platformDbPath);
+  // Legacy no-op — better-sqlite3 writes directly to disk
 }
 
-export async function getPlatformDb(): Promise<Database> {
+export async function getPlatformDb(): Promise<Database.Database> {
   if (platformDb) return platformDb;
 
   const bakPath = platformDbPath + '.bak';
@@ -51,22 +41,16 @@ export async function getPlatformDb(): Promise<Database> {
     }
   }
 
-  const SQL = await initSqlJs();
-  if (fs.existsSync(platformDbPath) && fs.statSync(platformDbPath).size > 0) {
-    const buffer = fs.readFileSync(platformDbPath);
-    platformDb = new SQL.Database(buffer);
-  } else {
-    platformDb = new SQL.Database();
-  }
-  platformDb.run('PRAGMA foreign_keys = ON');
+  platformDb = new Database(platformDbPath);
+  platformDb.pragma('journal_mode = WAL');
+  platformDb.pragma('foreign_keys = ON');
   return platformDb;
 }
 
 export async function getPlatformHelper(): Promise<DbHelper> {
   if (platformHelper) return platformHelper;
   const db = await getPlatformDb();
-  // Create a DbHelper that saves to the platform DB path
-  platformHelper = new DbHelper(db, savePlatformDb);
+  platformHelper = new DbHelper(db);
   return platformHelper;
 }
 
@@ -86,7 +70,7 @@ export function createPlatformBackup() {
 
     // Keep last 3 daily backups
     const backups = fs.readdirSync(backupDir)
-      .filter(f => f.startsWith('platform.db.'))
+      .filter((f) => f.startsWith('platform.db.'))
       .sort();
     for (const old of backups.slice(0, -3)) {
       try { fs.unlinkSync(path.join(backupDir, old)); } catch {}
