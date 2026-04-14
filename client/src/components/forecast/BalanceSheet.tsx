@@ -106,11 +106,11 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
     return data;
   }, [items, allValues, months, employeeBenefitsPct, financingItems]);
 
-  // Asset items split by item_type. Forecast items without item_type are
-  // treated as long-term for backwards compat (pre-AssetCreateModal data).
-  // A separate backfill migration can later set all legacy nulls to 'long_term'.
+  // Asset items split by item_type. Legacy rows with NULL item_type are
+  // backfilled to 'long_term' by the data-migrations block in schema.ts, so
+  // these filters can rely on item_type being populated.
   const currentAssetItems = useMemo(() => items.filter(i => i.category === 'assets' && i.item_type === 'current'), [items]);
-  const longTermAssetItems = useMemo(() => items.filter(i => i.category === 'assets' && (i.item_type === 'long_term' || !i.item_type)), [items]);
+  const longTermAssetItems = useMemo(() => items.filter(i => i.category === 'assets' && i.item_type === 'long_term'), [items]);
   const investmentAssetItems = useMemo(() => items.filter(i => i.category === 'assets' && i.item_type === 'investment'), [items]);
 
   // Per-item amortization for current assets. Each purchase in month P amortizes
@@ -150,6 +150,42 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
           }
         }
         perMonth[m] += balance;
+      });
+    });
+
+    return perMonth;
+  }, [currentAssetItems, allValues, months]);
+
+  // Per-month amortization *expense* for current assets (the portion that
+  // disappears from the balance each month). Mirrors currentForecastedBalanceByMonth
+  // but returns the expense (1/lifeMonths of each purchase while still amortizing)
+  // instead of the end-of-month balance. Needed on the equity side so retained
+  // earnings absorbs the non-cash write-down — otherwise total assets drop but
+  // equity doesn't, breaking A = L + E.
+  const currentAmortizationExpenseByMonth = useMemo(() => {
+    const perMonth: Record<string, number> = {};
+    months.forEach(m => { perMonth[m] = 0; });
+
+    currentAssetItems.forEach(item => {
+      const life = item.meta?.useful_life;
+      const lifeMonths =
+        life === 'full' || !life ? Infinity
+          : typeof life === 'string' && /^\d+m$/.test(life) ? parseInt(life.replace('m', ''), 10)
+          : typeof life === 'string' && /^\d+$/.test(life) ? parseInt(life, 10)
+          : Infinity;
+      if (!(lifeMonths > 0) || lifeMonths === Infinity) return; // 'full' never amortizes
+
+      const itemValues = allValues[item.id] || {};
+      months.forEach((m, mi) => {
+        let expense = 0;
+        for (let pi = 0; pi <= mi; pi++) {
+          const p = months[pi];
+          const v = itemValues[p] || 0;
+          if (!v) continue;
+          const elapsed = mi - pi + 1; // month of purchase counts as month 1
+          if (elapsed <= lifeMonths) expense += v / lifeMonths;
+        }
+        perMonth[m] += expense;
       });
     });
 
@@ -232,10 +268,13 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
 
       // Accumulated depreciation: monthly depreciation on fixed assets only
       const depPeriod = ib.depreciation_period;
+      let monthlyDep = 0;
       if (depPeriod && depPeriod !== 'forever' && cumulativeFixedAssets > 0) {
-        const monthlyDep = cumulativeFixedAssets / (parseFloat(depPeriod) * 12);
+        monthlyDep = cumulativeFixedAssets / (parseFloat(depPeriod) * 12);
         cumulativeDepreciation += monthlyDep;
       }
+      // Non-cash amortization on current assets for this month (precomputed).
+      const monthlyAmort = currentAmortizationExpenseByMonth[m] || 0;
 
       // AP: costs * (apDays/30) fraction stays payable
       const apFraction = Math.min(apGlobalDays / 30, 1);
@@ -268,8 +307,11 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
       // Investments add to paid-in capital
       cumulativeInvestments += md.investmentReceipts;
 
-      // Earnings (cumulative net profit YTD)
-      cumulativeEarnings += md.netProfit;
+      // Earnings (cumulative net profit YTD) — net of non-cash D&A so the
+      // equity side drops in lockstep with the asset write-downs. Without
+      // this, assets shrink via accumulated depreciation + current-asset
+      // amortization but equity stays flat, leaving A ≠ L + E.
+      cumulativeEarnings += md.netProfit - monthlyDep - monthlyAmort;
 
       // Retained earnings from initial balances
       const retainedEarnings = (ib.cash || 0) + initialAR + initialOtherCurrentAssets
@@ -319,7 +361,7 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
       };
     });
     return data;
-  }, [monthData, months, ib, arGlobalDays, apGlobalDays, financingItems, allValues, incomeTaxRate, salesTaxRate, longTermAssetItems, investmentAssetItems, currentForecastedBalanceByMonth]);
+  }, [monthData, months, ib, arGlobalDays, apGlobalDays, financingItems, allValues, incomeTaxRate, salesTaxRate, longTermAssetItems, investmentAssetItems, currentForecastedBalanceByMonth, currentAmortizationExpenseByMonth]);
 
   // Initial balance values
   const initialValues: Record<string, number> = useMemo(() => {

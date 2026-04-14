@@ -274,6 +274,18 @@ export function initializeSchema(db: DbHelper) {
     try { db.exec(sql); } catch { /* column already exists */ }
   }
 
+  // Data migrations — backfill / normalise legacy rows
+  // Historical forecast_items rows for assets were written with item_type NULL or ''.
+  // BalanceSheet.tsx routes assets by item_type (current / long_term / investment);
+  // NULL rows would leak out of every bucket, so we pin legacy rows to 'long_term'
+  // (the category's historical default — cash, AR, etc. were always added as such).
+  const dataMigrations = [
+    "UPDATE forecast_items SET item_type = 'long_term' WHERE category = 'assets' AND (item_type IS NULL OR item_type = '')",
+  ];
+  for (const sql of dataMigrations) {
+    try { db.exec(sql); } catch { /* table may not exist on fresh install */ }
+  }
+
   // Create indexes separately (sql.js doesn't support multiple statements well with CREATE INDEX)
   const indexes = [
     'CREATE INDEX IF NOT EXISTS idx_clinic_month ON clinic_actuals(bill_month)',

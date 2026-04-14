@@ -482,7 +482,7 @@ export default function CashFlowReport({ items, allValues, months, viewMode, set
                       <td key={c} className={`text-right py-2.5 px-3 tabular-nums ${
                         val < 0 ? 'text-theme-secondary' : isBold ? 'text-theme-heading' : 'text-theme-secondary'
                       }`}>
-                        {val === 0 && !isBold ? '' : formatCFCell(val)}
+                        {formatCFCell(val)}
                       </td>
                     );
                   })}
