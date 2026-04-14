@@ -11,7 +11,6 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
-const { initDatabase, getDbPath, DB_DIR } = require('./db/setup');
 const { DbManager } = require('./db/db-manager');
 const {
     withTenant,
@@ -21,8 +20,9 @@ const {
     getActiveClientDb,
     setActiveClientDb,
     closeAllTenants,
-    getTenantDir,
-    getTenantRoot,
+    getDataRoot,
+    getPlatformDbPath,
+    getClientDbPath,
 } = require('./db/tenant');
 const { TallyConnector } = require('./tally-connector');
 const { DataExtractor } = require('./extractors/data-extractor');
@@ -147,11 +147,11 @@ app.post('/client/login', loginLimiter, (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
     try {
-        const user = db.prepare('SELECT id, username, display_name, password_hash, features, is_active FROM client_users WHERE username = ? AND is_active = 1').get(username);
+        const user = db.prepare('SELECT id, username, display_name, password_hash, features, is_active FROM vcfo_client_users WHERE username = ? AND is_active = 1').get(username);
         if (!user || !bcrypt.compareSync(password, user.password_hash)) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
-        const companyIds = db.prepare('SELECT company_id FROM client_company_access WHERE client_id = ?')
+        const companyIds = db.prepare('SELECT company_id FROM vcfo_client_company_access WHERE client_id = ?')
             .all(user.id).map(r => r.company_id);
         const features = JSON.parse(user.features || '{}');
         req.session.clientUser = { id: user.id, username: user.username, displayName: user.display_name, companyIds, features };
@@ -207,13 +207,19 @@ const masterDb = new Proxy({}, {
     },
 });
 
-// Tables that live in client DBs (used for query routing)
+// Tables that live in per-client DBs (used for query routing). Everything
+// else goes to platform.db. After Step 4, all names carry the `vcfo_` prefix
+// and several former master tables (companies, writeoff_rules, tracker,
+// audit) are now per-client too.
 const CLIENT_TABLE_NAMES = new Set([
-    'account_groups', 'ledgers', 'trial_balance', 'profit_loss', 'balance_sheet',
-    'vouchers', 'stock_summary', 'stock_item_ledger', 'bills_outstanding',
-    'cost_centres', 'cost_allocations', 'gst_entries', 'payroll_entries', 'sync_log',
-    'excel_uploads', 'excel_data',
-    'budgets', 'allocation_rules',
+    'vcfo_account_groups', 'vcfo_ledgers', 'vcfo_trial_balance', 'vcfo_profit_loss', 'vcfo_balance_sheet',
+    'vcfo_vouchers', 'vcfo_stock_summary', 'vcfo_stock_item_ledger', 'vcfo_bills_outstanding',
+    'vcfo_cost_centres', 'vcfo_cost_allocations', 'vcfo_gst_entries', 'vcfo_payroll_entries', 'vcfo_sync_log',
+    'vcfo_excel_uploads', 'vcfo_excel_data',
+    'vcfo_budgets', 'vcfo_allocation_rules',
+    'vcfo_companies', 'vcfo_writeoff_rules',
+    'vcfo_tracker_items', 'vcfo_tracker_status',
+    'vcfo_audit_milestones', 'vcfo_audit_milestone_status', 'vcfo_audit_observations',
 ]);
 
 /** Check if a SQL query targets a client table */
@@ -264,48 +270,33 @@ const db = new Proxy({}, {
 });
 
 /**
- * Middleware: resolve and set the active client DB for each API request
- * (within the current tenant's workspace).
+ * Middleware: bind the active client DB for the current slug. Each request
+ * gets exactly one per-client DB (the slug's), regardless of any groupId /
+ * companyId query params — those are legacy and now just filter rows
+ * within the already-scoped DB.
  */
 app.use('/api', (req, res, next) => {
-    setActiveClientDb(null); // reset for this request
     const mgr = getDbManagerForCurrentTenant();
-    const groupId = Number(req.query.groupId || req.body?.groupId);
-    if (groupId) {
-        setActiveClientDb(mgr.getClientDb(groupId));
-        return next();
-    }
-    const companyId = Number(req.query.companyId || req.body?.companyId);
-    if (companyId) {
-        setActiveClientDb(mgr.resolveDbForCompany(companyId));
-        return next();
-    }
-    const csvIds = req.query.companyIds || req.body?.companyIds;
-    if (csvIds) {
-        const first = Number(String(csvIds).split(',')[0]);
-        if (first) setActiveClientDb(mgr.resolveDbForCompany(first));
-    }
+    setActiveClientDb(mgr.getClientDb());
     next();
 });
 
 /**
- * Get the correct client DB for a request (explicit, for cases like sync).
+ * Current request's per-client DB. Legacy signature accepted (the request
+ * is kept so callers can pass `req` as before); returns the slug's DB.
  */
-function getClientDb(req) {
-    const mgr = getDbManagerForCurrentTenant();
-    const groupId = Number(req.query.groupId || req.body?.groupId);
-    if (groupId) return mgr.getClientDb(groupId);
-    const companyId = Number(req.query.companyId || req.body?.companyId);
-    if (companyId) return mgr.resolveDbForCompany(companyId);
-    return getActiveClientDb() || getMasterDbForCurrentTenant();
+function getClientDb(_req) {
+    return getDbManagerForCurrentTenant().getClientDb();
 }
 
-function getClientDbForGroup(groupId) {
-    return getDbManagerForCurrentTenant().getClientDb(groupId);
+/** Legacy alias — groupId is ignored, the current slug's DB is returned. */
+function getClientDbForGroup(_groupId) {
+    return getDbManagerForCurrentTenant().getClientDb();
 }
 
-// File upload setup
-const UPLOAD_DIR = path.join(DB_DIR, 'uploads');
+// File upload setup. Uploads live alongside the unified data root
+// (same parent as platform.db and clients/).
+const UPLOAD_DIR = path.join(getDataRoot(), 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 const uploadTemp = path.join(UPLOAD_DIR, '_temp');
 if (!fs.existsSync(uploadTemp)) fs.mkdirSync(uploadTemp, { recursive: true });
@@ -325,11 +316,11 @@ let syncProgress = null;
 
 // Helper: get/set setting
 function getSetting(key) {
-    const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key);
+    const row = db.prepare('SELECT value FROM vcfo_app_settings WHERE key = ?').get(key);
     return row ? row.value : null;
 }
 function setSetting(key, value) {
-    db.prepare('INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)').run(key, value, new Date().toISOString());
+    db.prepare('INSERT OR REPLACE INTO vcfo_app_settings (key, value, updated_at) VALUES (?, ?, ?)').run(key, value, new Date().toISOString());
 }
 
 // ============================================================
@@ -349,7 +340,7 @@ function idPh(ids) { return ids.map(() => '?').join(','); }
  * Optional allowedIds: pre-filter to intersect with (used for group+geo intersection).
  */
 function resolveCompanyIds(state, city, location, type, allowedIds = null) {
-    let q = 'SELECT id FROM companies WHERE is_active = 1';
+    let q = 'SELECT id FROM vcfo_companies WHERE is_active = 1';
     const params = [];
     if (allowedIds?.length) {
         q += ` AND id IN (${allowedIds.map(() => '?').join(',')})`;
@@ -364,15 +355,20 @@ function resolveCompanyIds(state, city, location, type, allowedIds = null) {
 
 /**
  * Resolve active company IDs belonging to a group.
- * Returns array of IDs or null if group doesn't exist / has no active members.
+ *
+ * Unified-DB model: each tenant (slug) has exactly ONE virtual group that
+ * contains every company in the tenant's per-client DB. The `groupId` arg
+ * is kept for backward compatibility with the ~40 call sites that still
+ * pass it, but it's advisory only — we just return all active companies
+ * in the current slug's DB.
+ *
+ * Returns array of IDs or null if the tenant has no active companies.
  */
-function resolveGroupMemberIds(groupId) {
+function resolveGroupMemberIds(_groupId) {
     const rows = db.prepare(
-        `SELECT cgm.company_id FROM company_group_members cgm
-         JOIN companies c ON c.id = cgm.company_id
-         WHERE cgm.group_id = ? AND c.is_active = 1`
-    ).all(groupId);
-    return rows.length ? rows.map(r => r.company_id) : null;
+        'SELECT id FROM vcfo_companies WHERE is_active = 1'
+    ).all();
+    return rows.length ? rows.map(r => r.id) : null;
 }
 
 /**
@@ -455,7 +451,7 @@ function monthLabel(dateStr) {
  * Get all child groups of a parent (recursive tree walk)
  */
 function getGroupTree(ids, parentName) {
-    const allGroups = db.prepare(`SELECT DISTINCT group_name, parent_group FROM account_groups WHERE company_id IN (${idPh(ids)})`).all(...ids);
+    const allGroups = db.prepare(`SELECT DISTINCT group_name, parent_group FROM vcfo_account_groups WHERE company_id IN (${idPh(ids)})`).all(...ids);
     const result = new Set([parentName]);
     let changed = true;
     while (changed) {
@@ -471,10 +467,10 @@ function getGroupTree(ids, parentName) {
 }
 
 /**
- * Build ledger_name → group_name map from trial_balance (fast, ~8ms)
+ * Build ledger_name → group_name map from vcfo_trial_balance (fast, ~8ms)
  */
 function buildLedgerGroupMap(ids) {
-    const rows = db.prepare(`SELECT DISTINCT company_id, ledger_name, group_name FROM trial_balance WHERE company_id IN (${idPh(ids)})`).all(...ids);
+    const rows = db.prepare(`SELECT DISTINCT company_id, ledger_name, group_name FROM vcfo_trial_balance WHERE company_id IN (${idPh(ids)})`).all(...ids);
     const map = {};
     rows.forEach(r => { map[`${r.company_id}|${r.ledger_name}`] = r.group_name; });
     return map;
@@ -493,7 +489,7 @@ function buildPLGroupSets(ids) {
     // different (dr_cr, affects_gross_profit) across companies — prevents double-counting
     const groups = db.prepare(
         `SELECT group_name, dr_cr, affects_gross_profit, COUNT(*) as cnt
-         FROM account_groups WHERE company_id IN (${idPh(ids)}) AND bs_pl = 'PL'
+         FROM vcfo_account_groups WHERE company_id IN (${idPh(ids)}) AND bs_pl = 'PL'
          GROUP BY group_name, dr_cr, affects_gross_profit`
     ).all(...ids);
     // For each group_name, pick the classification with the highest company count
@@ -535,13 +531,13 @@ function getTBSupplement(ids, from, to) {
         SELECT company_id, ledger_name, group_name,
                SUM(net_debit)  AS net_debit,
                SUM(net_credit) AS net_credit
-        FROM trial_balance t
+        FROM vcfo_trial_balance t
         WHERE company_id IN (${idPh(ids)})
           AND period_from >= ?
           AND period_to   <= ?
           AND group_name IS NOT NULL
           AND NOT EXISTS (
-              SELECT 1 FROM trial_balance t2
+              SELECT 1 FROM vcfo_trial_balance t2
               WHERE t2.company_id = t.company_id
                 AND t2.ledger_name = t.ledger_name
                 AND t2.period_from = t.period_from
@@ -560,7 +556,7 @@ function getTBSupplement(ids, from, to) {
 function getPLFallback(ids, from, to) {
     return db.prepare(`
         SELECT company_id, ledger_name, group_name, SUM(amount) as amount
-        FROM profit_loss
+        FROM vcfo_profit_loss
         WHERE company_id IN (${idPh(ids)})
           AND period_from >= ?
           AND period_to   <= ?
@@ -575,7 +571,7 @@ function getPLFallback(ids, from, to) {
 function getVouchersByLedger(ids, fromDate, toDate) {
     return db.prepare(`
         SELECT company_id, ledger_name, SUM(amount) as total
-        FROM vouchers
+        FROM vcfo_vouchers
         WHERE company_id IN (${idPh(ids)}) AND date >= ? AND date <= ? AND ledger_name != ''
         GROUP BY company_id, ledger_name
     `).all(...ids, fromDate, toDate);
@@ -590,12 +586,12 @@ function getLedgerFlowsTB(ids, fromDate, toDate) {
     return db.prepare(`
         SELECT company_id, ledger_name,
                SUM(net_credit) - SUM(net_debit) as total
-        FROM trial_balance t
+        FROM vcfo_trial_balance t
         WHERE company_id IN (${idPh(ids)})
           AND period_from >= ? AND period_to <= ?
           AND group_name IS NOT NULL
           AND NOT EXISTS (
-              SELECT 1 FROM trial_balance t2
+              SELECT 1 FROM vcfo_trial_balance t2
               WHERE t2.company_id = t.company_id
                 AND t2.ledger_name = t.ledger_name
                 AND t2.period_from = t.period_from
@@ -631,7 +627,7 @@ function computeBSClosing(ids, asOfDate, groupNames, balanceFilter, lgMap) {
 
     // Find the TB month containing/preceding asOfDate (across all selected companies)
     const tbMonth = db.prepare(`
-        SELECT DISTINCT period_from, period_to FROM trial_balance
+        SELECT DISTINCT period_from, period_to FROM vcfo_trial_balance
         WHERE company_id IN (${idPh(ids)}) AND period_from <= ?
         ORDER BY period_from DESC LIMIT 1
     `).get(...ids, asOfDate);
@@ -640,7 +636,7 @@ function computeBSClosing(ids, asOfDate, groupNames, balanceFilter, lgMap) {
 
     // Get TB opening balances for target groups
     const tbRows = db.prepare(`
-        SELECT ledger_name, SUM(opening_balance) as opening_balance FROM trial_balance
+        SELECT ledger_name, SUM(opening_balance) as opening_balance FROM vcfo_trial_balance
         WHERE company_id IN (${idPh(ids)}) AND period_from = ? AND group_name IN (${grPh})
         GROUP BY ledger_name
     `).all(...ids, tbMonth.period_from, ...groupNames);
@@ -648,7 +644,7 @@ function computeBSClosing(ids, asOfDate, groupNames, balanceFilter, lgMap) {
     // Get voucher movements (no JOIN - simple query)
     const vRows = db.prepare(`
         SELECT company_id, ledger_name, SUM(amount) as movement
-        FROM vouchers
+        FROM vcfo_vouchers
         WHERE company_id IN (${idPh(ids)}) AND date >= ? AND date <= ? AND ledger_name != ''
         GROUP BY company_id, ledger_name
     `).all(...ids, tbMonth.period_from, asOfDate);
@@ -732,12 +728,12 @@ function getTotalsByGroup(vouchersByLedger, lgMap, groupSet, negate) {
 }
 
 /**
- * Get monthly breakdown from vouchers (for trend charts)
+ * Get monthly breakdown from vcfo_vouchers (for trend charts)
  */
 function getMonthlyVouchers(ids, fromDate, toDate) {
     return db.prepare(`
         SELECT company_id, strftime('%Y-%m-01', date) as month, ledger_name, SUM(amount) as total
-        FROM vouchers
+        FROM vcfo_vouchers
         WHERE company_id IN (${idPh(ids)}) AND date >= ? AND date <= ? AND ledger_name != ''
         GROUP BY company_id, strftime('%Y-%m', date), ledger_name
     `).all(...ids, fromDate, toDate);
@@ -751,12 +747,12 @@ function getMonthlyFlowsTB(ids, fromDate, toDate) {
     return db.prepare(`
         SELECT company_id, period_from as month, ledger_name,
                SUM(net_credit) - SUM(net_debit) as total
-        FROM trial_balance t
+        FROM vcfo_trial_balance t
         WHERE company_id IN (${idPh(ids)})
           AND period_from >= ? AND period_to <= ?
           AND group_name IS NOT NULL
           AND NOT EXISTS (
-              SELECT 1 FROM trial_balance t2
+              SELECT 1 FROM vcfo_trial_balance t2
               WHERE t2.company_id = t.company_id
                 AND t2.ledger_name = t.ledger_name
                 AND t2.period_from = t.period_from
@@ -778,17 +774,17 @@ app.get('/api/status', async (req, res) => {
     if (isClientSession(req)) {
         const cIds = req.session.clientUser.companyIds;
         if (cIds.length) {
-            companies = db.prepare(`SELECT id, name, state, city, location, type, last_full_sync_at FROM companies WHERE is_active = 1 AND id IN (${idPh(cIds)}) ORDER BY last_full_sync_at DESC`).all(...cIds);
+            companies = db.prepare(`SELECT id, name, state, city, location, type, last_full_sync_at FROM vcfo_companies WHERE is_active = 1 AND id IN (${idPh(cIds)}) ORDER BY last_full_sync_at DESC`).all(...cIds);
         } else { companies = []; }
     } else {
-        companies = db.prepare('SELECT * FROM companies WHERE is_active = 1 ORDER BY last_full_sync_at DESC').all();
+        companies = db.prepare('SELECT * FROM vcfo_companies WHERE is_active = 1 ORDER BY last_full_sync_at DESC').all();
     }
     const result = {
         tally: health,
         database: { companies },
         sync: { inProgress: syncInProgress, progress: syncProgress }
     };
-    if (!isClientSession(req)) result.database.path = getDbPath(getTenantDir(getCurrentSlug()));
+    if (!isClientSession(req)) result.database.path = getClientDbPath(getCurrentSlug());
     res.json(result);
 });
 
@@ -824,7 +820,7 @@ app.get('/api/tally/companies-enriched', async (req, res) => {
         const tallyCompanies = await tally.getCompanies();
 
         // Build a map of DB companies by name
-        const dbRows = db.prepare('SELECT id, name, last_full_sync_at, sync_from_date, sync_to_date, state, city, location, entity_type FROM companies WHERE is_active=1').all();
+        const dbRows = db.prepare('SELECT id, name, last_full_sync_at, sync_from_date, sync_to_date, state, city, location, entity_type FROM vcfo_companies WHERE is_active=1').all();
         const dbMap = new Map();
         for (const r of dbRows) dbMap.set(r.name, r);
 
@@ -860,12 +856,12 @@ app.post('/api/sync/start', async (req, res) => {
         return res.status(400).json({ error: 'companyName, fromDate, toDate required' });
     }
 
-    db.prepare('INSERT OR IGNORE INTO companies (name) VALUES (?)').run(companyName);
+    db.prepare('INSERT OR IGNORE INTO vcfo_companies (name) VALUES (?)').run(companyName);
     // Save geographic metadata — only overwrite non-empty values; preserve existing when blank/missing
-    const existing = db.prepare('SELECT state, city, location, entity_type FROM companies WHERE name=?').get(companyName) || {};
-    db.prepare('UPDATE companies SET state=?, city=?, location=?, entity_type=? WHERE name=?')
+    const existing = db.prepare('SELECT state, city, location, entity_type FROM vcfo_companies WHERE name=?').get(companyName) || {};
+    db.prepare('UPDATE vcfo_companies SET state=?, city=?, location=?, entity_type=? WHERE name=?')
         .run(state || existing.state || '', city || existing.city || '', location || existing.location || '', entity_type || existing.entity_type || '', companyName);
-    const company = db.prepare('SELECT * FROM companies WHERE name = ?').get(companyName);
+    const company = db.prepare('SELECT * FROM vcfo_companies WHERE name = ?').get(companyName);
 
     syncInProgress = true;
     syncProgress = { step: 'init', status: 'running', message: 'Starting...' };
@@ -895,9 +891,9 @@ app.post('/api/sync/start', async (req, res) => {
 
     extractor.runFullSync(company.id, companyName, fromDate, toDate, { forceResync: !!forceResync, syncModules })
         .then(results => {
-            // Update companies table in masterDb (not clientDb — companies is a master table)
+            // Update vcfo_companies in the per-client DB (routed by the db proxy)
             if (results.success) {
-                masterDb.prepare('UPDATE companies SET last_full_sync_at=?, sync_from_date=?, sync_to_date=? WHERE id=?')
+                db.prepare('UPDATE vcfo_companies SET last_full_sync_at=?, sync_from_date=?, sync_to_date=? WHERE id=?')
                     .run(new Date().toISOString(), fromDate, toDate, company.id);
             }
             syncInProgress = false;
@@ -917,7 +913,7 @@ app.get('/api/sync/progress', (req, res) => {
 
 app.get('/api/sync/log', (req, res) => {
     const companyId = req.query.companyId || 1;
-    const logs = db.prepare('SELECT * FROM sync_log WHERE company_id = ? ORDER BY id DESC LIMIT 100').all(companyId);
+    const logs = db.prepare('SELECT * FROM vcfo_sync_log WHERE company_id = ? ORDER BY id DESC LIMIT 100').all(companyId);
     res.json(logs);
 });
 
@@ -927,9 +923,9 @@ app.get('/api/companies', (req, res) => {
     if (isClientSession(req)) {
         const cIds = req.session.clientUser.companyIds;
         if (!cIds.length) return res.json([]);
-        return res.json(db.prepare(`SELECT id, name, state, city, location, type, last_full_sync_at FROM companies WHERE is_active = 1 AND id IN (${idPh(cIds)}) ORDER BY last_full_sync_at DESC`).all(...cIds));
+        return res.json(db.prepare(`SELECT id, name, state, city, location, type, last_full_sync_at FROM vcfo_companies WHERE is_active = 1 AND id IN (${idPh(cIds)}) ORDER BY last_full_sync_at DESC`).all(...cIds));
     }
-    const companies = db.prepare('SELECT * FROM companies WHERE is_active = 1 ORDER BY last_full_sync_at DESC').all();
+    const companies = db.prepare('SELECT * FROM vcfo_companies WHERE is_active = 1 ORDER BY last_full_sync_at DESC').all();
     res.json(companies);
 });
 
@@ -940,41 +936,43 @@ app.get('/api/init', (req, res) => {
     if (isClientSession(req)) {
         const cIds = req.session.clientUser.companyIds;
         companies = cIds.length
-            ? db.prepare(`SELECT id, name, state, city, location, type, last_full_sync_at FROM companies WHERE is_active = 1 AND id IN (${idPh(cIds)}) ORDER BY last_full_sync_at DESC`).all(...cIds)
+            ? db.prepare(`SELECT id, name, state, city, location, type, last_full_sync_at FROM vcfo_companies WHERE is_active = 1 AND id IN (${idPh(cIds)}) ORDER BY last_full_sync_at DESC`).all(...cIds)
             : [];
     } else {
-        companies = db.prepare('SELECT * FROM companies WHERE is_active = 1 ORDER BY last_full_sync_at DESC').all();
+        companies = db.prepare('SELECT * FROM vcfo_companies WHERE is_active = 1 ORDER BY last_full_sync_at DESC').all();
     }
 
-    // Groups (with client filtering)
-    const groups = db.prepare('SELECT id, name, description, created_at FROM company_groups ORDER BY name').all();
-    const members = db.prepare(
-        `SELECT cgm.group_id, cgm.company_id, c.name AS company_name, c.state, c.city, c.location, c.entity_type
-         FROM company_group_members cgm JOIN companies c ON c.id = cgm.company_id WHERE c.is_active = 1`
-    ).all();
+    // Unified-DB model: synthesize one virtual group per tenant, containing
+    // every company in the slug's DB. Replaces the old company_groups CRUD.
+    const allCompanies = db.prepare(
+        `SELECT id, name, state, city, location, entity_type
+         FROM vcfo_companies WHERE is_active = 1`
+    ).all().map(c => ({
+        id: c.id, name: c.name,
+        state: c.state || '', city: c.city || '',
+        location: c.location || '', entity_type: c.entity_type || '',
+    }));
     const allowedIds = isClientSession(req) ? new Set(req.session.clientUser.companyIds) : null;
-    const memberMap = {};
-    for (const m of members) {
-        if (!memberMap[m.group_id]) memberMap[m.group_id] = [];
-        memberMap[m.group_id].push({ id: m.company_id, name: m.company_name, state: m.state || '', city: m.city || '', location: m.location || '', entity_type: m.entity_type || '' });
-    }
-    let groupsResult = groups.map(g => ({ ...g, companies: memberMap[g.id] || [] }));
-    if (allowedIds) {
-        groupsResult = groupsResult.filter(g => g.companies.some(c => allowedIds.has(c.id)));
-        groupsResult.forEach(g => { g.companies = g.companies.filter(c => allowedIds.has(c.id)); });
-    }
+    const visibleCompanies = allowedIds ? allCompanies.filter(c => allowedIds.has(c.id)) : allCompanies;
+    const groupsResult = visibleCompanies.length ? [{
+        id: 1,
+        name: getCurrentSlug(),
+        description: '',
+        created_at: null,
+        companies: visibleCompanies,
+    }] : [];
 
     // Settings (admin only)
     let settings = {};
     if (!isClientSession(req)) {
-        const rows = db.prepare('SELECT key, value FROM app_settings').all();
+        const rows = db.prepare('SELECT key, value FROM vcfo_app_settings').all();
         rows.forEach(s => settings[s.key] = s.value);
     }
 
     // Geo filters (states for the active group, or all)
     const companyIds = companies.map(c => c.id);
     const geoStates = companyIds.length
-        ? db.prepare(`SELECT DISTINCT state FROM companies WHERE is_active = 1 AND state != '' AND id IN (${idPh(companyIds)}) ORDER BY state`).all(...companyIds).map(r => r.state)
+        ? db.prepare(`SELECT DISTINCT state FROM vcfo_companies WHERE is_active = 1 AND state != '' AND id IN (${idPh(companyIds)}) ORDER BY state`).all(...companyIds).map(r => r.state)
         : [];
 
     res.json({ companies, groups: groupsResult, settings, geoStates });
@@ -990,7 +988,7 @@ app.get('/api/filters/states', (req, res) => {
         const allowed = req.session.clientUser.companyIds;
         scopeIds = scopeIds ? scopeIds.filter(id => allowed.includes(id)) : allowed;
     }
-    let q = "SELECT DISTINCT state FROM companies WHERE is_active = 1 AND state != ''";
+    let q = "SELECT DISTINCT state FROM vcfo_companies WHERE is_active = 1 AND state != ''";
     const params = [];
     if (scopeIds?.length) { q += ` AND id IN (${scopeIds.map(() => '?').join(',')})`; params.push(...scopeIds); }
     else if (isClientSession(req)) return res.json([]);
@@ -1005,7 +1003,7 @@ app.get('/api/filters/cities', (req, res) => {
         const allowed = req.session.clientUser.companyIds;
         scopeIds = scopeIds ? scopeIds.filter(id => allowed.includes(id)) : allowed;
     }
-    let q = "SELECT DISTINCT city FROM companies WHERE is_active = 1 AND city != ''";
+    let q = "SELECT DISTINCT city FROM vcfo_companies WHERE is_active = 1 AND city != ''";
     const params = [];
     if (scopeIds?.length) { q += ` AND id IN (${scopeIds.map(() => '?').join(',')})`; params.push(...scopeIds); }
     else if (isClientSession(req)) return res.json([]);
@@ -1021,7 +1019,7 @@ app.get('/api/filters/locations', (req, res) => {
         const allowed = req.session.clientUser.companyIds;
         scopeIds = scopeIds ? scopeIds.filter(id => allowed.includes(id)) : allowed;
     }
-    let q = "SELECT DISTINCT location FROM companies WHERE is_active = 1 AND location != ''";
+    let q = "SELECT DISTINCT location FROM vcfo_companies WHERE is_active = 1 AND location != ''";
     const params = [];
     if (scopeIds?.length) { q += ` AND id IN (${scopeIds.map(() => '?').join(',')})`; params.push(...scopeIds); }
     else if (isClientSession(req)) return res.json([]);
@@ -1038,7 +1036,7 @@ app.get('/api/filters/types', (req, res) => {
         const allowed = req.session.clientUser.companyIds;
         scopeIds = scopeIds ? scopeIds.filter(id => allowed.includes(id)) : allowed;
     }
-    let q = "SELECT DISTINCT entity_type FROM companies WHERE is_active = 1 AND entity_type != ''";
+    let q = "SELECT DISTINCT entity_type FROM vcfo_companies WHERE is_active = 1 AND entity_type != ''";
     const params = [];
     if (scopeIds?.length) { q += ` AND id IN (${scopeIds.map(() => '?').join(',')})`; params.push(...scopeIds); }
     else if (isClientSession(req)) return res.json([]);
@@ -1123,23 +1121,23 @@ function computeKPIData(ids, from, to) {
 
         for (const cid of ids) {
             const firstPF = db.prepare(
-                `SELECT MIN(period_from) as pf FROM trial_balance
+                `SELECT MIN(period_from) as pf FROM vcfo_trial_balance
                  WHERE company_id = ? AND group_name IN (${stockPh}) AND period_from >= ?`
             ).get(cid, ...stockGroups, from)?.pf;
             if (firstPF) {
                 openingStock += db.prepare(
-                    `SELECT SUM(opening_balance) as val FROM trial_balance
+                    `SELECT SUM(opening_balance) as val FROM vcfo_trial_balance
                      WHERE company_id = ? AND group_name IN (${stockPh}) AND period_from = ?`
                 ).get(cid, ...stockGroups, firstPF)?.val || 0;
             }
 
             const lastPT = db.prepare(
-                `SELECT MAX(period_to) as pt FROM trial_balance
+                `SELECT MAX(period_to) as pt FROM vcfo_trial_balance
                  WHERE company_id = ? AND group_name IN (${stockPh}) AND period_to <= ?`
             ).get(cid, ...stockGroups, to)?.pt;
             if (lastPT) {
                 closingStock += db.prepare(
-                    `SELECT SUM(closing_balance) as val FROM trial_balance
+                    `SELECT SUM(closing_balance) as val FROM vcfo_trial_balance
                      WHERE company_id = ? AND group_name IN (${stockPh}) AND period_to = ?`
                 ).get(cid, ...stockGroups, lastPT)?.val || 0;
             }
@@ -1238,7 +1236,7 @@ function applyDashboardAllocations(ids, groupId, from, to) {
     let dashRules;
     try {
         dashRules = db.prepare(
-            'SELECT * FROM allocation_rules WHERE group_id = ? AND is_active = 1 AND affects_dashboard = 1 ORDER BY sort_order'
+            'SELECT * FROM vcfo_allocation_rules WHERE group_id = ? AND is_active = 1 AND affects_dashboard = 1 ORDER BY sort_order'
         ).all(groupId);
     } catch (e) { return null; } // column may not exist yet
 
@@ -1287,7 +1285,7 @@ function applyDashboardAllocations(ids, groupId, from, to) {
 function getDashboardAllocRules(groupId) {
     try {
         const rules = db.prepare(
-            'SELECT * FROM allocation_rules WHERE group_id = ? AND is_active = 1 AND affects_dashboard = 1 ORDER BY sort_order'
+            'SELECT * FROM vcfo_allocation_rules WHERE group_id = ? AND is_active = 1 AND affects_dashboard = 1 ORDER BY sort_order'
         ).all(groupId);
         return (rules && rules.length) ? rules : null;
     } catch (e) { return null; }
@@ -1297,7 +1295,7 @@ function getDashboardAllocRules(groupId) {
 function getDashboardWriteoffRules(groupId) {
     try {
         const rules = db.prepare(
-            'SELECT * FROM writeoff_rules WHERE group_id = ? AND is_active = 1 AND affects_dashboard = 1 ORDER BY sort_order'
+            'SELECT * FROM vcfo_writeoff_rules WHERE group_id = ? AND is_active = 1 AND affects_dashboard = 1 ORDER BY sort_order'
         ).all(groupId);
         return (rules && rules.length) ? rules : null;
     } catch (e) { return null; }
@@ -1774,11 +1772,11 @@ app.get('/api/dashboard/ledger-breakdown', (req, res) => {
 
     if (mode === 'balance') {
         const latestTB = db.prepare(
-            `SELECT DISTINCT period_from FROM trial_balance WHERE company_id IN (${idPh(ids)}) AND period_from <= ? ORDER BY period_from DESC LIMIT 1`
+            `SELECT DISTINCT period_from FROM vcfo_trial_balance WHERE company_id IN (${idPh(ids)}) AND period_from <= ? ORDER BY period_from DESC LIMIT 1`
         ).get(...ids, to);
         if (!latestTB) return res.json([]);
         const rows = db.prepare(
-            `SELECT ledger_name, group_name, SUM(closing_balance) as closing_balance FROM trial_balance WHERE company_id IN (${idPh(ids)}) AND period_from = ? GROUP BY ledger_name, group_name`
+            `SELECT ledger_name, group_name, SUM(closing_balance) as closing_balance FROM vcfo_trial_balance WHERE company_id IN (${idPh(ids)}) AND period_from = ? GROUP BY ledger_name, group_name`
         ).all(...ids, latestTB.period_from);
         const result = rows
             .filter(r => groupSet.has(r.group_name) && r.closing_balance !== 0)
@@ -1838,11 +1836,11 @@ app.get('/api/dashboard/group-breakdown', (req, res) => {
     let ledgerRows = [];
     if (mode === 'balance') {
         const latestTB = db.prepare(
-            `SELECT DISTINCT period_from FROM trial_balance WHERE company_id IN (${idPh(ids)}) AND period_from <= ? ORDER BY period_from DESC LIMIT 1`
+            `SELECT DISTINCT period_from FROM vcfo_trial_balance WHERE company_id IN (${idPh(ids)}) AND period_from <= ? ORDER BY period_from DESC LIMIT 1`
         ).get(...ids, to);
         if (!latestTB) return res.json({ parentGroup: parentGroup || null, children: [] });
         const rows = db.prepare(
-            `SELECT ledger_name, group_name, SUM(closing_balance) as closing_balance FROM trial_balance WHERE company_id IN (${idPh(ids)}) AND period_from = ? GROUP BY ledger_name, group_name`
+            `SELECT ledger_name, group_name, SUM(closing_balance) as closing_balance FROM vcfo_trial_balance WHERE company_id IN (${idPh(ids)}) AND period_from = ? GROUP BY ledger_name, group_name`
         ).all(...ids, latestTB.period_from);
         ledgerRows = rows
             .filter(r => groupSet.has(r.group_name) && r.closing_balance !== 0)
@@ -1864,7 +1862,7 @@ app.get('/api/dashboard/group-breakdown', (req, res) => {
     }
 
     // 3. Fetch group hierarchy and build maps
-    const allGroups = db.prepare(`SELECT DISTINCT group_name, parent_group FROM account_groups WHERE company_id IN (${idPh(ids)})`).all(...ids);
+    const allGroups = db.prepare(`SELECT DISTINCT group_name, parent_group FROM vcfo_account_groups WHERE company_id IN (${idPh(ids)})`).all(...ids);
     const parentMap = {};   // group_name → parent_group
     const childrenMap = {}; // parent → [child group names]
     const seenChild = new Set();
@@ -1977,7 +1975,7 @@ app.get('/api/dashboard/item-monthly-trend', (req, res) => {
     if (mode === 'balance') {
         const tbRows = db.prepare(
             `SELECT period_from as month, ledger_name, group_name, SUM(closing_balance) as closing_balance
-             FROM trial_balance WHERE company_id IN (${idPh(ids)}) AND period_from >= ? AND period_from <= ?
+             FROM vcfo_trial_balance WHERE company_id IN (${idPh(ids)}) AND period_from >= ? AND period_from <= ?
              GROUP BY period_from, ledger_name, group_name ORDER BY period_from`
         ).all(...ids, from, to);
 
@@ -2029,7 +2027,7 @@ app.get('/api/dashboard/receivable-ageing', (req, res) => {
             SUM(CASE WHEN overdue_days > 60 AND overdue_days <= 90 THEN ABS(outstanding_amount) ELSE 0 END) as "61_90",
             SUM(CASE WHEN overdue_days > 90 THEN ABS(outstanding_amount) ELSE 0 END) as "90_plus",
             SUM(ABS(outstanding_amount)) as total
-        FROM bills_outstanding WHERE company_id IN (${idPh(ids)}) AND nature = 'receivable'
+        FROM vcfo_bills_outstanding WHERE company_id IN (${idPh(ids)}) AND nature = 'receivable'
         GROUP BY party_name ORDER BY total DESC LIMIT 15
     `).all(...ids);
     res.json(rows);
@@ -2046,7 +2044,7 @@ app.get('/api/dashboard/payable-ageing', (req, res) => {
             SUM(CASE WHEN overdue_days > 60 AND overdue_days <= 90 THEN ABS(outstanding_amount) ELSE 0 END) as "61_90",
             SUM(CASE WHEN overdue_days > 90 THEN ABS(outstanding_amount) ELSE 0 END) as "90_plus",
             SUM(ABS(outstanding_amount)) as total
-        FROM bills_outstanding WHERE company_id IN (${idPh(ids)}) AND nature = 'payable'
+        FROM vcfo_bills_outstanding WHERE company_id IN (${idPh(ids)}) AND nature = 'payable'
         GROUP BY party_name ORDER BY total DESC LIMIT 15
     `).all(...ids);
     res.json(rows);
@@ -2058,7 +2056,7 @@ app.get('/api/dashboard/stock-summary', (req, res) => {
     if (!ids) return res.status(400).json({ error: 'companyId or geographic filters required' });
     const rows = db.prepare(`
         SELECT item_name, stock_group, SUM(closing_qty) as closing_qty, SUM(closing_value) as closing_value
-        FROM stock_summary WHERE company_id IN (${idPh(ids)}) AND period_to = (SELECT MAX(period_to) FROM stock_summary WHERE company_id IN (${idPh(ids)}))
+        FROM vcfo_stock_summary WHERE company_id IN (${idPh(ids)}) AND period_to = (SELECT MAX(period_to) FROM vcfo_stock_summary WHERE company_id IN (${idPh(ids)}))
         GROUP BY item_name, stock_group ORDER BY closing_value DESC LIMIT 20
     `).all(...ids, ...ids);
     res.json(rows);
@@ -2071,167 +2069,81 @@ app.get('/api/dashboard/trial-balance', (req, res) => {
     if (!ids) return res.status(400).json({ error: 'companyId or geographic filters required' });
     const rows = db.prepare(`
         SELECT ledger_name, group_name, SUM(opening_balance) as opening, SUM(net_debit) as debit, SUM(net_credit) as credit, SUM(closing_balance) as closing
-        FROM trial_balance WHERE company_id IN (${idPh(ids)}) AND period_from <= ? AND period_to >= ?
+        FROM vcfo_trial_balance WHERE company_id IN (${idPh(ids)}) AND period_from <= ? AND period_to >= ?
         GROUP BY ledger_name, group_name ORDER BY ABS(SUM(closing_balance)) DESC
     `).all(...ids, toDate || '2025-03-31', fromDate || '2024-04-01');
     res.json(rows);
 });
 
 // ===== COMPANY GROUPS =====
+//
+// Unified-DB model: the slug (Magna_Tracker client) IS the group. These
+// endpoints keep the old surface so the UI doesn't need to change, but:
+//  - GET synthesizes a single "virtual group" that contains every active
+//    company in the current slug's DB.
+//  - POST/PUT/DELETE are no-ops (return 501) — multi-group-per-tenant is
+//    gone; one slug => one virtual group.
+
+const VIRTUAL_GROUP_ID = 1;
+function virtualGroupFor(req) {
+    const companies = db.prepare(
+        `SELECT id, name, state, city, location, entity_type
+         FROM vcfo_companies WHERE is_active = 1`
+    ).all().map(c => ({
+        id: c.id, name: c.name,
+        state: c.state || '', city: c.city || '',
+        location: c.location || '', entity_type: c.entity_type || '',
+    }));
+    const allowedIds = isClientSession(req) ? new Set(req.session.clientUser.companyIds) : null;
+    const visible = allowedIds ? companies.filter(c => allowedIds.has(c.id)) : companies;
+    if (!visible.length) return null;
+    return {
+        id: VIRTUAL_GROUP_ID,
+        name: getCurrentSlug(),
+        description: '',
+        created_at: null,
+        companies: visible,
+    };
+}
 
 app.get('/api/company-groups', (req, res) => {
-    const groups = db.prepare(
-        'SELECT id, name, description, created_at FROM company_groups ORDER BY name'
-    ).all();
-    const members = db.prepare(
-        `SELECT cgm.group_id, cgm.company_id, c.name AS company_name,
-                c.state, c.city, c.location, c.entity_type
-         FROM company_group_members cgm
-         JOIN companies c ON c.id = cgm.company_id
-         WHERE c.is_active = 1`
-    ).all();
-    // Client users: filter to only groups containing their assigned companies
-    const allowedIds = isClientSession(req) ? new Set(req.session.clientUser.companyIds) : null;
-    const memberMap = {};
-    for (const m of members) {
-        if (!memberMap[m.group_id]) memberMap[m.group_id] = [];
-        memberMap[m.group_id].push({
-            id: m.company_id, name: m.company_name,
-            state: m.state || '', city: m.city || '',
-            location: m.location || '', entity_type: m.entity_type || ''
-        });
-    }
-    let result = groups.map(g => ({ ...g, companies: memberMap[g.id] || [] }));
-    if (allowedIds) {
-        result = result.filter(g => g.companies.some(c => allowedIds.has(c.id)));
-        result.forEach(g => { g.companies = g.companies.filter(c => allowedIds.has(c.id)); });
-    }
-    res.json(result);
+    const g = virtualGroupFor(req);
+    res.json(g ? [g] : []);
 });
 
 app.post('/api/company-groups', adminOnly, (req, res) => {
-    const { name, description, companyIds } = req.body;
-    if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });
-    if (!Array.isArray(companyIds) || companyIds.length === 0)
-        return res.status(400).json({ error: 'companyIds array is required and must be non-empty' });
-    if (db.prepare('SELECT id FROM company_groups WHERE name = ?').get(name.trim()))
-        return res.status(409).json({ error: `A group named "${name.trim()}" already exists` });
-
-    try {
-        const groupId = masterDb.transaction(() => {
-            const info = masterDb.prepare('INSERT INTO company_groups (name, description) VALUES (?, ?)').run(name.trim(), description || '');
-            const ins = masterDb.prepare('INSERT OR IGNORE INTO company_group_members (group_id, company_id) VALUES (?, ?)');
-            for (const cid of companyIds) ins.run(info.lastInsertRowid, cid);
-            return info.lastInsertRowid;
-        })();
-        // Migrate each company's data into the new group DB
-        const targetDb = dbManager.getClientDb(groupId);
-        for (const cid of companyIds) {
-            const sourceDb = dbManager.getStandaloneDb(cid);
-            dbManager.moveCompanyData(cid, sourceDb, targetDb);
-        }
-        res.status(201).json({ id: groupId, name: name.trim() });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    res.status(501).json({
+        error: 'Multi-group-per-tenant is no longer supported. Each client has one implicit group.'
+    });
 });
 
 app.put('/api/company-groups/:id', adminOnly, (req, res) => {
-    const id = Number(req.params.id);
-    if (!db.prepare('SELECT id FROM company_groups WHERE id = ?').get(id))
-        return res.status(404).json({ error: 'Group not found' });
-    const { name, description } = req.body;
-    if (!name && description === undefined) return res.status(400).json({ error: 'Provide name or description to update' });
-    if (name && db.prepare('SELECT id FROM company_groups WHERE name = ? AND id != ?').get(name.trim(), id))
-        return res.status(409).json({ error: `Another group named "${name.trim()}" already exists` });
-    const fields = [], params = [];
-    if (name) { fields.push('name = ?'); params.push(name.trim()); }
-    if (description !== undefined) { fields.push('description = ?'); params.push(description); }
-    fields.push('updated_at = ?'); params.push(new Date().toISOString());
-    params.push(id);
-    db.prepare(`UPDATE company_groups SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+    // No stored group metadata to update — noop success to keep the UI happy.
     res.json({ success: true });
 });
 
 app.delete('/api/company-groups/:id', adminOnly, (req, res) => {
-    const id = Number(req.params.id);
-    if (!db.prepare('SELECT id FROM company_groups WHERE id = ?').get(id))
-        return res.status(404).json({ error: 'Group not found' });
-    // Move all member data to standalone DBs before deleting the group
-    const memberIds = masterDb.prepare('SELECT company_id FROM company_group_members WHERE group_id = ?').all(id).map(r => r.company_id);
-    const sourceDb = dbManager.getClientDb(id);
-    for (const cid of memberIds) {
-        const targetDb = dbManager.getStandaloneDb(cid);
-        dbManager.moveCompanyData(cid, sourceDb, targetDb);
-    }
-    db.prepare('DELETE FROM company_groups WHERE id = ?').run(id);
-    res.json({ success: true });
+    res.status(501).json({
+        error: 'Cannot delete the tenant\'s implicit group.'
+    });
 });
 
 app.put('/api/company-groups/:id/members', adminOnly, (req, res) => {
-    const id = Number(req.params.id);
-    if (!db.prepare('SELECT id FROM company_groups WHERE id = ?').get(id))
-        return res.status(404).json({ error: 'Group not found' });
-    const { companyIds } = req.body;
-    if (!Array.isArray(companyIds) || companyIds.length === 0)
-        return res.status(400).json({ error: 'companyIds array must be non-empty' });
-    try {
-        const newSet = new Set(companyIds.map(Number));
-        const oldIds = masterDb.prepare('SELECT company_id FROM company_group_members WHERE group_id = ?').all(id).map(r => r.company_id);
-        const oldSet = new Set(oldIds);
-        const groupDb = dbManager.getClientDb(id);
-
-        // Companies removed from group → move data to standalone
-        for (const cid of oldIds) {
-            if (!newSet.has(cid)) {
-                const standaloneDb = dbManager.getStandaloneDb(cid);
-                dbManager.moveCompanyData(cid, groupDb, standaloneDb);
-            }
-        }
-        // Companies added to group → move data from standalone (or other group)
-        for (const cid of companyIds) {
-            if (!oldSet.has(cid)) {
-                const sourceDb = dbManager.resolveDbForCompany(cid);
-                dbManager.moveCompanyData(cid, sourceDb, groupDb);
-            }
-        }
-
-        masterDb.transaction(() => {
-            masterDb.prepare('DELETE FROM company_group_members WHERE group_id = ?').run(id);
-            const ins = masterDb.prepare('INSERT OR IGNORE INTO company_group_members (group_id, company_id) VALUES (?, ?)');
-            for (const cid of companyIds) ins.run(id, cid);
-            masterDb.prepare("UPDATE company_groups SET updated_at = ? WHERE id = ?").run(new Date().toISOString(), id);
-        })();
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    // All companies in the slug's DB already belong to the virtual group.
+    // Nothing to persist — noop success.
+    res.json({ success: true });
 });
 
 app.post('/api/company-groups/:id/members/add', adminOnly, (req, res) => {
-    const id = Number(req.params.id);
-    if (!db.prepare('SELECT id FROM company_groups WHERE id = ?').get(id))
-        return res.status(404).json({ error: 'Group not found' });
-    const { companyId } = req.body;
-    if (!companyId) return res.status(400).json({ error: 'companyId is required' });
-    // Move company data from its current DB to the group DB
-    const sourceDb = dbManager.resolveDbForCompany(companyId);
-    const targetDb = dbManager.getClientDb(id);
-    dbManager.moveCompanyData(companyId, sourceDb, targetDb);
-    masterDb.prepare('INSERT OR IGNORE INTO company_group_members (group_id, company_id) VALUES (?, ?)').run(id, companyId);
-    masterDb.prepare("UPDATE company_groups SET updated_at = ? WHERE id = ?").run(new Date().toISOString(), id);
+    // Same: adding a company to the virtual group is implicit.
     res.json({ success: true });
 });
 
 // Remove a company from ALL groups (make it standalone)
 app.delete('/api/company-groups/members/company/:companyId', adminOnly, (req, res) => {
-    const companyId = Number(req.params.companyId);
-    if (!companyId) return res.status(400).json({ error: 'Invalid companyId' });
-    // Find which group this company belongs to and move its data to standalone
-    const membership = masterDb.prepare('SELECT group_id FROM company_group_members WHERE company_id = ?').get(companyId);
-    if (membership) {
-        const sourceDb = dbManager.getClientDb(membership.group_id);
-        const targetDb = dbManager.getStandaloneDb(companyId);
-        dbManager.moveCompanyData(companyId, sourceDb, targetDb);
-    }
-    const result = masterDb.prepare('DELETE FROM company_group_members WHERE company_id = ?').run(companyId);
-    res.json({ success: true, removed: result.changes });
+    // Legacy "standalone" concept is gone — every company lives in the
+    // slug's DB. Noop success.
+    res.json({ success: true, removed: 0 });
 });
 
 // ===== ALLOCATION RULES =====
@@ -2241,7 +2153,7 @@ app.get('/api/allocation-rules', (req, res) => {
     const groupId = Number(req.query.groupId);
     if (!groupId) return res.json([]);
     const rows = db.prepare(
-        'SELECT * FROM allocation_rules WHERE group_id = ? ORDER BY sort_order, id'
+        'SELECT * FROM vcfo_allocation_rules WHERE group_id = ? ORDER BY sort_order, id'
     ).all(groupId);
     res.json(rows.map(r => ({ ...r, config: JSON.parse(r.config || '{}') })));
 });
@@ -2256,11 +2168,11 @@ app.post('/api/allocation-rules', adminOnly, (req, res) => {
         return res.status(400).json({ error: 'Invalid rule_type' });
     }
     const maxOrder = db.prepare(
-        'SELECT MAX(sort_order) as mx FROM allocation_rules WHERE group_id = ?'
+        'SELECT MAX(sort_order) as mx FROM vcfo_allocation_rules WHERE group_id = ?'
     ).get(groupId);
     const sortOrder = (maxOrder?.mx ?? -1) + 1;
     const result = db.prepare(
-        `INSERT INTO allocation_rules (group_id, rule_name, rule_type, config, sort_order, affects_dashboard)
+        `INSERT INTO vcfo_allocation_rules (group_id, rule_name, rule_type, config, sort_order, affects_dashboard)
          VALUES (?, ?, ?, ?, ?, ?)`
     ).run(groupId, rule_name, rule_type, JSON.stringify(config), sortOrder, affects_dashboard ? 1 : 0);
     res.json({ success: true, id: result.lastInsertRowid });
@@ -2270,10 +2182,10 @@ app.post('/api/allocation-rules', adminOnly, (req, res) => {
 app.put('/api/allocation-rules/:id', adminOnly, (req, res) => {
     const id = Number(req.params.id);
     const { rule_name, rule_type, config, is_active, sort_order, affects_dashboard } = req.body;
-    const existing = db.prepare('SELECT * FROM allocation_rules WHERE id = ?').get(id);
+    const existing = db.prepare('SELECT * FROM vcfo_allocation_rules WHERE id = ?').get(id);
     if (!existing) return res.status(404).json({ error: 'Rule not found' });
     db.prepare(
-        `UPDATE allocation_rules SET
+        `UPDATE vcfo_allocation_rules SET
             rule_name = ?, rule_type = ?, config = ?, is_active = ?, sort_order = ?,
             affects_dashboard = ?, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`
@@ -2293,7 +2205,7 @@ app.put('/api/allocation-rules/:id', adminOnly, (req, res) => {
 app.put('/api/allocation-rules/:id/toggle', adminOnly, (req, res) => {
     const id = Number(req.params.id);
     const { is_active } = req.body;
-    db.prepare('UPDATE allocation_rules SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    db.prepare('UPDATE vcfo_allocation_rules SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
         .run(is_active ? 1 : 0, id);
     res.json({ success: true });
 });
@@ -2301,7 +2213,7 @@ app.put('/api/allocation-rules/:id/toggle', adminOnly, (req, res) => {
 // Delete allocation rule
 app.delete('/api/allocation-rules/:id', adminOnly, (req, res) => {
     const id = Number(req.params.id);
-    db.prepare('DELETE FROM allocation_rules WHERE id = ?').run(id);
+    db.prepare('DELETE FROM vcfo_allocation_rules WHERE id = ?').run(id);
     res.json({ success: true });
 });
 
@@ -2312,7 +2224,7 @@ app.get('/api/writeoff-rules', (req, res) => {
     const groupId = Number(req.query.groupId);
     if (!groupId) return res.json([]);
     const rows = db.prepare(
-        'SELECT * FROM writeoff_rules WHERE group_id = ? ORDER BY sort_order, id'
+        'SELECT * FROM vcfo_writeoff_rules WHERE group_id = ? ORDER BY sort_order, id'
     ).all(groupId);
     res.json(rows.map(r => ({
         ...r,
@@ -2334,13 +2246,13 @@ app.post('/api/writeoff-rules', adminOnly, (req, res) => {
         return res.status(400).json({ error: 'Invalid rule_type' });
     }
     const maxOrder = db.prepare(
-        'SELECT MAX(sort_order) as mx FROM writeoff_rules WHERE group_id = ?'
+        'SELECT MAX(sort_order) as mx FROM vcfo_writeoff_rules WHERE group_id = ?'
     ).get(groupId);
     const sortOrder = (maxOrder?.mx ?? -1) + 1;
     // Include company_id for backward compat with old schema (NOT NULL column)
     const primaryCompanyId = company_ids[0] || 0;
     const result = db.prepare(
-        `INSERT INTO writeoff_rules (group_id, rule_name, rule_type, company_id, company_ids, ledger_names, config, sort_order, affects_dashboard)
+        `INSERT INTO vcfo_writeoff_rules (group_id, rule_name, rule_type, company_id, company_ids, ledger_names, config, sort_order, affects_dashboard)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(groupId, rule_name, rule_type, primaryCompanyId, JSON.stringify(company_ids), JSON.stringify(ledger_names),
         JSON.stringify(config || {}), sortOrder, affects_dashboard ? 1 : 0);
@@ -2351,10 +2263,10 @@ app.post('/api/writeoff-rules', adminOnly, (req, res) => {
 app.put('/api/writeoff-rules/:id', adminOnly, (req, res) => {
     const id = Number(req.params.id);
     const { rule_name, rule_type, company_ids, ledger_names, config, is_active, sort_order, affects_dashboard } = req.body;
-    const existing = db.prepare('SELECT * FROM writeoff_rules WHERE id = ?').get(id);
+    const existing = db.prepare('SELECT * FROM vcfo_writeoff_rules WHERE id = ?').get(id);
     if (!existing) return res.status(404).json({ error: 'Rule not found' });
     db.prepare(
-        `UPDATE writeoff_rules SET
+        `UPDATE vcfo_writeoff_rules SET
             rule_name = ?, rule_type = ?, company_ids = ?, ledger_names = ?, config = ?, is_active = ?, sort_order = ?,
             affects_dashboard = ?, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`
@@ -2376,7 +2288,7 @@ app.put('/api/writeoff-rules/:id', adminOnly, (req, res) => {
 app.put('/api/writeoff-rules/:id/toggle', adminOnly, (req, res) => {
     const id = Number(req.params.id);
     const { is_active } = req.body;
-    db.prepare('UPDATE writeoff_rules SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    db.prepare('UPDATE vcfo_writeoff_rules SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
         .run(is_active ? 1 : 0, id);
     res.json({ success: true });
 });
@@ -2384,7 +2296,7 @@ app.put('/api/writeoff-rules/:id/toggle', adminOnly, (req, res) => {
 // Delete writeoff rule
 app.delete('/api/writeoff-rules/:id', adminOnly, (req, res) => {
     const id = Number(req.params.id);
-    db.prepare('DELETE FROM writeoff_rules WHERE id = ?').run(id);
+    db.prepare('DELETE FROM vcfo_writeoff_rules WHERE id = ?').run(id);
     res.json({ success: true });
 });
 
@@ -2408,7 +2320,7 @@ app.get('/api/ledgers/for-writeoff', (req, res) => {
         const gph = groupNames.map(() => '?').join(',');
         const cph = companyIds.map(() => '?').join(',');
         const rows = db.prepare(
-            `SELECT DISTINCT l.name FROM ledgers l
+            `SELECT DISTINCT l.name FROM vcfo_ledgers l
              WHERE l.company_id IN (${cph}) AND (l.group_name IN (${gph}) OR l.parent_group IN (${gph}))
              ORDER BY l.name`
         ).all(...companyIds, ...groupNames, ...groupNames);
@@ -2424,13 +2336,11 @@ app.get('/api/ledgers/search', (req, res) => {
     const q = (req.query.q || '').trim();
     const groupId = Number(req.query.groupId);
     if (!q || q.length < 2 || !groupId) return res.json([]);
-    const memberIds = db.prepare(
-        'SELECT company_id FROM company_group_members WHERE group_id = ?'
-    ).all(groupId).map(r => r.company_id);
+    const memberIds = resolveGroupMemberIds(groupId) || [];
     if (!memberIds.length) return res.json([]);
     const placeholders = memberIds.map(() => '?').join(',');
     const rows = db.prepare(
-        `SELECT DISTINCT name FROM ledgers
+        `SELECT DISTINCT name FROM vcfo_ledgers
          WHERE company_id IN (${placeholders}) AND name LIKE ?
          ORDER BY name LIMIT 15`
     ).all(...memberIds, `%${q}%`);
@@ -2459,7 +2369,7 @@ app.get('/api/ledgers/by-category', (req, res) => {
         const gPh = groupNames.map(() => '?').join(',');
         const cPh = companyIds.map(() => '?').join(',');
         const rows = db.prepare(
-            `SELECT DISTINCT ledger_name FROM trial_balance
+            `SELECT DISTINCT ledger_name FROM vcfo_trial_balance
              WHERE company_id IN (${cPh}) AND group_name IN (${gPh})
              ORDER BY ledger_name`
         ).all(...companyIds, ...groupNames);
@@ -2473,12 +2383,12 @@ app.get('/api/ledgers/by-category', (req, res) => {
 // ===== CLIENT USER MANAGEMENT (Admin only) =====
 app.get('/api/admin/clients', adminOnly, (req, res) => {
     try {
-        const clients = db.prepare('SELECT id, username, display_name, is_active, created_at FROM client_users ORDER BY username').all();
+        const clients = db.prepare('SELECT id, username, display_name, is_active, created_at FROM vcfo_client_users ORDER BY username').all();
         for (const c of clients) {
             c.companies = db.prepare(`
                 SELECT ca.company_id as id, co.name
-                FROM client_company_access ca
-                LEFT JOIN companies co ON co.id = ca.company_id
+                FROM vcfo_client_company_access ca
+                LEFT JOIN vcfo_companies co ON co.id = ca.company_id
                 WHERE ca.client_id = ?
             `).all(c.id);
             c.company_ids = c.companies.map(co => co.id);
@@ -2494,10 +2404,10 @@ app.post('/api/admin/clients', adminOnly, (req, res) => {
     try {
         const hash = bcrypt.hashSync(password, 10);
         const featuresJson = JSON.stringify(features || {});
-        const result = db.prepare('INSERT INTO client_users (username, password_hash, display_name, features) VALUES (?, ?, ?, ?)').run(username, hash, display_name || '', featuresJson);
+        const result = db.prepare('INSERT INTO vcfo_client_users (username, password_hash, display_name, features) VALUES (?, ?, ?, ?)').run(username, hash, display_name || '', featuresJson);
         const clientId = result.lastInsertRowid;
         if (company_ids && company_ids.length) {
-            const ins = db.prepare('INSERT INTO client_company_access (client_id, company_id) VALUES (?, ?)');
+            const ins = db.prepare('INSERT INTO vcfo_client_company_access (client_id, company_id) VALUES (?, ?)');
             for (const cid of company_ids) ins.run(clientId, cid);
         }
         res.json({ success: true, id: clientId });
@@ -2513,14 +2423,14 @@ app.put('/api/admin/clients/:id', adminOnly, (req, res) => {
     try {
         if (password) {
             const hash = bcrypt.hashSync(password, 10);
-            db.prepare('UPDATE client_users SET password_hash = ? WHERE id = ?').run(hash, id);
+            db.prepare('UPDATE vcfo_client_users SET password_hash = ? WHERE id = ?').run(hash, id);
         }
-        if (display_name !== undefined) db.prepare('UPDATE client_users SET display_name = ? WHERE id = ?').run(display_name, id);
-        if (is_active !== undefined) db.prepare('UPDATE client_users SET is_active = ? WHERE id = ?').run(is_active ? 1 : 0, id);
-        if (features !== undefined) db.prepare('UPDATE client_users SET features = ? WHERE id = ?').run(JSON.stringify(features), id);
+        if (display_name !== undefined) db.prepare('UPDATE vcfo_client_users SET display_name = ? WHERE id = ?').run(display_name, id);
+        if (is_active !== undefined) db.prepare('UPDATE vcfo_client_users SET is_active = ? WHERE id = ?').run(is_active ? 1 : 0, id);
+        if (features !== undefined) db.prepare('UPDATE vcfo_client_users SET features = ? WHERE id = ?').run(JSON.stringify(features), id);
         if (company_ids !== undefined) {
-            db.prepare('DELETE FROM client_company_access WHERE client_id = ?').run(id);
-            const ins = db.prepare('INSERT INTO client_company_access (client_id, company_id) VALUES (?, ?)');
+            db.prepare('DELETE FROM vcfo_client_company_access WHERE client_id = ?').run(id);
+            const ins = db.prepare('INSERT INTO vcfo_client_company_access (client_id, company_id) VALUES (?, ?)');
             for (const cid of company_ids) ins.run(id, cid);
         }
         res.json({ success: true });
@@ -2529,7 +2439,7 @@ app.put('/api/admin/clients/:id', adminOnly, (req, res) => {
 
 app.delete('/api/admin/clients/:id', adminOnly, (req, res) => {
     try {
-        db.prepare('DELETE FROM client_users WHERE id = ?').run(Number(req.params.id));
+        db.prepare('DELETE FROM vcfo_client_users WHERE id = ?').run(Number(req.params.id));
         res.json({ success: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -2538,17 +2448,25 @@ app.delete('/api/admin/clients/:id', adminOnly, (req, res) => {
 app.delete('/api/companies/:id', adminOnly, (req, res) => {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ error: 'Invalid company id' });
-    const company = masterDb.prepare('SELECT id, name FROM companies WHERE id = ?').get(id);
+    const company = db.prepare('SELECT id, name FROM vcfo_companies WHERE id = ?').get(id);
     if (!company) return res.status(404).json({ error: 'Company not found' });
-    // Delete company data from its client DB
-    const { COMPANY_SCOPED_TABLES } = require('./db/db-manager');
+
+    // Every company-scoped vcfo_* table carries a `company_id` FK. Sweep
+    // them in the current tenant's DB. The list mirrors the per-client
+    // schema in db/setup.js.
+    const COMPANY_SCOPED_TABLES = [
+        'vcfo_ledgers', 'vcfo_trial_balance', 'vcfo_profit_loss', 'vcfo_balance_sheet',
+        'vcfo_vouchers', 'vcfo_stock_summary', 'vcfo_stock_item_ledger',
+        'vcfo_bills_outstanding', 'vcfo_cost_centres', 'vcfo_cost_allocations',
+        'vcfo_gst_entries', 'vcfo_payroll_entries', 'vcfo_account_groups',
+        'vcfo_sync_log', 'vcfo_excel_uploads', 'vcfo_excel_data',
+        'vcfo_tracker_status', 'vcfo_audit_milestone_status', 'vcfo_audit_observations',
+    ];
     const clientDb = dbManager.resolveDbForCompany(id);
     for (const table of COMPANY_SCOPED_TABLES) {
         try { clientDb.prepare(`DELETE FROM ${table} WHERE company_id = ?`).run(id); } catch (e) { /* skip */ }
     }
-    // Remove group memberships, then delete the company from master
-    masterDb.prepare('DELETE FROM company_group_members WHERE company_id = ?').run(id);
-    masterDb.prepare('DELETE FROM companies WHERE id = ?').run(id);
+    db.prepare('DELETE FROM vcfo_companies WHERE id = ?').run(id);
     res.json({ success: true, deleted: company.name });
 });
 
@@ -2556,7 +2474,7 @@ app.delete('/api/companies/:id', adminOnly, (req, res) => {
 
 app.get('/api/settings', (req, res) => {
     if (isClientSession(req)) return res.status(403).json({ error: 'Admin access required' });
-    const settings = db.prepare('SELECT key, value FROM app_settings').all();
+    const settings = db.prepare('SELECT key, value FROM vcfo_app_settings').all();
     const obj = {};
     settings.forEach(s => obj[s.key] = s.value);
     res.json(obj);
@@ -2573,15 +2491,15 @@ app.post('/api/settings', adminOnly, (req, res) => {
 // ===== OPTIONAL MODULE MANAGEMENT =====
 
 app.get('/api/companies/:id/modules', (req, res) => {
-    const company = db.prepare('SELECT sync_modules FROM companies WHERE id = ?').get(req.params.id);
+    const company = db.prepare('SELECT sync_modules FROM vcfo_companies WHERE id = ?').get(req.params.id);
     if (!company) return res.status(404).json({ error: 'Company not found' });
     res.json(JSON.parse(company.sync_modules || '{}'));
 });
 
 app.post('/api/companies/:id/modules', adminOnly, (req, res) => {
-    const company = db.prepare('SELECT id FROM companies WHERE id = ?').get(req.params.id);
+    const company = db.prepare('SELECT id FROM vcfo_companies WHERE id = ?').get(req.params.id);
     if (!company) return res.status(404).json({ error: 'Company not found' });
-    db.prepare('UPDATE companies SET sync_modules = ? WHERE id = ?').run(JSON.stringify(req.body), req.params.id);
+    db.prepare('UPDATE vcfo_companies SET sync_modules = ? WHERE id = ?').run(JSON.stringify(req.body), req.params.id);
     res.json({ success: true });
 });
 
@@ -2596,7 +2514,7 @@ app.get('/api/dashboard/gst-summary', (req, res) => {
     const rows = db.prepare(`
         SELECT voucher_type, COUNT(*) as count, SUM(taxable_value) as taxable,
                SUM(igst) as igst, SUM(cgst) as cgst, SUM(sgst) as sgst, SUM(cess) as cess
-        FROM gst_entries
+        FROM vcfo_gst_entries
         WHERE company_id = ? AND date >= ? AND date <= ?
         GROUP BY voucher_type
         ORDER BY taxable DESC
@@ -2605,7 +2523,7 @@ app.get('/api/dashboard/gst-summary', (req, res) => {
     const monthly = db.prepare(`
         SELECT substr(date,1,7) as month, SUM(taxable_value) as taxable,
                SUM(igst+cgst+sgst+cess) as total_tax, COUNT(*) as count
-        FROM gst_entries
+        FROM vcfo_gst_entries
         WHERE company_id = ? AND date >= ? AND date <= ?
         GROUP BY month ORDER BY month
     `).all(companyId, from, to);
@@ -2622,12 +2540,12 @@ app.get('/api/dashboard/cost-centre-analysis', (req, res) => {
     // Cost centre vs expense ledgers (amounts where cost centre allocation exists)
     const byCentre = db.prepare(`
         SELECT cost_centre, SUM(ABS(amount)) as total_amount, COUNT(DISTINCT ledger_name) as ledger_count
-        FROM cost_allocations
+        FROM vcfo_cost_allocations
         WHERE company_id = ? AND date >= ? AND date <= ?
         GROUP BY cost_centre ORDER BY total_amount DESC
     `).all(companyId, from, to);
 
-    const centres = db.prepare('SELECT name, parent, category FROM cost_centres WHERE company_id = ?').all(companyId);
+    const centres = db.prepare('SELECT name, parent, category FROM vcfo_cost_centres WHERE company_id = ?').all(companyId);
 
     res.json({ byCentre, centres });
 });
@@ -2640,21 +2558,21 @@ app.get('/api/dashboard/payroll-summary', (req, res) => {
 
     const byEmployee = db.prepare(`
         SELECT employee_name, SUM(ABS(amount)) as total, COUNT(DISTINCT date) as payslips
-        FROM payroll_entries
+        FROM vcfo_payroll_entries
         WHERE company_id = ? AND date >= ? AND date <= ? AND employee_name != ''
         GROUP BY employee_name ORDER BY total DESC LIMIT 50
     `).all(companyId, from, to);
 
     const byPayHead = db.prepare(`
         SELECT pay_head, SUM(ABS(amount)) as total
-        FROM payroll_entries
+        FROM vcfo_payroll_entries
         WHERE company_id = ? AND date >= ? AND date <= ? AND pay_head != ''
         GROUP BY pay_head ORDER BY total DESC
     `).all(companyId, from, to);
 
     const monthly = db.prepare(`
         SELECT substr(date,1,7) as month, SUM(ABS(amount)) as total
-        FROM payroll_entries
+        FROM vcfo_payroll_entries
         WHERE company_id = ? AND date >= ? AND date <= ?
         GROUP BY month ORDER BY month
     `).all(companyId, from, to);
@@ -2688,7 +2606,7 @@ app.get('/api/dashboard/stock-item-ledger', (req, res) => {
 
     const rows = db.prepare(`
         SELECT date, voucher_type, voucher_number, party_name, quantity, amount
-        FROM stock_item_ledger
+        FROM vcfo_stock_item_ledger
         WHERE company_id = ? AND item_name = ? AND date >= ? AND date <= ?
         ORDER BY date
     `).all(companyId, itemName, from, to);
@@ -2724,8 +2642,8 @@ const PL_LINES = [
 function buildFilterLabel(query) {
     const parts = [];
     if (query.groupId) {
-        const grp = db.prepare('SELECT name FROM company_groups WHERE id = ?').get(Number(query.groupId));
-        if (grp) parts.push(grp.name);
+        // Unified-DB model: the slug IS the group. Label with the slug name.
+        parts.push(getCurrentSlug());
     }
     const geoParts = [query.state, query.city, query.location,
                       (query.type && query.type !== 'All') ? query.type : '']
@@ -2738,8 +2656,7 @@ function buildReportFilename(query, format) {
     const prefix = format === 'docx' ? 'CFO_Insights' : 'TallyVision_Report';
     const parts = [prefix];
     if (query.groupId) {
-        const grp = db.prepare('SELECT name FROM company_groups WHERE id = ?').get(Number(query.groupId));
-        if (grp) parts.push(grp.name.replace(/\s+/g, '-'));
+        parts.push(getCurrentSlug().replace(/\s+/g, '-'));
     }
     const filters = [query.state, query.city, query.location,
                      (query.type && query.type !== 'All') ? query.type : '']
@@ -2774,7 +2691,7 @@ function buildPLStatement(req, ids, from, to) {
 
     // Fetch company metadata for the matched IDs
     const companies = db.prepare(
-        `SELECT id, city, location, entity_type FROM companies
+        `SELECT id, city, location, entity_type FROM vcfo_companies
          WHERE id IN (${idPh(ids)}) AND is_active = 1`
     ).all(...ids);
 
@@ -2895,12 +2812,12 @@ function computeMonthlyTrendData(ids, from, to) {
     const tbRows = db.prepare(`
         SELECT period_from as month, group_name,
                SUM(net_debit) as net_debit, SUM(net_credit) as net_credit
-        FROM trial_balance t
+        FROM vcfo_trial_balance t
         WHERE company_id IN (${idPh(ids)})
           AND period_from >= ? AND period_to <= ?
           AND group_name IS NOT NULL
           AND NOT EXISTS (
-              SELECT 1 FROM trial_balance t2
+              SELECT 1 FROM vcfo_trial_balance t2
               WHERE t2.company_id = t.company_id
                 AND t2.ledger_name = t.ledger_name
                 AND t2.period_from = t.period_from
@@ -3014,7 +2931,7 @@ function buildDirectIncomeSupplementary(companyIds, from, to) {
 
     const monthPh = periodMonths.map(() => '?').join(',');
     const cPh = companyIds.map(() => '?').join(',');
-    const q = `SELECT row_data FROM excel_data WHERE category = 'direct_income' AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
+    const q = `SELECT row_data FROM vcfo_excel_data WHERE category = 'direct_income' AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
     const rawRows = db.prepare(q).all(...periodMonths, ...companyIds);
     if (!rawRows.length) return null;
 
@@ -3138,10 +3055,10 @@ function buildPharmaInsightsData(companyIds, from, to) {
     let q, params;
     if (companyIds && companyIds.length) {
         const cPh = companyIds.map(() => '?').join(',');
-        q = `SELECT period_month, row_data FROM excel_data WHERE category = 'revenue' AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
+        q = `SELECT period_month, row_data FROM vcfo_excel_data WHERE category = 'revenue' AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
         params = [...periodMonths, ...companyIds];
     } else {
-        q = `SELECT period_month, row_data FROM excel_data WHERE category = 'revenue' AND period_month IN (${monthPh})`;
+        q = `SELECT period_month, row_data FROM vcfo_excel_data WHERE category = 'revenue' AND period_month IN (${monthPh})`;
         params = [...periodMonths];
     }
     const rawRows = db.prepare(q).all(...params);
@@ -3265,10 +3182,10 @@ function buildClosingStockInsightsData(companyIds, from, to) {
     let q, params;
     if (companyIds && companyIds.length) {
         const cPh = companyIds.map(() => '?').join(',');
-        q = `SELECT period_month, row_data FROM excel_data WHERE category = 'closing_stock' AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
+        q = `SELECT period_month, row_data FROM vcfo_excel_data WHERE category = 'closing_stock' AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
         params = [...periodMonths, ...companyIds];
     } else {
-        q = `SELECT period_month, row_data FROM excel_data WHERE category = 'closing_stock' AND period_month IN (${monthPh})`;
+        q = `SELECT period_month, row_data FROM vcfo_excel_data WHERE category = 'closing_stock' AND period_month IN (${monthPh})`;
         params = [...periodMonths];
     }
     const rawRows = db.prepare(q).all(...params);
@@ -3506,12 +3423,12 @@ function buildCFOInsightsData(req, ids, from, to) {
     const monthlyTBRows = db.prepare(`
         SELECT period_from as month, group_name,
                SUM(net_debit) - SUM(net_credit) as total
-        FROM trial_balance t
+        FROM vcfo_trial_balance t
         WHERE company_id IN (${idPh(ids)})
           AND period_from >= ? AND period_to <= ?
           AND group_name IS NOT NULL
           AND NOT EXISTS (
-              SELECT 1 FROM trial_balance t2
+              SELECT 1 FROM vcfo_trial_balance t2
               WHERE t2.company_id = t.company_id
                 AND t2.ledger_name = t.ledger_name
                 AND t2.period_from = t.period_from
@@ -3560,7 +3477,7 @@ function buildCFOInsightsData(req, ids, from, to) {
             SUM(CASE WHEN overdue_days > 60 AND overdue_days <= 90 THEN ABS(outstanding_amount) ELSE 0 END) as "61_90",
             SUM(CASE WHEN overdue_days > 90 THEN ABS(outstanding_amount) ELSE 0 END) as "90_plus",
             SUM(ABS(outstanding_amount)) as total
-        FROM bills_outstanding WHERE company_id IN (${idPh(ids)}) AND nature = 'receivable'
+        FROM vcfo_bills_outstanding WHERE company_id IN (${idPh(ids)}) AND nature = 'receivable'
         GROUP BY party_name ORDER BY total DESC LIMIT 15
     `).all(...ids);
 
@@ -3572,7 +3489,7 @@ function buildCFOInsightsData(req, ids, from, to) {
             SUM(CASE WHEN overdue_days > 60 AND overdue_days <= 90 THEN ABS(outstanding_amount) ELSE 0 END) as "61_90",
             SUM(CASE WHEN overdue_days > 90 THEN ABS(outstanding_amount) ELSE 0 END) as "90_plus",
             SUM(ABS(outstanding_amount)) as total
-        FROM bills_outstanding WHERE company_id IN (${idPh(ids)}) AND nature = 'payable'
+        FROM vcfo_bills_outstanding WHERE company_id IN (${idPh(ids)}) AND nature = 'payable'
         GROUP BY party_name ORDER BY total DESC LIMIT 15
     `).all(...ids);
 
@@ -3582,7 +3499,7 @@ function buildCFOInsightsData(req, ids, from, to) {
         const gstRows = db.prepare(`
             SELECT voucher_type, COUNT(*) as count, SUM(taxable_value) as taxable,
                    SUM(igst) as igst, SUM(cgst) as cgst, SUM(sgst) as sgst, SUM(cess) as cess
-            FROM gst_entries WHERE company_id IN (${idPh(ids)}) AND date >= ? AND date <= ?
+            FROM vcfo_gst_entries WHERE company_id IN (${idPh(ids)}) AND date >= ? AND date <= ?
             GROUP BY voucher_type ORDER BY taxable DESC
         `).all(...ids, from, to);
         if (gstRows.length > 0) gstSummary = gstRows;
@@ -3681,7 +3598,7 @@ function buildCFOReviewData(req, ids, groupId, from, to) {
     const idPh = ids.map(() => '?').join(',');
     const companyRows = db.prepare(
         `SELECT c.id, c.name, c.city, c.location, c.entity_type, c.state
-         FROM companies c
+         FROM vcfo_companies c
          WHERE c.id IN (${idPh}) AND c.is_active = 1
          ORDER BY c.entity_type, c.location, c.name`
     ).all(...ids);
@@ -3724,7 +3641,7 @@ function buildCFOReviewData(req, ids, groupId, from, to) {
 
     // Apply allocation rules
     const allocRules = db.prepare(
-        'SELECT * FROM allocation_rules WHERE group_id = ? AND is_active = 1 ORDER BY sort_order'
+        'SELECT * FROM vcfo_allocation_rules WHERE group_id = ? AND is_active = 1 ORDER BY sort_order'
     ).all(groupId);
 
     for (const rule of allocRules) {
@@ -3754,9 +3671,9 @@ function buildCFOReviewData(req, ids, groupId, from, to) {
     for (const comp of companyRows) {
         const stockRow = db.prepare(`
             SELECT SUM(closing_value) as cv
-            FROM stock_summary
+            FROM vcfo_stock_summary
             WHERE company_id = ?
-              AND period_to = (SELECT MAX(period_to) FROM stock_summary WHERE company_id = ? AND period_to <= ?)
+              AND period_to = (SELECT MAX(period_to) FROM vcfo_stock_summary WHERE company_id = ? AND period_to <= ?)
         `).get(comp.id, comp.id, curMonthEnd);
         if (stockRow && stockRow.cv) {
             stockByUnit.push({ companyId: comp.id, companyName: comp.name, closingValue: Math.abs(stockRow.cv) });
@@ -3764,9 +3681,8 @@ function buildCFOReviewData(req, ids, groupId, from, to) {
     }
     stockByUnit.sort((a, b) => b.closingValue - a.closingValue);
 
-    // Group info
-    const groupInfo = db.prepare('SELECT name FROM company_groups WHERE id = ?').get(groupId);
-    const groupName = groupInfo?.name || 'Company Group';
+    // Group info — the slug is the virtual group under the unified-DB model
+    const groupName = getCurrentSlug() || 'Company Group';
 
     // City label (most common city)
     const cities = [...new Set(companyRows.map(c => c.city).filter(Boolean))];
@@ -3852,11 +3768,11 @@ function fmtPctS(num) { return `${num >= 0 ? '+' : ''}${Number(num).toFixed(1)}%
 function getLedgerAmount(companyId, ledgerName, from, to) {
     const row = db.prepare(`
         SELECT SUM(net_debit) - SUM(net_credit) as total
-        FROM trial_balance t
+        FROM vcfo_trial_balance t
         WHERE company_id = ? AND ledger_name = ?
           AND period_from >= ? AND period_to <= ?
           AND NOT EXISTS (
-              SELECT 1 FROM trial_balance t2
+              SELECT 1 FROM vcfo_trial_balance t2
               WHERE t2.company_id = t.company_id
                 AND t2.ledger_name = t.ledger_name
                 AND t2.period_from = t.period_from
@@ -3872,11 +3788,11 @@ function getLedgerAmountMulti(companyId, ledgerNames, from, to) {
     const ph = ledgerNames.map(() => '?').join(',');
     const row = db.prepare(`
         SELECT SUM(net_debit) - SUM(net_credit) as total
-        FROM trial_balance t
+        FROM vcfo_trial_balance t
         WHERE company_id = ? AND ledger_name IN (${ph})
           AND period_from >= ? AND period_to <= ?
           AND NOT EXISTS (
-              SELECT 1 FROM trial_balance t2
+              SELECT 1 FROM vcfo_trial_balance t2
               WHERE t2.company_id = t.company_id
                 AND t2.ledger_name = t.ledger_name
                 AND t2.period_from = t.period_from
@@ -4060,8 +3976,7 @@ app.post('/api/reports/cfo-review/download', async (req, res) => {
         if (req.body.adjustmentNotes != null) data.adjustmentNotes = req.body.adjustmentNotes;
         if (req.body.actionItems) data.actionItems = req.body.actionItems;
 
-        const groupInfo = db.prepare('SELECT name FROM company_groups WHERE id = ?').get(groupId);
-        const groupName = (groupInfo?.name || 'Group').replace(/\s+/g, '_');
+        const groupName = (getCurrentSlug() || 'Group').replace(/\s+/g, '_');
         const filterParts = [req.query.state, req.query.city, req.query.location,
             (req.query.type && req.query.type !== 'All') ? req.query.type : ''].filter(v => v && v.trim()).map(v => v.replace(/\s+/g, '_'));
         const monthStr = monthLabel(to).replace(/\s+/g, '_');
@@ -4307,7 +4222,7 @@ app.get('/api/reports/balance-sheet', (req, res) => {
         // Get all BS groups with their hierarchy
         const bsGroups = db.prepare(
             `SELECT DISTINCT group_name, parent_group, dr_cr
-             FROM account_groups WHERE company_id IN (${idPh(ids)}) AND bs_pl = 'BS'`
+             FROM vcfo_account_groups WHERE company_id IN (${idPh(ids)}) AND bs_pl = 'BS'`
         ).all(...ids);
 
         // Standard Tally BS primary groups
@@ -4808,7 +4723,7 @@ app.get('/api/budgets', (req, res) => {
     const fromMonth = `${year}-04`;
     const toMonth = `${Number(year) + 1}-03`;
     const rows = db.prepare(
-        `SELECT * FROM budgets WHERE group_id = ? AND period_month >= ? AND period_month <= ? AND company_id IS NULL ORDER BY period_month, line_item`
+        `SELECT * FROM vcfo_budgets WHERE group_id = ? AND period_month >= ? AND period_month <= ? AND company_id IS NULL ORDER BY period_month, line_item`
     ).all(groupId, fromMonth, toMonth);
     res.json(rows);
 });
@@ -4819,7 +4734,7 @@ app.post('/api/budgets', adminOnly, (req, res) => {
     if (!groupId || !entries || !entries.length) return res.status(400).json({ error: 'groupId and entries required' });
 
     const upsert = db.prepare(`
-        INSERT INTO budgets (group_id, company_id, period_month, line_item, amount)
+        INSERT INTO vcfo_budgets (group_id, company_id, period_month, line_item, amount)
         VALUES (?, NULL, ?, ?, ?)
         ON CONFLICT(group_id, company_id, period_month, line_item)
         DO UPDATE SET amount = excluded.amount, updated_at = CURRENT_TIMESTAMP
@@ -4851,7 +4766,7 @@ app.get('/api/budgets/variance', (req, res) => {
     const fromMonth = from.substring(0, 7);
     const toMonth = to.substring(0, 7);
     const budgetRows = db.prepare(
-        `SELECT line_item, SUM(amount) as total FROM budgets
+        `SELECT line_item, SUM(amount) as total FROM vcfo_budgets
          WHERE group_id = ? AND company_id IS NULL AND period_month >= ? AND period_month <= ?
          GROUP BY line_item`
     ).all(groupId, fromMonth, toMonth);
@@ -4960,7 +4875,7 @@ app.post('/api/budgets/upload', adminOnly, multer({ storage: multer.memoryStorag
         if (!entries.length) return res.json({ success: true, count: 0, message: 'No budget data found in file' });
 
         const upsert = db.prepare(`
-            INSERT INTO budgets (group_id, company_id, period_month, line_item, amount)
+            INSERT INTO vcfo_budgets (group_id, company_id, period_month, line_item, amount)
             VALUES (?, NULL, ?, ?, ?)
             ON CONFLICT(group_id, company_id, period_month, line_item)
             DO UPDATE SET amount = excluded.amount, updated_at = CURRENT_TIMESTAMP
@@ -5023,7 +4938,7 @@ app.get('/api/reports/download', async (req, res) => {
 // List upload categories
 app.get('/api/upload/categories', (req, res) => {
     const cats = db.prepare(
-        'SELECT slug, display_name, description, expected_columns FROM upload_categories WHERE is_active = 1 ORDER BY sort_order'
+        'SELECT slug, display_name, description, expected_columns FROM vcfo_upload_categories WHERE is_active = 1 ORDER BY sort_order'
     ).all();
     res.json(cats.map(c => ({ ...c, expected_columns: JSON.parse(c.expected_columns || '[]') })));
 });
@@ -5044,7 +4959,7 @@ app.post('/api/upload/excel', adminOnly, upload.single('file'), async (req, res)
             fs.unlinkSync(req.file.path);
             return res.status(400).json({ error: 'Invalid category' });
         }
-        const cat = db.prepare('SELECT slug FROM upload_categories WHERE slug = ?').get(category);
+        const cat = db.prepare('SELECT slug FROM vcfo_upload_categories WHERE slug = ?').get(category);
         if (!cat) {
             fs.unlinkSync(req.file.path);
             return res.status(400).json({ error: 'Invalid category' });
@@ -5100,27 +5015,27 @@ app.post('/api/upload/excel', adminOnly, upload.single('file'), async (req, res)
         // Replace: delete old upload for same company+category+month
         const existing = db.prepare(
             companyId
-                ? 'SELECT id, stored_filename FROM excel_uploads WHERE company_id = ? AND category = ? AND period_month = ?'
-                : 'SELECT id, stored_filename FROM excel_uploads WHERE company_id IS NULL AND category = ? AND period_month = ?'
+                ? 'SELECT id, stored_filename FROM vcfo_excel_uploads WHERE company_id = ? AND category = ? AND period_month = ?'
+                : 'SELECT id, stored_filename FROM vcfo_excel_uploads WHERE company_id IS NULL AND category = ? AND period_month = ?'
         ).get(...(companyId ? [companyId, category, periodMonth] : [category, periodMonth]));
 
         const replaceTransaction = db.transaction(() => {
             if (existing) {
-                db.prepare('DELETE FROM excel_data WHERE upload_id = ?').run(existing.id);
-                db.prepare('DELETE FROM excel_uploads WHERE id = ?').run(existing.id);
+                db.prepare('DELETE FROM vcfo_excel_data WHERE upload_id = ?').run(existing.id);
+                db.prepare('DELETE FROM vcfo_excel_uploads WHERE id = ?').run(existing.id);
                 const oldPath = path.join(UPLOAD_DIR, subDir, category, existing.stored_filename);
                 if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
             }
 
             const result = db.prepare(`
-                INSERT INTO excel_uploads (company_id, category, period_month, original_filename, stored_filename, file_size, sheet_name, row_count)
+                INSERT INTO vcfo_excel_uploads (company_id, category, period_month, original_filename, stored_filename, file_size, sheet_name, row_count)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             `).run(companyId, category, periodMonth, req.file.originalname, storedFilename,
                    req.file.size, worksheet.name, rows.length);
 
             const uploadId = result.lastInsertRowid;
             const insertRow = db.prepare(
-                'INSERT INTO excel_data (upload_id, company_id, period_month, category, row_num, row_data) VALUES (?, ?, ?, ?, ?, ?)'
+                'INSERT INTO vcfo_excel_data (upload_id, company_id, period_month, category, row_num, row_data) VALUES (?, ?, ?, ?, ?, ?)'
             );
             rows.forEach((row, idx) => {
                 insertRow.run(uploadId, companyId, periodMonth, category, idx + 1, JSON.stringify(row));
@@ -5148,9 +5063,9 @@ app.post('/api/upload/excel', adminOnly, upload.single('file'), async (req, res)
 app.get('/api/upload/list', (req, res) => {
     const { companyId, category, periodMonth } = req.query;
     let q = `SELECT u.*, c.name as company_name, uc.display_name as category_name
-             FROM excel_uploads u
-             LEFT JOIN companies c ON c.id = u.company_id
-             JOIN upload_categories uc ON uc.slug = u.category
+             FROM vcfo_excel_uploads u
+             LEFT JOIN vcfo_companies c ON c.id = u.company_id
+             JOIN vcfo_upload_categories uc ON uc.slug = u.category
              WHERE 1=1`;
     const params = [];
     if (companyId) { q += ' AND u.company_id = ?'; params.push(companyId); }
@@ -5168,12 +5083,12 @@ app.get('/api/upload/grid', (req, res) => {
     let q, params;
     if (companyId) {
         q = `SELECT id, period_month, original_filename, file_size, row_count, uploaded_at
-             FROM excel_uploads WHERE category = ? AND company_id = ?
+             FROM vcfo_excel_uploads WHERE category = ? AND company_id = ?
              ORDER BY period_month`;
         params = [category, Number(companyId)];
     } else {
         q = `SELECT id, period_month, original_filename, file_size, row_count, uploaded_at
-             FROM excel_uploads WHERE category = ? AND company_id IS NULL
+             FROM vcfo_excel_uploads WHERE category = ? AND company_id IS NULL
              ORDER BY period_month`;
         params = [category];
     }
@@ -5193,19 +5108,19 @@ app.get('/api/upload/grid', (req, res) => {
 
 // Get parsed data for an upload
 app.get('/api/upload/data/:uploadId', (req, res) => {
-    const upl = db.prepare('SELECT * FROM excel_uploads WHERE id = ?').get(req.params.uploadId);
+    const upl = db.prepare('SELECT * FROM vcfo_excel_uploads WHERE id = ?').get(req.params.uploadId);
     if (!upl) return res.status(404).json({ error: 'Upload not found' });
-    const rows = db.prepare('SELECT row_num, row_data FROM excel_data WHERE upload_id = ? ORDER BY row_num').all(upl.id);
+    const rows = db.prepare('SELECT row_num, row_data FROM vcfo_excel_data WHERE upload_id = ? ORDER BY row_num').all(upl.id);
     res.json({ upload: upl, data: rows.map(r => ({ row_num: r.row_num, ...JSON.parse(r.row_data) })) });
 });
 
 // Delete an upload
 app.delete('/api/upload/:uploadId', adminOnly, (req, res) => {
-    const upl = db.prepare('SELECT * FROM excel_uploads WHERE id = ?').get(req.params.uploadId);
+    const upl = db.prepare('SELECT * FROM vcfo_excel_uploads WHERE id = ?').get(req.params.uploadId);
     if (!upl) return res.status(404).json({ error: 'Upload not found' });
     db.transaction(() => {
-        db.prepare('DELETE FROM excel_data WHERE upload_id = ?').run(upl.id);
-        db.prepare('DELETE FROM excel_uploads WHERE id = ?').run(upl.id);
+        db.prepare('DELETE FROM vcfo_excel_data WHERE upload_id = ?').run(upl.id);
+        db.prepare('DELETE FROM vcfo_excel_uploads WHERE id = ?').run(upl.id);
     })();
     const subDir = upl.company_id ? String(upl.company_id) : '_all';
     const filePath = path.join(UPLOAD_DIR, subDir, upl.category, upl.stored_filename);
@@ -5240,10 +5155,10 @@ app.get('/api/upload/analytics', (req, res) => {
         let q, params;
         if (companyIds && companyIds.length) {
             const cPh = companyIds.map(() => '?').join(',');
-            q = `SELECT row_data FROM excel_data WHERE category = ? AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
+            q = `SELECT row_data FROM vcfo_excel_data WHERE category = ? AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
             params = [category, ...periodMonths, ...companyIds];
         } else {
-            q = `SELECT row_data FROM excel_data WHERE category = ? AND period_month IN (${monthPh})`;
+            q = `SELECT row_data FROM vcfo_excel_data WHERE category = ? AND period_month IN (${monthPh})`;
             params = [category, ...periodMonths];
         }
         const rawRows = db.prepare(q).all(...params);
@@ -5253,10 +5168,10 @@ app.get('/api/upload/analytics', (req, res) => {
         let uq, uParams;
         if (companyIds && companyIds.length) {
             const cPh = companyIds.map(() => '?').join(',');
-            uq = `SELECT COUNT(*) as cnt FROM excel_uploads WHERE category = ? AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
+            uq = `SELECT COUNT(*) as cnt FROM vcfo_excel_uploads WHERE category = ? AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
             uParams = [category, ...periodMonths, ...companyIds];
         } else {
-            uq = `SELECT COUNT(*) as cnt FROM excel_uploads WHERE category = ? AND period_month IN (${monthPh})`;
+            uq = `SELECT COUNT(*) as cnt FROM vcfo_excel_uploads WHERE category = ? AND period_month IN (${monthPh})`;
             uParams = [category, ...periodMonths];
         }
         const uploadCount = db.prepare(uq).get(...uParams).cnt;
@@ -5265,10 +5180,10 @@ app.get('/api/upload/analytics', (req, res) => {
         let amq, amParams;
         if (companyIds && companyIds.length) {
             const cPh = companyIds.map(() => '?').join(',');
-            amq = `SELECT DISTINCT period_month FROM excel_uploads WHERE category = ? AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL) ORDER BY period_month`;
+            amq = `SELECT DISTINCT period_month FROM vcfo_excel_uploads WHERE category = ? AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL) ORDER BY period_month`;
             amParams = [category, ...periodMonths, ...companyIds];
         } else {
-            amq = `SELECT DISTINCT period_month FROM excel_uploads WHERE category = ? AND period_month IN (${monthPh}) ORDER BY period_month`;
+            amq = `SELECT DISTINCT period_month FROM vcfo_excel_uploads WHERE category = ? AND period_month IN (${monthPh}) ORDER BY period_month`;
             amParams = [category, ...periodMonths];
         }
         const actualMonths = db.prepare(amq).all(...amParams).map(r => r.period_month);
@@ -5426,10 +5341,10 @@ app.get('/api/upload/closing-stock-analytics', (req, res) => {
         let q, params;
         if (companyIds && companyIds.length) {
             const cPh = companyIds.map(() => '?').join(',');
-            q = `SELECT period_month, row_data FROM excel_data WHERE category = 'closing_stock' AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
+            q = `SELECT period_month, row_data FROM vcfo_excel_data WHERE category = 'closing_stock' AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
             params = [...periodMonths, ...companyIds];
         } else {
-            q = `SELECT period_month, row_data FROM excel_data WHERE category = 'closing_stock' AND period_month IN (${monthPh})`;
+            q = `SELECT period_month, row_data FROM vcfo_excel_data WHERE category = 'closing_stock' AND period_month IN (${monthPh})`;
             params = [...periodMonths];
         }
         const rawRows = db.prepare(q).all(...params);
@@ -5439,10 +5354,10 @@ app.get('/api/upload/closing-stock-analytics', (req, res) => {
         let uq, uParams;
         if (companyIds && companyIds.length) {
             const cPh = companyIds.map(() => '?').join(',');
-            uq = `SELECT COUNT(*) as cnt FROM excel_uploads WHERE category = 'closing_stock' AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
+            uq = `SELECT COUNT(*) as cnt FROM vcfo_excel_uploads WHERE category = 'closing_stock' AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
             uParams = [...periodMonths, ...companyIds];
         } else {
-            uq = `SELECT COUNT(*) as cnt FROM excel_uploads WHERE category = 'closing_stock' AND period_month IN (${monthPh})`;
+            uq = `SELECT COUNT(*) as cnt FROM vcfo_excel_uploads WHERE category = 'closing_stock' AND period_month IN (${monthPh})`;
             uParams = [...periodMonths];
         }
         const uploadCount = db.prepare(uq).get(...uParams).cnt;
@@ -5451,10 +5366,10 @@ app.get('/api/upload/closing-stock-analytics', (req, res) => {
         let amq, amParams;
         if (companyIds && companyIds.length) {
             const cPh = companyIds.map(() => '?').join(',');
-            amq = `SELECT DISTINCT period_month FROM excel_uploads WHERE category = 'closing_stock' AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL) ORDER BY period_month`;
+            amq = `SELECT DISTINCT period_month FROM vcfo_excel_uploads WHERE category = 'closing_stock' AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL) ORDER BY period_month`;
             amParams = [...periodMonths, ...companyIds];
         } else {
-            amq = `SELECT DISTINCT period_month FROM excel_uploads WHERE category = 'closing_stock' AND period_month IN (${monthPh}) ORDER BY period_month`;
+            amq = `SELECT DISTINCT period_month FROM vcfo_excel_uploads WHERE category = 'closing_stock' AND period_month IN (${monthPh}) ORDER BY period_month`;
             amParams = [...periodMonths];
         }
         const actualMonths = db.prepare(amq).all(...amParams).map(r => r.period_month);
@@ -5699,10 +5614,10 @@ app.get('/api/upload/pharma-analytics', (req, res) => {
         let q, params;
         if (companyIds && companyIds.length) {
             const cPh = companyIds.map(() => '?').join(',');
-            q = `SELECT period_month, row_data FROM excel_data WHERE category = ? AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
+            q = `SELECT period_month, row_data FROM vcfo_excel_data WHERE category = ? AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
             params = [category, ...periodMonths, ...companyIds];
         } else {
-            q = `SELECT period_month, row_data FROM excel_data WHERE category = ? AND period_month IN (${monthPh})`;
+            q = `SELECT period_month, row_data FROM vcfo_excel_data WHERE category = ? AND period_month IN (${monthPh})`;
             params = [category, ...periodMonths];
         }
         const rawRows = db.prepare(q).all(...params);
@@ -5712,10 +5627,10 @@ app.get('/api/upload/pharma-analytics', (req, res) => {
         let uq, uParams;
         if (companyIds && companyIds.length) {
             const cPh = companyIds.map(() => '?').join(',');
-            uq = `SELECT COUNT(*) as cnt FROM excel_uploads WHERE category = ? AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
+            uq = `SELECT COUNT(*) as cnt FROM vcfo_excel_uploads WHERE category = ? AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL)`;
             uParams = [category, ...periodMonths, ...companyIds];
         } else {
-            uq = `SELECT COUNT(*) as cnt FROM excel_uploads WHERE category = ? AND period_month IN (${monthPh})`;
+            uq = `SELECT COUNT(*) as cnt FROM vcfo_excel_uploads WHERE category = ? AND period_month IN (${monthPh})`;
             uParams = [category, ...periodMonths];
         }
         const uploadCount = db.prepare(uq).get(...uParams).cnt;
@@ -5723,10 +5638,10 @@ app.get('/api/upload/pharma-analytics', (req, res) => {
         let amq, amParams;
         if (companyIds && companyIds.length) {
             const cPh = companyIds.map(() => '?').join(',');
-            amq = `SELECT DISTINCT period_month FROM excel_uploads WHERE category = ? AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL) ORDER BY period_month`;
+            amq = `SELECT DISTINCT period_month FROM vcfo_excel_uploads WHERE category = ? AND period_month IN (${monthPh}) AND (company_id IN (${cPh}) OR company_id IS NULL) ORDER BY period_month`;
             amParams = [category, ...periodMonths, ...companyIds];
         } else {
-            amq = `SELECT DISTINCT period_month FROM excel_uploads WHERE category = ? AND period_month IN (${monthPh}) ORDER BY period_month`;
+            amq = `SELECT DISTINCT period_month FROM vcfo_excel_uploads WHERE category = ? AND period_month IN (${monthPh}) ORDER BY period_month`;
             amParams = [category, ...periodMonths];
         }
         const actualMonths = db.prepare(amq).all(...amParams).map(r => r.period_month);
@@ -5881,11 +5796,16 @@ app.post('/api/cloud/publish', adminOnly, async (req, res) => {
 
     function send(obj) { res.write(JSON.stringify(obj) + '\n'); }
 
+    // Outgoing `table` label → local `vcfo_*` table to read from.
+    // The cloud API still expects unprefixed table names, so the label
+    // stays as-is but the SQL targets the prefixed local schema.
+    // `company_groups` / `company_group_members` were eliminated in the
+    // unified-DB migration; they're no longer pushed.
     const TABLES_TO_PUSH = [
         'companies', 'account_groups', 'ledgers', 'trial_balance', 'profit_loss',
         'balance_sheet', 'vouchers', 'stock_summary', 'stock_item_ledger',
         'bills_outstanding', 'cost_centres', 'cost_allocations', 'gst_entries',
-        'payroll_entries', 'company_groups', 'company_group_members',
+        'payroll_entries',
         'allocation_rules', 'writeoff_rules', 'budgets'
     ];
 
@@ -5917,6 +5837,7 @@ app.post('/api/cloud/publish', adminOnly, async (req, res) => {
         const totalTables = TABLES_TO_PUSH.length;
         for (let i = 0; i < totalTables; i++) {
             const table = TABLES_TO_PUSH[i];
+            const localTable = `vcfo_${table}`;
             const pct = Math.round(5 + (i / totalTables) * 90);
             send({ progress: pct, message: `Pushing ${table}...` });
 
@@ -5924,18 +5845,12 @@ app.post('/api/cloud/publish', adminOnly, async (req, res) => {
             try {
                 if (COMPANY_SCOPED.has(table)) {
                     const ph = companyIds.map(() => '?').join(',');
-                    rows = db.prepare(`SELECT * FROM ${table} WHERE company_id IN (${ph})`).all(...companyIds);
+                    rows = db.prepare(`SELECT * FROM ${localTable} WHERE company_id IN (${ph})`).all(...companyIds);
                 } else if (table === 'companies') {
                     const ph = companyIds.map(() => '?').join(',');
-                    rows = db.prepare(`SELECT * FROM companies WHERE id IN (${ph})`).all(...companyIds);
-                } else if (table === 'company_group_members') {
-                    const ph = companyIds.map(() => '?').join(',');
-                    rows = db.prepare(`SELECT * FROM company_group_members WHERE company_id IN (${ph})`).all(...companyIds);
-                } else if (table === 'client_company_access') {
-                    const ph = companyIds.map(() => '?').join(',');
-                    rows = db.prepare(`SELECT * FROM client_company_access WHERE company_id IN (${ph})`).all(...companyIds);
+                    rows = db.prepare(`SELECT * FROM vcfo_companies WHERE id IN (${ph})`).all(...companyIds);
                 } else {
-                    rows = db.prepare(`SELECT * FROM ${table}`).all();
+                    rows = db.prepare(`SELECT * FROM ${localTable}`).all();
                 }
             } catch (e) {
                 send({ progress: pct, message: `Skipping ${table} (${e.message})` });
@@ -6138,8 +6053,8 @@ app.get('/api/vcfo/status', (req, res) => {
     if (!groupId) return res.status(400).json({ error: 'groupId required' });
 
     const items = db.prepare('SELECT * FROM vcfo_tracker_items WHERE group_id=? AND tracker_type=? AND is_active=1 ORDER BY sort_order, id').all(groupId, type);
-    const memberIds = db.prepare('SELECT cgm.company_id FROM company_group_members cgm JOIN companies c ON c.id=cgm.company_id WHERE cgm.group_id=? AND c.is_active=1').all(groupId).map(r => r.company_id);
-    const companies = memberIds.length ? db.prepare(`SELECT id, name, entity_type, city, location FROM companies WHERE id IN (${idPh(memberIds)})`).all(...memberIds) : [];
+    const memberIds = resolveGroupMemberIds(groupId) || [];
+    const companies = memberIds.length ? db.prepare(`SELECT id, name, entity_type, city, location FROM vcfo_companies WHERE id IN (${idPh(memberIds)})`).all(...memberIds) : [];
 
     let statusRows = [];
     if (period && items.length && memberIds.length) {
@@ -6189,7 +6104,7 @@ app.get('/api/vcfo/summary', (req, res) => {
     if (!groupId) return res.status(400).json({ error: 'groupId required' });
 
     const items = db.prepare('SELECT id FROM vcfo_tracker_items WHERE group_id=? AND tracker_type=? AND is_active=1').all(groupId, type);
-    const memberIds = db.prepare('SELECT cgm.company_id FROM company_group_members cgm JOIN companies c ON c.id=cgm.company_id WHERE cgm.group_id=? AND c.is_active=1').all(groupId).map(r => r.company_id);
+    const memberIds = resolveGroupMemberIds(groupId) || [];
     const totalCells = items.length * memberIds.length;
 
     if (!period || !totalCells) return res.json({ total: totalCells, completed: 0, pending: totalCells, overdue: 0, in_progress: 0 });
@@ -6215,7 +6130,7 @@ app.get('/api/vcfo/summary', (req, res) => {
 app.post('/api/audit/milestones/seed', adminOnly, (req, res) => {
     const groupId = Number(req.query.groupId || req.body.groupId);
     if (!groupId) return res.status(400).json({ error: 'groupId required' });
-    const ins = db.prepare('INSERT OR IGNORE INTO audit_milestones (group_id, name, sort_order, is_prebuilt) VALUES (?,?,?,1)');
+    const ins = db.prepare('INSERT OR IGNORE INTO vcfo_audit_milestones (group_id, name, sort_order, is_prebuilt) VALUES (?,?,?,1)');
     let count = 0;
     db.transaction(() => {
         for (const m of AUDIT_MILESTONE_SEEDS) {
@@ -6230,27 +6145,27 @@ app.post('/api/audit/milestones/seed', adminOnly, (req, res) => {
 app.get('/api/audit/milestones', (req, res) => {
     const groupId = Number(req.query.groupId);
     if (!groupId) return res.status(400).json({ error: 'groupId required' });
-    res.json(db.prepare('SELECT * FROM audit_milestones WHERE group_id=? AND is_active=1 ORDER BY sort_order, id').all(groupId));
+    res.json(db.prepare('SELECT * FROM vcfo_audit_milestones WHERE group_id=? AND is_active=1 ORDER BY sort_order, id').all(groupId));
 });
 
 // ── Audit: Create milestone ──
 app.post('/api/audit/milestones', adminOnly, (req, res) => {
     const { groupId, name } = req.body;
     if (!groupId || !name) return res.status(400).json({ error: 'groupId, name required' });
-    const maxSort = db.prepare('SELECT MAX(sort_order) as m FROM audit_milestones WHERE group_id=?').get(groupId)?.m || 0;
-    const r = db.prepare('INSERT INTO audit_milestones (group_id, name, sort_order, is_prebuilt) VALUES (?,?,?,0)').run(groupId, name, maxSort + 1);
+    const maxSort = db.prepare('SELECT MAX(sort_order) as m FROM vcfo_audit_milestones WHERE group_id=?').get(groupId)?.m || 0;
+    const r = db.prepare('INSERT INTO vcfo_audit_milestones (group_id, name, sort_order, is_prebuilt) VALUES (?,?,?,0)').run(groupId, name, maxSort + 1);
     res.json({ id: r.lastInsertRowid });
 });
 
 // ── Audit: Update milestone ──
 app.put('/api/audit/milestones/:id', adminOnly, (req, res) => {
-    db.prepare('UPDATE audit_milestones SET name=? WHERE id=?').run(req.body.name, req.params.id);
+    db.prepare('UPDATE vcfo_audit_milestones SET name=? WHERE id=?').run(req.body.name, req.params.id);
     res.json({ ok: true });
 });
 
 // ── Audit: Delete milestone ──
 app.delete('/api/audit/milestones/:id', adminOnly, (req, res) => {
-    db.prepare('UPDATE audit_milestones SET is_active=0 WHERE id=?').run(req.params.id);
+    db.prepare('UPDATE vcfo_audit_milestones SET is_active=0 WHERE id=?').run(req.params.id);
     res.json({ ok: true });
 });
 
@@ -6260,14 +6175,14 @@ app.get('/api/audit/milestone-status', (req, res) => {
     const fy = Number(req.query.fy);
     if (!groupId) return res.status(400).json({ error: 'groupId required' });
 
-    const milestones = db.prepare('SELECT * FROM audit_milestones WHERE group_id=? AND is_active=1 ORDER BY sort_order, id').all(groupId);
-    const memberIds = db.prepare('SELECT cgm.company_id FROM company_group_members cgm JOIN companies c ON c.id=cgm.company_id WHERE cgm.group_id=? AND c.is_active=1').all(groupId).map(r => r.company_id);
-    const companies = memberIds.length ? db.prepare(`SELECT id, name, entity_type, city, location FROM companies WHERE id IN (${idPh(memberIds)})`).all(...memberIds) : [];
+    const milestones = db.prepare('SELECT * FROM vcfo_audit_milestones WHERE group_id=? AND is_active=1 ORDER BY sort_order, id').all(groupId);
+    const memberIds = resolveGroupMemberIds(groupId) || [];
+    const companies = memberIds.length ? db.prepare(`SELECT id, name, entity_type, city, location FROM vcfo_companies WHERE id IN (${idPh(memberIds)})`).all(...memberIds) : [];
 
     let statusRows = [];
     if (fy && milestones.length && memberIds.length) {
         const mIds = milestones.map(m => m.id);
-        statusRows = db.prepare(`SELECT * FROM audit_milestone_status WHERE milestone_id IN (${idPh(mIds)}) AND company_id IN (${idPh(memberIds)}) AND fy_year=?`).all(...mIds, ...memberIds, fy);
+        statusRows = db.prepare(`SELECT * FROM vcfo_audit_milestone_status WHERE milestone_id IN (${idPh(mIds)}) AND company_id IN (${idPh(memberIds)}) AND fy_year=?`).all(...mIds, ...memberIds, fy);
     }
     const statusMap = {};
     for (const s of statusRows) {
@@ -6281,7 +6196,7 @@ app.get('/api/audit/milestone-status', (req, res) => {
 app.put('/api/audit/milestone-status', adminOnly, (req, res) => {
     const { milestone_id, company_id, fy_year, status, due_date, completion_date, assigned_to, notes } = req.body;
     if (!milestone_id || !company_id || !fy_year) return res.status(400).json({ error: 'milestone_id, company_id, fy_year required' });
-    db.prepare(`INSERT INTO audit_milestone_status (milestone_id, company_id, fy_year, status, due_date, completion_date, assigned_to, notes, updated_at)
+    db.prepare(`INSERT INTO vcfo_audit_milestone_status (milestone_id, company_id, fy_year, status, due_date, completion_date, assigned_to, notes, updated_at)
         VALUES (?,?,?,?,?,?,?,?,datetime('now'))
         ON CONFLICT(milestone_id, company_id, fy_year) DO UPDATE SET status=excluded.status, due_date=excluded.due_date, completion_date=excluded.completion_date, assigned_to=excluded.assigned_to, notes=excluded.notes, updated_at=datetime('now')`)
         .run(milestone_id, company_id, fy_year, status || 'pending', due_date || null, completion_date || null, assigned_to || '', notes || '');
@@ -6293,7 +6208,7 @@ app.get('/api/audit/observations', (req, res) => {
     const groupId = Number(req.query.groupId);
     const fy = Number(req.query.fy);
     if (!groupId) return res.status(400).json({ error: 'groupId required' });
-    let q = 'SELECT o.*, c.name as company_name FROM audit_observations o LEFT JOIN companies c ON c.id=o.company_id WHERE o.group_id=?';
+    let q = 'SELECT o.*, c.name as company_name FROM vcfo_audit_observations o LEFT JOIN vcfo_companies c ON c.id=o.company_id WHERE o.group_id=?';
     const params = [groupId];
     if (fy) { q += ' AND o.fy_year=?'; params.push(fy); }
     if (req.query.severity) { q += ' AND o.severity=?'; params.push(req.query.severity); }
@@ -6306,20 +6221,20 @@ app.get('/api/audit/observations', (req, res) => {
 app.post('/api/audit/observations', adminOnly, (req, res) => {
     const { groupId, company_id, fy_year, title, description, severity, category, recommendation, mgmt_response, status, assigned_to, due_date } = req.body;
     if (!groupId || !title || !fy_year) return res.status(400).json({ error: 'groupId, title, fy_year required' });
-    const r = db.prepare(`INSERT INTO audit_observations (group_id, company_id, fy_year, title, description, severity, category, recommendation, mgmt_response, status, assigned_to, due_date) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+    const r = db.prepare(`INSERT INTO vcfo_audit_observations (group_id, company_id, fy_year, title, description, severity, category, recommendation, mgmt_response, status, assigned_to, due_date) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
         .run(groupId, company_id || null, fy_year, title, description || '', severity || 'medium', category || '', recommendation || '', mgmt_response || '', status || 'open', assigned_to || '', due_date || null);
     res.json({ id: r.lastInsertRowid });
 });
 
 app.put('/api/audit/observations/:id', adminOnly, (req, res) => {
     const { title, description, severity, category, recommendation, mgmt_response, status, assigned_to, due_date, resolution_date, company_id } = req.body;
-    db.prepare(`UPDATE audit_observations SET title=?, description=?, severity=?, category=?, recommendation=?, mgmt_response=?, status=?, assigned_to=?, due_date=?, resolution_date=?, company_id=?, updated_at=datetime('now') WHERE id=?`)
+    db.prepare(`UPDATE vcfo_audit_observations SET title=?, description=?, severity=?, category=?, recommendation=?, mgmt_response=?, status=?, assigned_to=?, due_date=?, resolution_date=?, company_id=?, updated_at=datetime('now') WHERE id=?`)
         .run(title, description || '', severity || 'medium', category || '', recommendation || '', mgmt_response || '', status || 'open', assigned_to || '', due_date || null, resolution_date || null, company_id || null, req.params.id);
     res.json({ ok: true });
 });
 
 app.delete('/api/audit/observations/:id', adminOnly, (req, res) => {
-    db.prepare('DELETE FROM audit_observations WHERE id=?').run(req.params.id);
+    db.prepare('DELETE FROM vcfo_audit_observations WHERE id=?').run(req.params.id);
     res.json({ ok: true });
 });
 
@@ -6329,20 +6244,20 @@ app.get('/api/audit/summary', (req, res) => {
     const fy = Number(req.query.fy);
     if (!groupId) return res.status(400).json({ error: 'groupId required' });
 
-    const milestones = db.prepare('SELECT id FROM audit_milestones WHERE group_id=? AND is_active=1').all(groupId);
-    const memberIds = db.prepare('SELECT cgm.company_id FROM company_group_members cgm JOIN companies c ON c.id=cgm.company_id WHERE cgm.group_id=? AND c.is_active=1').all(groupId).map(r => r.company_id);
+    const milestones = db.prepare('SELECT id FROM vcfo_audit_milestones WHERE group_id=? AND is_active=1').all(groupId);
+    const memberIds = resolveGroupMemberIds(groupId) || [];
     const totalCells = milestones.length * memberIds.length;
 
     let msCompleted = 0, msInProgress = 0;
     if (fy && milestones.length && memberIds.length) {
         const mIds = milestones.map(m => m.id);
-        const counts = db.prepare(`SELECT status, COUNT(*) as cnt FROM audit_milestone_status WHERE milestone_id IN (${idPh(mIds)}) AND company_id IN (${idPh(memberIds)}) AND fy_year=? GROUP BY status`).all(...mIds, ...memberIds, fy);
+        const counts = db.prepare(`SELECT status, COUNT(*) as cnt FROM vcfo_audit_milestone_status WHERE milestone_id IN (${idPh(mIds)}) AND company_id IN (${idPh(memberIds)}) AND fy_year=? GROUP BY status`).all(...mIds, ...memberIds, fy);
         for (const c of counts) { if (c.status === 'completed') msCompleted = c.cnt; if (c.status === 'in_progress') msInProgress = c.cnt; }
     }
 
     let obsOpen = 0, obsInProgress = 0, obsResolved = 0, obsClosed = 0;
     if (fy) {
-        const obsCounts = db.prepare('SELECT status, COUNT(*) as cnt FROM audit_observations WHERE group_id=? AND fy_year=? GROUP BY status').all(groupId, fy);
+        const obsCounts = db.prepare('SELECT status, COUNT(*) as cnt FROM vcfo_audit_observations WHERE group_id=? AND fy_year=? GROUP BY status').all(groupId, fy);
         for (const c of obsCounts) {
             if (c.status === 'open') obsOpen = c.cnt;
             if (c.status === 'in_progress') obsInProgress = c.cnt;
@@ -6363,10 +6278,11 @@ app.get('/api/audit/summary', (req, res) => {
 if (require.main === module) {
     const PORT = parseInt(getSetting('dashboard_port') || process.env.PORT || '3456');
     app.listen(PORT, () => {
-        console.log(`\n  TallyVision API Server (v5 - Multi-tenant DB Architecture)`);
+        console.log(`\n  TallyVision API Server (v6 - Unified DB)`);
         console.log(`  http://localhost:${PORT}`);
-        console.log(`  Tenant root:  ${getTenantRoot()}`);
-        console.log(`  Per-tenant:   <tenant-root>/<client-slug>/{master.db, clients/*.db}\n`);
+        console.log(`  Data root:    ${getDataRoot()}`);
+        console.log(`  Platform DB:  ${getPlatformDbPath()}`);
+        console.log(`  Per-client:   <data-root>/clients/<slug>.db\n`);
     });
 
     // Graceful shutdown — close every cached tenant's connections

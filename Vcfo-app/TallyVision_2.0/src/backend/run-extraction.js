@@ -3,7 +3,9 @@
  * Run: node run-extraction.js --company "MyCompany" --from 2025-04-01 --to 2026-03-31
  */
 
-const { initDatabase } = require('./db/setup');
+const path = require('path');
+const { DbManager } = require('./db/db-manager');
+const { getPlatformDbPath, getClientDbPath, DEFAULT_SLUG } = require('./db/tenant');
 const { DataExtractor } = require('./extractors/data-extractor');
 
 async function main() {
@@ -12,6 +14,7 @@ async function main() {
     const getArg = (flag) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : null; };
 
     const companyName = getArg('--company') || getArg('-c');
+    const slug = getArg('--slug') || DEFAULT_SLUG;
     const fromDate = getArg('--from') || '2025-04-01';
     const toDate = getArg('--to') || '2026-03-31';
     const host = getArg('--host') || 'localhost';
@@ -38,12 +41,17 @@ async function main() {
     console.log(`  Tally   : ${host}:${port}`);
     console.log('');
 
-    // Init database
-    const db = initDatabase();
+    // Open the per-client DB for this slug (creates + migrates if needed).
+    const mgr = new DbManager({
+        slug,
+        platformDbPath: getPlatformDbPath(),
+        clientDbPath: getClientDbPath(slug),
+    });
+    const db = mgr.getClientDb();
 
-    // Upsert company
-    db.prepare('INSERT OR IGNORE INTO companies (name) VALUES (?)').run(companyName);
-    const company = db.prepare('SELECT * FROM companies WHERE name = ?').get(companyName);
+    // Upsert company in the per-client DB.
+    db.prepare('INSERT OR IGNORE INTO vcfo_companies (name) VALUES (?)').run(companyName);
+    const company = db.prepare('SELECT * FROM vcfo_companies WHERE name = ?').get(companyName);
 
     // Create extractor with console progress
     const extractor = new DataExtractor(db, {

@@ -1,26 +1,19 @@
 /**
- * TallyVision - Per-client (tenant) context
+ * TallyVision - Per-client (tenant) context (unified-DB architecture, Step 4)
  *
- * Each Magna_Tracker client gets its own isolated TallyVision workspace:
+ * After DB unification, each Magna_Tracker client's VCFO data lives in the
+ * same SQLite file as its forecast data:
  *
- *   TALLYVISION_DATA/
- *     _default/               ← used when no slug is set (local dev, legacy)
- *       master.db
- *       clients/group_*.db
- *     magnacode/
- *       master.db
- *       clients/group_*.db
- *     indefine/
- *       master.db
- *       clients/group_*.db
+ *   <repo>/data/platform.db        — truly-global VCFO tables (vcfo_*)
+ *   <repo>/data/clients/{slug}.db  — per-client VCFO + forecast tables
  *
- * A request's active slug is carried in Node's AsyncLocalStorage. The
- * TallyVision middleware wraps each request in `requestContext.run(...)`,
- * so any code downstream (even through async/await) sees the correct slug.
+ * The slug is the unit of multi-tenancy. This module carries the active
+ * slug through each request via AsyncLocalStorage, so any code downstream
+ * (even through async/await) sees the correct tenant.
  *
  * `getDbManagerForCurrentTenant()` returns a cached `DbManager` keyed by
- * slug. `getMasterDbForCurrentTenant()` delegates to it. Both are safe to
- * call outside a request (returns the `_default` tenant).
+ * slug. All slugs share the same `platform.db` connection; each slug has
+ * its own `clients/{slug}.db` connection.
  */
 
 const { AsyncLocalStorage } = require('async_hooks');
@@ -36,10 +29,35 @@ function _getDbManagerCtor() {
 
 const DEFAULT_SLUG = '_default';
 
-// Root directory on disk that holds ALL tenants.
-// Falls back to the legacy single-tenant path for backward compatibility.
-function getTenantRoot() {
-    return process.env.TALLYVISION_DATA || path.join(__dirname, '..', '..', '..', 'data');
+/**
+ * Repo-root data directory. VCFO_DATA_ROOT can override for tests, but
+ * the default is the Magna_Tracker monorepo's top-level data/.
+ *
+ * Layout:
+ *   <root>/platform.db
+ *   <root>/clients/{slug}.db
+ */
+function getDataRoot() {
+    // Walk up from backend/db/ to the repo root (4 levels: db -> backend
+    // -> src -> TallyVision_2.0 -> Vcfo-app -> <repo>).
+    return (
+        process.env.VCFO_DATA_ROOT ||
+        path.resolve(__dirname, '..', '..', '..', '..', '..', 'data')
+    );
+}
+
+function getPlatformDbPath() {
+    return path.join(getDataRoot(), 'platform.db');
+}
+
+function getClientsDir() {
+    const dir = path.join(getDataRoot(), 'clients');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return dir;
+}
+
+function getClientDbPath(slug) {
+    return path.join(getClientsDir(), `${normalizeSlug(slug)}.db`);
 }
 
 // Per-request context. The store shape is:
@@ -47,7 +65,7 @@ function getTenantRoot() {
 const requestContext = new AsyncLocalStorage();
 
 // Per-slug DbManager cache. One `DbManager` per tenant, lives for the
-// process's lifetime. Each manages its own better-sqlite3 connections.
+// process's lifetime. Each manages its own per-client DB connection.
 const _dbManagerBySlug = new Map();
 
 /** Validate and normalize a tenant slug. */
@@ -59,20 +77,16 @@ function normalizeSlug(slug) {
     return s;
 }
 
-/** Absolute path for a given tenant's data directory. */
-function getTenantDir(slug) {
-    const safe = normalizeSlug(slug);
-    const dir = path.join(getTenantRoot(), safe);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    return dir;
-}
-
-/** Get (or create) the DbManager for a specific tenant. */
+/** Get (or create) the DbManager for a specific slug. */
 function getDbManagerForSlug(slug) {
     const safe = normalizeSlug(slug);
     if (_dbManagerBySlug.has(safe)) return _dbManagerBySlug.get(safe);
     const Ctor = _getDbManagerCtor();
-    const mgr = new Ctor(getTenantDir(safe));
+    const mgr = new Ctor({
+        slug: safe,
+        platformDbPath: getPlatformDbPath(),
+        clientDbPath: getClientDbPath(safe),
+    });
     _dbManagerBySlug.set(safe, mgr);
     return mgr;
 }
@@ -88,7 +102,7 @@ function getDbManagerForCurrentTenant() {
     return getDbManagerForSlug(getCurrentSlug());
 }
 
-/** Master DB for the current request's tenant. */
+/** Platform (global) DB for the current request's tenant. */
 function getMasterDbForCurrentTenant() {
     return getDbManagerForCurrentTenant().getMasterDb();
 }
@@ -101,8 +115,6 @@ function getActiveClientDb() {
 function setActiveClientDb(db) {
     const store = requestContext.getStore();
     if (store) store.activeClientDb = db;
-    // If called outside a request, silently drop — the proxies fall back
-    // to master anyway.
 }
 
 /**
@@ -120,12 +132,15 @@ function closeAllTenants() {
         try { mgr.closeAll(); } catch (e) { /* ignore */ }
     }
     _dbManagerBySlug.clear();
+    try { require('./db-manager').closePlatformDb(); } catch (e) { /* ignore */ }
 }
 
 module.exports = {
     DEFAULT_SLUG,
-    getTenantRoot,
-    getTenantDir,
+    getDataRoot,
+    getPlatformDbPath,
+    getClientsDir,
+    getClientDbPath,
     normalizeSlug,
     requestContext,
     withTenant,

@@ -207,7 +207,7 @@ class DataExtractor {
     }
 
     logSync(companyId, reportType, from, to, status, rowCount = 0, error = null) {
-        this.db.prepare(`INSERT INTO sync_log (company_id, report_type, period_from, period_to, status, row_count, error_message, completed_at) VALUES (?,?,?,?,?,?,?,?)`)
+        this.db.prepare(`INSERT INTO vcfo_sync_log (company_id, report_type, period_from, period_to, status, row_count, error_message, completed_at) VALUES (?,?,?,?,?,?,?,?)`)
             .run(companyId, reportType, from, to, status, rowCount, error, new Date().toISOString());
     }
 
@@ -215,8 +215,8 @@ class DataExtractor {
         this.onProgress({ step: 'chart-of-accounts', status: 'running', message: 'Chart of Accounts...' });
         const xml = TEMPLATES['chart-of-accounts'](companyName);
         const rows = await this.withRetry(() => this.fetchReport(xml), 'CoA');
-        this.db.prepare('DELETE FROM account_groups WHERE company_id = ?').run(companyId);
-        const ins = this.db.prepare('INSERT OR REPLACE INTO account_groups (company_id,group_name,parent_group,bs_pl,dr_cr,affects_gross_profit) VALUES (?,?,?,?,?,?)');
+        this.db.prepare('DELETE FROM vcfo_account_groups WHERE company_id = ?').run(companyId);
+        const ins = this.db.prepare('INSERT OR REPLACE INTO vcfo_account_groups (company_id,group_name,parent_group,bs_pl,dr_cr,affects_gross_profit) VALUES (?,?,?,?,?,?)');
         this.db.transaction((rows) => { for (const r of rows) ins.run(companyId, this.cleanString(r.F01), this.cleanString(r.F02), this.cleanString(r.F03), this.cleanString(r.F04), this.cleanString(r.F05)); })(rows);
         this.logSync(companyId, 'chart-of-accounts', null, null, 'success', rows.length);
         return rows.length;
@@ -226,8 +226,8 @@ class DataExtractor {
         this.onProgress({ step: 'ledgers', status: 'running', message: 'Ledger List...' });
         const xml = TEMPLATES['list-masters']('Ledger', companyName);
         const rows = await this.withRetry(() => this.fetchReport(xml), 'Ledgers');
-        this.db.prepare('DELETE FROM ledgers WHERE company_id = ?').run(companyId);
-        const ins = this.db.prepare('INSERT OR REPLACE INTO ledgers (company_id,name,group_name) VALUES (?,?,?)');
+        this.db.prepare('DELETE FROM vcfo_ledgers WHERE company_id = ?').run(companyId);
+        const ins = this.db.prepare('INSERT OR REPLACE INTO vcfo_ledgers (company_id,name,group_name) VALUES (?,?,?)');
         this.db.transaction((rows) => { for (const r of rows) ins.run(companyId, this.cleanString(r.F01), this.cleanString(r.F02)); })(rows);
         this.logSync(companyId, 'ledgers', null, null, 'success', rows.length);
         return rows.length;
@@ -239,14 +239,14 @@ class DataExtractor {
         // Previous blanket DELETE wiped ALL TB data for the company, destroying other FYs'
         // data when syncing multiple FYs sequentially (e.g. FY 26-27 sync deleted FY 25-26 TB).
         if (forceResync) {
-            this.db.prepare('DELETE FROM trial_balance WHERE company_id = ? AND period_from >= ? AND period_to <= ?')
+            this.db.prepare('DELETE FROM vcfo_trial_balance WHERE company_id = ? AND period_from >= ? AND period_to <= ?')
                 .run(companyId, fromDate, toDate);
         }
         for (let i = 0; i < chunks.length; i++) {
             const c = chunks[i];
             // Skip historical months already synced
             if (!forceResync && this.isHistoricalPeriod(c.to)) {
-                const exists = this.db.prepare('SELECT 1 FROM trial_balance WHERE company_id=? AND period_from=? LIMIT 1').get(companyId, c.from);
+                const exists = this.db.prepare('SELECT 1 FROM vcfo_trial_balance WHERE company_id=? AND period_from=? LIMIT 1').get(companyId, c.from);
                 if (exists) {
                     this.onProgress({ step: 'trial-balance', status: 'running', message: `Trial Balance: ${c.label} (cached)`, progress: Math.round(((i+1)/chunks.length)*100) });
                     continue;
@@ -256,8 +256,8 @@ class DataExtractor {
             try {
                 const xml = TEMPLATES['trial-balance'](this.formatTallyDate(c.from), this.formatTallyDate(c.to), companyName);
                 const rows = await this.withRetry(() => this.fetchReport(xml), `TB ${c.label}`);
-                this.db.prepare('DELETE FROM trial_balance WHERE company_id=? AND period_from=? AND period_to=?').run(companyId, c.from, c.to);
-                const ins = this.db.prepare('INSERT OR IGNORE INTO trial_balance (company_id,period_from,period_to,ledger_name,group_name,opening_balance,net_debit,net_credit,closing_balance) VALUES (?,?,?,?,?,?,?,?,?)');
+                this.db.prepare('DELETE FROM vcfo_trial_balance WHERE company_id=? AND period_from=? AND period_to=?').run(companyId, c.from, c.to);
+                const ins = this.db.prepare('INSERT OR IGNORE INTO vcfo_trial_balance (company_id,period_from,period_to,ledger_name,group_name,opening_balance,net_debit,net_credit,closing_balance) VALUES (?,?,?,?,?,?,?,?,?)');
                 this.db.transaction((rows) => { for (const r of rows) ins.run(companyId, c.from, c.to, this.cleanString(r.F01), this.cleanString(r.F02), this.parseNumber(r.F03), this.parseNumber(r.F04), this.parseNumber(r.F05), this.parseNumber(r.F06)); })(rows);
                 total += rows.length; this.logSync(companyId, 'trial-balance', c.from, c.to, 'success', rows.length);
             } catch (e) { this.logSync(companyId, 'trial-balance', c.from, c.to, 'error', 0, e.message); }
@@ -270,7 +270,7 @@ class DataExtractor {
         for (let i = 0; i < chunks.length; i++) {
             const c = chunks[i];
             if (!forceResync && this.isHistoricalMonth(c.from.substring(0, 7))) {
-                const exists = this.db.prepare('SELECT 1 FROM profit_loss WHERE company_id=? AND period_from=? LIMIT 1').get(companyId, c.from);
+                const exists = this.db.prepare('SELECT 1 FROM vcfo_profit_loss WHERE company_id=? AND period_from=? LIMIT 1').get(companyId, c.from);
                 if (exists) {
                     this.onProgress({ step: 'profit-loss', status: 'running', message: `P&L: ${c.label} (cached)`, progress: Math.round(((i+1)/chunks.length)*100) });
                     continue;
@@ -280,8 +280,8 @@ class DataExtractor {
             try {
                 const xml = TEMPLATES['profit-loss'](this.formatTallyDate(c.from), this.formatTallyDate(c.to), companyName);
                 const rows = await this.withRetry(() => this.fetchReport(xml), `PL ${c.label}`);
-                this.db.prepare('DELETE FROM profit_loss WHERE company_id=? AND period_from=? AND period_to=?').run(companyId, c.from, c.to);
-                const ins = this.db.prepare('INSERT OR IGNORE INTO profit_loss (company_id,period_from,period_to,ledger_name,group_name,amount) VALUES (?,?,?,?,?,?)');
+                this.db.prepare('DELETE FROM vcfo_profit_loss WHERE company_id=? AND period_from=? AND period_to=?').run(companyId, c.from, c.to);
+                const ins = this.db.prepare('INSERT OR IGNORE INTO vcfo_profit_loss (company_id,period_from,period_to,ledger_name,group_name,amount) VALUES (?,?,?,?,?,?)');
                 this.db.transaction((rows) => { for (const r of rows) ins.run(companyId, c.from, c.to, this.cleanString(r.F01), this.cleanString(r.F02), this.parseNumber(r.F03)); })(rows);
                 total += rows.length; this.logSync(companyId, 'profit-loss', c.from, c.to, 'success', rows.length);
             } catch (e) { this.logSync(companyId, 'profit-loss', c.from, c.to, 'error', 0, e.message); }
@@ -294,7 +294,7 @@ class DataExtractor {
         for (let i = 0; i < chunks.length; i++) {
             const c = chunks[i];
             if (!forceResync && this.isHistoricalMonth(c.from.substring(0, 7))) {
-                const exists = this.db.prepare('SELECT 1 FROM balance_sheet WHERE company_id=? AND as_on_date=? LIMIT 1').get(companyId, c.to);
+                const exists = this.db.prepare('SELECT 1 FROM vcfo_balance_sheet WHERE company_id=? AND as_on_date=? LIMIT 1').get(companyId, c.to);
                 if (exists) {
                     this.onProgress({ step: 'balance-sheet', status: 'running', message: `Balance Sheet: ${c.label} (cached)`, progress: Math.round(((i+1)/chunks.length)*100) });
                     continue;
@@ -304,8 +304,8 @@ class DataExtractor {
             try {
                 const xml = TEMPLATES['balance-sheet'](this.formatTallyDate(fromDate), this.formatTallyDate(c.to), companyName);
                 const rows = await this.withRetry(() => this.fetchReport(xml), `BS ${c.label}`);
-                this.db.prepare('DELETE FROM balance_sheet WHERE company_id=? AND as_on_date=?').run(companyId, c.to);
-                const ins = this.db.prepare('INSERT OR IGNORE INTO balance_sheet (company_id,as_on_date,ledger_name,group_name,closing_balance) VALUES (?,?,?,?,?)');
+                this.db.prepare('DELETE FROM vcfo_balance_sheet WHERE company_id=? AND as_on_date=?').run(companyId, c.to);
+                const ins = this.db.prepare('INSERT OR IGNORE INTO vcfo_balance_sheet (company_id,as_on_date,ledger_name,group_name,closing_balance) VALUES (?,?,?,?,?)');
                 this.db.transaction((rows) => { for (const r of rows) ins.run(companyId, c.to, this.cleanString(r.F01), this.cleanString(r.F02), this.parseNumber(r.F03)); })(rows);
                 total += rows.length; this.logSync(companyId, 'balance-sheet', null, c.to, 'success', rows.length);
             } catch (e) { this.logSync(companyId, 'balance-sheet', null, c.to, 'error', 0, e.message); }
@@ -333,7 +333,7 @@ class DataExtractor {
         let total = 0;
 
         const ins = this.db.prepare(
-            'INSERT OR IGNORE INTO vouchers (company_id,date,voucher_type,voucher_number,ledger_name,amount,party_name,narration,sync_month) VALUES (?,?,?,?,?,?,?,?,?)'
+            'INSERT OR IGNORE INTO vcfo_vouchers (company_id,date,voucher_type,voucher_number,ledger_name,amount,party_name,narration,sync_month) VALUES (?,?,?,?,?,?,?,?,?)'
         );
 
         // ── Phase 1: Smart-skip check — determine which months need re-fetch ──────
@@ -344,7 +344,7 @@ class DataExtractor {
 
             if (!forceResync && this.isHistoricalMonth(syncMonth)) {
                 const exists = this.db.prepare(
-                    'SELECT 1 FROM vouchers WHERE company_id=? AND date >= ? AND date <= ? LIMIT 1'
+                    'SELECT 1 FROM vcfo_vouchers WHERE company_id=? AND date >= ? AND date <= ? LIMIT 1'
                 ).get(companyId, c.from, c.to);
                 if (exists) {
                     this.onProgress({ step: 'vouchers', status: 'running',
@@ -405,7 +405,7 @@ class DataExtractor {
 
             // DELETE + INSERT in same transaction — no data loss window
             this.db.transaction((vRows) => {
-                this.db.prepare('DELETE FROM vouchers WHERE company_id=? AND date >= ? AND date <= ?')
+                this.db.prepare('DELETE FROM vcfo_vouchers WHERE company_id=? AND date >= ? AND date <= ?')
                     .run(companyId, c.from, c.to);
                 for (const r of vRows) {
                     ins.run(companyId, parseTallyDate(r.date, c.from),
@@ -426,7 +426,7 @@ class DataExtractor {
         for (let i = 0; i < chunks.length; i++) {
             const c = chunks[i];
             if (!forceResync && this.isHistoricalPeriod(c.to)) {
-                const exists = this.db.prepare('SELECT 1 FROM stock_summary WHERE company_id=? AND period_from=? LIMIT 1').get(companyId, c.from);
+                const exists = this.db.prepare('SELECT 1 FROM vcfo_stock_summary WHERE company_id=? AND period_from=? LIMIT 1').get(companyId, c.from);
                 if (exists) {
                     this.onProgress({ step: 'stock-summary', status: 'running', message: `Stock: ${c.label} (cached)`, progress: Math.round(((i+1)/chunks.length)*100) });
                     continue;
@@ -436,8 +436,8 @@ class DataExtractor {
             try {
                 const xml = TEMPLATES['stock-summary'](this.formatTallyDate(c.from), this.formatTallyDate(c.to), companyName);
                 const rows = await this.withRetry(() => this.fetchReport(xml), `Stock ${c.label}`);
-                this.db.prepare('DELETE FROM stock_summary WHERE company_id=? AND period_from=? AND period_to=?').run(companyId, c.from, c.to);
-                const ins = this.db.prepare('INSERT OR IGNORE INTO stock_summary (company_id,period_from,period_to,item_name,stock_group,opening_qty,opening_value,inward_qty,inward_value,outward_qty,outward_value,closing_qty,closing_value) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
+                this.db.prepare('DELETE FROM vcfo_stock_summary WHERE company_id=? AND period_from=? AND period_to=?').run(companyId, c.from, c.to);
+                const ins = this.db.prepare('INSERT OR IGNORE INTO vcfo_stock_summary (company_id,period_from,period_to,item_name,stock_group,opening_qty,opening_value,inward_qty,inward_value,outward_qty,outward_value,closing_qty,closing_value) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
                 this.db.transaction((rows) => { for (const r of rows) ins.run(companyId, c.from, c.to, this.cleanString(r.F01), this.cleanString(r.F02), this.parseNumber(r.F03), this.parseNumber(r.F04), this.parseNumber(r.F05), this.parseNumber(r.F06), this.parseNumber(r.F07), this.parseNumber(r.F08), this.parseNumber(r.F09), this.parseNumber(r.F10)); })(rows);
                 total += rows.length; this.logSync(companyId, 'stock-summary', c.from, c.to, 'success', rows.length);
             } catch (e) { this.logSync(companyId, 'stock-summary', c.from, c.to, 'error', 0, e.message); }
@@ -451,8 +451,8 @@ class DataExtractor {
             try {
                 const xml = TEMPLATES['bills-outstanding'](this.formatTallyDate(toDate), nature, companyName);
                 const rows = await this.withRetry(() => this.fetchReport(xml), `Bills ${nature}`);
-                this.db.prepare('DELETE FROM bills_outstanding WHERE company_id=? AND as_on_date=? AND nature=?').run(companyId, toDate, nature);
-                const ins = this.db.prepare('INSERT OR IGNORE INTO bills_outstanding (company_id,as_on_date,nature,bill_date,reference_number,outstanding_amount,party_name,overdue_days) VALUES (?,?,?,?,?,?,?,?)');
+                this.db.prepare('DELETE FROM vcfo_bills_outstanding WHERE company_id=? AND as_on_date=? AND nature=?').run(companyId, toDate, nature);
+                const ins = this.db.prepare('INSERT OR IGNORE INTO vcfo_bills_outstanding (company_id,as_on_date,nature,bill_date,reference_number,outstanding_amount,party_name,overdue_days) VALUES (?,?,?,?,?,?,?,?)');
                 this.db.transaction((rows) => { for (const r of rows) ins.run(companyId, toDate, nature, this.parseDate(r.F01), this.cleanString(r.F02), this.parseNumber(r.F03), this.cleanString(r.F04), this.parseNumber(r.F05)); })(rows);
                 this.logSync(companyId, `bills-${nature}`, null, toDate, 'success', rows.length);
             } catch (e) { this.logSync(companyId, `bills-${nature}`, null, toDate, 'error', 0, e.message); }
@@ -472,8 +472,8 @@ class DataExtractor {
                 this.logSync(companyId, 'cost-centres', null, null, 'success', 0);
                 return 0;
             }
-            this.db.prepare('DELETE FROM cost_centres WHERE company_id = ?').run(companyId);
-            const ins = this.db.prepare('INSERT OR REPLACE INTO cost_centres (company_id,name,parent,category) VALUES (?,?,?,?)');
+            this.db.prepare('DELETE FROM vcfo_cost_centres WHERE company_id = ?').run(companyId);
+            const ins = this.db.prepare('INSERT OR REPLACE INTO vcfo_cost_centres (company_id,name,parent,category) VALUES (?,?,?,?)');
             this.db.transaction((rows) => {
                 for (const r of rows) ins.run(companyId, this.cleanString(r.F01), this.cleanString(r.F02), this.cleanString(r.F03));
             })(rows);
@@ -491,15 +491,15 @@ class DataExtractor {
         let total = 0;
         for (const c of chunks) {
             if (!forceResync && this.isHistoricalPeriod(c.to)) {
-                const exists = this.db.prepare('SELECT 1 FROM cost_allocations WHERE company_id=? AND date=? LIMIT 1').get(companyId, c.to);
+                const exists = this.db.prepare('SELECT 1 FROM vcfo_cost_allocations WHERE company_id=? AND date=? LIMIT 1').get(companyId, c.to);
                 if (exists) continue;
             }
             this.onProgress({ step: 'costAlloc', status: 'running', message: `Cost Allocations: ${c.label}` });
             try {
                 const xml = TEMPLATES['cost-allocations'](this.formatTallyDate(c.from), this.formatTallyDate(c.to), companyName);
                 const rows = await this.withRetry(() => this.fetchReport(xml), `CostAlloc ${c.label}`);
-                this.db.prepare('DELETE FROM cost_allocations WHERE company_id=? AND date=? AND sync_month=?').run(companyId, c.to, c.from.substring(0, 7));
-                const ins = this.db.prepare('INSERT OR IGNORE INTO cost_allocations (company_id,date,ledger_name,cost_centre,amount,sync_month) VALUES (?,?,?,?,?,?)');
+                this.db.prepare('DELETE FROM vcfo_cost_allocations WHERE company_id=? AND date=? AND sync_month=?').run(companyId, c.to, c.from.substring(0, 7));
+                const ins = this.db.prepare('INSERT OR IGNORE INTO vcfo_cost_allocations (company_id,date,ledger_name,cost_centre,amount,sync_month) VALUES (?,?,?,?,?,?)');
                 this.db.transaction((rows) => {
                     for (const r of rows) {
                         const ledger = this.cleanString(r.F01);
@@ -525,7 +525,7 @@ class DataExtractor {
         let total = 0;
 
         const insGst = this.db.prepare(
-            'INSERT OR IGNORE INTO gst_entries (company_id,date,voucher_type,voucher_number,party_name,taxable_value,sync_month) VALUES (?,?,?,?,?,?,?)'
+            'INSERT OR IGNORE INTO vcfo_gst_entries (company_id,date,voucher_type,voucher_number,party_name,taxable_value,sync_month) VALUES (?,?,?,?,?,?,?)'
         );
 
         const parseTallyDate = (dateStr, fallback) => {
@@ -538,7 +538,7 @@ class DataExtractor {
         for (const c of chunks) {
             const syncMonth = c.from.substring(0, 7);
             if (!forceResync && this.isHistoricalMonth(syncMonth)) {
-                const exists = this.db.prepare('SELECT 1 FROM gst_entries WHERE company_id=? AND sync_month=? LIMIT 1').get(companyId, syncMonth);
+                const exists = this.db.prepare('SELECT 1 FROM vcfo_gst_entries WHERE company_id=? AND sync_month=? LIMIT 1').get(companyId, syncMonth);
                 if (exists) continue;
             }
             this.onProgress({ step: 'gst', status: 'running', message: `GST Entries: ${c.label}` });
@@ -558,7 +558,7 @@ class DataExtractor {
                 // DELETE + INSERT in same transaction — no data loss on failure
                 const monthTotal = [];
                 this.db.transaction((entries) => {
-                    this.db.prepare('DELETE FROM gst_entries WHERE company_id=? AND sync_month=?').run(companyId, syncMonth);
+                    this.db.prepare('DELETE FROM vcfo_gst_entries WHERE company_id=? AND sync_month=?').run(companyId, syncMonth);
                     for (const [, v] of entries) {
                         const d = parseTallyDate(v.date, c.from);
                         if (d >= c.from && d <= c.to) {
@@ -581,7 +581,7 @@ class DataExtractor {
         const chunks = this.generateMonthChunks(fromDate, toDate);
         let total = 0;
         const ins = this.db.prepare(
-            'INSERT OR IGNORE INTO payroll_entries (company_id,date,voucher_number,employee_name,pay_head,amount,sync_month) VALUES (?,?,?,?,?,?,?)'
+            'INSERT OR IGNORE INTO vcfo_payroll_entries (company_id,date,voucher_number,employee_name,pay_head,amount,sync_month) VALUES (?,?,?,?,?,?,?)'
         );
 
         const parseTallyDate = (dateStr, fallback) => {
@@ -594,7 +594,7 @@ class DataExtractor {
         for (const c of chunks) {
             const syncMonth = c.from.substring(0, 7);
             if (!forceResync && this.isHistoricalMonth(syncMonth)) {
-                const exists = this.db.prepare('SELECT 1 FROM payroll_entries WHERE company_id=? AND sync_month=? LIMIT 1').get(companyId, syncMonth);
+                const exists = this.db.prepare('SELECT 1 FROM vcfo_payroll_entries WHERE company_id=? AND sync_month=? LIMIT 1').get(companyId, syncMonth);
                 if (exists) continue;
             }
             this.onProgress({ step: 'payroll', status: 'running', message: `Payroll: ${c.label}` });
@@ -607,7 +607,7 @@ class DataExtractor {
                     this.logSync(companyId, 'payroll', c.from, c.to, 'success', 0);
                     continue;
                 }
-                this.db.prepare('DELETE FROM payroll_entries WHERE company_id=? AND sync_month=?').run(companyId, syncMonth);
+                this.db.prepare('DELETE FROM vcfo_payroll_entries WHERE company_id=? AND sync_month=?').run(companyId, syncMonth);
                 this.db.transaction((rows) => {
                     for (const r of rows) {
                         const d = parseTallyDate(r.date, c.from);
@@ -656,10 +656,10 @@ class DataExtractor {
 
             const vouchers = collection['VOUCHER'] || [];
             const ins = this.db.prepare(
-                'INSERT OR IGNORE INTO stock_item_ledger (company_id,date,item_name,voucher_type,voucher_number,party_name,quantity,amount,sync_month) VALUES (?,?,?,?,?,?,?,?,?)'
+                'INSERT OR IGNORE INTO vcfo_stock_item_ledger (company_id,date,item_name,voucher_type,voucher_number,party_name,quantity,amount,sync_month) VALUES (?,?,?,?,?,?,?,?,?)'
             );
 
-            this.db.prepare('DELETE FROM stock_item_ledger WHERE company_id=? AND item_name=? AND date>=? AND date<=?')
+            this.db.prepare('DELETE FROM vcfo_stock_item_ledger WHERE company_id=? AND item_name=? AND date>=? AND date<=?')
                 .run(companyId, itemName, fromDate, toDate);
 
             let total = 0;
