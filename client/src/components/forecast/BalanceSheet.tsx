@@ -106,14 +106,61 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
     return data;
   }, [items, allValues, months, employeeBenefitsPct, financingItems]);
 
-  // Long-term asset items for depreciation & investments
+  // Asset items split by item_type. Forecast items without item_type are
+  // treated as long-term for backwards compat (pre-AssetCreateModal data).
+  // A separate backfill migration can later set all legacy nulls to 'long_term'.
+  const currentAssetItems = useMemo(() => items.filter(i => i.category === 'assets' && i.item_type === 'current'), [items]);
   const longTermAssetItems = useMemo(() => items.filter(i => i.category === 'assets' && (i.item_type === 'long_term' || !i.item_type)), [items]);
   const investmentAssetItems = useMemo(() => items.filter(i => i.category === 'assets' && i.item_type === 'investment'), [items]);
+
+  // Per-item amortization for current assets. Each purchase in month P amortizes
+  // straight-line over meta.useful_life months (e.g. '6m' → 1/6 consumed per month,
+  // starting the month of purchase). 'full' or missing life = no amortization
+  // (balance equals cumulative purchases). Returns an end-of-month balance per
+  // month, summed across every current asset. This lets a user log a ₹60k
+  // prepaid-rent entry in Apr with a 6-month life and see the Current Assets
+  // row decay ₹10k/month while cash was already drained up front.
+  const currentForecastedBalanceByMonth = useMemo(() => {
+    const perMonth: Record<string, number> = {};
+    months.forEach(m => { perMonth[m] = 0; });
+
+    currentAssetItems.forEach(item => {
+      const life = item.meta?.useful_life;
+      const lifeMonths =
+        life === 'full' || !life ? Infinity
+          : typeof life === 'string' && /^\d+m$/.test(life) ? parseInt(life.replace('m', ''), 10)
+          : typeof life === 'string' && /^\d+$/.test(life) ? parseInt(life, 10)
+          : Infinity;
+      if (!(lifeMonths > 0)) return;
+
+      const itemValues = allValues[item.id] || {};
+      months.forEach((m, mi) => {
+        let balance = 0;
+        // Sum contributions from every purchase month P at or before m.
+        for (let pi = 0; pi <= mi; pi++) {
+          const p = months[pi];
+          const v = itemValues[p] || 0;
+          if (!v) continue;
+          if (lifeMonths === Infinity) {
+            balance += v;
+          } else {
+            const elapsed = mi - pi + 1; // months since purchase (month of purchase counts as 1)
+            const remainingFrac = Math.max(0, 1 - elapsed / lifeMonths);
+            balance += v * remainingFrac;
+          }
+        }
+        perMonth[m] += balance;
+      });
+    });
+
+    return perMonth;
+  }, [currentAssetItems, allValues, months]);
 
   // Cumulative calculations for balance sheet
   const balanceData = useMemo(() => {
     const data: Record<string, {
       cash: number; accountsReceivable: number; otherCurrentAssets: number;
+      otherCurrentForecasted: number;
       fixedAssets: number; investmentAssets: number;
       longTermAssets: number; accumulatedDepreciation: number;
       currentAssets: number; longTermAssetsNet: number; totalAssets: number;
@@ -230,7 +277,13 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
         - initialAP - initialIncomeTaxPayable - initialSalesTaxPayable
         - initialPaidInCapital;
 
-      const currentAssets = cumulativeCash + accountsReceivable + otherCurrentAssets;
+      // End-of-month balance for user-added current assets (precomputed with
+      // per-item amortization). Added here so forecasted current assets show
+      // up in Current Assets rather than silently falling through to Fixed
+      // Assets (the old behaviour).
+      const otherCurrentForecasted = currentForecastedBalanceByMonth[m] || 0;
+
+      const currentAssets = cumulativeCash + accountsReceivable + otherCurrentAssets + otherCurrentForecasted;
       const longTermAssetsNet = longTermAssets - cumulativeDepreciation;
       const totalAssets = currentAssets + longTermAssetsNet;
 
@@ -244,6 +297,7 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
         cash: cumulativeCash,
         accountsReceivable,
         otherCurrentAssets,
+        otherCurrentForecasted,
         fixedAssets: cumulativeFixedAssets,
         investmentAssets: cumulativeInvestmentAssets,
         longTermAssets,
@@ -265,7 +319,7 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
       };
     });
     return data;
-  }, [monthData, months, ib, arGlobalDays, apGlobalDays, financingItems, allValues, incomeTaxRate, salesTaxRate, longTermAssetItems, investmentAssetItems]);
+  }, [monthData, months, ib, arGlobalDays, apGlobalDays, financingItems, allValues, incomeTaxRate, salesTaxRate, longTermAssetItems, investmentAssetItems, currentForecastedBalanceByMonth]);
 
   // Initial balance values
   const initialValues: Record<string, number> = useMemo(() => {
@@ -340,6 +394,12 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
       parentId: 'current_assets',
       getValue: m => bd[m]?.otherCurrentAssets || 0,
       getInitial: () => iv.otherCurrent,
+    });
+    rows.push({
+      id: 'current_forecasted', label: 'Forecasted Current Assets', kind: 'leaf', level: 2,
+      parentId: 'current_assets',
+      getValue: m => bd[m]?.otherCurrentForecasted || 0,
+      getInitial: () => 0,
     });
 
     // Long-Term Assets
