@@ -78,8 +78,11 @@ export default function ModuleSelectPage() {
     localStorage.setItem('active_module', mod.key);
     // VCFO Portal is a separate sub-app (TallyVision) mounted at /vcfo/* — use a hard nav
     // so the browser loads the non-React app instead of the SPA router.
+    // Pass the current client's slug so TallyVision isolates data per-client.
     if (mod.key === 'vcfo_portal') {
-      window.location.href = '/vcfo/';
+      const clientSlug = localStorage.getItem('client_slug') || '';
+      const url = clientSlug ? `/vcfo/?clientSlug=${encodeURIComponent(clientSlug)}` : '/vcfo/';
+      window.location.href = url;
       return;
     }
     navigate(mod.path);

@@ -42,17 +42,52 @@ const GROUP_SCOPED_TABLES = [
 ];
 
 class DbManager {
+    /**
+     * @param {string} dataDir - tenant-scoped data directory, e.g.
+     *   `/data/vcfo/magnacode`. Master + clients/ both live under this dir.
+     */
     constructor(dataDir) {
         this.dataDir = dataDir;
-        this.clientDir = getClientDbDir();
+        this.clientDir = getClientDbDir(dataDir);
         this._cache = new Map(); // path → Database connection
 
         // Auto-migrate if needed
         this._autoMigrate();
 
         // Open master DB and ensure schema is up to date
-        this.masterDb = this._openCached(getMasterDbPath(), 'master');
+        this.masterDb = this._openCached(getMasterDbPath(dataDir), 'master');
         this._ensureMasterSchema();
+
+        // One-off data migrations for this tenant (idempotent)
+        this._runLegacyDataMigrations();
+    }
+
+    /**
+     * Per-tenant historical data migrations. Safe to re-run — each
+     * migration checks a sentinel before mutating.
+     */
+    _runLegacyDataMigrations() {
+        // Convert allocation_rules fixed amounts from annual → monthly.
+        // Previously ran once globally at server.js module load; now runs
+        // once per tenant on first DbManager construction.
+        try {
+            const groups = this.masterDb.prepare('SELECT id FROM company_groups').all();
+            for (const g of groups) {
+                const cdb = this.getClientDb(g.id);
+                const fixedRules = cdb.prepare("SELECT id, config FROM allocation_rules WHERE rule_type = 'fixed'").all();
+                for (const r of fixedRules) {
+                    const cfg = JSON.parse(r.config || '{}');
+                    if (cfg.amount && !cfg._migrated_monthly) {
+                        cfg.amount = cfg.amount / 12;
+                        cfg._migrated_monthly = true;
+                        cdb.prepare("UPDATE allocation_rules SET config = ? WHERE id = ?").run(JSON.stringify(cfg), r.id);
+                        console.log(`  Migrated fixed rule ${r.id}: annual ${cfg.amount * 12} → monthly ${cfg.amount}`);
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Tenant legacy migration error:', e.message);
+        }
     }
 
     /** Ensure master DB has all tables (handles upgrades to existing DBs) */
@@ -212,8 +247,8 @@ class DbManager {
      * Runs once on first startup when master.db doesn't exist but tallyvision.db does.
      */
     _autoMigrate() {
-        const masterPath = getMasterDbPath();
-        const legacyPath = getDbPath();
+        const masterPath = getMasterDbPath(this.dataDir);
+        const legacyPath = getDbPath(this.dataDir);
 
         // Already migrated
         if (fs.existsSync(masterPath)) return;

@@ -13,6 +13,17 @@ const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 const { initDatabase, getDbPath, DB_DIR } = require('./db/setup');
 const { DbManager } = require('./db/db-manager');
+const {
+    withTenant,
+    getCurrentSlug,
+    getDbManagerForCurrentTenant,
+    getMasterDbForCurrentTenant,
+    getActiveClientDb,
+    setActiveClientDb,
+    closeAllTenants,
+    getTenantDir,
+    getTenantRoot,
+} = require('./db/tenant');
 const { TallyConnector } = require('./tally-connector');
 const { DataExtractor } = require('./extractors/data-extractor');
 const rateLimit = require('express-rate-limit');
@@ -46,6 +57,21 @@ app.use((req, res, next) => {
     res.setHeader('X-XSS-Protection', '1; mode=block');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     next();
+});
+
+// ── Tenant (per-client) context ──
+// Magna_Tracker navigates here with ?clientSlug=<slug>. We persist it to
+// the session so subsequent requests don't need the query. Downstream code
+// (`dbManager`, `masterDb`, `db`) reads the slug via AsyncLocalStorage and
+// routes every DB open to `TALLYVISION_DATA/<slug>/…`, isolating each
+// Magna_Tracker client's TallyVision data.
+app.use((req, res, next) => {
+    const fromQuery = typeof req.query.clientSlug === 'string' ? req.query.clientSlug.trim() : '';
+    if (fromQuery) {
+        req.session.tvSlug = fromQuery;
+    }
+    const slug = (req.session && req.session.tvSlug) || null;
+    return withTenant(slug, () => next());
 });
 
 // ===== AUTH HELPERS =====
@@ -122,17 +148,26 @@ app.use('/api', (req, res, next) => {
     next();
 });
 
-// Initialize database — per-client architecture
-const dbManager = new DbManager(DB_DIR);
-const masterDb = dbManager.getMasterDb();
+// ── Per-tenant DbManager (multi-client) ──
+// `dbManager` and `masterDb` are Proxies. Each property access resolves to
+// the CURRENT REQUEST's tenant (via AsyncLocalStorage set by the middleware
+// above). All existing `dbManager.*` / `masterDb.*` / `db.prepare(...)` call
+// sites keep working unchanged — the Proxy handles routing.
+const dbManager = new Proxy({}, {
+    get(_, prop) {
+        const mgr = getDbManagerForCurrentTenant();
+        const val = mgr[prop];
+        return typeof val === 'function' ? val.bind(mgr) : val;
+    },
+});
 
-/**
- * Request-local client DB. Set by middleware before each handler.
- * All existing `db.prepare(...)` calls are routed through a Proxy that
- * sends client-table queries to _activeClientDb and master-table queries to masterDb.
- * Since Node.js is single-threaded and better-sqlite3 is synchronous, this is safe.
- */
-let _activeClientDb = null;
+const masterDb = new Proxy({}, {
+    get(_, prop) {
+        const m = getMasterDbForCurrentTenant();
+        const val = m[prop];
+        return typeof val === 'function' ? val.bind(m) : val;
+    },
+});
 
 // Tables that live in client DBs (used for query routing)
 const CLIENT_TABLE_NAMES = new Set([
@@ -154,59 +189,63 @@ function _isClientQuery(sql) {
 }
 
 /**
- * Smart DB proxy: routes queries to masterDb or _activeClientDb based on table names.
- * This allows ALL existing `db.prepare(...)` calls to work unchanged.
+ * Smart DB proxy: routes queries to the current tenant's master DB or its
+ * active client DB (set per-request via AsyncLocalStorage).
  */
-const db = new Proxy(masterDb, {
-    get(target, prop) {
+const db = new Proxy({}, {
+    get(_, prop) {
         if (prop === 'prepare') {
             return function(sql) {
-                const useClient = _isClientQuery(sql) && _activeClientDb;
-                return useClient ? _activeClientDb.prepare(sql) : masterDb.prepare(sql);
+                const active = getActiveClientDb();
+                const useClient = _isClientQuery(sql) && active;
+                return useClient ? active.prepare(sql) : getMasterDbForCurrentTenant().prepare(sql);
             };
         }
         if (prop === 'exec') {
             return function(sql) {
-                const useClient = _isClientQuery(sql) && _activeClientDb;
-                return useClient ? _activeClientDb.exec(sql) : masterDb.exec(sql);
+                const active = getActiveClientDb();
+                const useClient = _isClientQuery(sql) && active;
+                return useClient ? active.exec(sql) : getMasterDbForCurrentTenant().exec(sql);
             };
         }
         if (prop === 'transaction') {
             return function(fn) {
-                // Transactions go to the active client DB if one is set
-                const target = _activeClientDb || masterDb;
+                // Transactions go to the active client DB if one is set, else master.
+                const target = getActiveClientDb() || getMasterDbForCurrentTenant();
                 return target.transaction(fn);
             };
         }
         if (prop === 'pragma') {
-            return function(...args) { return masterDb.pragma(...args); };
+            return function(...args) { return getMasterDbForCurrentTenant().pragma(...args); };
         }
-        // For any other property, return from masterDb
-        const val = masterDb[prop];
-        return typeof val === 'function' ? val.bind(masterDb) : val;
-    }
+        // For any other property, forward to the current tenant's master.
+        const m = getMasterDbForCurrentTenant();
+        const val = m[prop];
+        return typeof val === 'function' ? val.bind(m) : val;
+    },
 });
 
 /**
- * Middleware: resolve and set the active client DB for each API request.
- * Must run BEFORE any handler that touches client data.
+ * Middleware: resolve and set the active client DB for each API request
+ * (within the current tenant's workspace).
  */
 app.use('/api', (req, res, next) => {
-    _activeClientDb = null; // reset
+    setActiveClientDb(null); // reset for this request
+    const mgr = getDbManagerForCurrentTenant();
     const groupId = Number(req.query.groupId || req.body?.groupId);
     if (groupId) {
-        _activeClientDb = dbManager.getClientDb(groupId);
+        setActiveClientDb(mgr.getClientDb(groupId));
         return next();
     }
     const companyId = Number(req.query.companyId || req.body?.companyId);
     if (companyId) {
-        _activeClientDb = dbManager.resolveDbForCompany(companyId);
+        setActiveClientDb(mgr.resolveDbForCompany(companyId));
         return next();
     }
     const csvIds = req.query.companyIds || req.body?.companyIds;
     if (csvIds) {
         const first = Number(String(csvIds).split(',')[0]);
-        if (first) _activeClientDb = dbManager.resolveDbForCompany(first);
+        if (first) setActiveClientDb(mgr.resolveDbForCompany(first));
     }
     next();
 });
@@ -215,15 +254,16 @@ app.use('/api', (req, res, next) => {
  * Get the correct client DB for a request (explicit, for cases like sync).
  */
 function getClientDb(req) {
+    const mgr = getDbManagerForCurrentTenant();
     const groupId = Number(req.query.groupId || req.body?.groupId);
-    if (groupId) return dbManager.getClientDb(groupId);
+    if (groupId) return mgr.getClientDb(groupId);
     const companyId = Number(req.query.companyId || req.body?.companyId);
-    if (companyId) return dbManager.resolveDbForCompany(companyId);
-    return _activeClientDb || masterDb;
+    if (companyId) return mgr.resolveDbForCompany(companyId);
+    return getActiveClientDb() || getMasterDbForCurrentTenant();
 }
 
 function getClientDbForGroup(groupId) {
-    return dbManager.getClientDb(groupId);
+    return getDbManagerForCurrentTenant().getClientDb(groupId);
 }
 
 // File upload setup
@@ -710,7 +750,7 @@ app.get('/api/status', async (req, res) => {
         database: { companies },
         sync: { inProgress: syncInProgress, progress: syncProgress }
     };
-    if (!isClientSession(req)) result.database.path = getDbPath();
+    if (!isClientSession(req)) result.database.path = getDbPath(getTenantDir(getCurrentSlug()));
     res.json(result);
 });
 
@@ -5785,23 +5825,9 @@ app.get('/api/upload/pharma-analytics', (req, res) => {
 });
 
 // ===== MIGRATIONS =====
-// One-time: convert fixed allocation amounts from annual to monthly (runs across all client DBs)
-try {
-    const groups = masterDb.prepare('SELECT id FROM company_groups').all();
-    for (const g of groups) {
-        const cdb = dbManager.getClientDb(g.id);
-        const fixedRules = cdb.prepare("SELECT id, config FROM allocation_rules WHERE rule_type = 'fixed'").all();
-        for (const r of fixedRules) {
-            const cfg = JSON.parse(r.config || '{}');
-            if (cfg.amount && !cfg._migrated_monthly) {
-                cfg.amount = cfg.amount / 12;
-                cfg._migrated_monthly = true;
-                cdb.prepare("UPDATE allocation_rules SET config = ? WHERE id = ?").run(JSON.stringify(cfg), r.id);
-                console.log(`  Migrated fixed rule ${r.id}: annual ${cfg.amount * 12} → monthly ${cfg.amount}`);
-            }
-        }
-    }
-} catch (e) { console.error('Migration error:', e.message); }
+// (Per-tenant legacy migrations now live in DbManager so they run once per
+// tenant on first access, not once globally at module load. The latter
+// would trigger a DB open before any request context is established.)
 
 // ===== CLOUD PUBLISH =====
 // Streams local SQLite data to the cloud PostgreSQL instance
@@ -6299,15 +6325,15 @@ app.get('/api/audit/summary', (req, res) => {
 if (require.main === module) {
     const PORT = parseInt(getSetting('dashboard_port') || process.env.PORT || '3456');
     app.listen(PORT, () => {
-        console.log(`\n  TallyVision API Server (v4 - Per-Client DB Architecture)`);
+        console.log(`\n  TallyVision API Server (v5 - Multi-tenant DB Architecture)`);
         console.log(`  http://localhost:${PORT}`);
-        console.log(`  Master DB: ${require('./db/setup').getMasterDbPath()}`);
-        console.log(`  Client DBs: ${require('./db/setup').getClientDbDir()}\n`);
+        console.log(`  Tenant root:  ${getTenantRoot()}`);
+        console.log(`  Per-tenant:   <tenant-root>/<client-slug>/{master.db, clients/*.db}\n`);
     });
 
-    // Graceful shutdown — close all cached DB connections
-    process.on('SIGINT', () => { dbManager.closeAll(); process.exit(0); });
-    process.on('SIGTERM', () => { dbManager.closeAll(); process.exit(0); });
+    // Graceful shutdown — close every cached tenant's connections
+    process.on('SIGINT', () => { closeAllTenants(); process.exit(0); });
+    process.on('SIGTERM', () => { closeAllTenants(); process.exit(0); });
 }
 
 module.exports = app;

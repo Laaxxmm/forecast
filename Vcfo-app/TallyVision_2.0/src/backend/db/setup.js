@@ -9,20 +9,28 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
+// DB_DIR is the TENANT ROOT. Each Magna_Tracker client gets a subdirectory
+// here (e.g. DB_DIR/magnacode/master.db). Callers that want a tenant-scoped
+// path pass their own baseDir; callers that pass nothing land in the root,
+// which preserves the legacy single-tenant behavior for local dev.
 const DB_DIR = process.env.TALLYVISION_DATA || path.join(__dirname, '..', '..', '..', 'data');
 
-function getDbPath() {
-    if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
-    return path.join(DB_DIR, 'tallyvision.db');
+function _resolveBase(baseDir) {
+    const d = baseDir || DB_DIR;
+    if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+    return d;
 }
 
-function getMasterDbPath() {
-    if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
-    return path.join(DB_DIR, 'master.db');
+function getDbPath(baseDir) {
+    return path.join(_resolveBase(baseDir), 'tallyvision.db');
 }
 
-function getClientDbDir() {
-    const dir = path.join(DB_DIR, 'clients');
+function getMasterDbPath(baseDir) {
+    return path.join(_resolveBase(baseDir), 'master.db');
+}
+
+function getClientDbDir(baseDir) {
+    const dir = path.join(_resolveBase(baseDir), 'clients');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     return dir;
 }
