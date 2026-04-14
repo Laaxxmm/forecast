@@ -215,7 +215,7 @@ const CLIENT_TABLE_NAMES = new Set([
     'vcfo_account_groups', 'vcfo_ledgers', 'vcfo_trial_balance', 'vcfo_profit_loss', 'vcfo_balance_sheet',
     'vcfo_vouchers', 'vcfo_stock_summary', 'vcfo_stock_item_ledger', 'vcfo_bills_outstanding',
     'vcfo_cost_centres', 'vcfo_cost_allocations', 'vcfo_gst_entries', 'vcfo_payroll_entries', 'vcfo_sync_log',
-    'vcfo_excel_uploads', 'vcfo_excel_data',
+    'vcfo_excel_uploads', 'vcfo_excel_data', 'vcfo_upload_categories',
     'vcfo_budgets', 'vcfo_allocation_rules',
     'vcfo_companies', 'vcfo_writeoff_rules',
     'vcfo_tracker_items', 'vcfo_tracker_status',
@@ -294,12 +294,30 @@ function getClientDbForGroup(_groupId) {
     return getDbManagerForCurrentTenant().getClientDb();
 }
 
-// File upload setup. Uploads live alongside the unified data root
-// (same parent as platform.db and clients/).
-const UPLOAD_DIR = path.join(getDataRoot(), 'uploads');
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-const uploadTemp = path.join(UPLOAD_DIR, '_temp');
+// File upload setup. Uploads live under the unified data root, scoped by
+// tenant slug so one slug's uploads can't collide with another's.
+//
+//   data/uploads/
+//     _temp/                  (multer staging, shared — safe: random temp names)
+//     {slug}/                 (permanent storage, per-tenant)
+//       {company_id}/
+//         {category}/
+//           {uuid}_{originalname}
+const UPLOAD_ROOT = path.join(getDataRoot(), 'uploads');
+if (!fs.existsSync(UPLOAD_ROOT)) fs.mkdirSync(UPLOAD_ROOT, { recursive: true });
+const uploadTemp = path.join(UPLOAD_ROOT, '_temp');
 if (!fs.existsSync(uploadTemp)) fs.mkdirSync(uploadTemp, { recursive: true });
+
+/**
+ * Resolve the upload directory for the current request's tenant slug.
+ * Creates it lazily. Must be called from within a request handler so
+ * getCurrentSlug() has a context to read from.
+ */
+function getSlugUploadDir() {
+    const dir = path.join(UPLOAD_ROOT, getCurrentSlug());
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return dir;
+}
 const upload = multer({
     dest: uploadTemp,
     limits: { fileSize: 10 * 1024 * 1024 },
@@ -5004,10 +5022,10 @@ app.post('/api/upload/excel', adminOnly, upload.single('file'), async (req, res)
             }
         });
 
-        // Move file to permanent location
+        // Move file to permanent location (per-slug scoped).
         const storedFilename = `${uuidv4()}_${req.file.originalname}`;
         const subDir = companyId ? String(companyId) : '_all';
-        const companyDir = path.join(UPLOAD_DIR, subDir, category);
+        const companyDir = path.join(getSlugUploadDir(), subDir, category);
         fs.mkdirSync(companyDir, { recursive: true });
         const finalPath = path.join(companyDir, storedFilename);
         fs.renameSync(req.file.path, finalPath);
@@ -5023,7 +5041,7 @@ app.post('/api/upload/excel', adminOnly, upload.single('file'), async (req, res)
             if (existing) {
                 db.prepare('DELETE FROM vcfo_excel_data WHERE upload_id = ?').run(existing.id);
                 db.prepare('DELETE FROM vcfo_excel_uploads WHERE id = ?').run(existing.id);
-                const oldPath = path.join(UPLOAD_DIR, subDir, category, existing.stored_filename);
+                const oldPath = path.join(getSlugUploadDir(), subDir, category, existing.stored_filename);
                 if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
             }
 
@@ -5123,7 +5141,7 @@ app.delete('/api/upload/:uploadId', adminOnly, (req, res) => {
         db.prepare('DELETE FROM vcfo_excel_uploads WHERE id = ?').run(upl.id);
     })();
     const subDir = upl.company_id ? String(upl.company_id) : '_all';
-    const filePath = path.join(UPLOAD_DIR, subDir, upl.category, upl.stored_filename);
+    const filePath = path.join(getSlugUploadDir(), subDir, upl.category, upl.stored_filename);
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     res.json({ success: true });
 });

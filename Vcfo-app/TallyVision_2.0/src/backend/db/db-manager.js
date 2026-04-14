@@ -21,6 +21,7 @@ const {
     initPlatformDatabase,
     initClientDatabase,
     ensureClientSchema,
+    createPlatformSchema,
     openDb,
 } = require('./setup');
 
@@ -31,8 +32,10 @@ function getPlatformDb(platformDbPath) {
     if (_platformDb) return _platformDb;
     if (fs.existsSync(platformDbPath)) {
         _platformDb = openDb(platformDbPath);
-        // Schema is ensured at app boot via initPlatformDatabase, but
-        // re-running createPlatformSchema (all IF NOT EXISTS) is safe.
+        // Idempotent: (re)apply platform schema on every open so newly-added
+        // tables and one-off DROPs (e.g. the vcfo_upload_categories move to
+        // per-client in Step 4) actually land on existing deployments.
+        createPlatformSchema(_platformDb);
     } else {
         _platformDb = initPlatformDatabase(platformDbPath);
     }

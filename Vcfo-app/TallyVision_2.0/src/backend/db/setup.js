@@ -63,18 +63,12 @@ function createPlatformSchema(db) {
             PRIMARY KEY (client_id, company_id)
         );
         CREATE INDEX IF NOT EXISTS vcfo_idx_cca_client ON vcfo_client_company_access(client_id);
-
-        CREATE TABLE IF NOT EXISTS vcfo_upload_categories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            slug TEXT NOT NULL UNIQUE,
-            display_name TEXT NOT NULL,
-            description TEXT,
-            expected_columns TEXT DEFAULT '[]',
-            is_active INTEGER DEFAULT 1,
-            sort_order INTEGER DEFAULT 0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
     `);
+
+    // vcfo_upload_categories moved from platform -> per-client in Step 4 fix.
+    // Drop any orphaned copy left over in platform.db from the earlier
+    // placement. Idempotent: no-op on fresh installs.
+    db.exec('DROP TABLE IF EXISTS vcfo_upload_categories;');
 
     // Insert default settings
     const insertSetting = db.prepare('INSERT OR IGNORE INTO vcfo_app_settings (key, value) VALUES (?, ?)');
@@ -85,25 +79,6 @@ function createPlatformSchema(db) {
         'modules_toggle': 'off', 'location_tag_toggle': 'off'
     };
     for (const [key, value] of Object.entries(defaults)) insertSetting.run(key, value);
-
-    // Seed upload categories
-    const hasCats = db.prepare("SELECT COUNT(*) as n FROM vcfo_upload_categories").get().n;
-    if (!hasCats) {
-        const insertCat = db.prepare('INSERT OR IGNORE INTO vcfo_upload_categories (slug, display_name, description, expected_columns, sort_order) VALUES (?, ?, ?, ?, ?)');
-        const categories = [
-            ['revenue', 'Revenue', 'Bill-wise revenue', '["Date","Bill No","Patient Name","Doctor","Department","Amount","Payment Mode"]', 1],
-            ['direct_income', 'Direct Income', 'Direct income breakdowns', '["Date","Description","Amount","Source"]', 2],
-            ['purchase', 'Purchases', 'Purchase details', '["Date","Invoice No","Supplier","Item","Quantity","Amount"]', 3],
-            ['direct_expenses', 'Direct Expenses', 'Direct costs', '["Date","Doctor Name","Department","Consultations","Amount"]', 4],
-            ['indirect_expenses', 'Indirect Expenses', 'Overhead expenses', '["Date","Description","Category","Amount"]', 5],
-            ['indirect_income', 'Indirect Income', 'Other income', '["Date","Description","Amount","Source"]', 6],
-            ['opening_stock', 'Opening Stock', 'Opening stock', '["Item Name","Stock Group","Quantity","Value"]', 7],
-            ['closing_stock', 'Closing Stock', 'Closing stock', '["Item Name","Stock Group","Quantity","Value"]', 8],
-            ['loans', 'Loans', 'Loan details', '["Lender","Loan Type","Outstanding","EMI","Due Date"]', 9],
-            ['custom', 'Custom Data', 'Supplementary data', '[]', 99],
-        ];
-        for (const c of categories) insertCat.run(...c);
-    }
 }
 
 function initPlatformDatabase(dbPath) {
@@ -500,7 +475,41 @@ function createClientSchema(db) {
             created_at DATETIME DEFAULT (datetime('now')),
             updated_at DATETIME DEFAULT (datetime('now'))
         );
+
+        -- Upload categories (Excel upload workflow config). Moved from
+        -- platform.db to per-client in Step 4 fix so /api/upload/list's
+        -- JOIN with vcfo_excel_uploads resolves in one DB.
+        CREATE TABLE IF NOT EXISTS vcfo_upload_categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug TEXT NOT NULL UNIQUE,
+            display_name TEXT NOT NULL,
+            description TEXT,
+            expected_columns TEXT DEFAULT '[]',
+            is_active INTEGER DEFAULT 1,
+            sort_order INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
     `);
+
+    // Seed upload categories (10 fixed rows). Idempotent via INSERT OR IGNORE
+    // on the UNIQUE(slug) constraint.
+    const hasCats = db.prepare("SELECT COUNT(*) as n FROM vcfo_upload_categories").get().n;
+    if (!hasCats) {
+        const insertCat = db.prepare('INSERT OR IGNORE INTO vcfo_upload_categories (slug, display_name, description, expected_columns, sort_order) VALUES (?, ?, ?, ?, ?)');
+        const categories = [
+            ['revenue', 'Revenue', 'Bill-wise revenue', '["Date","Bill No","Patient Name","Doctor","Department","Amount","Payment Mode"]', 1],
+            ['direct_income', 'Direct Income', 'Direct income breakdowns', '["Date","Description","Amount","Source"]', 2],
+            ['purchase', 'Purchases', 'Purchase details', '["Date","Invoice No","Supplier","Item","Quantity","Amount"]', 3],
+            ['direct_expenses', 'Direct Expenses', 'Direct costs', '["Date","Doctor Name","Department","Consultations","Amount"]', 4],
+            ['indirect_expenses', 'Indirect Expenses', 'Overhead expenses', '["Date","Description","Category","Amount"]', 5],
+            ['indirect_income', 'Indirect Income', 'Other income', '["Date","Description","Amount","Source"]', 6],
+            ['opening_stock', 'Opening Stock', 'Opening stock', '["Item Name","Stock Group","Quantity","Value"]', 7],
+            ['closing_stock', 'Closing Stock', 'Closing stock', '["Item Name","Stock Group","Quantity","Value"]', 8],
+            ['loans', 'Loans', 'Loan details', '["Lender","Loan Type","Outstanding","EMI","Due Date"]', 9],
+            ['custom', 'Custom Data', 'Supplementary data', '[]', 99],
+        ];
+        for (const c of categories) insertCat.run(...c);
+    }
 }
 
 function runClientMigrations(db) {
