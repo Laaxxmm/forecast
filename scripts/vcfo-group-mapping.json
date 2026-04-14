@@ -1,0 +1,4 @@
+{
+  "_comment": "Step 3 mapping input — which VCFO group DB belongs to which Magna_Tracker client. Keys are the group ID (number) from the top-level master.db company_groups table. Values are the Magna_Tracker slug (matching data/clients/{slug}.db).",
+  "2": "magnacode"
+}
