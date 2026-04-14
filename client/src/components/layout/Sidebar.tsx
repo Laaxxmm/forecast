@@ -2,9 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, TrendingUp, Upload, Settings, LogOut, BarChart3, Building2, ArrowLeftRight,
-  ChevronLeft, MapPin, ChevronDown, Sun, Moon, ArrowRight, ShieldCheck, RefreshCw,
-  FileText, Scale, Receipt, ClipboardCheck, Landmark, FolderOpen, BookOpen, FileSpreadsheet,
-  Calculator, FileSearch, Cog, Table2, Download, Cloud, Sliders, Activity, PieChart,
+  ChevronLeft, MapPin, ChevronDown, Sun, Moon, ArrowRight, Activity, PieChart,
 } from 'lucide-react';
 import api from '../../api/client';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -18,25 +16,11 @@ const forecastLinks = [
   { to: '/revenue-sharing', icon: PieChart, label: 'Rev. Sharing', clientAdminOnly: false },
 ];
 
-// VCFO Portal navigation — matches original TallyVision sidebar exactly
-// Main nav (top 4 items)
-const vcfoLinks = [
-  { to: '/vcfo', icon: LayoutDashboard, label: 'Business Overview', clientAdminOnly: false },
-  { to: '/vcfo/table-view', icon: Table2, label: 'Table View', clientAdminOnly: false },
-  { to: '/vcfo/forecast', icon: TrendingUp, label: 'Forecast', clientAdminOnly: false },
-  { to: '/vcfo/tracker', icon: ClipboardCheck, label: 'VCFO', clientAdminOnly: false },
-  { to: '/vcfo/audit', icon: ShieldCheck, label: 'Audit', clientAdminOnly: false },
-];
+// VCFO Portal is served by the mounted TallyVision sub-app at /vcfo/* and has its own sidebar.
 
 // Utility links — bottom section above logout
 const utilityLinks = [
   { to: '/import', icon: Upload, label: 'Import Data', clientAdminOnly: true, module: 'forecast_ops' },
-  // VCFO bottom section — matches original TallyVision sidebar
-  { to: '/vcfo/adjustments', icon: Sliders, label: 'Adjustments', clientAdminOnly: false, module: 'vcfo_portal' },
-  { to: '/vcfo/uploads', icon: FolderOpen, label: 'Files', clientAdminOnly: false, module: 'vcfo_portal' },
-  { to: '/vcfo/cfo-review', icon: Download, label: 'Download Reports', clientAdminOnly: false, module: 'vcfo_portal' },
-  { to: '/vcfo/publish', icon: Cloud, label: 'Publish to Cloud', clientAdminOnly: false, module: 'vcfo_portal' },
-  { to: '/vcfo/settings', icon: Cog, label: 'Tally Settings', clientAdminOnly: false, module: 'vcfo_portal' },
   { to: '/settings', icon: Settings, label: 'Settings', clientAdminOnly: true },
 ];
 
@@ -126,7 +110,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
   };
 
   const activeModule = localStorage.getItem('active_module') || 'forecast_ops';
-  const mainLinks = activeModule === 'vcfo_portal' ? vcfoLinks : forecastLinks;
+  const mainLinks = forecastLinks;
   // Owner super_admin sees nothing (they use Admin Panel only).
   // Non-owner super_admin in client context sees module links like a client admin.
   const isOwnerAdmin = isSuperAdmin && isOwner;
@@ -405,20 +389,6 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
       {/* Bottom utility links + theme toggle + logout */}
       <div className="px-2 pb-2 border-t border-dark-400/30 pt-3 space-y-1">
         {visibleUtility.map(renderLink)}
-
-        {/* Sync Data button — VCFO module only, matches TallyVision */}
-        {activeModule === 'vcfo_portal' && !isSuperAdmin && (
-          <button
-            onClick={() => navigate('/vcfo/sync')}
-            title={!expanded ? 'Sync Data' : undefined}
-            className={`flex items-center gap-3 px-3 py-2.5 text-[13px] font-semibold bg-accent-500 hover:bg-accent-600 text-white rounded-xl w-full transition-all ${
-              expanded ? '' : 'justify-center'
-            }`}
-          >
-            <RefreshCw size={17} className="flex-shrink-0" />
-            {expanded && <span>Sync Data</span>}
-          </button>
-        )}
 
         {/* Theme toggle */}
         <button

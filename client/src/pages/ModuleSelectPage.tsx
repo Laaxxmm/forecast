@@ -76,6 +76,12 @@ export default function ModuleSelectPage() {
     if (!enabledModules.includes(mod.key)) return;
     if (!mod.path) return;
     localStorage.setItem('active_module', mod.key);
+    // VCFO Portal is a separate sub-app (TallyVision) mounted at /vcfo/* — use a hard nav
+    // so the browser loads the non-React app instead of the SPA router.
+    if (mod.key === 'vcfo_portal') {
+      window.location.href = '/vcfo/';
+      return;
+    }
     navigate(mod.path);
   };
 

@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import session from 'express-session';
 import path from 'path';
 import fs from 'fs';
+import { createRequire } from 'module';
 import { getClientHelper, createDailyBackups } from './db/connection.js';
 import { initializeSchema } from './db/schema.js';
 import { seedDatabase } from './db/seed.js';
@@ -26,21 +27,6 @@ import dashboardActualsRoutes from './routes/dashboard-actuals.js';
 import syncRoutes from './routes/sync.js';
 import revenueSharingRoutes from './routes/revenue-sharing.js';
 import dbViewerRoutes from './routes/db-viewer.js';
-import vcfoTallySyncRoutes from './routes/vcfo/tally-sync.js';
-import vcfoDashboardRoutes from './routes/vcfo/dashboard.js';
-import vcfoCompanyRoutes from './routes/vcfo/companies.js';
-import vcfoReportsRoutes from './routes/vcfo/reports.js';
-import vcfoTrackerRoutes from './routes/vcfo/tracker.js';
-import vcfoAuditRoutes from './routes/vcfo/audit.js';
-import vcfoCompanyGroupRoutes from './routes/vcfo/company-groups.js';
-import vcfoFilterRoutes from './routes/vcfo/filters.js';
-import vcfoSettingsRoutes from './routes/vcfo/vcfo-settings.js';
-import vcfoAllocationRuleRoutes from './routes/vcfo/allocation-rules.js';
-import vcfoWriteoffRuleRoutes from './routes/vcfo/writeoff-rules.js';
-import vcfoLedgerRoutes from './routes/vcfo/ledgers.js';
-import vcfoBudgetRoutes from './routes/vcfo/budgets.js';
-import vcfoUploadRoutes from './routes/vcfo/uploads.js';
-import vcfoForecastViewRoutes from './routes/vcfo/forecast-view.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -254,23 +240,20 @@ app.use('/api/sync', ...forecastOps, requireAdmin, syncRoutes);
 app.use('/api/revenue-sharing', ...forecastOps, revenueSharingRoutes);
 app.use('/api/db', requireAuth, resolveTenant, resolveBranch, requireAdmin, dbViewerRoutes);
 
-// ─── VCFO Portal routes ───────────────────────────────────────────────────────
-const vcfoModule = [requireAuth, resolveTenant, resolveBranch, requireModule('vcfo_portal')];
-app.use('/api/vcfo/tally', ...vcfoModule, requireAdmin, vcfoTallySyncRoutes);
-app.use('/api/vcfo/dashboard', ...vcfoModule, vcfoDashboardRoutes);
-app.use('/api/vcfo/companies', ...vcfoModule, vcfoCompanyRoutes);
-app.use('/api/vcfo/reports', ...vcfoModule, vcfoReportsRoutes);
-app.use('/api/vcfo/tracker', ...vcfoModule, vcfoTrackerRoutes);
-app.use('/api/vcfo/audit', ...vcfoModule, vcfoAuditRoutes);
-app.use('/api/vcfo/groups', ...vcfoModule, vcfoCompanyGroupRoutes);
-app.use('/api/vcfo/filters', ...vcfoModule, vcfoFilterRoutes);
-app.use('/api/vcfo/settings', ...vcfoModule, requireAdmin, vcfoSettingsRoutes);
-app.use('/api/vcfo/allocation-rules', ...vcfoModule, requireAdmin, vcfoAllocationRuleRoutes);
-app.use('/api/vcfo/writeoff-rules', ...vcfoModule, requireAdmin, vcfoWriteoffRuleRoutes);
-app.use('/api/vcfo/ledgers', ...vcfoModule, vcfoLedgerRoutes);
-app.use('/api/vcfo/budgets', ...vcfoModule, vcfoBudgetRoutes);
-app.use('/api/vcfo/uploads', ...vcfoModule, vcfoUploadRoutes);
-app.use('/api/vcfo/forecast-view', ...vcfoModule, vcfoForecastViewRoutes);
+// ─── VCFO sub-app: TallyVision (CommonJS) mounted under /vcfo ────────────────
+// TallyVision is loaded via createRequire because our server is ESM.
+// It brings its own express-session, better-sqlite3 DB and static assets;
+// the sub-app does not run app.listen() when required (guarded in server.js).
+// Phase 2 will add SSO bridging so Magna_Tracker tokens can unlock a TV session.
+try {
+  const requireCJS = createRequire(import.meta.url);
+  // Path resolves from the compiled dist/ output at runtime; src/index.ts → ../../Vcfo-app/...
+  const vcfoApp = requireCJS('../../Vcfo-app/TallyVision_2.0/src/backend/server.js');
+  app.use('/vcfo', vcfoApp);
+  console.log('✓ TallyVision sub-app mounted at /vcfo');
+} catch (err: any) {
+  console.warn('⚠ TallyVision sub-app not mounted:', err?.message || err);
+}
 
 // ─── Client modules & integrations (for module selection page) ──────────────
 app.get('/api/client-modules', requireAuth, resolveTenant, async (req, res) => {
