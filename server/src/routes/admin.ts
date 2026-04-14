@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import bcrypt from 'bcryptjs';
+import { createRequire } from 'module';
 import { validatePassword } from '../middleware/auth.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
 import { getClientHelper, getClientsDir } from '../db/connection.js';
@@ -10,6 +11,40 @@ import path from 'path';
 import fs from 'fs';
 
 const router = Router();
+
+// ─── VCFO auto-provisioning (Step 6) ────────────────────────────────────────
+// Bridge from our ESM server into TallyVision's CJS db/tenant.js so a brand-
+// new Magna_Tracker client gets its vcfo_* schema + a default vcfo_companies
+// row seeded in the same per-client DB that holds its forecast_* tables.
+// Loaded lazily and wrapped in try/catch so a missing VCFO sub-app doesn't
+// break client creation.
+const requireCJS = createRequire(import.meta.url);
+export function ensureVcfoForSlug(slug: string, clientName: string): void {
+  try {
+    const vcfoTenant = requireCJS(
+      '../../../Vcfo-app/TallyVision_2.0/src/backend/db/tenant.js'
+    );
+    // getClientDb() applies ensureClientSchema (idempotent CREATE TABLE IF
+    // NOT EXISTS for every vcfo_* table) and runs tenant-level migrations.
+    const mgr = vcfoTenant.getDbManagerForSlug(slug);
+    const db = mgr.getClientDb();
+    // Seed a default vcfo_companies row if the tenant has none — otherwise
+    // the VCFO dashboard is blank on first visit for a fresh client. Name
+    // mirrors the Magna_Tracker client name; user can rename later.
+    const count = db
+      .prepare('SELECT COUNT(*) AS n FROM vcfo_companies')
+      .get() as { n: number };
+    if (count.n === 0) {
+      db.prepare('INSERT INTO vcfo_companies (name, is_active) VALUES (?, 1)')
+        .run(clientName);
+    }
+  } catch (err: any) {
+    console.warn(
+      `[Admin] VCFO auto-provision skipped for "${slug}":`,
+      err?.message || err
+    );
+  }
+}
 
 // Helper: check if a non-owner admin is assigned to a client
 async function requireClientAssignment(req: Request, res: Response, clientSlug: string): Promise<boolean> {
@@ -175,6 +210,10 @@ router.post('/clients', async (req: Request, res: Response) => {
   const clientDb = await getClientHelper(slug);
   initializeSchema(clientDb);
   await seedDatabase(clientDb);
+
+  // Auto-provision VCFO workspace in the same per-client DB — creates
+  // vcfo_* tables alongside forecast_* and seeds a default company row.
+  ensureVcfoForSlug(slug, name);
 
   console.log(`[Admin] Created client "${slug}" with DB ${dbFilename}, assigned ${teamMemberIds.length} team members`);
 

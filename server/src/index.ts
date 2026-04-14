@@ -15,7 +15,7 @@ import { requireAuth, requireSuperAdmin, requireAdmin, requireModule } from './m
 import { resolveTenant } from './middleware/tenant.js';
 import { resolveBranch } from './middleware/branch.js';
 import authRoutes from './routes/auth.js';
-import adminRoutes from './routes/admin.js';
+import adminRoutes, { ensureVcfoForSlug } from './routes/admin.js';
 import settingsRoutes from './routes/settings.js';
 import importRoutes from './routes/import.js';
 import actualsRoutes from './routes/actuals.js';
@@ -282,26 +282,9 @@ app.post('/api/vcfo/sso-token', requireAuth, resolveTenant, async (req, res) => 
     return res.status(400).json({ error: 'No active client' });
   }
 
-  // For client users, gather the company IDs + module features their
-  // TallyVision session should have access to. Super admins get an empty
-  // companyIds — they'll see all of that tenant's data inside TallyVision.
-  let companyIds: number[] = [];
-  const features: Record<string, boolean> = {};
-  if (req.userType === 'client_user' && req.session.userId) {
-    try {
-      const platformDb = await getPlatformHelper();
-      // Company scoping lives in platform DB if wired; otherwise skip.
-      // (TallyVision falls back to showing the tenant's companies anyway.)
-      try {
-        const rows = platformDb.all(
-          'SELECT company_id FROM client_user_companies WHERE user_id = ?',
-          req.session.userId
-        );
-        companyIds = rows.map((r: any) => r.company_id);
-      } catch { /* table may not exist; ignore */ }
-    } catch { /* ignore */ }
-  }
-
+  // Post-unification (Step 6): company scoping is per-tenant inside the
+  // client DB (vcfo_companies), not a cross-cutting SSO claim. The SSO
+  // token carries only tenant + identity + role.
   const token = vcfoSso.sign({
     slug: req.tenantSlug,
     userId: req.session.userId,
@@ -312,8 +295,6 @@ app.post('/api/vcfo/sso-token', requireAuth, resolveTenant, async (req, res) => 
     isOwner: req.isOwner,
     clientId: req.clientId,
     clientName: req.clientName,
-    companyIds,
-    features,
   });
   res.json({ token });
 });
@@ -618,12 +599,18 @@ async function start() {
   }
 
   // 2. Initialize existing client databases (ensure schemas + seed data are up to date)
-  const clients = platformDb.all('SELECT slug FROM clients WHERE is_active = 1');
+  const clients = platformDb.all('SELECT slug, name FROM clients WHERE is_active = 1');
   for (const client of clients) {
     try {
       const clientDb = await getClientHelper(client.slug);
       initializeSchema(clientDb);
       await seedDatabase(clientDb);
+
+      // Idempotent VCFO top-up (Step 6): applies vcfo_* schema on every
+      // boot so pre-Step-6 clients gain it without a manual migration,
+      // and seeds a default vcfo_companies row for clients that never
+      // had one (zero-row tenants would see a blank VCFO dashboard).
+      ensureVcfoForSlug(client.slug, client.name);
 
       // Auto-create default scenario if FY exists but no scenario does
       const activeFy = clientDb.get('SELECT id FROM financial_years WHERE is_active = 1');
