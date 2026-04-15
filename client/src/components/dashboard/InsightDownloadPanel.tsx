@@ -107,6 +107,31 @@ const LIGHT_BG: [number, number, number] = [241, 245, 249];
 const DARK_TEXT: [number, number, number] = [30, 41, 59];
 const MUTED_TEXT: [number, number, number] = [100, 116, 139];
 const BAR_BG: [number, number, number] = [226, 232, 240];
+const PAGE_BG: [number, number, number] = [243, 246, 250];
+const CARD_BORDER: [number, number, number] = [226, 232, 240];
+const CARD_SHADOW: [number, number, number] = [220, 226, 234];
+const DANGER_BG: [number, number, number] = [254, 226, 226];
+const DANGER_BORDER: [number, number, number] = [220, 38, 38];
+const DANGER_TEXT: [number, number, number] = [153, 27, 27];
+
+const GREEN: [number, number, number] = [16, 185, 129];
+const AMBER: [number, number, number] = [245, 158, 11];
+const RED: [number, number, number] = [220, 38, 38];
+const MUTED: [number, number, number] = [148, 163, 184];
+
+/** Classify a percent-of-target into a RAG band.
+ *  >=100 green · 80–100 amber · <80 red. */
+function pctToRAG(pct: number): 'GREEN' | 'AMBER' | 'RED' {
+  if (!isFinite(pct)) return 'RED';
+  if (pct >= 100) return 'GREEN';
+  if (pct >= 80) return 'AMBER';
+  return 'RED';
+}
+
+function pctToColor(pct: number): [number, number, number] {
+  const r = pctToRAG(pct);
+  return r === 'GREEN' ? GREEN : r === 'AMBER' ? AMBER : RED;
+}
 
 /* ──────── Visual primitives ──────── */
 
@@ -226,6 +251,137 @@ function drawRAGPill(doc: jsPDF, rag: string, x: number, y: number, w = 42, h = 
   doc.setFont('helvetica', 'normal');
 }
 
+/** Paint the full page light-grey so white cards stand out. */
+function drawPageBg(doc: jsPDF) {
+  const pw = doc.internal.pageSize.getWidth();
+  const ph = doc.internal.pageSize.getHeight();
+  doc.setFillColor(...PAGE_BG);
+  doc.rect(0, 0, pw, ph, 'F');
+}
+
+/** White card with subtle shadow + hairline border. */
+function drawCard(doc: jsPDF, x: number, y: number, w: number, h: number) {
+  // shadow
+  doc.setFillColor(...CARD_SHADOW);
+  doc.roundedRect(x + 0.4, y + 0.6, w, h, 2.5, 2.5, 'F');
+  // fill
+  doc.setFillColor(255, 255, 255);
+  doc.roundedRect(x, y, w, h, 2.5, 2.5, 'F');
+  // border
+  doc.setDrawColor(...CARD_BORDER);
+  doc.setLineWidth(0.2);
+  doc.roundedRect(x, y, w, h, 2.5, 2.5, 'S');
+}
+
+/** Section title inside a card: coloured accent bar + bold text. */
+function drawCardTitle(doc: jsPDF, title: string, x: number, y: number, color: [number, number, number] = PRIMARY) {
+  doc.setFillColor(...color);
+  doc.rect(x, y - 3.5, 1.6, 5, 'F');
+  doc.setTextColor(...DARK_TEXT);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.text(title, x + 4, y);
+}
+
+/** Directional arrow next to a WoW change percentage. */
+function drawWoWArrow(doc: jsPDF, x: number, y: number, pct: number) {
+  const up = pct >= 0;
+  const color: [number, number, number] = up ? GREEN : RED;
+  doc.setFillColor(...color);
+  if (up) {
+    // filled up-triangle
+    doc.triangle(x, y - 2.6, x + 1.8, y + 0.2, x - 1.8, y + 0.2, 'F');
+  } else {
+    // filled down-triangle
+    doc.triangle(x, y + 0.4, x + 1.8, y - 2.4, x - 1.8, y - 2.4, 'F');
+  }
+}
+
+/** Small coloured status pill (ON TRACK / WATCH / BEHIND / …). */
+function drawStatusPill(doc: jsPDF, status: string, x: number, y: number) {
+  const upper = status.toUpperCase();
+  const isGreen = /ON TRACK|EXCEEDED|ON PACE/.test(upper);
+  const isRed = /BEHIND/.test(upper);
+  const isAmber = /WATCH|ATTENTION/.test(upper);
+  const color: [number, number, number] = isGreen ? GREEN : isRed ? RED : isAmber ? AMBER : MUTED;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  const tw = doc.getTextWidth(upper) + 5;
+  doc.setFillColor(...color);
+  doc.roundedRect(x, y - 3.4, tw, 4.6, 1, 1, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.text(upper, x + tw / 2, y - 0.3, { align: 'center' });
+}
+
+/** Red callout box for critical issues (WoW drops, margin gaps, etc.). */
+function drawAlertBox(doc: jsPDF, x: number, y: number, w: number, alerts: string[]): number {
+  if (alerts.length === 0) return y;
+  const innerW = w - 12;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  const wrapped: string[] = [];
+  for (const a of alerts) {
+    const lines = doc.splitTextToSize('>  ' + a, innerW);
+    wrapped.push(...lines);
+  }
+  const headerH = 8;
+  const lineH = 4.4;
+  const bodyH = wrapped.length * lineH;
+  const padB = 3.5;
+  const h = headerH + bodyH + padB;
+
+  // background
+  doc.setFillColor(...DANGER_BG);
+  doc.roundedRect(x, y, w, h, 2, 2, 'F');
+  // left accent
+  doc.setFillColor(...DANGER_BORDER);
+  doc.rect(x, y, 1.6, h, 'F');
+  // border
+  doc.setDrawColor(252, 165, 165);
+  doc.setLineWidth(0.2);
+  doc.roundedRect(x, y, w, h, 2, 2, 'S');
+
+  // header
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(...DANGER_TEXT);
+  doc.text('! CRITICAL ALERTS', x + 5, y + 5.5);
+
+  // body
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.setTextColor(...DARK_TEXT);
+  let ly = y + headerH + 2.8;
+  for (const line of wrapped) {
+    doc.text(line, x + 5, ly);
+    ly += lineH;
+  }
+  return y + h + 5;
+}
+
+/** Thin progress bar with RAG fill, used inside scorecards and KPI rows. */
+function drawInlineBar(doc: jsPDF, x: number, y: number, w: number, pct: number) {
+  const color = pctToColor(pct);
+  const h = 2.6;
+  // track
+  doc.setFillColor(...BAR_BG);
+  doc.roundedRect(x, y, w, h, 1, 1, 'F');
+  // fill (capped at 100%)
+  const displayPct = Math.max(0, Math.min(pct, 100));
+  const fillW = (w * displayPct) / 100;
+  if (fillW > 0) {
+    doc.setFillColor(...color);
+    doc.roundedRect(x, y, fillW, h, 1, 1, 'F');
+  }
+  // over-shoot cap marker
+  if (pct > 100) {
+    doc.setDrawColor(...DARK_TEXT);
+    doc.setLineWidth(0.3);
+    doc.line(x + w, y - 0.5, x + w, y + h + 0.5);
+    doc.setLineWidth(0.2);
+  }
+}
+
 /* ──────── Page chrome ──────── */
 
 function addHeader(doc: jsPDF, title: string, subtitle: string, clientName: string) {
@@ -257,19 +413,6 @@ function addHeader(doc: jsPDF, title: string, subtitle: string, clientName: stri
   );
 }
 
-function addSectionTitle(doc: jsPDF, title: string, y: number): number {
-  const pageW = doc.internal.pageSize.getWidth();
-  doc.setTextColor(...PRIMARY);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.text(title, 14, y);
-  doc.setDrawColor(...PRIMARY);
-  doc.setLineWidth(0.5);
-  doc.line(14, y + 1.5, pageW - 14, y + 1.5);
-  doc.setLineWidth(0.2);
-  return y + 8;
-}
-
 function addParagraph(doc: jsPDF, text: string, y: number, options?: { bold?: boolean; color?: [number, number, number]; size?: number }): number {
   const pageW = doc.internal.pageSize.getWidth();
   doc.setFont('helvetica', options?.bold ? 'bold' : 'normal');
@@ -293,23 +436,59 @@ function addFooter(doc: jsPDF, label: string) {
   }
 }
 
-function ensureSpace(doc: jsPDF, y: number, needed = 40): number {
-  const pageH = doc.internal.pageSize.getHeight();
-  if (y + needed > pageH - 14) {
-    doc.addPage();
-    return 16;
-  }
-  return y;
-}
-
 /* ──────── Narrative / insight engine ──────── */
 
 interface InsightNarrative {
-  executive: string;       // one-paragraph summary
+  executive: string;        // one-paragraph summary
   streamInsights: string[]; // per-stream paragraph
   observations: string[];   // bullet points
   actions: string[];        // target-focused actions
+  alerts: string[];         // critical red-flag callouts (WoW drops, margin gaps, big target misses)
 }
+
+/** Walk each stream and surface critical issues that belong in the red alert box. */
+function buildAlerts(data: InsightsData): string[] {
+  const alerts: string[] = [];
+  for (const s of streams_list(data)) {
+    // WoW revenue drop
+    const tw = s.thisWeek.revenue;
+    const lw = s.lastWeek.revenue;
+    if (lw > 0 && tw >= 0) {
+      const wow = ((tw - lw) / lw) * 100;
+      if (wow <= -15) {
+        alerts.push(`${s.name} revenue dropped ${Math.abs(Math.round(wow))}% week-over-week (${fmtRs(tw)} vs ${fmtRs(lw)}).`);
+      }
+    }
+    // Gross margin below forecast
+    const margin = s.cards.find(c => c.label === 'Gross Margin');
+    if (margin && margin.target > 0) {
+      const delta = margin.mtd - margin.target;
+      if (delta <= -3) {
+        alerts.push(`${s.name} gross margin is ${margin.mtd}% vs ${margin.target}% forecast — ${Math.abs(delta).toFixed(1)}pp below plan.`);
+      }
+    }
+    // Primary revenue materially behind target
+    const primary = s.cards.find(c => c.label === 'Revenue' && !c.category)
+      || s.cards.find(c => c.label === 'Sales');
+    if (primary && primary.target > 0) {
+      const projPct = (primary.projected / primary.target) * 100;
+      if (projPct < 70) {
+        alerts.push(`${s.name} projected to close month at ${Math.round(projPct)}% of target (${fmtRs(primary.projected)} vs ${fmtRs(primary.target)}).`);
+      }
+    }
+  }
+  // Combined projection red
+  if (data.combined.targetRevenue > 0) {
+    const combinedPct = (data.combined.projectedRevenue / data.combined.targetRevenue) * 100;
+    if (combinedPct < 70) {
+      alerts.push(`Combined revenue projection is ${Math.round(combinedPct)}% of monthly target — intervention required.`);
+    }
+  }
+  return alerts;
+}
+
+/** Tiny helper so buildAlerts reads top-down without TypeScript complaints. */
+function streams_list(data: InsightsData) { return data.streams; }
 
 function buildNarrative(data: InsightsData, variant: ReportVariant): InsightNarrative {
   const { streams, combined, daysElapsed, daysInMonth, daysRemaining, monthLabel, actions } = data;
@@ -541,7 +720,362 @@ function buildNarrative(data: InsightsData, variant: ReportVariant): InsightNarr
     actionList.push('All metrics tracking at or above target -- maintain current operational cadence and continue monitoring.');
   }
 
-  return { executive, streamInsights, observations, actions: actionList };
+  return { executive, streamInsights, observations, actions: actionList, alerts: buildAlerts(data) };
+}
+
+/* ──────── Shared section builders (card-based layout) ──────── */
+
+type WoWRow = { label: string; cur: string; prev: string; pct: number };
+
+/** Initialise page chrome: grey bg + teal header + white panel below header. */
+function drawFirstPageChrome(doc: jsPDF, title: string, subtitle: string, clientName: string): number {
+  drawPageBg(doc);
+  addHeader(doc, title, subtitle, clientName);
+  const pw = doc.internal.pageSize.getWidth();
+  const ph = doc.internal.pageSize.getHeight();
+  drawCard(doc, 8, 40, pw - 16, ph - 54);
+  return 48;
+}
+
+/** New page with just the white panel (no teal header repeat). */
+function drawContinuationPage(doc: jsPDF): number {
+  doc.addPage();
+  drawPageBg(doc);
+  const pw = doc.internal.pageSize.getWidth();
+  const ph = doc.internal.pageSize.getHeight();
+  drawCard(doc, 8, 14, pw - 16, ph - 28);
+  return 22;
+}
+
+/** Space-aware wrapper that uses drawContinuationPage for page breaks so
+ *  the white panel always re-appears. Shadow-overrides ensureSpace locally. */
+function ensureRoom(doc: jsPDF, y: number, needed: number): number {
+  const pageH = doc.internal.pageSize.getHeight();
+  if (y + needed > pageH - 22) return drawContinuationPage(doc);
+  return y;
+}
+
+/** Executive summary block: title, RAG pill, narrative paragraph, combined progress. */
+function drawExecutiveBlock(
+  doc: jsPDF,
+  data: InsightsData,
+  narrative: InsightNarrative,
+  y: number,
+  x: number,
+  w: number,
+): number {
+  const pageW = doc.internal.pageSize.getWidth();
+  drawCardTitle(doc, 'Executive Summary', x, y, PRIMARY);
+  drawRAGPill(doc, data.combined.rag, pageW - 60, y, 46, 6.5);
+  y += 6;
+
+  y = addParagraph(doc, narrative.executive, y, { size: 10 });
+  y += 4;
+
+  if (data.combined.targetRevenue > 0) {
+    const mtdPct = (data.combined.mtdRevenue / data.combined.targetRevenue) * 100;
+    const projPct = (data.combined.projectedRevenue / data.combined.targetRevenue) * 100;
+
+    doc.setFontSize(9.5);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...DARK_TEXT);
+    doc.text('Combined Revenue — MTD vs Monthly Target', x, y);
+    doc.setTextColor(...pctToColor(mtdPct));
+    doc.text(`${Math.round(mtdPct)}%`, x + w, y, { align: 'right' });
+    y += 2;
+
+    drawProgressBar(doc, x, y, w, 7, mtdPct, projPct, pctToColor(mtdPct));
+    y += 11;
+
+    doc.setFontSize(8.8);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...MUTED_TEXT);
+    doc.text(`MTD: ${fmtRs(data.combined.mtdRevenue)}`, x, y);
+    doc.text(
+      `Projected EOM: ${fmtRs(data.combined.projectedRevenue)} (${Math.round(projPct)}%)`,
+      x + w / 2, y, { align: 'center' }
+    );
+    doc.text(`Target: ${fmtRs(data.combined.targetRevenue)}`, x + w, y, { align: 'right' });
+    y += 5;
+
+    const gap = data.combined.targetRevenue - data.combined.projectedRevenue;
+    doc.setFontSize(8.8);
+    doc.setFont('helvetica', 'bold');
+    if (gap > 0) {
+      const perDay = gap / Math.max(data.daysRemaining, 1);
+      doc.setTextColor(...RED);
+      doc.text(
+        `Gap to target: ${fmtRs(gap)} — needs ${fmtRs(perDay)}/day for ${data.daysRemaining} days`,
+        x, y
+      );
+    } else {
+      doc.setTextColor(...GREEN);
+      doc.text(`Projected to clear target with ${fmtRs(Math.abs(gap))} cushion`, x, y);
+    }
+    y += 6;
+  } else {
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'italic');
+    doc.setTextColor(...MUTED_TEXT);
+    doc.text('No monthly target configured. Showing actuals only.', x, y);
+    y += 6;
+  }
+  return y;
+}
+
+/** Scorecard rows: one per card with a numeric target. */
+function computeScorecardRows(stream: StreamData) {
+  return stream.cards
+    .filter(c => c.target > 0 && c.unit !== 'percent')
+    .map(c => {
+      const mtdPct = (c.mtd / c.target) * 100;
+      const projPct = (c.projected / c.target) * 100;
+      return {
+        label: c.category ? `${c.category} — ${c.label}` : c.label,
+        mtd: fmtValue(c.mtd, c.unit),
+        target: fmtValue(c.target, c.unit),
+        projected: fmtValue(c.projected, c.unit),
+        mtdPct, projPct,
+      };
+    });
+}
+
+/** Full stream section: title, narrative, scorecard, KPI bars, WoW table. */
+function drawStreamSection(
+  doc: jsPDF,
+  stream: StreamData,
+  idx: number,
+  narrative: InsightNarrative,
+  y: number,
+  x: number,
+  w: number,
+): number {
+  const pageW = doc.internal.pageSize.getWidth();
+
+  // Light divider above this section
+  doc.setDrawColor(...CARD_BORDER);
+  doc.setLineWidth(0.2);
+  doc.line(x, y - 3, x + w, y - 3);
+
+  drawCardTitle(doc, stream.name.toUpperCase(), x, y, PRIMARY);
+  y += 5.5;
+
+  const narr = narrative.streamInsights[idx];
+  if (narr) {
+    y = addParagraph(doc, narr, y, { size: 9.5 });
+    y += 2;
+  }
+
+  // ── Summary Scorecard ──
+  y = ensureRoom(doc, y, 35);
+  doc.setFontSize(9.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...DARK_TEXT);
+  doc.text('Summary Scorecard', x, y);
+  y += 2;
+
+  const rows = computeScorecardRows(stream);
+  autoTable(doc, {
+    startY: y,
+    head: [['Metric', 'MTD', 'Target', 'Projected EOM', 'Status']],
+    body: rows.map(r => [r.label, r.mtd, r.target, r.projected, '']),
+    theme: 'grid',
+    styles: { fontSize: 8.8, cellPadding: 2.3, lineColor: CARD_BORDER, lineWidth: 0.1 },
+    headStyles: { fillColor: LIGHT_BG, textColor: DARK_TEXT, fontStyle: 'bold', fontSize: 8.8 },
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 52 },
+      1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' },
+      4: { halign: 'center', cellWidth: 34 },
+    },
+    didDrawCell: (hook) => {
+      if (hook.section === 'body' && hook.column.index === 4) {
+        const r = rows[hook.row.index];
+        if (!r) return;
+        const rag = pctToRAG(r.projPct);
+        const label = rag === 'GREEN' ? 'ON TRACK' : rag === 'AMBER' ? 'WATCH' : 'BEHIND';
+        drawStatusPill(doc, label, hook.cell.x + 3, hook.cell.y + hook.cell.height / 2 + 1.6);
+      }
+    },
+    margin: { left: x, right: pageW - (x + w) },
+  });
+  y = (doc as any).lastAutoTable.finalY + 5;
+
+  // ── KPI Progress Bars ──
+  if (rows.length > 0) {
+    y = ensureRoom(doc, y, 12 + rows.length * 8);
+    doc.setFontSize(9.5);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...DARK_TEXT);
+    doc.text('KPI Progress (MTD vs Target)', x, y);
+    y += 4;
+
+    for (const r of rows) {
+      y = ensureRoom(doc, y, 10);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      doc.setTextColor(...DARK_TEXT);
+      doc.text(r.label, x, y);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...pctToColor(r.mtdPct));
+      doc.text(`${Math.round(r.mtdPct)}%`, x + w, y, { align: 'right' });
+      drawInlineBar(doc, x, y + 1.2, w, r.mtdPct);
+      y += 7.5;
+    }
+    y += 2;
+  }
+
+  // ── This Week vs Last Week ──
+  y = ensureRoom(doc, y, 40);
+  doc.setFontSize(9.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...DARK_TEXT);
+  doc.text('This Week vs Last Week', x, y);
+  y += 2;
+
+  const isClinic = stream.name.toLowerCase().includes('clinic') || stream.name.toLowerCase().includes('health');
+  const tw = stream.thisWeek;
+  const lw = stream.lastWeek;
+  const wowRows: WoWRow[] = isClinic ? [
+    { label: 'Patients', cur: fmtCount(tw.patients), prev: fmtCount(lw.patients), pct: lw.patients > 0 ? ((tw.patients - lw.patients) / lw.patients) * 100 : 0 },
+    { label: 'Revenue',  cur: fmtRs(tw.revenue),    prev: fmtRs(lw.revenue),    pct: lw.revenue > 0 ? ((tw.revenue - lw.revenue) / lw.revenue) * 100 : 0 },
+    { label: 'Avg Ticket', cur: fmtRs(tw.avgTicket), prev: fmtRs(lw.avgTicket), pct: lw.avgTicket > 0 ? ((tw.avgTicket - lw.avgTicket) / lw.avgTicket) * 100 : 0 },
+  ] : [
+    { label: 'Transactions', cur: fmtCount(tw.transactions), prev: fmtCount(lw.transactions), pct: lw.transactions > 0 ? ((tw.transactions - lw.transactions) / lw.transactions) * 100 : 0 },
+    { label: 'Sales',  cur: fmtRs(tw.revenue), prev: fmtRs(lw.revenue), pct: lw.revenue > 0 ? ((tw.revenue - lw.revenue) / lw.revenue) * 100 : 0 },
+    { label: 'Profit', cur: fmtRs(tw.profit),  prev: fmtRs(lw.profit),  pct: lw.profit !== 0 && lw.profit > 0 ? ((tw.profit - lw.profit) / lw.profit) * 100 : 0 },
+    { label: 'Avg Ticket', cur: fmtRs(tw.avgTicket), prev: fmtRs(lw.avgTicket), pct: lw.avgTicket > 0 ? ((tw.avgTicket - lw.avgTicket) / lw.avgTicket) * 100 : 0 },
+  ];
+
+  autoTable(doc, {
+    startY: y,
+    head: [['Metric', 'This Week', 'Last Week', 'Change']],
+    body: wowRows.map(r => {
+      const sign = r.pct >= 0 ? '+' : '';
+      return [r.label, r.cur, r.prev, `   ${sign}${r.pct.toFixed(1)}%`];
+    }),
+    theme: 'grid',
+    styles: { fontSize: 9, cellPadding: 2.3, lineColor: CARD_BORDER, lineWidth: 0.1 },
+    headStyles: { fillColor: LIGHT_BG, textColor: DARK_TEXT, fontStyle: 'bold' },
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 42 },
+      1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right', cellWidth: 32 },
+    },
+    didParseCell: (cell) => {
+      if (cell.section === 'body' && cell.column.index === 3) {
+        const i = cell.row.index;
+        const pct = wowRows[i]?.pct ?? 0;
+        cell.cell.styles.textColor = pct >= 0 ? GREEN : RED;
+        cell.cell.styles.fontStyle = 'bold';
+      }
+    },
+    didDrawCell: (hook) => {
+      if (hook.section === 'body' && hook.column.index === 3) {
+        const pct = wowRows[hook.row.index]?.pct ?? 0;
+        drawWoWArrow(doc, hook.cell.x + 4, hook.cell.y + hook.cell.height / 2 + 0.5, pct);
+      }
+    },
+    margin: { left: x, right: pageW - (x + w) },
+  });
+  y = (doc as any).lastAutoTable.finalY + 7;
+
+  return y;
+}
+
+/** Key observations as a list of rows. */
+function drawObservationsBlock(
+  doc: jsPDF,
+  observations: string[],
+  y: number,
+  x: number,
+  w: number,
+  title = 'Key Observations',
+): number {
+  y = ensureRoom(doc, y, 20);
+  drawCardTitle(doc, title, x, y, PRIMARY);
+  y += 5;
+  for (const obs of observations) {
+    y = ensureRoom(doc, y, 10);
+    y = addParagraph(doc, '>  ' + obs, y, { size: 9.5 });
+    y += 1;
+  }
+  return y + 3;
+}
+
+/** Numbered action list with colour-coded WATCH/PRIORITY lines. */
+function drawActionsBlock(
+  doc: jsPDF,
+  title: string,
+  actions: string[],
+  y: number,
+  x: number,
+  w: number,
+): number {
+  y = ensureRoom(doc, y, 20);
+  drawCardTitle(doc, title, x, y, PRIMARY);
+  y += 4;
+
+  const pageW = doc.internal.pageSize.getWidth();
+  autoTable(doc, {
+    startY: y,
+    body: actions.map((r, i) => [String(i + 1), r]),
+    theme: 'plain',
+    styles: { fontSize: 9.5, cellPadding: 2.6, valign: 'top' },
+    columnStyles: {
+      0: { cellWidth: 10, halign: 'center', fontStyle: 'bold', textColor: PRIMARY },
+      1: { cellWidth: 'auto', textColor: DARK_TEXT },
+    },
+    didParseCell: (cell) => {
+      if (cell.section === 'body' && cell.column.index === 1) {
+        const txt = String(cell.cell.raw || '');
+        if (/^(URGENT|PRIORITY)/.test(txt)) {
+          cell.cell.styles.textColor = DANGER_BORDER;
+          cell.cell.styles.fontStyle = 'bold';
+        } else if (/^WATCH/.test(txt)) {
+          cell.cell.styles.textColor = AMBER;
+          cell.cell.styles.fontStyle = 'bold';
+        }
+      }
+    },
+    margin: { left: x, right: pageW - (x + w) },
+  });
+  return (doc as any).lastAutoTable.finalY + 4;
+}
+
+/** Daily trend bar chart used by weekly + monthly reports. */
+function drawDailyTrendBlock(
+  doc: jsPDF,
+  stream: StreamData,
+  daysInMonth: number,
+  y: number,
+  x: number,
+  w: number,
+): number {
+  if (stream.daily.length === 0) return y;
+  y = ensureRoom(doc, y, 45);
+
+  doc.setFontSize(9.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...DARK_TEXT);
+  doc.text(`${stream.name} — Daily Revenue Trend (${stream.daily.length} days)`, x, y);
+  y += 3;
+
+  const revs = stream.daily.map(d => d.revenue || 0);
+  const primary = stream.cards.find(c => c.label === 'Revenue' && !c.category)
+    || stream.cards.find(c => c.label === 'Sales');
+  const dailyTarget = primary && primary.target > 0 ? primary.target / daysInMonth : 0;
+  drawMiniBarChart(doc, x, y, w, 26, revs, PRIMARY, dailyTarget);
+  y += 28;
+
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...MUTED_TEXT);
+  doc.text(prettyDate(stream.daily[0].date), x, y);
+  doc.text(prettyDate(stream.daily[stream.daily.length - 1].date), x + w, y, { align: 'right' });
+  if (dailyTarget > 0) {
+    doc.setTextColor(...RED);
+    doc.text(`Red dashed line = daily target ${fmtRs(dailyTarget)}`, x + w / 2, y, { align: 'center' });
+  }
+  return y + 6;
 }
 
 /* ──────── Daily PDF ──────── */
@@ -549,165 +1083,149 @@ function buildNarrative(data: InsightsData, variant: ReportVariant): InsightNarr
 function generateDailyPDF(data: InsightsData, clientName: string) {
   const doc = new jsPDF({ orientation: 'portrait', format: 'a4', unit: 'mm' });
   const pageW = doc.internal.pageSize.getWidth();
+  const INNER_X = 14;
+  const INNER_W = pageW - 28;
 
   const latestDate = data.streams.flatMap(s => s.daily.map(d => d.date)).sort().pop() || '';
-  const prevDate = data.streams.flatMap(s => s.daily.map(d => d.date)).filter(d => d < latestDate).sort().pop() || '';
+  const prevDate   = data.streams.flatMap(s => s.daily.map(d => d.date)).filter(d => d < latestDate).sort().pop() || '';
 
-  addHeader(
+  let y = drawFirstPageChrome(
     doc,
     'Daily Operational Insight',
     `${data.monthLabel}  |  Day ${data.daysElapsed} of ${data.daysInMonth}  |  ${data.daysRemaining} days remaining`,
     clientName
   );
 
-  let y = 44;
   const narrative = buildNarrative(data, 'daily');
 
-  // Executive summary header row: title on the left, RAG pill on the right
-  doc.setTextColor(...PRIMARY);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.text('Executive Summary', 14, y);
-  drawRAGPill(doc, data.combined.rag, pageW - 58, y, 44, 7);
-  doc.setDrawColor(...PRIMARY);
-  doc.setLineWidth(0.5);
-  doc.line(14, y + 1.5, pageW - 14, y + 1.5);
-  doc.setLineWidth(0.2);
-  y += 8;
+  // ── Executive summary (narrative + combined revenue progress) ──
+  y = drawExecutiveBlock(doc, data, narrative, y, INNER_X, INNER_W);
 
-  y = addParagraph(doc, narrative.executive, y, { size: 10 });
-  y += 5;
-
-  // Combined progress bar
-  if (data.combined.targetRevenue > 0) {
-    doc.setFontSize(11);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(...DARK_TEXT);
-    doc.text('Combined Revenue Progress', 14, y);
-    y += 5;
-
-    const mtdPct = (data.combined.mtdRevenue / data.combined.targetRevenue) * 100;
-    const projPct = (data.combined.projectedRevenue / data.combined.targetRevenue) * 100;
-    drawProgressBar(doc, 14, y, pageW - 28, 7, mtdPct, projPct, ragRGB(data.combined.rag));
-    y += 12;
-
-    doc.setFontSize(8.5);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(...MUTED_TEXT);
-    doc.text(`MTD: ${fmtRs(data.combined.mtdRevenue)} (${Math.round(mtdPct)}%)`, 14, y);
-    doc.text(`Projected: ${fmtRs(data.combined.projectedRevenue)} (${Math.round(projPct)}%)`, pageW / 2, y, { align: 'center' });
-    doc.text(`Target: ${fmtRs(data.combined.targetRevenue)}`, pageW - 14, y, { align: 'right' });
-    y += 10;
+  // ── Critical alerts callout ──
+  if (narrative.alerts.length > 0) {
+    y = ensureRoom(doc, y, 15 + narrative.alerts.length * 6);
+    y = drawAlertBox(doc, INNER_X, y, INNER_W, narrative.alerts);
   }
 
-  // Per-stream day snapshot
+  // ── Per-stream "today vs yesterday" + pace table ──
   for (const stream of data.streams) {
-    y = ensureSpace(doc, y, 90);
-    y = addSectionTitle(doc, `${stream.name} - Today vs Yesterday`, y);
+    y = ensureRoom(doc, y, 80);
 
-    const today = latestDate ? stream.daily.find(d => d.date === latestDate) : null;
-    const yesterday = prevDate ? stream.daily.find(d => d.date === prevDate) : null;
+    doc.setDrawColor(...CARD_BORDER);
+    doc.setLineWidth(0.2);
+    doc.line(INNER_X, y - 3, INNER_X + INNER_W, y - 3);
+
+    drawCardTitle(doc, `${stream.name.toUpperCase()} — TODAY VS YESTERDAY`, INNER_X, y, PRIMARY);
+    y += 5;
+
+    const today     = latestDate ? stream.daily.find(d => d.date === latestDate) : null;
+    const yesterday = prevDate   ? stream.daily.find(d => d.date === prevDate)   : null;
     const isClinic = stream.name.toLowerCase().includes('clinic') || stream.name.toLowerCase().includes('health');
 
-    const rows: string[][] = [];
-    if (isClinic) {
-      rows.push(['Patients', today ? fmtCount(today.patients || 0) : '--', yesterday ? fmtCount(yesterday.patients || 0) : '--', yesterday ? pctChange(today?.patients || 0, yesterday.patients || 0) : '--']);
-      rows.push(['Revenue', today ? fmtRs(today.revenue || 0) : '--', yesterday ? fmtRs(yesterday.revenue || 0) : '--', yesterday ? pctChange(today?.revenue || 0, yesterday.revenue || 0) : '--']);
-    } else {
-      rows.push(['Transactions', today ? fmtCount(today.transactions || 0) : '--', yesterday ? fmtCount(yesterday.transactions || 0) : '--', yesterday ? pctChange(today?.transactions || 0, yesterday.transactions || 0) : '--']);
-      rows.push(['Sales', today ? fmtRs(today.revenue || 0) : '--', yesterday ? fmtRs(yesterday.revenue || 0) : '--', yesterday ? pctChange(today?.revenue || 0, yesterday.revenue || 0) : '--']);
-      rows.push(['Profit', today ? fmtRs(today.profit || 0) : '--', yesterday ? fmtRs(yesterday.profit || 0) : '--', yesterday ? pctChange(today?.profit || 0, yesterday.profit || 0) : '--']);
-    }
+    const rows: WoWRow[] = isClinic ? [
+      { label: 'Patients', cur: today ? fmtCount(today.patients || 0) : '--', prev: yesterday ? fmtCount(yesterday.patients || 0) : '--',
+        pct: (yesterday && yesterday.patients) ? (((today?.patients || 0) - (yesterday.patients || 0)) / yesterday.patients) * 100 : 0 },
+      { label: 'Revenue',  cur: today ? fmtRs(today.revenue || 0) : '--',    prev: yesterday ? fmtRs(yesterday.revenue || 0) : '--',
+        pct: (yesterday && yesterday.revenue) ? (((today?.revenue || 0) - (yesterday.revenue || 0)) / yesterday.revenue) * 100 : 0 },
+    ] : [
+      { label: 'Transactions', cur: today ? fmtCount(today.transactions || 0) : '--', prev: yesterday ? fmtCount(yesterday.transactions || 0) : '--',
+        pct: (yesterday && yesterday.transactions) ? (((today?.transactions || 0) - (yesterday.transactions || 0)) / yesterday.transactions) * 100 : 0 },
+      { label: 'Sales',  cur: today ? fmtRs(today.revenue || 0) : '--', prev: yesterday ? fmtRs(yesterday.revenue || 0) : '--',
+        pct: (yesterday && yesterday.revenue) ? (((today?.revenue || 0) - (yesterday.revenue || 0)) / yesterday.revenue) * 100 : 0 },
+      { label: 'Profit', cur: today ? fmtRs(today.profit || 0) : '--', prev: yesterday ? fmtRs(yesterday.profit || 0) : '--',
+        pct: (yesterday && yesterday.profit) ? (((today?.profit || 0) - (yesterday.profit || 0)) / yesterday.profit) * 100 : 0 },
+    ];
 
     autoTable(doc, {
       startY: y,
       head: [['Metric', latestDate ? prettyDate(latestDate) : 'Latest', prevDate ? prettyDate(prevDate) : 'Previous', 'Change']],
-      body: rows,
+      body: rows.map(r => {
+        const sign = r.pct >= 0 ? '+' : '';
+        return [r.label, r.cur, r.prev, r.prev === '--' ? '--' : `   ${sign}${r.pct.toFixed(1)}%`];
+      }),
       theme: 'grid',
-      styles: { fontSize: 9.5, cellPadding: 2.5 },
+      styles: { fontSize: 9.2, cellPadding: 2.3, lineColor: CARD_BORDER, lineWidth: 0.1 },
       headStyles: { fillColor: LIGHT_BG, textColor: DARK_TEXT, fontStyle: 'bold', fontSize: 9 },
       columnStyles: {
-        0: { fontStyle: 'bold', cellWidth: 35 },
-        1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' },
+        0: { fontStyle: 'bold', cellWidth: 38 },
+        1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right', cellWidth: 30 },
       },
       didParseCell: (cell) => {
         if (cell.section === 'body' && cell.column.index === 3) {
           const txt = String(cell.cell.raw || '');
-          if (txt.startsWith('+')) cell.cell.styles.textColor = [16, 185, 129];
-          else if (txt.startsWith('-')) cell.cell.styles.textColor = [220, 38, 38];
+          if (txt.startsWith('+')) { cell.cell.styles.textColor = GREEN; cell.cell.styles.fontStyle = 'bold'; }
+          else if (txt.startsWith('-')) { cell.cell.styles.textColor = RED; cell.cell.styles.fontStyle = 'bold'; }
         }
       },
-      margin: { left: 14, right: 14 },
+      didDrawCell: (hook) => {
+        if (hook.section === 'body' && hook.column.index === 3) {
+          const r = rows[hook.row.index];
+          if (r && r.prev !== '--') {
+            drawWoWArrow(doc, hook.cell.x + 4, hook.cell.y + hook.cell.height / 2 + 0.5, r.pct);
+          }
+        }
+      },
+      margin: { left: INNER_X, right: pageW - (INNER_X + INNER_W) },
     });
-    y = (doc as any).lastAutoTable.finalY + 4;
+    y = (doc as any).lastAutoTable.finalY + 5;
 
-    // Pace table
-    const paceRows: string[][] = [];
-    for (const card of stream.cards) {
-      if (card.target === 0 || card.unit === 'percent') continue;
-      const dailyTarget = Math.round(card.target / data.daysInMonth);
-      const aheadMtd = card.mtd >= card.target;
-      const onPace = card.requiredRate <= card.dailyRate;
-      const status = aheadMtd ? 'EXCEEDED' : onPace ? 'ON PACE' : 'BEHIND';
-      paceRows.push([
-        card.category ? `${card.category} - ${card.label}` : card.label,
-        fmtValue(card.mtd, card.unit),
-        fmtValue(card.target, card.unit),
-        fmtValue(dailyTarget, card.unit),
-        fmtValue(card.dailyRate, card.unit),
-        aheadMtd ? '--' : fmtValue(Math.max(card.requiredRate, 0), card.unit),
-        status,
-      ]);
-    }
+    // Pace table: KPI | MTD | Target | Status
+    const paceCards = stream.cards.filter(c => c.target > 0 && c.unit !== 'percent');
+    if (paceCards.length > 0) {
+      y = ensureRoom(doc, y, 20 + paceCards.length * 7);
+      doc.setFontSize(9.5);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...DARK_TEXT);
+      doc.text('Pace to Monthly Target', INNER_X, y);
+      y += 2;
 
-    if (paceRows.length > 0) {
+      const paceRows = paceCards.map(card => {
+        const dailyTarget = Math.round(card.target / data.daysInMonth);
+        const aheadMtd = card.mtd >= card.target;
+        const onPace = card.requiredRate <= card.dailyRate;
+        const status = aheadMtd ? 'EXCEEDED' : onPace ? 'ON PACE' : 'BEHIND';
+        return {
+          label: card.category ? `${card.category} — ${card.label}` : card.label,
+          mtd: fmtValue(card.mtd, card.unit),
+          target: fmtValue(card.target, card.unit),
+          dailyTarget: fmtValue(dailyTarget, card.unit),
+          actualDay: fmtValue(card.dailyRate, card.unit),
+          required: aheadMtd ? '—' : fmtValue(Math.max(card.requiredRate, 0), card.unit),
+          status,
+        };
+      });
+
       autoTable(doc, {
         startY: y,
-        head: [['KPI', 'MTD', 'Monthly Goal', 'Daily Target', 'Actual/day', 'Required/day', 'Status']],
-        body: paceRows,
+        head: [['KPI', 'MTD', 'Goal', 'Day Tgt', 'Actual/day', 'Needed/day', 'Status']],
+        body: paceRows.map(r => [r.label, r.mtd, r.target, r.dailyTarget, r.actualDay, r.required, '']),
         theme: 'grid',
-        styles: { fontSize: 8.5, cellPadding: 2 },
+        styles: { fontSize: 8.5, cellPadding: 2, lineColor: CARD_BORDER, lineWidth: 0.1 },
         headStyles: { fillColor: LIGHT_BG, textColor: DARK_TEXT, fontStyle: 'bold', fontSize: 8.5 },
         columnStyles: {
-          0: { fontStyle: 'bold', cellWidth: 42 },
+          0: { fontStyle: 'bold', cellWidth: 40 },
           1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' },
-          4: { halign: 'right' }, 5: { halign: 'right' }, 6: { halign: 'center', fontStyle: 'bold' },
+          4: { halign: 'right' }, 5: { halign: 'right' }, 6: { halign: 'center', cellWidth: 26 },
         },
-        didParseCell: (d) => {
-          if (d.section === 'body' && d.column.index === 6) {
-            if (d.cell.raw === 'ON PACE' || d.cell.raw === 'EXCEEDED') d.cell.styles.textColor = [16, 185, 129];
-            if (d.cell.raw === 'BEHIND') d.cell.styles.textColor = [220, 38, 38];
+        didDrawCell: (hook) => {
+          if (hook.section === 'body' && hook.column.index === 6) {
+            const r = paceRows[hook.row.index];
+            if (r) drawStatusPill(doc, r.status, hook.cell.x + 2, hook.cell.y + hook.cell.height / 2 + 1.6);
           }
         },
-        margin: { left: 14, right: 14 },
+        margin: { left: INNER_X, right: pageW - (INNER_X + INNER_W) },
       });
       y = (doc as any).lastAutoTable.finalY + 6;
     }
   }
 
-  // Key observations
-  y = ensureSpace(doc, y, 50);
-  y = addSectionTitle(doc, 'Key Observations', y);
-  for (const obs of narrative.observations.slice(0, 5)) {
-    y = ensureSpace(doc, y, 10);
-    y = addParagraph(doc, '>  ' + obs, y, { size: 9.5 });
-    y += 1;
+  // ── Observations ──
+  if (narrative.observations.length > 0) {
+    y = drawObservationsBlock(doc, narrative.observations.slice(0, 6), y, INNER_X, INNER_W, 'Key Observations');
   }
-  y += 2;
 
-  // Action items
-  y = ensureSpace(doc, y, 50);
-  y = addSectionTitle(doc, "Today's Actions", y);
-  autoTable(doc, {
-    startY: y,
-    head: [['#', 'Action Required']],
-    body: narrative.actions.map((r, i) => [String(i + 1), r]),
-    theme: 'striped',
-    styles: { fontSize: 9.5, cellPadding: 2.8 },
-    headStyles: { fillColor: PRIMARY, textColor: [255, 255, 255], fontStyle: 'bold' },
-    columnStyles: { 0: { cellWidth: 10, halign: 'center', fontStyle: 'bold' }, 1: { cellWidth: 'auto' } },
-    margin: { left: 14, right: 14 },
-  });
+  // ── Actions ──
+  y = drawActionsBlock(doc, "Today's Actions", narrative.actions, y, INNER_X, INNER_W);
 
   addFooter(doc, `Daily Insight  |  ${data.monthLabel}  |  ${clientName}`);
   doc.save(`Daily_Insight_${data.month}_${latestDate || 'today'}.pdf`);
@@ -718,155 +1236,42 @@ function generateDailyPDF(data: InsightsData, clientName: string) {
 function generateWeeklyPDF(data: InsightsData, clientName: string) {
   const doc = new jsPDF({ orientation: 'portrait', format: 'a4', unit: 'mm' });
   const pageW = doc.internal.pageSize.getWidth();
+  const INNER_X = 14;
+  const INNER_W = pageW - 28;
 
-  addHeader(
+  let y = drawFirstPageChrome(
     doc,
     'Weekly Operational Insight',
     `${data.monthLabel}  |  Day ${data.daysElapsed} of ${data.daysInMonth}  |  ${data.daysRemaining} days remaining`,
     clientName
   );
 
-  let y = 44;
   const narrative = buildNarrative(data, 'weekly');
 
-  // Executive summary header row: title on the left, RAG pill on the right
-  doc.setTextColor(...PRIMARY);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.text('Executive Summary', 14, y);
-  drawRAGPill(doc, data.combined.rag, pageW - 58, y, 44, 7);
-  doc.setDrawColor(...PRIMARY);
-  doc.setLineWidth(0.5);
-  doc.line(14, y + 1.5, pageW - 14, y + 1.5);
-  doc.setLineWidth(0.2);
-  y += 8;
+  // ── Executive summary ──
+  y = drawExecutiveBlock(doc, data, narrative, y, INNER_X, INNER_W);
 
-  y = addParagraph(doc, narrative.executive, y, { size: 10 });
-  y += 5;
-
-  for (const stream of data.streams) {
-    y = ensureSpace(doc, y, 80);
-    y = addSectionTitle(doc, `${stream.name} - Week over Week`, y);
-
-    // Narrative for stream
-    const narr = narrative.streamInsights.find(n => n.startsWith(`${stream.name}:`));
-    if (narr) {
-      y = addParagraph(doc, narr, y, { size: 9.5 });
-      y += 2;
-    }
-
-    const isClinic = stream.name.toLowerCase().includes('clinic') || stream.name.toLowerCase().includes('health');
-    const tw = stream.thisWeek;
-    const lw = stream.lastWeek;
-
-    const rows: string[][] = isClinic ? [
-      ['Patients', fmtCount(tw.patients), fmtCount(lw.patients), pctChange(tw.patients, lw.patients)],
-      ['Revenue', fmtRs(tw.revenue), fmtRs(lw.revenue), pctChange(tw.revenue, lw.revenue)],
-      ['Avg Ticket', fmtRs(tw.avgTicket), fmtRs(lw.avgTicket), pctChange(tw.avgTicket, lw.avgTicket)],
-    ] : [
-      ['Transactions', fmtCount(tw.transactions), fmtCount(lw.transactions), pctChange(tw.transactions, lw.transactions)],
-      ['Sales', fmtRs(tw.revenue), fmtRs(lw.revenue), pctChange(tw.revenue, lw.revenue)],
-      ['Profit', fmtRs(tw.profit), fmtRs(lw.profit), pctChange(tw.profit, lw.profit)],
-      ['Avg Ticket', fmtRs(tw.avgTicket), fmtRs(lw.avgTicket), pctChange(tw.avgTicket, lw.avgTicket)],
-    ];
-
-    autoTable(doc, {
-      startY: y,
-      head: [['Metric', 'This Week', 'Last Week', 'WoW Change']],
-      body: rows,
-      theme: 'grid',
-      styles: { fontSize: 9.5, cellPadding: 2.5 },
-      headStyles: { fillColor: LIGHT_BG, textColor: DARK_TEXT, fontStyle: 'bold' },
-      columnStyles: {
-        0: { fontStyle: 'bold', cellWidth: 35 },
-        1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' },
-      },
-      didParseCell: (cell) => {
-        if (cell.section === 'body' && cell.column.index === 3) {
-          const txt = String(cell.cell.raw || '');
-          if (txt.startsWith('+')) cell.cell.styles.textColor = [16, 185, 129];
-          else if (txt.startsWith('-')) cell.cell.styles.textColor = [220, 38, 38];
-        }
-      },
-      margin: { left: 14, right: 14 },
-    });
-    y = (doc as any).lastAutoTable.finalY + 4;
-
-    // Visual comparison bars — primary revenue
-    y = ensureSpace(doc, y, 30);
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(...DARK_TEXT);
-    doc.text('Visual Comparison (revenue)', 14, y);
-    y += 4;
-    const maxRev = Math.max(tw.revenue, lw.revenue, 1);
-    const barMaxW = pageW - 70;
-    // this week
-    const twW = (tw.revenue / maxRev) * barMaxW;
-    doc.setFillColor(...PRIMARY);
-    doc.rect(50, y - 3, twW, 5, 'F');
-    doc.setFontSize(8.5);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(...DARK_TEXT);
-    doc.text('This Week', 14, y + 1);
-    doc.text(fmtRs(tw.revenue), 50 + twW + 2, y + 1);
-    y += 7;
-    // last week
-    const lwW = (lw.revenue / maxRev) * barMaxW;
-    doc.setFillColor(148, 163, 184);
-    doc.rect(50, y - 3, lwW, 5, 'F');
-    doc.text('Last Week', 14, y + 1);
-    doc.text(fmtRs(lw.revenue), 50 + lwW + 2, y + 1);
-    y += 10;
-
-    // Daily breakdown chart (this month so far)
-    if (stream.daily.length > 0) {
-      y = ensureSpace(doc, y, 40);
-      doc.setFontSize(9);
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(...DARK_TEXT);
-      doc.text(`${stream.name} - Daily Revenue Trend (${stream.daily.length} days)`, 14, y);
-      y += 3;
-      const revs = stream.daily.map(d => d.revenue || 0);
-      const primary = stream.cards.find(c => c.label === 'Revenue' && !c.category) || stream.cards.find(c => c.label === 'Sales');
-      const dailyTarget = primary && primary.target > 0 ? primary.target / data.daysInMonth : 0;
-      drawMiniBarChart(doc, 14, y, pageW - 28, 25, revs, PRIMARY, dailyTarget);
-      y += 27;
-      doc.setFontSize(7.5);
-      doc.setTextColor(...MUTED_TEXT);
-      doc.text(`${prettyDate(stream.daily[0].date)}`, 14, y);
-      doc.text(`${prettyDate(stream.daily[stream.daily.length - 1].date)}`, pageW - 14, y, { align: 'right' });
-      if (dailyTarget > 0) {
-        doc.setTextColor(220, 38, 38);
-        doc.text(`Red dashed line = daily target ${fmtRs(dailyTarget)}`, pageW / 2, y, { align: 'center' });
-      }
-      y += 6;
-    }
+  // ── Critical alerts callout ──
+  if (narrative.alerts.length > 0) {
+    y = ensureRoom(doc, y, 15 + narrative.alerts.length * 6);
+    y = drawAlertBox(doc, INNER_X, y, INNER_W, narrative.alerts);
   }
 
-  // Observations
-  y = ensureSpace(doc, y, 50);
-  y = addSectionTitle(doc, 'Weekly Observations', y);
-  for (const obs of narrative.observations) {
-    y = ensureSpace(doc, y, 10);
-    y = addParagraph(doc, '>  ' + obs, y, { size: 9.5 });
-    y += 1;
+  // ── Per-stream section: scorecard + KPI bars + WoW + daily trend ──
+  for (let idx = 0; idx < data.streams.length; idx++) {
+    const stream = data.streams[idx];
+    y = ensureRoom(doc, y, 100);
+    y = drawStreamSection(doc, stream, idx, narrative, y, INNER_X, INNER_W);
+    y = drawDailyTrendBlock(doc, stream, data.daysInMonth, y, INNER_X, INNER_W);
   }
-  y += 2;
 
-  // Actions
-  y = ensureSpace(doc, y, 50);
-  y = addSectionTitle(doc, 'Focus Areas for Next Week', y);
-  autoTable(doc, {
-    startY: y,
-    head: [['#', 'Recommendation']],
-    body: narrative.actions.map((r, i) => [String(i + 1), r]),
-    theme: 'striped',
-    styles: { fontSize: 9.5, cellPadding: 2.8 },
-    headStyles: { fillColor: PRIMARY, textColor: [255, 255, 255], fontStyle: 'bold' },
-    columnStyles: { 0: { cellWidth: 10, halign: 'center', fontStyle: 'bold' }, 1: { cellWidth: 'auto' } },
-    margin: { left: 14, right: 14 },
-  });
+  // ── Observations ──
+  if (narrative.observations.length > 0) {
+    y = drawObservationsBlock(doc, narrative.observations, y, INNER_X, INNER_W, 'Weekly Observations');
+  }
+
+  // ── Actions ──
+  y = drawActionsBlock(doc, 'Focus Areas for Next Week', narrative.actions, y, INNER_X, INNER_W);
 
   addFooter(doc, `Weekly Insight  |  ${data.monthLabel}  |  ${clientName}`);
   doc.save(`Weekly_Insight_${data.month}.pdf`);
@@ -877,267 +1282,42 @@ function generateWeeklyPDF(data: InsightsData, clientName: string) {
 function generateMonthlyPDF(data: InsightsData, clientName: string) {
   const doc = new jsPDF({ orientation: 'portrait', format: 'a4', unit: 'mm' });
   const pageW = doc.internal.pageSize.getWidth();
+  const INNER_X = 14;
+  const INNER_W = pageW - 28;
 
-  addHeader(
+  let y = drawFirstPageChrome(
     doc,
     'Monthly / MTD Operational Insight',
     `${data.monthLabel}  |  Day ${data.daysElapsed} of ${data.daysInMonth}  |  ${data.daysRemaining} days remaining`,
     clientName
   );
 
-  let y = 44;
   const narrative = buildNarrative(data, 'monthly');
 
-  // Executive summary header row: title on the left, RAG pill on the right
-  doc.setTextColor(...PRIMARY);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.text('Executive Summary', 14, y);
-  drawRAGPill(doc, data.combined.rag, pageW - 58, y, 44, 7);
-  doc.setDrawColor(...PRIMARY);
-  doc.setLineWidth(0.5);
-  doc.line(14, y + 1.5, pageW - 14, y + 1.5);
-  doc.setLineWidth(0.2);
-  y += 8;
+  // ── Executive summary ──
+  y = drawExecutiveBlock(doc, data, narrative, y, INNER_X, INNER_W);
 
-  y = addParagraph(doc, narrative.executive, y, { size: 10 });
-  y += 5;
-
-  // Combined revenue visual
-  if (data.combined.targetRevenue > 0) {
-    y = ensureSpace(doc, y, 35);
-    doc.setFontSize(11);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(...DARK_TEXT);
-    doc.text('Combined Revenue Progress', 14, y);
-    y += 5;
-
-    const mtdPct = (data.combined.mtdRevenue / data.combined.targetRevenue) * 100;
-    const projPct = (data.combined.projectedRevenue / data.combined.targetRevenue) * 100;
-    drawProgressBar(doc, 14, y, pageW - 28, 9, mtdPct, projPct, ragRGB(data.combined.rag));
-    y += 12;
-
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(...MUTED_TEXT);
-    doc.text(`MTD: ${fmtRs(data.combined.mtdRevenue)} (${Math.round(mtdPct)}%)`, 14, y);
-    doc.text(`Projected: ${fmtRs(data.combined.projectedRevenue)} (${Math.round(projPct)}%)`, pageW / 2, y, { align: 'center' });
-    doc.text(`Target: ${fmtRs(data.combined.targetRevenue)}`, pageW - 14, y, { align: 'right' });
-    y += 6;
-
-    // Summary table
-    autoTable(doc, {
-      startY: y,
-      body: [
-        ['MTD Revenue', fmtRs(data.combined.mtdRevenue), `${Math.round(mtdPct)}% of target`],
-        ['Monthly Target', fmtRs(data.combined.targetRevenue), ''],
-        ['Projected EOM', fmtRs(data.combined.projectedRevenue), `${Math.round(projPct)}% of target`],
-        ['Gap to Target', fmtRs(Math.max(data.combined.targetRevenue - data.combined.projectedRevenue, 0)), `${data.daysRemaining} days remaining`],
-        ['Status', ragLabel(data.combined.rag), ''],
-      ],
-      theme: 'plain',
-      styles: { fontSize: 10, cellPadding: 2.2 },
-      columnStyles: {
-        0: { fontStyle: 'bold', cellWidth: 50, textColor: DARK_TEXT },
-        1: { halign: 'right', cellWidth: 55, fontStyle: 'bold' },
-        2: { cellWidth: 'auto', textColor: MUTED_TEXT },
-      },
-      margin: { left: 14, right: 14 },
-    });
-    y = (doc as any).lastAutoTable.finalY + 6;
-  } else {
-    doc.setFontSize(9);
-    doc.setTextColor(...MUTED_TEXT);
-    doc.text('No monthly target configured. Showing actuals only.', 14, y);
-    y += 6;
+  // ── Critical alerts callout (WoW drops, margin gaps, big misses) ──
+  if (narrative.alerts.length > 0) {
+    y = ensureRoom(doc, y, 15 + narrative.alerts.length * 6);
+    y = drawAlertBox(doc, INNER_X, y, INNER_W, narrative.alerts);
   }
 
-  // Per-stream detail
+  // ── Per-stream section: scorecard + KPI progress bars + WoW + daily trend ──
   for (let idx = 0; idx < data.streams.length; idx++) {
     const stream = data.streams[idx];
-    y = ensureSpace(doc, y, 110);
-    y = addSectionTitle(doc, `${stream.name} - Detailed Performance`, y);
-
-    // Stream narrative
-    const narr = narrative.streamInsights[idx];
-    if (narr) {
-      y = addParagraph(doc, narr, y, { size: 10 });
-      y += 3;
-    }
-
-    // KPI table
-    const kpiRows: string[][] = [];
-    for (const card of stream.cards) {
-      if (card.unit === 'percent') {
-        kpiRows.push([
-          card.category ? `${card.category} - ${card.label}` : card.label,
-          fmtValue(card.mtd, card.unit),
-          card.target > 0 ? `Fcst: ${fmtValue(card.target, card.unit)}` : '--',
-          '--', '--', '--',
-          ragLabel(card.rag),
-        ]);
-      } else {
-        const aheadMtd = card.mtd >= card.target && card.target > 0;
-        const onPace = card.requiredRate <= card.dailyRate;
-        const status =
-          card.target === 0 ? 'N/A' :
-          aheadMtd ? 'EXCEEDED' :
-          onPace ? 'ON PACE' : 'BEHIND';
-        const requiredDisplay =
-          card.target === 0 ? '--' :
-          aheadMtd ? '--' :
-          fmtValue(Math.max(card.requiredRate, 0), card.unit);
-        kpiRows.push([
-          card.category ? `${card.category} - ${card.label}` : card.label,
-          fmtValue(card.mtd, card.unit),
-          card.target > 0 ? fmtValue(card.target, card.unit) : '--',
-          fmtValue(card.projected, card.unit),
-          fmtValue(card.dailyRate, card.unit),
-          requiredDisplay,
-          status,
-        ]);
-      }
-    }
-
-    autoTable(doc, {
-      startY: y,
-      head: [['KPI', 'MTD', 'Target', 'Projected', 'Actual/day', 'Required/day', 'Status']],
-      body: kpiRows,
-      theme: 'grid',
-      styles: { fontSize: 8.5, cellPadding: 2 },
-      headStyles: { fillColor: LIGHT_BG, textColor: DARK_TEXT, fontStyle: 'bold', fontSize: 8.5 },
-      columnStyles: {
-        0: { fontStyle: 'bold', cellWidth: 42 },
-        1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' },
-        4: { halign: 'right' }, 5: { halign: 'right' }, 6: { halign: 'center', fontStyle: 'bold' },
-      },
-      didParseCell: (cell) => {
-        if (cell.section === 'body' && cell.column.index === 6) {
-          const txt = String(cell.cell.raw || '');
-          if (txt === 'ON PACE' || txt === 'ON TRACK' || txt === 'EXCEEDED') cell.cell.styles.textColor = [16, 185, 129];
-          else if (txt === 'BEHIND' || txt === 'BEHIND TARGET') cell.cell.styles.textColor = [220, 38, 38];
-          else if (txt === 'NEEDS ATTENTION') cell.cell.styles.textColor = [245, 158, 11];
-        }
-      },
-      margin: { left: 14, right: 14 },
-    });
-    y = (doc as any).lastAutoTable.finalY + 5;
-
-    // Per-card progress bars for ones with targets
-    y = ensureSpace(doc, y, 40);
-    doc.setFontSize(9.5);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(...DARK_TEXT);
-    doc.text('Target Progress Visualization', 14, y);
-    y += 4;
-
-    for (const card of stream.cards) {
-      if (card.target === 0 || card.unit === 'percent') continue;
-      y = ensureSpace(doc, y, 12);
-      const pct = (card.mtd / card.target) * 100;
-      const projPct = (card.projected / card.target) * 100;
-      const label = card.category ? `${card.category} ${card.label}` : card.label;
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8.5);
-      doc.setTextColor(...DARK_TEXT);
-      doc.text(label, 14, y);
-      doc.text(`${Math.round(pct)}%`, pageW - 14, y, { align: 'right' });
-      drawProgressBar(doc, 14, y + 1.5, pageW - 28, 4, pct, projPct, ragRGB(card.rag));
-      y += 8;
-    }
-    y += 2;
-
-    // Daily trend chart
-    if (stream.daily.length > 0) {
-      y = ensureSpace(doc, y, 45);
-      doc.setFontSize(9.5);
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(...DARK_TEXT);
-      doc.text(`Daily Revenue Trend (${stream.daily.length} days)`, 14, y);
-      y += 3;
-      const revs = stream.daily.map(d => d.revenue || 0);
-      const primary = stream.cards.find(c => c.label === 'Revenue' && !c.category) || stream.cards.find(c => c.label === 'Sales');
-      const dailyTarget = primary && primary.target > 0 ? primary.target / data.daysInMonth : 0;
-      drawMiniBarChart(doc, 14, y, pageW - 28, 28, revs, PRIMARY, dailyTarget);
-      y += 30;
-      doc.setFontSize(7.5);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(...MUTED_TEXT);
-      doc.text(prettyDate(stream.daily[0].date), 14, y);
-      doc.text(prettyDate(stream.daily[stream.daily.length - 1].date), pageW - 14, y, { align: 'right' });
-      if (dailyTarget > 0) {
-        doc.setTextColor(220, 38, 38);
-        doc.text(`Red dashed line = daily target ${fmtRs(dailyTarget)}`, pageW / 2, y, { align: 'center' });
-      }
-      y += 6;
-    }
-
-    // Week-over-week stripe
-    y = ensureSpace(doc, y, 35);
-    doc.setFontSize(9.5);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(...DARK_TEXT);
-    doc.text('This Week vs Last Week', 14, y);
-    y += 3;
-
-    const tw = stream.thisWeek;
-    const lw = stream.lastWeek;
-    const isClinic = stream.name.toLowerCase().includes('clinic') || stream.name.toLowerCase().includes('health');
-    const wowRows: string[][] = isClinic ? [
-      ['Patients', fmtCount(tw.patients), fmtCount(lw.patients), pctChange(tw.patients, lw.patients)],
-      ['Revenue', fmtRs(tw.revenue), fmtRs(lw.revenue), pctChange(tw.revenue, lw.revenue)],
-    ] : [
-      ['Transactions', fmtCount(tw.transactions), fmtCount(lw.transactions), pctChange(tw.transactions, lw.transactions)],
-      ['Sales', fmtRs(tw.revenue), fmtRs(lw.revenue), pctChange(tw.revenue, lw.revenue)],
-      ['Profit', fmtRs(tw.profit), fmtRs(lw.profit), pctChange(tw.profit, lw.profit)],
-    ];
-
-    autoTable(doc, {
-      startY: y,
-      head: [['Metric', 'This Week', 'Last Week', 'Change']],
-      body: wowRows,
-      theme: 'grid',
-      styles: { fontSize: 9, cellPadding: 2 },
-      headStyles: { fillColor: LIGHT_BG, textColor: DARK_TEXT, fontStyle: 'bold' },
-      columnStyles: {
-        0: { fontStyle: 'bold', cellWidth: 35 },
-        1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' },
-      },
-      didParseCell: (cell) => {
-        if (cell.section === 'body' && cell.column.index === 3) {
-          const txt = String(cell.cell.raw || '');
-          if (txt.startsWith('+')) cell.cell.styles.textColor = [16, 185, 129];
-          else if (txt.startsWith('-')) cell.cell.styles.textColor = [220, 38, 38];
-        }
-      },
-      margin: { left: 14, right: 14 },
-    });
-    y = (doc as any).lastAutoTable.finalY + 8;
+    y = ensureRoom(doc, y, 100);
+    y = drawStreamSection(doc, stream, idx, narrative, y, INNER_X, INNER_W);
+    y = drawDailyTrendBlock(doc, stream, data.daysInMonth, y, INNER_X, INNER_W);
   }
 
-  // Key Observations
-  y = ensureSpace(doc, y, 60);
-  y = addSectionTitle(doc, 'Key Observations & Insights', y);
-  for (const obs of narrative.observations) {
-    y = ensureSpace(doc, y, 10);
-    y = addParagraph(doc, '>  ' + obs, y, { size: 9.5 });
-    y += 1;
+  // ── Key Observations ──
+  if (narrative.observations.length > 0) {
+    y = drawObservationsBlock(doc, narrative.observations, y, INNER_X, INNER_W, 'Key Observations & Insights');
   }
-  y += 3;
 
-  // Management Actions
-  y = ensureSpace(doc, y, 50);
-  y = addSectionTitle(doc, 'Management Actions to Achieve Monthly Target', y);
-  autoTable(doc, {
-    startY: y,
-    head: [['#', 'Action / Recommendation']],
-    body: narrative.actions.map((r, i) => [String(i + 1), r]),
-    theme: 'striped',
-    styles: { fontSize: 9.5, cellPadding: 2.8 },
-    headStyles: { fillColor: PRIMARY, textColor: [255, 255, 255], fontStyle: 'bold' },
-    columnStyles: { 0: { cellWidth: 10, halign: 'center', fontStyle: 'bold' }, 1: { cellWidth: 'auto' } },
-    margin: { left: 14, right: 14 },
-  });
+  // ── Management Actions ──
+  y = drawActionsBlock(doc, 'Management Actions to Achieve Monthly Target', narrative.actions, y, INNER_X, INNER_W);
 
   addFooter(doc, `Monthly Insight  |  ${data.monthLabel}  |  ${clientName}`);
   doc.save(`Monthly_Insight_${data.month}.pdf`);
