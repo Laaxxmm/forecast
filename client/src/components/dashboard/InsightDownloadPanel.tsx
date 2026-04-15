@@ -113,34 +113,66 @@ const BAR_BG: [number, number, number] = [226, 232, 240];
 function drawProgressBar(
   doc: jsPDF,
   x: number, y: number, w: number, h: number,
-  actualPct: number,      // 0-100
-  projectedPct: number,   // 0-100
+  actualPct: number,      // 0-N (can exceed 100)
+  projectedPct: number,   // 0-N (can exceed 100)
   color: [number, number, number]
 ) {
-  // Background
+  // Track background (represents 100% of target)
   doc.setFillColor(...BAR_BG);
   doc.roundedRect(x, y, w, h, 1.5, 1.5, 'F');
 
-  // Actual fill
-  const actualW = Math.max(0, Math.min(w, (w * actualPct) / 100));
-  if (actualW > 0) {
-    doc.setFillColor(...color);
-    doc.roundedRect(x, y, actualW, h, 1.5, 1.5, 'F');
+  if (actualPct <= 100 && projectedPct <= 100) {
+    // Standard case: both under/at target.
+    const actualW = Math.max(0, (w * actualPct) / 100);
+    if (actualW > 0) {
+      doc.setFillColor(...color);
+      doc.roundedRect(x, y, actualW, h, 1.5, 1.5, 'F');
+    }
+    if (projectedPct > 0) {
+      const projX = x + (w * projectedPct) / 100;
+      doc.setDrawColor(30, 41, 59);
+      doc.setLineWidth(0.5);
+      doc.line(projX, y - 1, projX, y + h + 1);
+      doc.setLineWidth(0.2);
+    }
+    return;
   }
 
-  // Projected marker (thin vertical line)
-  const projX = x + Math.max(0, Math.min(w, (w * projectedPct) / 100));
+  // Exceeded case: compress scale so the full actual/projected fits and the
+  // original 100% target stays clearly marked inside the track.
+  const scaleMax = Math.max(actualPct, projectedPct, 100);
+  const targetX = x + (w * 100) / scaleMax;
+  const actualW = (w * actualPct) / scaleMax;
+  const projX = x + (w * projectedPct) / scaleMax;
+
+  // Fill the portion up to target in the RAG colour
+  if (actualW > 0) {
+    const capped = Math.min(actualW, targetX - x);
+    doc.setFillColor(...color);
+    doc.roundedRect(x, y, capped, h, 1.5, 1.5, 'F');
+    // Overflow portion in a slightly darker shade to show surplus
+    if (actualW > targetX - x) {
+      doc.setFillColor(Math.max(color[0] - 30, 0), Math.max(color[1] - 30, 0), Math.max(color[2] - 30, 0));
+      doc.rect(targetX, y, actualW - (targetX - x), h, 'F');
+    }
+  }
+
+  // 100% target marker (solid bold line in the middle of the bar)
   doc.setDrawColor(30, 41, 59);
+  doc.setLineWidth(0.7);
+  doc.line(targetX, y - 1.5, targetX, y + h + 1.5);
+
+  // Projected marker
+  doc.setDrawColor(71, 85, 105);
   doc.setLineWidth(0.4);
   doc.line(projX, y - 1, projX, y + h + 1);
+
   doc.setLineWidth(0.2);
 
-  // 100% target line
-  if (projectedPct > 100 || actualPct > 100) {
-    const targetX = x + w;
-    doc.setDrawColor(...MUTED_TEXT);
-    doc.line(targetX, y - 1, targetX, y + h + 1);
-  }
+  // "Target" tick label below the 100% mark
+  doc.setFontSize(6.5);
+  doc.setTextColor(...MUTED_TEXT);
+  doc.text('100%', targetX, y + h + 3.8, { align: 'center' });
 }
 
 function drawMiniBarChart(
@@ -337,12 +369,27 @@ function buildNarrative(data: InsightsData, variant: ReportVariant): InsightNarr
     if (primary.target > 0) {
       const pct = Math.round((primary.mtd / primary.target) * 100);
       const projPct = Math.round((primary.projected / primary.target) * 100);
-      const state =
-        primary.rag === 'GREEN' ? 'on pace' :
-        primary.rag === 'AMBER' ? 'close, needs attention' : 'behind pace';
-      para += `MTD revenue is ${fmtRs(primary.mtd)} (${pct}% of ${fmtRs(primary.target)} target), ${state}. `;
-      para += `Actual daily pace is ${fmtRs(primary.dailyRate)}/day vs a required ${fmtRs(primary.requiredRate)}/day to hit target. `;
-      para += `At this pace, projected EOM is ${fmtRs(primary.projected)} (${projPct}%). `;
+      const aheadMtd = primary.mtd >= primary.target;
+      const aheadProj = primary.projected >= primary.target;
+
+      if (aheadMtd) {
+        // Already cleared the month with days still to go.
+        para += `MTD revenue of ${fmtRs(primary.mtd)} has already cleared the ${fmtRs(primary.target)} monthly target (${pct}%). `;
+        para += `Current daily pace is ${fmtRs(primary.dailyRate)}/day and at this run-rate the month is projected to close at ${fmtRs(primary.projected)} (${projPct}%), a ${fmtRs(primary.projected - primary.target)} cushion above target. `;
+        para += `Focus shifts from revenue catch-up to maintaining pace and protecting margin. `;
+      } else if (aheadProj) {
+        // MTD behind target but projection clears it.
+        para += `MTD revenue is ${fmtRs(primary.mtd)} (${pct}% of ${fmtRs(primary.target)} target). `;
+        para += `Current daily pace of ${fmtRs(primary.dailyRate)}/day projects the month to close at ${fmtRs(primary.projected)} (${projPct}%) -- target clears with a cushion of ${fmtRs(primary.projected - primary.target)}. `;
+      } else {
+        // Genuinely behind — required rate is positive and meaningful.
+        const state =
+          primary.rag === 'GREEN' ? 'on pace' :
+          primary.rag === 'AMBER' ? 'close, needs attention' : 'behind pace';
+        para += `MTD revenue is ${fmtRs(primary.mtd)} (${pct}% of ${fmtRs(primary.target)} target), ${state}. `;
+        para += `Actual daily pace is ${fmtRs(primary.dailyRate)}/day vs a required ${fmtRs(Math.max(primary.requiredRate, 0))}/day to hit target. `;
+        para += `At this pace, projected EOM is ${fmtRs(primary.projected)} (${projPct}%). `;
+      }
     } else {
       para += `MTD revenue is ${fmtRs(primary.mtd)} (no target set). `;
     }
@@ -372,33 +419,40 @@ function buildNarrative(data: InsightsData, variant: ReportVariant): InsightNarr
   // ── Observations (bullet points) ──────────────────
   const observations: string[] = [];
 
-  // Pace observations per stream
   for (const s of streams) {
+    // Positive: stream already cleared target
+    const primary = s.cards.find(c => c.label === 'Revenue' && !c.category) || s.cards.find(c => c.label === 'Sales');
+    if (primary && primary.target > 0 && primary.mtd >= primary.target) {
+      const overshoot = Math.round((primary.mtd / primary.target) * 100);
+      observations.push(`${s.name} has already cleared the monthly target (${overshoot}% of ${fmtRs(primary.target)}). Remaining days are pure upside -- protect margin and sustain pace.`);
+    }
+
     const tw = s.thisWeek.revenue;
     const lw = s.lastWeek.revenue;
     if (lw > 0 && tw > 0) {
       const wow = ((tw - lw) / lw) * 100;
       if (wow < -10) {
-        observations.push(`${s.name} revenue fell ${Math.abs(Math.round(wow))}% week-over-week -- investigate operational or demand drivers.`);
+        observations.push(`${s.name} weekly revenue fell ${Math.abs(Math.round(wow))}% vs prior week -- investigate operational or demand drivers.`);
       } else if (wow > 15) {
-        observations.push(`${s.name} had a strong week, up ${Math.round(wow)}% vs prior -- identify and replicate the driver.`);
+        observations.push(`${s.name} had a strong week, up ${Math.round(wow)}% vs prior -- identify what drove the lift and replicate.`);
       }
     }
 
-    // Daily variance
+    // Daily variance (latest day vs month average)
     if (s.daily.length >= 3) {
       const revs = s.daily.map(d => d.revenue || 0);
       const avg = revs.reduce((a, b) => a + b, 0) / revs.length;
-      const worst = revs[revs.length - 1]; // today/latest
+      const worst = revs[revs.length - 1];
       if (avg > 0 && worst < avg * 0.6) {
         observations.push(`${s.name} latest day (${fmtRs(worst)}) is notably below the month's daily average (${fmtRs(avg)}) -- check for day-of-week or operational reasons.`);
       }
     }
 
-    // Category RED
-    const redCats = s.cards.filter(c => c.rag === 'RED' && c.category);
+    // Category RED — only when genuinely behind (mtd < target)
+    const redCats = s.cards.filter(c => c.rag === 'RED' && c.category && c.mtd < c.target);
     for (const rc of redCats) {
-      observations.push(`${s.name} -> ${rc.category} is behind target (${fmtValue(rc.mtd, rc.unit)} of ${fmtValue(rc.target, rc.unit)}); needs ${fmtValue(rc.requiredRate, rc.unit)}/day to recover.`);
+      const need = Math.max(rc.requiredRate, 0);
+      observations.push(`${s.name} -> ${rc.category} ${rc.label} behind target (${fmtValue(rc.mtd, rc.unit)} of ${fmtValue(rc.target, rc.unit)}); needs ${fmtValue(need, rc.unit)}/day to recover.`);
     }
 
     // Pharmacy margin comment
@@ -414,13 +468,15 @@ function buildNarrative(data: InsightsData, variant: ReportVariant): InsightNarr
     }
   }
 
-  // Projection comfort
+  // Combined projection comfort
   if (combined.targetRevenue > 0) {
     const combinedPct = (combined.projectedRevenue / combined.targetRevenue) * 100;
     if (combinedPct >= 100 && combinedPct < 110) {
-      observations.push(`Overall projection is only ${Math.round(combinedPct)}% of target -- slim cushion, small disruptions could break the plan.`);
-    } else if (combinedPct >= 110) {
-      observations.push(`Overall projection is ${Math.round(combinedPct)}% of target -- consider raising internal goals for the remaining days.`);
+      observations.push(`Combined projection is ${Math.round(combinedPct)}% of target -- slim cushion, small disruptions could break the plan.`);
+    } else if (combinedPct >= 110 && combinedPct < 150) {
+      observations.push(`Combined projection is ${Math.round(combinedPct)}% of target -- strong performance; consider reinvesting or raising internal stretch goals for the remainder.`);
+    } else if (combinedPct >= 150) {
+      observations.push(`Combined projection is ${Math.round(combinedPct)}% of target -- materially outperforming. Review whether the monthly target was set correctly and recalibrate future forecasts.`);
     }
   }
 
@@ -443,6 +499,10 @@ function buildNarrative(data: InsightsData, variant: ReportVariant): InsightNarr
       actionList.push(
         `Hold current pace and add targeted revenue initiatives (outbound, bundling, or pricing) to bridge the remaining gap.`
       );
+    } else if (combinedPct >= 110) {
+      actionList.push(
+        `Projections are ${Math.round(combinedPct)}% of target. Sustain operational pace, monitor margin and service quality, and use the surplus to strengthen next month's pipeline.`
+      );
     }
   }
 
@@ -450,15 +510,22 @@ function buildNarrative(data: InsightsData, variant: ReportVariant): InsightNarr
     const primary = s.cards.find(c => c.label === 'Revenue' && !c.category)
       || s.cards.find(c => c.label === 'Sales');
     if (!primary || primary.target === 0) continue;
-    if (primary.rag === 'RED') {
+
+    // Only recommend "lift pace" when genuinely behind (mtd < target and required rate is positive).
+    if (primary.rag === 'RED' && primary.mtd < primary.target && primary.requiredRate > 0) {
       actionList.push(
         `${s.name}: Lift daily pace from ${fmtRs(primary.dailyRate)} to ${fmtRs(primary.requiredRate)} -- review capacity, conversion, and demand levers this week.`
       );
+    } else if (primary.mtd >= primary.target) {
+      actionList.push(
+        `${s.name}: Monthly target already cleared (${Math.round((primary.mtd / primary.target) * 100)}%). Maintain current pace, protect margin, and capture remaining days as upside.`
+      );
     }
 
-    const cats = s.cards.filter(c => c.category && c.rag === 'RED');
+    // Category-level: only push recommendations for categories actually behind
+    const cats = s.cards.filter(c => c.category && c.rag === 'RED' && c.mtd < c.target && c.requiredRate > 0);
     for (const c of cats) {
-      actionList.push(`${s.name} -> ${c.category} ${c.label}: needs ${fmtValue(c.requiredRate, c.unit)}/day (currently ${fmtValue(c.dailyRate, c.unit)}) to close the ${fmtValue(Math.max(c.target - c.mtd, 0), c.unit)} gap.`);
+      actionList.push(`${s.name} -> ${c.category} ${c.label}: needs ${fmtValue(c.requiredRate, c.unit)}/day (currently ${fmtValue(c.dailyRate, c.unit)}) to close the ${fmtValue(c.target - c.mtd, c.unit)} gap.`);
     }
   }
 
@@ -496,28 +563,33 @@ function generateDailyPDF(data: InsightsData, clientName: string) {
   let y = 44;
   const narrative = buildNarrative(data, 'daily');
 
-  // Executive summary
-  y = addSectionTitle(doc, 'Executive Summary', y);
-  y = addParagraph(doc, narrative.executive, y, { size: 10 });
-  y += 4;
+  // Executive summary header row: title on the left, RAG pill on the right
+  doc.setTextColor(...PRIMARY);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text('Executive Summary', 14, y);
+  drawRAGPill(doc, data.combined.rag, pageW - 58, y, 44, 7);
+  doc.setDrawColor(...PRIMARY);
+  doc.setLineWidth(0.5);
+  doc.line(14, y + 1.5, pageW - 14, y + 1.5);
+  doc.setLineWidth(0.2);
+  y += 8;
 
-  // RAG badge
-  drawRAGPill(doc, data.combined.rag, pageW - 56, y, 44, 7);
-  y += 6;
+  y = addParagraph(doc, narrative.executive, y, { size: 10 });
+  y += 5;
 
   // Combined progress bar
   if (data.combined.targetRevenue > 0) {
-    y = ensureSpace(doc, y, 30);
-    doc.setFontSize(10);
+    doc.setFontSize(11);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(...DARK_TEXT);
     doc.text('Combined Revenue Progress', 14, y);
-    y += 4;
+    y += 5;
 
     const mtdPct = (data.combined.mtdRevenue / data.combined.targetRevenue) * 100;
     const projPct = (data.combined.projectedRevenue / data.combined.targetRevenue) * 100;
     drawProgressBar(doc, 14, y, pageW - 28, 7, mtdPct, projPct, ragRGB(data.combined.rag));
-    y += 9;
+    y += 12;
 
     doc.setFontSize(8.5);
     doc.setFont('helvetica', 'normal');
@@ -525,7 +597,7 @@ function generateDailyPDF(data: InsightsData, clientName: string) {
     doc.text(`MTD: ${fmtRs(data.combined.mtdRevenue)} (${Math.round(mtdPct)}%)`, 14, y);
     doc.text(`Projected: ${fmtRs(data.combined.projectedRevenue)} (${Math.round(projPct)}%)`, pageW / 2, y, { align: 'center' });
     doc.text(`Target: ${fmtRs(data.combined.targetRevenue)}`, pageW - 14, y, { align: 'right' });
-    y += 8;
+    y += 10;
   }
 
   // Per-stream day snapshot
@@ -574,15 +646,17 @@ function generateDailyPDF(data: InsightsData, clientName: string) {
     for (const card of stream.cards) {
       if (card.target === 0 || card.unit === 'percent') continue;
       const dailyTarget = Math.round(card.target / data.daysInMonth);
+      const aheadMtd = card.mtd >= card.target;
       const onPace = card.requiredRate <= card.dailyRate;
+      const status = aheadMtd ? 'EXCEEDED' : onPace ? 'ON PACE' : 'BEHIND';
       paceRows.push([
         card.category ? `${card.category} - ${card.label}` : card.label,
         fmtValue(card.mtd, card.unit),
         fmtValue(card.target, card.unit),
         fmtValue(dailyTarget, card.unit),
         fmtValue(card.dailyRate, card.unit),
-        fmtValue(card.requiredRate, card.unit),
-        onPace ? 'ON PACE' : 'BEHIND',
+        aheadMtd ? '--' : fmtValue(Math.max(card.requiredRate, 0), card.unit),
+        status,
       ]);
     }
 
@@ -601,7 +675,7 @@ function generateDailyPDF(data: InsightsData, clientName: string) {
         },
         didParseCell: (d) => {
           if (d.section === 'body' && d.column.index === 6) {
-            if (d.cell.raw === 'ON PACE') d.cell.styles.textColor = [16, 185, 129];
+            if (d.cell.raw === 'ON PACE' || d.cell.raw === 'EXCEEDED') d.cell.styles.textColor = [16, 185, 129];
             if (d.cell.raw === 'BEHIND') d.cell.styles.textColor = [220, 38, 38];
           }
         },
@@ -655,12 +729,20 @@ function generateWeeklyPDF(data: InsightsData, clientName: string) {
   let y = 44;
   const narrative = buildNarrative(data, 'weekly');
 
-  y = addSectionTitle(doc, 'Executive Summary', y);
-  y = addParagraph(doc, narrative.executive, y, { size: 10 });
-  y += 3;
-
-  drawRAGPill(doc, data.combined.rag, pageW - 56, y, 44, 7);
+  // Executive summary header row: title on the left, RAG pill on the right
+  doc.setTextColor(...PRIMARY);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text('Executive Summary', 14, y);
+  drawRAGPill(doc, data.combined.rag, pageW - 58, y, 44, 7);
+  doc.setDrawColor(...PRIMARY);
+  doc.setLineWidth(0.5);
+  doc.line(14, y + 1.5, pageW - 14, y + 1.5);
+  doc.setLineWidth(0.2);
   y += 8;
+
+  y = addParagraph(doc, narrative.executive, y, { size: 10 });
+  y += 5;
 
   for (const stream of data.streams) {
     y = ensureSpace(doc, y, 80);
@@ -806,14 +888,20 @@ function generateMonthlyPDF(data: InsightsData, clientName: string) {
   let y = 44;
   const narrative = buildNarrative(data, 'monthly');
 
-  // Executive Summary
-  y = addSectionTitle(doc, 'Executive Summary', y);
-  y = addParagraph(doc, narrative.executive, y, { size: 10 });
-  y += 3;
-
-  // RAG pill + headline numbers row
-  drawRAGPill(doc, data.combined.rag, pageW - 56, y, 44, 7);
+  // Executive summary header row: title on the left, RAG pill on the right
+  doc.setTextColor(...PRIMARY);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text('Executive Summary', 14, y);
+  drawRAGPill(doc, data.combined.rag, pageW - 58, y, 44, 7);
+  doc.setDrawColor(...PRIMARY);
+  doc.setLineWidth(0.5);
+  doc.line(14, y + 1.5, pageW - 14, y + 1.5);
+  doc.setLineWidth(0.2);
   y += 8;
+
+  y = addParagraph(doc, narrative.executive, y, { size: 10 });
+  y += 5;
 
   // Combined revenue visual
   if (data.combined.targetRevenue > 0) {
@@ -889,15 +977,24 @@ function generateMonthlyPDF(data: InsightsData, clientName: string) {
           ragLabel(card.rag),
         ]);
       } else {
+        const aheadMtd = card.mtd >= card.target && card.target > 0;
         const onPace = card.requiredRate <= card.dailyRate;
+        const status =
+          card.target === 0 ? 'N/A' :
+          aheadMtd ? 'EXCEEDED' :
+          onPace ? 'ON PACE' : 'BEHIND';
+        const requiredDisplay =
+          card.target === 0 ? '--' :
+          aheadMtd ? '--' :
+          fmtValue(Math.max(card.requiredRate, 0), card.unit);
         kpiRows.push([
           card.category ? `${card.category} - ${card.label}` : card.label,
           fmtValue(card.mtd, card.unit),
           card.target > 0 ? fmtValue(card.target, card.unit) : '--',
           fmtValue(card.projected, card.unit),
           fmtValue(card.dailyRate, card.unit),
-          card.target > 0 ? fmtValue(card.requiredRate, card.unit) : '--',
-          card.target === 0 ? 'N/A' : (onPace ? 'ON PACE' : 'BEHIND'),
+          requiredDisplay,
+          status,
         ]);
       }
     }
@@ -917,7 +1014,7 @@ function generateMonthlyPDF(data: InsightsData, clientName: string) {
       didParseCell: (cell) => {
         if (cell.section === 'body' && cell.column.index === 6) {
           const txt = String(cell.cell.raw || '');
-          if (txt === 'ON PACE' || txt === 'ON TRACK') cell.cell.styles.textColor = [16, 185, 129];
+          if (txt === 'ON PACE' || txt === 'ON TRACK' || txt === 'EXCEEDED') cell.cell.styles.textColor = [16, 185, 129];
           else if (txt === 'BEHIND' || txt === 'BEHIND TARGET') cell.cell.styles.textColor = [220, 38, 38];
           else if (txt === 'NEEDS ATTENTION') cell.cell.styles.textColor = [245, 158, 11];
         }
