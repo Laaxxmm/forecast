@@ -6,8 +6,9 @@ import api from '../api/client';
 import { formatINR, formatNumber, ragColor } from '../utils/format';
 import {
   Activity, TrendingUp, TrendingDown, Users, ShoppingBag, Target,
-  AlertTriangle, Info, ArrowUp, ArrowDown, Minus,
+  AlertTriangle, Info, ArrowUp, ArrowDown, Minus, Download,
 } from 'lucide-react';
+import InsightDownloadPanel from '../components/dashboard/InsightDownloadPanel';
 
 interface CardData {
   label: string; mtd: number; target: number; projected: number;
@@ -67,6 +68,8 @@ function VariationBadge({ actual, forecast }: { actual: number; forecast: number
 export default function OperationalInsightsPage() {
   const [data, setData] = useState<InsightsData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const clientName = typeof window !== 'undefined' ? (localStorage.getItem('client_name') || '') : '';
 
   useEffect(() => {
     api.get('/dashboard/operational-insights')
@@ -100,11 +103,28 @@ export default function OperationalInsightsPage() {
             {data.monthLabel} &middot; Day {daysElapsed} of {daysInMonth} &middot; {daysRemaining} days remaining
           </p>
         </div>
-        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold ${ragColor(combined.rag)}`}>
-          <span className={`w-2 h-2 rounded-full ${RAG_DOT[combined.rag]}`} />
-          {combined.rag === 'GREEN' ? 'On Track' : combined.rag === 'AMBER' ? 'Needs Attention' : combined.rag === 'RED' ? 'Behind Target' : 'No Target'}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setDownloadOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-dark-600 hover:bg-dark-500 text-theme-secondary border border-dark-400/50 transition-colors"
+            title="Download operational insight report"
+          >
+            <Download size={14} />
+            <span className="hidden sm:inline">Download Insight</span>
+          </button>
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold ${ragColor(combined.rag)}`}>
+            <span className={`w-2 h-2 rounded-full ${RAG_DOT[combined.rag]}`} />
+            {combined.rag === 'GREEN' ? 'On Track' : combined.rag === 'AMBER' ? 'Needs Attention' : combined.rag === 'RED' ? 'Behind Target' : 'No Target'}
+          </div>
         </div>
       </div>
+
+      <InsightDownloadPanel
+        open={downloadOpen}
+        onClose={() => setDownloadOpen(false)}
+        data={data}
+        clientName={clientName}
+      />
 
       {/* Combined Overview Bar */}
       {combined.targetRevenue > 0 && (
