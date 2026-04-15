@@ -43,11 +43,17 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), uploa
     const branchId = getBranchIdForInsert(req);
     const { rows, summary } = parseHealthplix(req.file.path);
 
-    // Dedup: delete existing clinic rows for the specific dates being imported
+    // Dedup: delete existing clinic rows for the specific (branch, date) pairs
+    // being re-imported. The branch_id scope is MANDATORY — without it an
+    // upload for one branch would wipe another branch's rows on the same dates.
+    // `branch_id IS ?` handles NULL (single-branch clients) correctly.
     const clinicDatesToReplace = [...new Set(rows.map(r => r.bill_date).filter(Boolean))];
     if (clinicDatesToReplace.length > 0) {
       const ph = clinicDatesToReplace.map(() => '?').join(',');
-      db.run(`DELETE FROM clinic_actuals WHERE bill_date IN (${ph})`, ...clinicDatesToReplace);
+      db.run(
+        `DELETE FROM clinic_actuals WHERE branch_id IS ? AND bill_date IN (${ph})`,
+        branchId, ...clinicDatesToReplace
+      );
     }
 
     db.run(
@@ -132,11 +138,16 @@ router.post('/oneglance-sales', requireAdmin, requireIntegration('oneglance'), u
     const { rows: allRows, summary } = parseOneglanceSales(req.file.path);
     const rows = allRows.filter(r => !r.bill_month || r.bill_month <= currentMonth);
 
-    // Dedup: delete existing sales rows for the specific dates being imported
+    // Dedup: delete existing sales rows for this branch on the dates being
+    // re-imported. branch_id scope is MANDATORY — an upload for one branch
+    // must never clobber another branch's rows for the same dates.
     const salesDates = [...new Set(rows.map(r => r.bill_date).filter(Boolean))];
     if (salesDates.length > 0) {
       const ph = salesDates.map(() => '?').join(',');
-      db.run(`DELETE FROM pharmacy_sales_actuals WHERE bill_date IN (${ph})`, ...salesDates);
+      db.run(
+        `DELETE FROM pharmacy_sales_actuals WHERE branch_id IS ? AND bill_date IN (${ph})`,
+        branchId, ...salesDates
+      );
     }
 
     db.run(
@@ -210,11 +221,15 @@ router.post('/oneglance-purchase', requireAdmin, requireIntegration('oneglance')
     const { rows: allRows, summary } = parseOneglancePurchase(req.file.path);
     const rows = allRows.filter(r => !r.invoice_month || r.invoice_month <= currentMonth);
 
-    // Dedup: delete existing purchase rows for the specific dates being imported
+    // Dedup: delete existing purchase rows for this branch on the dates being
+    // re-imported. branch_id scope is MANDATORY — see sales handler above.
     const purchaseDates = [...new Set(rows.map(r => r.invoice_date).filter(Boolean))];
     if (purchaseDates.length > 0) {
       const ph = purchaseDates.map(() => '?').join(',');
-      db.run(`DELETE FROM pharmacy_purchase_actuals WHERE invoice_date IN (${ph})`, ...purchaseDates);
+      db.run(
+        `DELETE FROM pharmacy_purchase_actuals WHERE branch_id IS ? AND invoice_date IN (${ph})`,
+        branchId, ...purchaseDates
+      );
     }
 
     db.run(
@@ -300,11 +315,15 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), upload.single('
     const branchId = getBranchIdForInsert(req);
     const { rows, summary } = parseTuriaInvoices(req.file.path);
 
-    // Dedup: delete existing turia rows for the specific dates being imported
+    // Dedup: delete existing turia rows for this branch on the dates being
+    // re-imported. branch_id scope is MANDATORY — see clinic handler above.
     const turiaDates = [...new Set(rows.map(r => r.invoice_date).filter(Boolean))];
     if (turiaDates.length > 0) {
       const ph = turiaDates.map(() => '?').join(',');
-      db.run(`DELETE FROM turia_invoices WHERE invoice_date IN (${ph})`, ...turiaDates);
+      db.run(
+        `DELETE FROM turia_invoices WHERE branch_id IS ? AND invoice_date IN (${ph})`,
+        branchId, ...turiaDates
+      );
     }
 
     db.run(

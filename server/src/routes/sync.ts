@@ -161,12 +161,18 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async
 
     state.progress = { step: 'saving', message: `Saving ${rows.length} rows to database...`, pct: 95 };
 
-    // ── Deduplication: delete existing clinic rows for the specific dates being imported ──
+    // ── Deduplication: delete existing clinic rows for THIS BRANCH on the
+    //    dates being re-synced. branch_id scope is MANDATORY — a sync for one
+    //    branch must never wipe another branch's rows for overlapping dates.
+    //    `branch_id IS ?` also handles NULL (single-branch clients). ──
     const clinicDatesToReplace = [...new Set(rows.map((r: any) => r.bill_date).filter(Boolean))];
     if (clinicDatesToReplace.length > 0) {
       const ph = clinicDatesToReplace.map(() => '?').join(',');
-      db.run(`DELETE FROM clinic_actuals WHERE bill_date IN (${ph})`, ...clinicDatesToReplace);
-      console.log(`[hp-sync] Cleared existing clinic data for dates: ${clinicDatesToReplace.length} dates`);
+      db.run(
+        `DELETE FROM clinic_actuals WHERE branch_id IS ? AND bill_date IN (${ph})`,
+        branchId, ...clinicDatesToReplace
+      );
+      console.log(`[hp-sync] Cleared existing clinic data for branch=${branchId}, dates=${clinicDatesToReplace.length}`);
     }
 
     // Insert into DB
@@ -412,12 +418,16 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
       const rows = allRows.filter(r => !r.bill_month || r.bill_month <= currentMonth);
       console.log(`[oneglance-sync] Sales: ${allRows.length} total rows, ${rows.length} after filtering future months (dropped ${allRows.length - rows.length})`);
 
-      // ── Deduplication: delete existing rows for the specific dates being imported ──
+      // ── Deduplication: delete existing sales rows for THIS BRANCH on the
+      //    dates being re-synced. branch_id scope is MANDATORY. ──
       const salesDatesToReplace = [...new Set(rows.map((r: any) => r.bill_date).filter(Boolean))];
       if (salesDatesToReplace.length > 0) {
         const ph = salesDatesToReplace.map(() => '?').join(',');
-        db.run(`DELETE FROM pharmacy_sales_actuals WHERE bill_date IN (${ph})`, ...salesDatesToReplace);
-        console.log(`[oneglance-sync] Cleared existing sales data for dates: ${salesDatesToReplace.length} dates`);
+        db.run(
+          `DELETE FROM pharmacy_sales_actuals WHERE branch_id IS ? AND bill_date IN (${ph})`,
+          branchId, ...salesDatesToReplace
+        );
+        console.log(`[oneglance-sync] Cleared existing sales data for branch=${branchId}, dates=${salesDatesToReplace.length}`);
       }
 
       db.run(
@@ -508,12 +518,16 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
       const rows = allPurchaseRows.filter(r => !r.invoice_month || r.invoice_month <= currentMonth);
       console.log(`[oneglance-sync] Purchase: ${allPurchaseRows.length} total rows, ${rows.length} after filtering future months`);
 
-      // ── Deduplication: delete existing purchase rows for the specific dates being imported ──
+      // ── Deduplication: delete existing purchase rows for THIS BRANCH on
+      //    the dates being re-synced. branch_id scope is MANDATORY. ──
       const purchaseDatesToReplace = [...new Set(rows.map((r: any) => r.invoice_date).filter(Boolean))];
       if (purchaseDatesToReplace.length > 0) {
         const ph = purchaseDatesToReplace.map(() => '?').join(',');
-        db.run(`DELETE FROM pharmacy_purchase_actuals WHERE invoice_date IN (${ph})`, ...purchaseDatesToReplace);
-        console.log(`[oneglance-sync] Cleared existing purchase data for dates: ${purchaseDatesToReplace.length} dates`);
+        db.run(
+          `DELETE FROM pharmacy_purchase_actuals WHERE branch_id IS ? AND invoice_date IN (${ph})`,
+          branchId, ...purchaseDatesToReplace
+        );
+        console.log(`[oneglance-sync] Cleared existing purchase data for branch=${branchId}, dates=${purchaseDatesToReplace.length}`);
       }
 
       db.run(
@@ -736,12 +750,16 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Req
 
     state.progress = { step: 'saving', message: `Saving ${rows.length} invoices to database...`, pct: 92 };
 
-    // Dedup: delete existing turia rows for the specific dates being imported
+    // Dedup: delete existing turia rows for THIS BRANCH on the dates being
+    // re-synced. branch_id scope is MANDATORY.
     const turiaDatesToReplace = [...new Set(rows.map((r: any) => r.invoice_date).filter(Boolean))];
     if (turiaDatesToReplace.length > 0) {
       const ph = turiaDatesToReplace.map(() => '?').join(',');
-      db.run(`DELETE FROM turia_invoices WHERE invoice_date IN (${ph})`, ...turiaDatesToReplace);
-      console.log(`[turia-sync] Cleared existing data for dates: ${turiaDatesToReplace.length} dates`);
+      db.run(
+        `DELETE FROM turia_invoices WHERE branch_id IS ? AND invoice_date IN (${ph})`,
+        branchId, ...turiaDatesToReplace
+      );
+      console.log(`[turia-sync] Cleared existing data for branch=${branchId}, dates=${turiaDatesToReplace.length}`);
     }
 
     db.run(
