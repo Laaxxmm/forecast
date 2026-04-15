@@ -24,7 +24,12 @@ interface Category {
   key: string;          // forecast_items.category value (or computed id)
   label: string;
   kind: Kind;
-  computed?: (f: Record<string, number>, a: Record<string, number>, month: string) => { f: number; a: number };
+  // f/a are nested: f[categoryKey][monthKey] = value
+  computed?: (
+    f: Record<string, Record<string, number>>,
+    a: Record<string, Record<string, number>>,
+    month: string
+  ) => { f: number; a: number };
   isHeader?: boolean;   // computed totals get a heavier visual weight
 }
 
