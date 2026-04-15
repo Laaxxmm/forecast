@@ -115,7 +115,7 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), uploa
         db.run(
           `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
            VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, ?, datetime('now'))
-           ON CONFLICT(scenario_id, category, item_name, month)
+           ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
            DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
           activeScenario.id, row.month, row.total, branchId, clinicStreamId
         );
@@ -198,7 +198,7 @@ router.post('/oneglance-sales', requireAdmin, requireIntegration('oneglance'), u
         db.run(
           `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
            VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?, ?, datetime('now'))
-           ON CONFLICT(scenario_id, category, item_name, month)
+           ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
            DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
           activeScenario.id, row.month, row.total, branchId, pharmaStreamId
         );
@@ -375,7 +375,7 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), upload.single('
         db.run(
           `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
            VALUES (?, 'revenue', 'Consultancy Revenue', ?, ?, ?, ?, datetime('now'))
-           ON CONFLICT(scenario_id, category, item_name, month)
+           ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
            DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
           activeScenario.id, row.month, row.total, branchId, consultStreamId
         );

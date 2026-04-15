@@ -218,7 +218,7 @@ app.post('/api/cleanup-clinic', async (_req, res) => {
         mcDb.run(
           `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, stream_id, updated_at)
            VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, datetime('now'))
-           ON CONFLICT(scenario_id, category, item_name, month)
+           ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
            DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
           scenarioId, row.month, row.total, clinicStreamId
         );
@@ -653,7 +653,7 @@ async function start() {
                 clientDb.run(
                   `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, stream_id)
                    VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?)
-                   ON CONFLICT(scenario_id, category, item_name, month)
+                   ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
                    DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id`,
                   scenario.id, row.month, row.total, clinicStream?.id || null
                 );
@@ -673,7 +673,7 @@ async function start() {
                 clientDb.run(
                   `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, stream_id)
                    VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?)
-                   ON CONFLICT(scenario_id, category, item_name, month)
+                   ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
                    DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id`,
                   scenario.id, row.month, row.total, pharmaStream?.id || null
                 );
@@ -682,6 +682,121 @@ async function start() {
             } catch {}
           }
         }
+      }
+
+      // ── Per-branch dashboard_actuals rebuild (one-time reconciliation) ──
+      // The previous UNIQUE constraint on dashboard_actuals didn't include
+      // branch_id, so multi-branch clients ended up with per-(scenario,cat,
+      // item,month) rollup rows that belonged to whichever branch last
+      // synced — other branches' rollups were silently overwritten. The
+      // schema migration above fixes the constraint; this block rebuilds
+      // the auto-synced rollup rows from the (still-intact) source tables
+      // so existing data shows up correctly for every branch.
+      //
+      // Scope: only the rows that are auto-populated by import/sync — Clinic
+      // Revenue, Pharmacy Revenue, Pharmacy COGS, Consultancy Revenue.
+      // Manually-entered rows (everything else) are left alone.
+      //
+      // Flag: dashboard_actuals_branch_rebuild_v1 in app_settings.
+      try {
+        const clientDb = await getClientHelper(client.slug);
+        const already = clientDb.get(
+          "SELECT value FROM app_settings WHERE key = 'dashboard_actuals_branch_rebuild_v1'"
+        );
+        if (!already) {
+          const platformDb2 = await getPlatformHelper();
+          const clientRow = platformDb2.get('SELECT id FROM clients WHERE slug = ?', client.slug);
+          const clinicStream = clientRow ? platformDb2.get(
+            "SELECT id FROM business_streams WHERE client_id = ? AND (LOWER(name) LIKE '%clinic%' OR LOWER(name) LIKE '%health%') AND is_active = 1 LIMIT 1",
+            clientRow.id
+          ) : null;
+          const pharmaStream = clientRow ? platformDb2.get(
+            "SELECT id FROM business_streams WHERE client_id = ? AND LOWER(name) LIKE '%pharma%' AND is_active = 1 LIMIT 1",
+            clientRow.id
+          ) : null;
+
+          // Pick the scenario tied to each stream (fall back to default).
+          const pickScenario = (streamId: number | null) => clientDb.get(
+            `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
+             WHERE fy.is_active = 1 AND (s.stream_id = ? OR s.is_default = 1)
+             ORDER BY CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id LIMIT 1`,
+            streamId, streamId
+          );
+          const clinicScenario = pickScenario(clinicStream?.id || null);
+          const pharmaScenario = pickScenario(pharmaStream?.id || null);
+
+          let rebuilt = 0;
+
+          // Clinic Revenue — per (branch_id, month) from clinic_actuals
+          if (clinicScenario) {
+            clientDb.run(
+              `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Clinic Revenue'`,
+              clinicScenario.id
+            );
+            const rows = clientDb.all(
+              `SELECT branch_id, bill_month as month, COALESCE(SUM(item_price), 0) as total
+               FROM clinic_actuals
+               WHERE bill_month IS NOT NULL AND bill_month != ''
+               GROUP BY branch_id, bill_month`
+            );
+            for (const r of rows) {
+              if (!r.month) continue;
+              clientDb.run(
+                `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+                 VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, ?, datetime('now'))
+                 ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
+                 DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
+                clinicScenario.id, r.month, r.total, r.branch_id, clinicStream?.id || null
+              );
+              rebuilt++;
+            }
+          }
+
+          // Pharmacy Revenue + COGS — per (branch_id, month) from pharmacy_sales_actuals
+          if (pharmaScenario) {
+            clientDb.run(
+              `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Pharmacy Revenue'`,
+              pharmaScenario.id
+            );
+            clientDb.run(
+              `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'direct_costs' AND item_name = 'Pharmacy COGS'`,
+              pharmaScenario.id
+            );
+            const rows = clientDb.all(
+              `SELECT branch_id, bill_month as month,
+                      COALESCE(SUM(sales_amount), 0) as revenue,
+                      COALESCE(SUM(purchase_amount), 0) as cogs
+               FROM pharmacy_sales_actuals
+               WHERE bill_month IS NOT NULL AND bill_month != ''
+               GROUP BY branch_id, bill_month`
+            );
+            for (const r of rows) {
+              if (!r.month) continue;
+              clientDb.run(
+                `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+                 VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?, ?, datetime('now'))
+                 ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
+                 DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
+                pharmaScenario.id, r.month, r.revenue, r.branch_id, pharmaStream?.id || null
+              );
+              clientDb.run(
+                `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+                 VALUES (?, 'direct_costs', 'Pharmacy COGS', ?, ?, ?, ?, datetime('now'))
+                 ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
+                 DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
+                pharmaScenario.id, r.month, r.cogs, r.branch_id, pharmaStream?.id || null
+              );
+              rebuilt += 2;
+            }
+          }
+
+          clientDb.run(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('dashboard_actuals_branch_rebuild_v1', '1')"
+          );
+          console.log(`  [branch-rebuild] "${client.slug}": rebuilt ${rebuilt} dashboard_actuals rows from source tables`);
+        }
+      } catch (e) {
+        console.error(`  [branch-rebuild] "${client.slug}" failed:`, (e as Error).message);
       }
 
       console.log(`Client DB "${client.slug}" schema + seed verified`);

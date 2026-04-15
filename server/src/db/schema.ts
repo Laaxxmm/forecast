@@ -292,6 +292,62 @@ export function initializeSchema(db: DbHelper) {
     try { db.exec(sql); } catch { /* column already exists */ }
   }
 
+  // ── dashboard_actuals UNIQUE fix ───────────────────────────────────────────
+  // The original table definition had UNIQUE(scenario_id, category, item_name,
+  // month) — branch_id NOT in the key. Consequence: any multi-branch client's
+  // INSERT .. ON CONFLICT DO UPDATE on this table silently overwrites another
+  // branch's rollup row for the same (scenario, category, item, month). That
+  // bug manifested as "Chennai data disappeared after Ashok Nagar synced"
+  // even though the raw clinic_actuals rows were safe post-commit 0f75294.
+  //
+  // Fix: rebuild the table without the inline UNIQUE and recreate it as an
+  // expression-based unique index that normalises NULL branch_id to 0 so the
+  // single-branch case still enforces one row per (scenario, cat, item, month)
+  // and the multi-branch case allows one row per (scenario, cat, item, month,
+  // branch). All INSERT .. ON CONFLICT call sites have been updated to target
+  // this same expression list.
+  //
+  // Idempotent: uses the presence of idx_dashboard_actuals_unique_v2 as the
+  // migration flag.
+  try {
+    const already = db.get(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_dashboard_actuals_unique_v2'"
+    );
+    if (!already) {
+      db.exec(`
+        BEGIN;
+        CREATE TABLE dashboard_actuals_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          scenario_id INTEGER NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE,
+          category TEXT NOT NULL,
+          item_name TEXT NOT NULL,
+          linked_item_id INTEGER REFERENCES forecast_items(id) ON DELETE SET NULL,
+          month TEXT NOT NULL,
+          amount REAL DEFAULT 0,
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now')),
+          branch_id INTEGER,
+          stream_id INTEGER
+        );
+        INSERT INTO dashboard_actuals_new
+          (id, scenario_id, category, item_name, linked_item_id, month, amount, created_at, updated_at, branch_id, stream_id)
+          SELECT id, scenario_id, category, item_name, linked_item_id, month, amount, created_at, updated_at, branch_id, stream_id
+          FROM dashboard_actuals;
+        DROP TABLE dashboard_actuals;
+        ALTER TABLE dashboard_actuals_new RENAME TO dashboard_actuals;
+        CREATE UNIQUE INDEX idx_dashboard_actuals_unique_v2
+          ON dashboard_actuals (scenario_id, category, item_name, month, COALESCE(branch_id, 0));
+        COMMIT;
+      `);
+    }
+  } catch (err) {
+    // If rebuild fails (unlikely — wrapped in BEGIN/COMMIT), log and move on.
+    // App still works; per-branch rollups just remain collapsed until the next
+    // deploy retries the migration.
+    try { db.exec('ROLLBACK'); } catch {}
+    console.warn('[schema] dashboard_actuals unique-key migration skipped:', (err as Error).message);
+  }
+
   // Data migrations — backfill / normalise legacy rows
   // Historical forecast_items rows for assets were written with item_type NULL or ''.
   // BalanceSheet.tsx routes assets by item_type (current / long_term / investment);

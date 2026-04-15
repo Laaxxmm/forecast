@@ -30,18 +30,23 @@ router.get('/', async (req, res) => {
 
 // POST /api/dashboard-actuals/bulk
 // Bulk upsert actuals: { scenario_id, entries: [{ category, item_name, linked_item_id?, month, amount }] }
+// Scoped by the caller's current branch so manual entries for one branch don't
+// overwrite another branch's row with the same (scenario, category, item, month).
 router.post('/bulk', async (req, res) => {
   const db = req.tenantDb!;
   const { scenario_id, entries } = req.body;
   if (!scenario_id || !entries) return res.status(400).json({ error: 'scenario_id and entries required' });
 
+  const branchId = getBranchIdForInsert(req);
+  const streamId = getStreamIdForInsert(req);
+
   for (const entry of entries) {
     db.run(
-      `INSERT INTO dashboard_actuals (scenario_id, category, item_name, linked_item_id, month, amount, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-       ON CONFLICT(scenario_id, category, item_name, month)
+      `INSERT INTO dashboard_actuals (scenario_id, category, item_name, linked_item_id, month, amount, branch_id, stream_id, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
        DO UPDATE SET amount = excluded.amount, linked_item_id = excluded.linked_item_id, updated_at = datetime('now')`,
-      scenario_id, entry.category, entry.item_name, entry.linked_item_id || null, entry.month, entry.amount || 0
+      scenario_id, entry.category, entry.item_name, entry.linked_item_id || null, entry.month, entry.amount || 0, branchId, streamId
     );
   }
   res.json({ success: true, count: entries.length });
@@ -130,7 +135,7 @@ router.post('/sync-from-imports', async (req, res) => {
         db.run(
           `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
            VALUES (?, 'revenue', ?, ?, ?, ?, ?, datetime('now'))
-           ON CONFLICT(scenario_id, category, item_name, month)
+           ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
            DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
           scenario_id, `${clinicStreamName} Revenue`, row.month, row.total, branchId, streams[0]?.id || streamId
         );
@@ -152,14 +157,14 @@ router.post('/sync-from-imports', async (req, res) => {
         db.run(
           `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
            VALUES (?, 'revenue', ?, ?, ?, ?, ?, datetime('now'))
-           ON CONFLICT(scenario_id, category, item_name, month)
+           ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
            DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
           scenario_id, `${pharmacyStreamName} Revenue`, row.month, row.revenue, branchId, streams[1]?.id || streamId
         );
         db.run(
           `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
            VALUES (?, 'direct_costs', ?, ?, ?, ?, ?, datetime('now'))
-           ON CONFLICT(scenario_id, category, item_name, month)
+           ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
            DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')`,
           scenario_id, `${pharmacyStreamName} COGS`, row.month, row.cogs, branchId, streams[1]?.id || streamId
         );

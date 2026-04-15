@@ -247,7 +247,7 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async
         db.run(
           `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
            VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, ?, datetime('now'))
-           ON CONFLICT(scenario_id, category, item_name, month)
+           ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
            DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
           activeScenario.id, row.month, row.total, branchId, clinicStreamId
         );
@@ -472,14 +472,15 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
         pharmaStreamId, pharmaStreamId
       );
       if (activeScenario) {
-        // Clear old Pharmacy Revenue/COGS entries before re-syncing (prevents stale month data)
+        // Clear old Pharmacy Revenue/COGS entries before re-syncing (prevents stale month data).
+        // branch_id scope is MANDATORY — syncing one branch must never wipe another branch's rollup.
         db.run(
-          `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Pharmacy Revenue'`,
-          activeScenario.id
+          `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Pharmacy Revenue'${bf.where}`,
+          activeScenario.id, ...bf.params
         );
         db.run(
-          `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'direct_costs' AND item_name = 'Pharmacy COGS'`,
-          activeScenario.id
+          `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'direct_costs' AND item_name = 'Pharmacy COGS'${bf.where}`,
+          activeScenario.id, ...bf.params
         );
         const pharmaMonthly = db.all(
           `SELECT bill_month as month, COALESCE(SUM(sales_amount), 0) as revenue,
@@ -494,14 +495,14 @@ router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (
           db.run(
             `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
              VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?, ?, datetime('now'))
-             ON CONFLICT(scenario_id, category, item_name, month)
+             ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
              DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
             activeScenario.id, row.month, row.revenue, branchId, pharmaStreamId
           );
           db.run(
             `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
              VALUES (?, 'direct_costs', 'Pharmacy COGS', ?, ?, ?, ?, datetime('now'))
-             ON CONFLICT(scenario_id, category, item_name, month)
+             ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
              DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
             activeScenario.id, row.month, row.cogs, branchId, pharmaStreamId
           );
@@ -824,7 +825,7 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Req
         db.run(
           `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
            VALUES (?, 'revenue', 'Consultancy Revenue', ?, ?, ?, ?, datetime('now'))
-           ON CONFLICT(scenario_id, category, item_name, month)
+           ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
            DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
           activeScenario.id, row.month, row.total, branchId, consultStreamId
         );
