@@ -238,7 +238,7 @@ app.use('/api/admin', requireAuth, requireSuperAdmin, adminRoutes);
 
 // ─── Client-scoped routes (require auth + tenant + branch + module) ────────
 const forecastOps = [requireAuth, resolveTenant, resolveBranch, requireModule('forecast_ops')];
-app.use('/api/settings', requireAuth, resolveTenant, resolveBranch, requireAdmin, settingsRoutes);
+app.use('/api/settings', requireAuth, resolveTenant, resolveBranch, settingsRoutes);
 app.use('/api/import', ...forecastOps, requireAdmin, importRoutes);
 app.use('/api/actuals', ...forecastOps, actualsRoutes);
 app.use('/api/budgets', ...forecastOps, budgetRoutes);

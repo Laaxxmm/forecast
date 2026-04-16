@@ -1,13 +1,16 @@
 import { Router } from 'express';
+import { requireAdmin } from '../middleware/auth.js';
 
 const router = Router();
 
+// GET endpoints — accessible to all authenticated users (regular users need FY data for forecast)
 router.get('/fy', async (_req, res) => {
   const db = _req.tenantDb!;
   res.json(db.all('SELECT * FROM financial_years ORDER BY start_date DESC'));
 });
 
-router.post('/fy', async (req, res) => {
+// Write endpoints — admin only
+router.post('/fy', requireAdmin, async (req, res) => {
   const { label, start_date, end_date } = req.body;
   if (!label || !start_date || !end_date) return res.status(400).json({ error: 'label, start_date, end_date required' });
   const db = req.tenantDb!;
@@ -15,7 +18,7 @@ router.post('/fy', async (req, res) => {
   res.json({ id: result.lastInsertRowid });
 });
 
-router.put('/fy/:id/activate', async (req, res) => {
+router.put('/fy/:id/activate', requireAdmin, async (req, res) => {
   const db = req.tenantDb!;
   db.run('UPDATE financial_years SET is_active = 0');
   db.run('UPDATE financial_years SET is_active = 1 WHERE id = ?', req.params.id);
@@ -27,7 +30,7 @@ router.get('/doctors', async (_req, res) => {
   res.json(db.all('SELECT * FROM doctors ORDER BY name'));
 });
 
-router.post('/doctors', async (req, res) => {
+router.post('/doctors', requireAdmin, async (req, res) => {
   const { name } = req.body;
   if (!name) return res.status(400).json({ error: 'name required' });
   const db = req.tenantDb!;
