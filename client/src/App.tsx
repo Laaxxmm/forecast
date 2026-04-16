@@ -66,9 +66,9 @@ function ModuleRoute({ moduleKey, children }: { moduleKey: string; children: Rea
   return enabledModules.includes(moduleKey) ? <>{children}</> : <Navigate to="/modules" replace />;
 }
 
-// Block regular users from Analysis/Insights when analysis_access module is disabled
+// Block regular users from a page when its module toggle is disabled
 // Admins and super_admins always have access
-function AnalysisRoute({ children }: { children: React.ReactNode }) {
+function UserModuleRoute({ moduleKey, children }: { moduleKey: string; children: React.ReactNode }) {
   const userRole = localStorage.getItem('user_role');
   const userType = localStorage.getItem('user_type');
   const isAdmin = userRole === 'admin' || userType === 'super_admin';
@@ -76,7 +76,7 @@ function AnalysisRoute({ children }: { children: React.ReactNode }) {
   const enabledModules: string[] = (() => {
     try { return JSON.parse(localStorage.getItem('enabled_modules') || '[]'); } catch { return []; }
   })();
-  return enabledModules.includes('analysis_access') ? <>{children}</> : <Navigate to="/actuals" replace />;
+  return enabledModules.includes(moduleKey) ? <>{children}</> : <Navigate to="/actuals" replace />;
 }
 
 // Smart default redirect based on role
@@ -106,8 +106,8 @@ export default function App() {
         >
           <Route path="/actuals" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><DashboardPage /></ModuleRoute></ClientRoute>} />
           <Route path="/forecast/*" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><ForecastModulePage /></ModuleRoute></ClientRoute>} />
-          <Route path="/analysis/*" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><AnalysisRoute><DashboardModulePage /></AnalysisRoute></ModuleRoute></ClientRoute>} />
-          <Route path="/insights" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><AnalysisRoute><OperationalInsightsPage /></AnalysisRoute></ModuleRoute></ClientRoute>} />
+          <Route path="/analysis/*" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><UserModuleRoute moduleKey="user_analysis"><DashboardModulePage /></UserModuleRoute></ModuleRoute></ClientRoute>} />
+          <Route path="/insights" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><UserModuleRoute moduleKey="user_insights"><OperationalInsightsPage /></UserModuleRoute></ModuleRoute></ClientRoute>} />
           <Route path="/revenue-sharing" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><RevenueSharingPage /></ModuleRoute></ClientRoute>} />
           <Route path="/import" element={<ClientRoute><ClientAdminRoute><ModuleRoute moduleKey="forecast_ops"><ImportPage /></ModuleRoute></ClientAdminRoute></ClientRoute>} />
           <Route path="/stream/:streamId" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><StreamDetailPage /></ModuleRoute></ClientRoute>} />

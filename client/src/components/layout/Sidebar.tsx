@@ -9,11 +9,11 @@ import { useTheme } from '../../contexts/ThemeContext';
 
 // Forecast & Operations navigation
 const forecastLinks = [
-  { to: '/actuals', icon: LayoutDashboard, label: 'Actuals', clientAdminOnly: false, analysisOnly: false },
-  { to: '/forecast', icon: TrendingUp, label: 'Forecast', clientAdminOnly: false, analysisOnly: false },
-  { to: '/analysis', icon: BarChart3, label: 'Analysis', clientAdminOnly: false, analysisOnly: true },
-  { to: '/insights', icon: Activity, label: 'Insights', clientAdminOnly: false, analysisOnly: true },
-  { to: '/revenue-sharing', icon: PieChart, label: 'Rev. Sharing', clientAdminOnly: false, analysisOnly: false },
+  { to: '/actuals', icon: LayoutDashboard, label: 'Actuals', clientAdminOnly: false, requiresModule: '' },
+  { to: '/forecast', icon: TrendingUp, label: 'Forecast', clientAdminOnly: false, requiresModule: '' },
+  { to: '/analysis', icon: BarChart3, label: 'Analysis', clientAdminOnly: false, requiresModule: 'user_analysis' },
+  { to: '/insights', icon: Activity, label: 'Insights', clientAdminOnly: false, requiresModule: 'user_insights' },
+  { to: '/revenue-sharing', icon: PieChart, label: 'Rev. Sharing', clientAdminOnly: false, requiresModule: '' },
 ];
 
 // VCFO Portal is served by the mounted TallyVision sub-app at /vcfo/* and has its own sidebar.
@@ -119,8 +119,8 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
   const isOwnerAdmin = isSuperAdmin && isOwner;
   const visibleMain = isOwnerAdmin ? [] : mainLinks.filter(l => {
     if (!isClientAdmin && !isSuperAdmin && l.clientAdminOnly) return false;
-    // Hide Analysis & Insights for regular users when analysis_access is disabled
-    if (l.analysisOnly && !isClientAdmin && !isSuperAdmin && !enabledModules.includes('analysis_access')) return false;
+    // Hide Analysis/Insights for regular users when their respective module is disabled
+    if (l.requiresModule && !isClientAdmin && !isSuperAdmin && !enabledModules.includes(l.requiresModule)) return false;
     return true;
   });
   const visibleUtility = isOwnerAdmin ? [] : utilityLinks.filter(l => {
