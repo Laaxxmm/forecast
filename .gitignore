@@ -8,3 +8,4 @@ backups/
 *.log
 uploads/
 vcfo/node_modules/
+.claude/
