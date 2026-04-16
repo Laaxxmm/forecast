@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import { BarChart3, Eye, EyeOff } from 'lucide-react';
@@ -9,7 +9,12 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [platformLogo, setPlatformLogo] = useState<string | null>(null);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    api.get('/logo').then(res => setPlatformLogo(res.data.platformLogo)).catch(() => {});
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,8 +49,12 @@ export default function LoginPage() {
       <div className="w-full max-w-md relative z-10 animate-fade-in">
         {/* Logo */}
         <div className="text-center mb-10">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-accent-500 shadow-glow mb-4">
-            <BarChart3 size={24} className="text-white" />
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-accent-500 shadow-glow mb-4 overflow-hidden">
+            {platformLogo ? (
+              <img src={platformLogo} alt="Vision" className="w-full h-full object-contain p-1.5" />
+            ) : (
+              <BarChart3 size={24} className="text-white" />
+            )}
           </div>
           <h1 className="text-2xl font-bold text-theme-heading">Vision</h1>
           <p className="text-theme-faint mt-1.5 text-sm">by Indefine</p>

@@ -7,6 +7,7 @@ import { getClientHelper, getClientsDir } from '../db/connection.js';
 import { initializeSchema } from '../db/schema.js';
 import { seedDatabase } from '../db/seed.js';
 import { INDUSTRY_TEMPLATES } from '../config/industry-templates.js';
+import { logoUpload, getLogosDir, getClientLogosDir } from '../middleware/upload.js';
 import path from 'path';
 import fs from 'fs';
 
@@ -1272,6 +1273,73 @@ router.put('/clients/:slug/team', async (req: Request, res: Response) => {
   }
 
   res.json({ ok: true, count: team_member_ids.length });
+});
+
+// ─── Logo Management ──────────────────────────────────────────────────────────
+
+// Helper: find logo file by prefix in a directory
+function findLogoFile(dir: string, prefix: string): string | null {
+  if (!fs.existsSync(dir)) return null;
+  const files = fs.readdirSync(dir).filter(f => f.startsWith(prefix + '.') && !f.startsWith('temp-'));
+  return files.length > 0 ? files[0] : null;
+}
+
+// Platform logo
+router.post('/logo/platform', logoUpload.single('logo'), (req: Request, res: Response) => {
+  if (!req.isOwner) return res.status(403).json({ error: 'Only the owner can manage platform logo' });
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+  const logosDir = getLogosDir();
+  // Delete existing platform logos
+  const existing = fs.readdirSync(logosDir).filter(f => f.startsWith('platform-logo.'));
+  for (const f of existing) fs.unlinkSync(path.join(logosDir, f));
+
+  // Rename temp file to platform-logo.{ext}
+  const ext = path.extname(req.file.originalname).toLowerCase();
+  const newName = `platform-logo${ext}`;
+  fs.renameSync(req.file.path, path.join(logosDir, newName));
+
+  res.json({ url: `/api/logos/${newName}` });
+});
+
+router.delete('/logo/platform', (req: Request, res: Response) => {
+  if (!req.isOwner) return res.status(403).json({ error: 'Only the owner can manage platform logo' });
+
+  const logosDir = getLogosDir();
+  const existing = fs.readdirSync(logosDir).filter(f => f.startsWith('platform-logo.'));
+  for (const f of existing) fs.unlinkSync(path.join(logosDir, f));
+
+  res.json({ ok: true });
+});
+
+// Client logo
+router.post('/logo/client/:slug', logoUpload.single('logo'), async (req: Request, res: Response) => {
+  const { slug } = req.params;
+  const db = await getPlatformHelper();
+  const client = db.get('SELECT id FROM clients WHERE slug = ?', slug);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+  const clientLogosDir = getClientLogosDir();
+  // Delete existing client logos
+  const existing = fs.readdirSync(clientLogosDir).filter(f => f.startsWith(`${slug}.`));
+  for (const f of existing) fs.unlinkSync(path.join(clientLogosDir, f));
+
+  // Rename temp file to {slug}.{ext}
+  const ext = path.extname(req.file.originalname).toLowerCase();
+  const newName = `${slug}${ext}`;
+  fs.renameSync(req.file.path, path.join(clientLogosDir, newName));
+
+  res.json({ url: `/api/logos/clients/${newName}` });
+});
+
+router.delete('/logo/client/:slug', async (req: Request, res: Response) => {
+  const { slug } = req.params;
+  const clientLogosDir = getClientLogosDir();
+  const existing = fs.readdirSync(clientLogosDir).filter(f => f.startsWith(`${slug}.`));
+  for (const f of existing) fs.unlinkSync(path.join(clientLogosDir, f));
+
+  res.json({ ok: true });
 });
 
 export default router;

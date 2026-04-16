@@ -46,6 +46,9 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
   const isClientAdmin = userRole === 'admin';
   const isOwner = localStorage.getItem('is_owner') === '1';
 
+  const [platformLogo, setPlatformLogo] = useState<string | null>(null);
+  const [clientLogo, setClientLogo] = useState<string | null>(null);
+
   const [branches, setBranches] = useState<any[]>([]);
   const [canViewConsolidated, setCanViewConsolidated] = useState(false);
   const [selectedBranchId, setSelectedBranchId] = useState<string>(localStorage.getItem('branch_id') || 'all');
@@ -63,6 +66,28 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, [showBranchDropdown]);
+
+  useEffect(() => {
+    // Fetch platform logo
+    api.get('/logo').then(res => setPlatformLogo(res.data.platformLogo)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    // Check for client logo
+    if (!clientName) return;
+    const slug = localStorage.getItem('client_slug');
+    if (!slug) return;
+    const checkLogo = async () => {
+      for (const ext of ['png', 'jpg', 'jpeg', 'svg', 'webp']) {
+        const url = `/api/logos/clients/${slug}.${ext}`;
+        try {
+          const res = await fetch(url, { method: 'HEAD' });
+          if (res.ok) { setClientLogo(url); return; }
+        } catch {}
+      }
+    };
+    checkLogo();
+  }, [clientName]);
 
   useEffect(() => {
     if (!isMultiBranch || (isSuperAdmin && isOwner)) return;
@@ -212,8 +237,12 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
       {/* Logo */}
       <div className="px-4 py-5 border-b border-dark-400/30 flex-shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-accent-500 flex items-center justify-center flex-shrink-0">
-            <BarChart3 size={18} className="text-white" />
+          <div className="w-9 h-9 rounded-xl bg-accent-500 flex items-center justify-center flex-shrink-0 overflow-hidden">
+            {platformLogo ? (
+              <img src={platformLogo} alt="Vision" className="w-full h-full object-contain p-1" />
+            ) : (
+              <BarChart3 size={18} className="text-white" />
+            )}
           </div>
           {expanded && (
             <div className="min-w-0">
@@ -251,8 +280,12 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
       {clientName && expanded && (
         <div className="px-3 py-3 border-b border-dark-400/30 flex-shrink-0">
           <div className="flex items-center gap-2.5 bg-dark-600 rounded-xl px-3 py-2.5">
-            <div className="w-7 h-7 rounded-lg bg-accent-500/15 flex items-center justify-center flex-shrink-0">
-              <Building2 size={13} className="text-accent-400" />
+            <div className="w-7 h-7 rounded-lg bg-accent-500/15 flex items-center justify-center flex-shrink-0 overflow-hidden">
+              {clientLogo ? (
+                <img src={clientLogo} alt={clientName || ''} className="w-full h-full object-contain" />
+              ) : (
+                <Building2 size={13} className="text-accent-400" />
+              )}
             </div>
             <div className="flex-1 min-w-0">
               <span className="text-xs font-semibold text-theme-primary truncate block">{clientName}</span>

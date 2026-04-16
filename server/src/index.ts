@@ -5,6 +5,7 @@ import session from 'express-session';
 import path from 'path';
 import fs from 'fs';
 import { createRequire } from 'module';
+import { getLogosDir, getClientLogosDir } from './middleware/upload.js';
 import { getClientHelper, createDailyBackups } from './db/connection.js';
 import { initializeSchema } from './db/schema.js';
 import { seedDatabase } from './db/seed.js';
@@ -401,6 +402,38 @@ app.use((err: any, _req: any, res: any, _next: any) => {
   const isProdMode = process.env.NODE_ENV === 'production';
   res.status(500).json({ error: isProdMode ? 'Internal server error' : (err.message || 'Internal server error') });
 });
+
+// ─── Logo serving ─────────────────────────────────────────────────────────────
+// Public: no auth needed (login page uses this)
+app.get('/api/logo', (_req, res) => {
+  const logosDir = getLogosDir();
+  const clientLogosDir = getClientLogosDir();
+  let platformLogo: string | null = null;
+
+  if (fs.existsSync(logosDir)) {
+    const files = fs.readdirSync(logosDir).filter(f => f.startsWith('platform-logo.'));
+    if (files.length > 0) platformLogo = `/api/logos/${files[0]}`;
+  }
+
+  res.json({ platformLogo });
+});
+
+// Client logo info (auth + tenant needed)
+app.get('/api/logo/client', requireAuth, resolveTenant, (req, res) => {
+  const slug = req.tenantSlug;
+  const clientLogosDir = getClientLogosDir();
+  let clientLogo: string | null = null;
+
+  if (slug && fs.existsSync(clientLogosDir)) {
+    const files = fs.readdirSync(clientLogosDir).filter(f => f.startsWith(`${slug}.`));
+    if (files.length > 0) clientLogo = `/api/logos/clients/${files[0]}`;
+  }
+
+  res.json({ clientLogo });
+});
+
+// Serve logo files statically
+app.use('/api/logos', express.static(getLogosDir()));
 
 // ─── Static files ───────────────────────────────────────────────────────────
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');

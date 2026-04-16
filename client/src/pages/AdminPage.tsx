@@ -6,6 +6,7 @@ import {
   Eye, EyeOff, CheckCircle, Plug, Shield, Trash2, Copy, KeyRound, BarChart3,
   MapPin, GitBranch, Layers, Search, Activity, Globe, ChevronRight, ChevronDown,
   ChevronUp, LayoutDashboard, Edit2, Calendar, Stethoscope, Upload, Server, BookOpen,
+  ImagePlus,
 } from 'lucide-react';
 
 /* ─── Types ──────────────────────────────────────────────── */
@@ -57,6 +58,9 @@ export default function AdminPage() {
         </div>
       </div>
 
+      {/* Platform Logo (owner only) */}
+      {isOwner && <PlatformLogoSection />}
+
       {/* Tabs */}
       <div className="border-b border-dark-400/30 mb-6">
         <div className="flex gap-0">
@@ -79,6 +83,77 @@ export default function AdminPage() {
 
       {tab === 'clients' && <ClientsPanel />}
       {tab === 'team' && isOwner && <TeamPanel />}
+    </div>
+  );
+}
+
+/* ─── Platform Logo Section (owner only) ─────────────────── */
+
+function PlatformLogoSection() {
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    api.get('/logo').then(res => setLogoUrl(res.data.platformLogo)).catch(() => {});
+  }, []);
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('logo', file);
+      const res = await api.post('/admin/logo/platform', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setLogoUrl(res.data.url + '?t=' + Date.now());
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleRemove = async () => {
+    if (!confirm('Remove platform logo?')) return;
+    await api.delete('/admin/logo/platform');
+    setLogoUrl(null);
+  };
+
+  return (
+    <div className="bg-dark-700/60 rounded-2xl border border-dark-400/20 p-5 mb-6">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div className="w-14 h-14 rounded-2xl bg-dark-600 flex items-center justify-center border border-dark-400/30 overflow-hidden">
+            {logoUrl ? (
+              <img src={logoUrl} alt="Platform logo" className="w-full h-full object-contain p-1" />
+            ) : (
+              <BarChart3 size={24} className="text-accent-400" />
+            )}
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-theme-heading">Platform Logo</h3>
+            <p className="text-xs text-theme-faint mt-0.5">Shown on login page and sidebar</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium text-accent-400 hover:bg-accent-500/10 border border-accent-500/20 cursor-pointer transition-all">
+            <ImagePlus size={14} />
+            {uploading ? 'Uploading...' : 'Upload'}
+            <input type="file" accept="image/*" className="hidden" onChange={handleUpload} disabled={uploading} />
+          </label>
+          {logoUrl && (
+            <button
+              onClick={handleRemove}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium text-red-400 hover:bg-red-500/10 border border-red-500/20 transition-all"
+            >
+              <Trash2 size={14} />
+              Remove
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -433,6 +508,8 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
   const [activeTab, setActiveTab] = useState<ClientDetailTab>('users');
   const [resetResult, setResetResult] = useState<{username: string; password: string} | null>(null);
   const [resetConfirm, setResetConfirm] = useState<{userId: number; username: string} | null>(null);
+  const [clientLogoUrl, setClientLogoUrl] = useState<string | null>(null);
+  const [logoUploading, setLogoUploading] = useState(false);
 
   const loadDetail = useCallback(() => {
     Promise.all([
@@ -457,6 +534,38 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
   }, []);
 
   useEffect(() => { loadDetail(); }, [loadDetail]);
+
+  // Check for client logo
+  useEffect(() => {
+    const checkLogo = async () => {
+      for (const ext of ['png', 'jpg', 'jpeg', 'svg', 'webp']) {
+        const url = `/api/logos/clients/${slug}.${ext}`;
+        try {
+          const res = await fetch(url, { method: 'HEAD' });
+          if (res.ok) { setClientLogoUrl(url); return; }
+        } catch {}
+      }
+    };
+    checkLogo();
+  }, [slug]);
+
+  const handleClientLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLogoUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('logo', file);
+      const res = await api.post(`/admin/logo/client/${slug}`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setClientLogoUrl(res.data.url + '?t=' + Date.now());
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Upload failed');
+    } finally {
+      setLogoUploading(false);
+    }
+  };
 
   const toggleActive = async () => {
     await api.put(`/admin/clients/${slug}`, { is_active: !client.is_active });
@@ -508,8 +617,18 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
       <div className="bg-dark-700/60 rounded-2xl border border-dark-400/20 p-6 mb-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-accent-500/20 to-accent-600/10 flex items-center justify-center border border-accent-500/20">
-              <Building2 size={24} className="text-accent-400" />
+            <div className="relative group">
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-accent-500/20 to-accent-600/10 flex items-center justify-center border border-accent-500/20 overflow-hidden">
+                {clientLogoUrl ? (
+                  <img src={clientLogoUrl} alt={client.name} className="w-full h-full object-contain p-1" />
+                ) : (
+                  <Building2 size={24} className="text-accent-400" />
+                )}
+              </div>
+              <label className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-2xl opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity">
+                <ImagePlus size={16} className="text-white" />
+                <input type="file" accept="image/*" className="hidden" onChange={handleClientLogoUpload} disabled={logoUploading} />
+              </label>
             </div>
             <div>
               <h2 className="text-xl font-bold text-theme-heading">{client.name}</h2>
