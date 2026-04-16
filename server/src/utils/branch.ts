@@ -19,12 +19,14 @@ export function branchFilter(
   }
 
   if (req.branchMode === 'specific' && req.branchId) {
-    return { where: ` AND ${col} = ?`, params: [req.branchId] };
+    // Include NULL so company-level data (created in consolidated mode) is
+    // visible to users viewing a specific branch.
+    return { where: ` AND (${col} = ? OR ${col} IS NULL)`, params: [req.branchId] };
   }
 
   if (req.branchMode === 'consolidated' && req.allowedBranchIds?.length) {
     const placeholders = req.allowedBranchIds.map(() => '?').join(',');
-    return { where: ` AND ${col} IN (${placeholders})`, params: [...req.allowedBranchIds] };
+    return { where: ` AND (${col} IN (${placeholders}) OR ${col} IS NULL)`, params: [...req.allowedBranchIds] };
   }
 
   // Multi-branch client but no allowed branches — deny all data
@@ -59,7 +61,9 @@ export function streamFilter(
   }
 
   if (req.streamMode === 'specific' && req.streamId) {
-    return { where: ` AND ${col} = ?`, params: [req.streamId] };
+    // Include NULL so company-level data (created without a stream scope)
+    // is visible when a specific stream is selected.
+    return { where: ` AND (${col} = ? OR ${col} IS NULL)`, params: [req.streamId] };
   }
 
   // 'all' mode — no additional filtering (show data for all allowed streams)
