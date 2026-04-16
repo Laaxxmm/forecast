@@ -799,6 +799,34 @@ async function start() {
         console.error(`  [branch-rebuild] "${client.slug}" failed:`, (e as Error).message);
       }
 
+      // ── Cleanup: remove orphan empty scenarios ──
+      // When a branch-specific user hit /scenarios/ensure with the old code
+      // (before the branchFilter NULL fix), empty scenarios were auto-created
+      // for their specific branch_id.  These orphans have zero forecast_items
+      // and shadow the admin's populated NULL-branch scenario.  Delete them.
+      try {
+        const clientDb3 = await getClientHelper(client.slug);
+        const orphans = clientDb3.all(
+          `SELECT s.id, s.fy_id, s.branch_id, s.stream_id FROM scenarios s
+           WHERE s.branch_id IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM forecast_items fi WHERE fi.scenario_id = s.id)
+             AND EXISTS (
+               SELECT 1 FROM scenarios s2
+               WHERE s2.fy_id = s.fy_id AND s2.branch_id IS NULL AND s2.is_default = 1
+             )`
+        );
+        if (orphans.length > 0) {
+          for (const o of orphans) {
+            clientDb3.run('DELETE FROM forecast_values WHERE scenario_id = ?', o.id);
+            clientDb3.run('DELETE FROM forecast_settings WHERE scenario_id = ?', o.id);
+            clientDb3.run('DELETE FROM scenarios WHERE id = ?', o.id);
+          }
+          console.log(`  [orphan-cleanup] "${client.slug}": removed ${orphans.length} empty branch-specific scenario(s)`);
+        }
+      } catch (e) {
+        // Non-fatal — cleanup is best-effort
+      }
+
       console.log(`Client DB "${client.slug}" schema + seed verified`);
     } catch (e) {
       console.error(`Failed to init client DB "${client.slug}":`, e);

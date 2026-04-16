@@ -96,17 +96,33 @@ router.post('/scenarios/ensure', async (req, res) => {
 
   // Don't create scenarios for "all" stream mode — use /consolidated instead
   if (req.streamMode === 'all' || req.streamMode === 'none') {
-    const scenario = db.get(`SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}`, fy_id, ...bf.params);
+    // Prefer NULL-branch (company-level, admin-created) scenarios so branch
+    // users see the populated data instead of an auto-created empty stub.
+    const scenario = db.get(
+      `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where} ORDER BY branch_id IS NOT NULL, id`,
+      fy_id, ...bf.params
+    );
     return res.json(scenario || null);
   }
 
-  let scenario = db.get(`SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where}`, fy_id, ...bf.params, ...sf.params);
+  // Prefer NULL-branch/stream scenarios (admin-populated) over branch-specific
+  // orphan stubs by ordering NULLs first.
+  let scenario = db.get(
+    `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where} ORDER BY branch_id IS NOT NULL, stream_id IS NOT NULL, id`,
+    fy_id, ...bf.params, ...sf.params
+  );
   if (!scenario) {
-    scenario = db.get(`SELECT * FROM scenarios WHERE fy_id = ?${bf.where}${sf.where}`, fy_id, ...bf.params, ...sf.params);
+    scenario = db.get(
+      `SELECT * FROM scenarios WHERE fy_id = ?${bf.where}${sf.where} ORDER BY branch_id IS NOT NULL, stream_id IS NOT NULL, id`,
+      fy_id, ...bf.params, ...sf.params
+    );
   }
   if (!scenario) {
     db.run('INSERT INTO scenarios (fy_id, name, is_default, branch_id, stream_id) VALUES (?, ?, 1, ?, ?)', fy_id, 'Original Scenario', branchId, streamId);
-    scenario = db.get(`SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where}`, fy_id, ...bf.params, ...sf.params);
+    scenario = db.get(
+      `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where} ORDER BY branch_id IS NOT NULL, stream_id IS NOT NULL, id`,
+      fy_id, ...bf.params, ...sf.params
+    );
   }
   res.json(scenario);
 });
