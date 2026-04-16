@@ -198,6 +198,7 @@ export default function DashboardPage() {
         </div>
         {periodOptions.length > 0 && (
           <select
+            data-tour="period-filter"
             value={selectedPeriod}
             onChange={e => setSelectedPeriod(e.target.value)}
             className="input text-sm py-2 w-64"
@@ -211,7 +212,7 @@ export default function DashboardPage() {
 
       {/* KPI Cards — only in "All" mode */}
       {isAllStreams && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
+        <div data-tour="kpi-cards" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
           {data.cards && data.cards.length > 0 ? (
             data.cards.map((card: any) => {
               const CardIcon = ICON_MAP[card.icon] || BarChart3;

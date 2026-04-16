@@ -253,6 +253,7 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
           {/* Pin toggle (desktop) or Close (mobile) */}
           {expanded && !isMobile && (
             <button
+              data-tour="sidebar-pin"
               onClick={(e) => { e.stopPropagation(); onPinnedChange(!pinned); }}
               className={`ml-auto flex-shrink-0 p-1.5 rounded-lg transition-colors ${
                 pinned
@@ -426,7 +427,7 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
       )}
 
       {/* Main navigation — scrollable */}
-      <nav className="flex-1 py-4 px-2 overflow-y-auto">
+      <nav data-tour="sidebar-nav" className="flex-1 py-4 px-2 overflow-y-auto">
         <div className="space-y-1">
           {visibleMain.map(renderLink)}
         </div>
@@ -460,6 +461,7 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
 
         {/* Theme toggle */}
         <button
+          data-tour="theme-toggle"
           onClick={toggleTheme}
           title={!expanded ? (theme === 'dark' ? 'Light mode' : 'Dark mode') : undefined}
           className={`flex items-center gap-3 px-3 py-2.5 text-[13px] font-medium text-theme-muted hover:bg-dark-600 hover:text-theme-primary rounded-xl w-full transition-all ${

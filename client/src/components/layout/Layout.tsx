@@ -1,9 +1,19 @@
 import { useState, useEffect } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
-import { Menu, BarChart3 } from 'lucide-react';
+import { Menu, BarChart3, HelpCircle } from 'lucide-react';
 import Sidebar from './Sidebar';
+import { TourProvider, useTour } from '../../contexts/TourContext';
+import { getTourSteps, getPageKey } from '../../config/tourSteps';
 
 export default function Layout() {
+  return (
+    <TourProvider>
+      <LayoutInner />
+    </TourProvider>
+  );
+}
+
+function LayoutInner() {
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [sidebarPinned, setSidebarPinned] = useState(() => {
     return localStorage.getItem('sidebar_pinned') === '1';
@@ -31,6 +41,28 @@ export default function Layout() {
   }, [sidebarPinned]);
 
   const effectiveExpanded = sidebarPinned || sidebarExpanded;
+
+  const { startTour, hasPageSeen, markPageSeen } = useTour();
+  const pageKey = getPageKey(location.pathname);
+
+  const handleHelp = () => {
+    const key = pageKey || 'global';
+    const steps = getTourSteps(key);
+    startTour(steps);
+    markPageSeen(key);
+  };
+
+  // Auto-prompt on first visit (only once ever)
+  useEffect(() => {
+    if (!localStorage.getItem('tour_seen_global')) {
+      const timer = setTimeout(() => {
+        const steps = getTourSteps(pageKey || 'global');
+        startTour(steps);
+        localStorage.setItem('tour_seen_global', '1');
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="flex min-h-screen bg-dark-900 text-theme-primary">
@@ -78,6 +110,15 @@ export default function Layout() {
         <div className={isMobile ? 'p-4' : 'p-8'}>
           <Outlet />
         </div>
+        {/* Floating help button */}
+        <button
+          onClick={handleHelp}
+          data-tour="help-button"
+          className="fixed bottom-6 right-6 z-30 w-10 h-10 rounded-full bg-accent-500 text-white shadow-lg shadow-accent-500/20 hover:bg-accent-600 hover:scale-110 flex items-center justify-center transition-all"
+          title="Take a guided tour"
+        >
+          <HelpCircle size={18} />
+        </button>
       </main>
     </div>
   );

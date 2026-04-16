@@ -134,7 +134,7 @@ export default function DashboardModulePage() {
       {/* Top Navigation */}
       <div className="bg-dark-800 border-b border-dark-400/30 -mx-4 -mt-4 px-4 md:-mx-8 md:-mt-8 md:px-8 mb-0 rounded-none">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between">
-          <div className="flex overflow-x-auto scrollbar-hide">
+          <div data-tour="analysis-tabs" className="flex overflow-x-auto scrollbar-hide">
             {tabs.filter(tab => isClientAdmin || tab.path !== 'update-actuals').map(tab => (
               <NavLink
                 key={tab.path}

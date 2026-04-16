@@ -155,7 +155,7 @@ export default function ForecastModulePage() {
       {/* Top Navigation Tabs */}
       <div className="bg-dark-800 border-b border-dark-400/30 -mx-4 -mt-4 px-4 md:-mx-8 md:-mt-8 md:px-8 mb-0">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between">
-          <div className="flex overflow-x-auto scrollbar-hide">
+          <div data-tour="forecast-tabs" className="flex overflow-x-auto scrollbar-hide">
             {topTabs.map(tab => (
               <NavLink
                 key={tab.path}
@@ -185,6 +185,7 @@ export default function ForecastModulePage() {
               </span>
             )}
             <button
+              data-tour="print-button"
               onClick={() => setShowDownloadPanel(true)}
               className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-theme-muted hover:text-accent-400 hover:bg-accent-500/10 rounded-xl transition-all"
               title="Download & Print Reports"
@@ -195,6 +196,7 @@ export default function ForecastModulePage() {
             {!isConsolidated && <>
             <div className="h-6 w-px bg-dark-400" />
             <select
+              data-tour="scenario-select"
               value={scenario?.id || ''}
               onChange={e => {
                 const s = scenarios.find(sc => sc.id === Number(e.target.value));
@@ -206,6 +208,7 @@ export default function ForecastModulePage() {
             </select>
             </>}
             <select
+              data-tour="fy-select"
               value={selectedFY?.id || ''}
               onChange={e => {
                 const fy = fys.find(f => f.id === Number(e.target.value));
@@ -222,7 +225,7 @@ export default function ForecastModulePage() {
       {/* Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-2 py-3 border-b border-dark-400/30 -mx-4 px-4 md:-mx-8 md:px-8 bg-dark-800/50">
         <div className="flex items-center gap-2">
-          <div className="flex bg-dark-700 border border-dark-400/50 rounded-xl overflow-hidden">
+          <div data-tour="view-mode" className="flex bg-dark-700 border border-dark-400/50 rounded-xl overflow-hidden">
             <button
               onClick={() => setViewMode('yearly')}
               className={`px-3 py-1.5 text-xs font-medium transition-all ${viewMode === 'yearly' ? 'bg-accent-500/15 text-accent-400' : 'text-theme-faint hover:text-theme-secondary'}`}
