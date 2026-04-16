@@ -833,6 +833,161 @@ async function start() {
         // Non-fatal — cleanup is best-effort
       }
 
+      // ── One-time: split NULL-stream scenarios into per-stream scenarios ──
+      // Forecast items created in "All streams" mode live in a single scenario
+      // with stream_id=NULL.  When a user switches to a specific stream the
+      // ensure endpoint can't surface those items reliably.  This migration
+      // splits the items into proper per-stream scenarios so each stream view
+      // shows only its own items.
+      //
+      // Items are classified by name pattern:
+      //   Pharmacy-related  → Pharmacy stream
+      //   Everything else   → Clinic stream (default)
+      //
+      // Flag: forecast_stream_split_v1 in app_settings.
+      try {
+        const cDb = await getClientHelper(client.slug);
+        const splitDone = cDb.get("SELECT value FROM app_settings WHERE key = 'forecast_stream_split_v1'");
+        if (!splitDone) {
+          const pDb = await getPlatformHelper();
+          const cRow = pDb.get('SELECT id FROM clients WHERE slug = ?', client.slug);
+          if (cRow) {
+            const streams = pDb.all(
+              'SELECT id, name FROM business_streams WHERE client_id = ? AND is_active = 1',
+              cRow.id
+            );
+            const clinicStreamRow = streams.find((s: any) => /clinic|health/i.test(s.name));
+            const pharmaStreamRow = streams.find((s: any) => /pharma/i.test(s.name));
+
+            if (clinicStreamRow && pharmaStreamRow && streams.length >= 2) {
+              // Find scenarios with NULL stream_id that have items
+              const nullStreamScenarios = cDb.all(
+                `SELECT s.* FROM scenarios s
+                 WHERE s.stream_id IS NULL
+                   AND EXISTS (SELECT 1 FROM forecast_items fi WHERE fi.scenario_id = s.id)`
+              );
+
+              // Also backfill branch_id: set to the first active branch if NULL
+              const firstBranch = pDb.get(
+                'SELECT id FROM branches WHERE client_id = ? AND is_active = 1 ORDER BY id LIMIT 1',
+                cRow.id
+              );
+
+              for (const src of nullStreamScenarios) {
+                const items = cDb.all('SELECT * FROM forecast_items WHERE scenario_id = ?', src.id);
+                if (items.length === 0) continue;
+
+                // Classify items: pharmacy-related names go to pharmacy, rest to clinic
+                const pharmaPatterns = /pharmacy|pharma\b|cogs|drug|medicine|purchase/i;
+                const clinicItems = items.filter((it: any) => !pharmaPatterns.test(it.name));
+                const pharmaItems = items.filter((it: any) => pharmaPatterns.test(it.name));
+
+                const branchId = src.branch_id || (firstBranch?.id ?? null);
+
+                // Create Clinic scenario and move clinic items
+                if (clinicItems.length > 0) {
+                  cDb.run(
+                    'INSERT INTO scenarios (fy_id, name, is_default, branch_id, stream_id) VALUES (?, ?, 1, ?, ?)',
+                    src.fy_id, src.name, branchId, clinicStreamRow.id
+                  );
+                  const clinicScenario = cDb.get(
+                    'SELECT id FROM scenarios WHERE fy_id = ? AND stream_id = ? AND branch_id IS ? ORDER BY id DESC LIMIT 1',
+                    src.fy_id, clinicStreamRow.id, branchId
+                  );
+                  if (clinicScenario) {
+                    const idMap: Record<number, number> = {};
+                    for (const item of clinicItems) {
+                      cDb.run(
+                        `INSERT INTO forecast_items (scenario_id, category, name, item_type, entry_mode, constant_value, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        clinicScenario.id, item.category, item.name, item.item_type, item.entry_mode,
+                        item.constant_value, item.constant_period, item.start_month,
+                        item.annual_raise_pct, item.tax_rate_pct, item.sort_order, null, item.meta
+                      );
+                      const newItem = cDb.get('SELECT id FROM forecast_items WHERE scenario_id = ? AND name = ? AND category = ? ORDER BY id DESC LIMIT 1',
+                        clinicScenario.id, item.name, item.category);
+                      if (newItem) idMap[item.id] = newItem.id;
+                    }
+                    // Copy values
+                    for (const [oldId, newId] of Object.entries(idMap)) {
+                      const vals = cDb.all('SELECT month, amount FROM forecast_values WHERE item_id = ?', oldId);
+                      for (const v of vals) {
+                        cDb.run('INSERT OR REPLACE INTO forecast_values (item_id, month, amount) VALUES (?, ?, ?)', newId, v.month, v.amount);
+                      }
+                    }
+                    // Copy settings
+                    const settings = cDb.all('SELECT * FROM forecast_settings WHERE scenario_id = ?', src.id);
+                    for (const s of settings) {
+                      cDb.run('INSERT OR IGNORE INTO forecast_settings (scenario_id, key, value) VALUES (?, ?, ?)',
+                        clinicScenario.id, s.key, s.value);
+                    }
+                    // Fix parent_id references
+                    for (const item of clinicItems) {
+                      if (item.parent_id && idMap[item.parent_id] && idMap[item.id]) {
+                        cDb.run('UPDATE forecast_items SET parent_id = ? WHERE id = ?', idMap[item.parent_id], idMap[item.id]);
+                      }
+                    }
+                  }
+                }
+
+                // Create Pharmacy scenario and move pharmacy items
+                if (pharmaItems.length > 0) {
+                  cDb.run(
+                    'INSERT INTO scenarios (fy_id, name, is_default, branch_id, stream_id) VALUES (?, ?, 1, ?, ?)',
+                    src.fy_id, src.name, branchId, pharmaStreamRow.id
+                  );
+                  const pharmaScenario = cDb.get(
+                    'SELECT id FROM scenarios WHERE fy_id = ? AND stream_id = ? AND branch_id IS ? ORDER BY id DESC LIMIT 1',
+                    src.fy_id, pharmaStreamRow.id, branchId
+                  );
+                  if (pharmaScenario) {
+                    const idMap: Record<number, number> = {};
+                    for (const item of pharmaItems) {
+                      cDb.run(
+                        `INSERT INTO forecast_items (scenario_id, category, name, item_type, entry_mode, constant_value, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        pharmaScenario.id, item.category, item.name, item.item_type, item.entry_mode,
+                        item.constant_value, item.constant_period, item.start_month,
+                        item.annual_raise_pct, item.tax_rate_pct, item.sort_order, null, item.meta
+                      );
+                      const newItem = cDb.get('SELECT id FROM forecast_items WHERE scenario_id = ? AND name = ? AND category = ? ORDER BY id DESC LIMIT 1',
+                        pharmaScenario.id, item.name, item.category);
+                      if (newItem) idMap[item.id] = newItem.id;
+                    }
+                    for (const [oldId, newId] of Object.entries(idMap)) {
+                      const vals = cDb.all('SELECT month, amount FROM forecast_values WHERE item_id = ?', oldId);
+                      for (const v of vals) {
+                        cDb.run('INSERT OR REPLACE INTO forecast_values (item_id, month, amount) VALUES (?, ?, ?)', newId, v.month, v.amount);
+                      }
+                    }
+                    const settings = cDb.all('SELECT * FROM forecast_settings WHERE scenario_id = ?', src.id);
+                    for (const s of settings) {
+                      cDb.run('INSERT OR IGNORE INTO forecast_settings (scenario_id, key, value) VALUES (?, ?, ?)',
+                        pharmaScenario.id, s.key, s.value);
+                    }
+                    for (const item of pharmaItems) {
+                      if (item.parent_id && idMap[item.parent_id] && idMap[item.id]) {
+                        cDb.run('UPDATE forecast_items SET parent_id = ? WHERE id = ?', idMap[item.parent_id], idMap[item.id]);
+                      }
+                    }
+                  }
+                }
+
+                // Delete old NULL-stream scenario (its items have been copied to per-stream scenarios)
+                cDb.run('DELETE FROM forecast_values WHERE item_id IN (SELECT id FROM forecast_items WHERE scenario_id = ?)', src.id);
+                cDb.run('DELETE FROM forecast_items WHERE scenario_id = ?', src.id);
+                cDb.run('DELETE FROM forecast_settings WHERE scenario_id = ?', src.id);
+                cDb.run('DELETE FROM scenarios WHERE id = ?', src.id);
+                console.log(`  [stream-split] "${client.slug}": split scenario ${src.id} → clinic(${clinicItems.length} items) + pharmacy(${pharmaItems.length} items)`);
+              }
+            }
+          }
+          cDb.run("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('forecast_stream_split_v1', '1')");
+        }
+      } catch (e) {
+        console.error(`  [stream-split] "${client.slug}" failed:`, e);
+      }
+
       console.log(`Client DB "${client.slug}" schema + seed verified`);
     } catch (e) {
       console.error(`Failed to init client DB "${client.slug}":`, e);
