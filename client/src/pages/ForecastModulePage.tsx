@@ -81,7 +81,7 @@ export default function ForecastModulePage() {
   const isAllStreams = !localStorage.getItem('stream_id');
   const streamName = localStorage.getItem('stream_name');
   const [isConsolidated, setIsConsolidated] = useState(false);
-  const readOnly = (userRole !== 'admin' && userType !== 'super_admin') || isConsolidated;
+  const readOnly = (userRole !== 'admin' && userType !== 'super_admin') || (isConsolidated && userType !== 'super_admin');
 
   useEffect(() => {
     api.get('/settings/fy').then(res => {

@@ -55,9 +55,14 @@ export default function SelectClientPage() {
         localStorage.removeItem('branch_id');
         localStorage.removeItem('branch_name');
       }
-      // Set streams
+      // Set streams and auto-select first stream so forecast doesn't land in consolidated/read-only view
       if (streamRes.data?.length > 0) {
         localStorage.setItem('streams', JSON.stringify(streamRes.data));
+        if (!localStorage.getItem('stream_id')) {
+          const first = streamRes.data[0];
+          localStorage.setItem('stream_id', String(first.id));
+          localStorage.setItem('stream_name', first.name);
+        }
       }
     } catch {
       localStorage.setItem('enabled_modules', JSON.stringify(['forecast_ops']));
