@@ -432,6 +432,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
   const [modules, setModules] = useState<{module_key: string; is_enabled: number}[]>([]);
   const [activeTab, setActiveTab] = useState<ClientDetailTab>('users');
   const [resetResult, setResetResult] = useState<{username: string; password: string} | null>(null);
+  const [resetConfirm, setResetConfirm] = useState<{userId: number; username: string} | null>(null);
 
   const loadDetail = useCallback(() => {
     Promise.all([
@@ -467,11 +468,12 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
     loadDetail();
   };
 
-  const resetPassword = async (userId: number, username: string) => {
+  const resetPassword = async (userId: number, username: string, customPw?: string) => {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
-    const newPw = Array.from({length: 10}, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    const newPw = customPw || Array.from({length: 10}, () => chars[Math.floor(Math.random() * chars.length)]).join('');
     try {
       await api.put(`/admin/clients/${slug}/users/${userId}`, { password: newPw });
+      setResetConfirm(null);
       setResetResult({ username, password: newPw });
     } catch (err: any) {
       alert(err.response?.data?.error || 'Failed to reset password');
@@ -597,7 +599,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
       </div>
 
       {/* Tab Content */}
-      {activeTab === 'users' && <UsersSection slug={slug} users={users} onReload={loadDetail} resetPassword={resetPassword} />}
+      {activeTab === 'users' && <UsersSection slug={slug} users={users} onReload={loadDetail} resetPassword={(id, username) => setResetConfirm({ userId: id, username })} />}
       {activeTab === 'modules' && <ModulesSection slug={slug} modules={modules} onReload={loadDetail} />}
       {activeTab === 'integrations' && <IntegrationsSection slug={slug} integrations={integrations} onReload={loadDetail} />}
       {activeTab === 'streams' && <StreamsSection slug={slug} streams={streams} onReload={loadDetail} />}
@@ -605,11 +607,23 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
       {activeTab === 'branches' && <BranchesSection slug={slug} client={client} branches={clientBranches} users={users} onReload={loadDetail} />}
       {activeTab === 'assigned_team' && <TeamAssignmentSection slug={slug} />}
 
-      {/* Password Reset Modal */}
+      {/* Password Reset Confirmation Modal */}
+      {resetConfirm && (
+        <ResetPasswordModal
+          username={resetConfirm.username}
+          onConfirm={(customPw) => resetPassword(resetConfirm.userId, resetConfirm.username, customPw)}
+          onCancel={() => setResetConfirm(null)}
+        />
+      )}
+
+      {/* Password Reset Result Modal */}
       {resetResult && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setResetResult(null)}>
           <div className="bg-dark-700 rounded-2xl p-6 max-w-sm w-full mx-4 border border-dark-400/30 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <h3 className="font-semibold text-theme-heading mb-3">Password Reset</h3>
+            <div className="flex items-center gap-2 mb-3">
+              <CheckCircle size={18} className="text-emerald-400" />
+              <h3 className="font-semibold text-theme-heading">Password Reset</h3>
+            </div>
             <p className="text-sm text-theme-muted mb-3">New credentials for <span className="text-accent-400 font-medium">@{resetResult.username}</span></p>
             <div className="bg-dark-800 rounded-xl p-3 font-mono text-sm text-theme-heading mb-4 flex items-center justify-between border border-dark-400/20">
               <span>{resetResult.password}</span>
@@ -1792,22 +1806,105 @@ function TeamAssignmentSection({ slug }: { slug: string }) {
   );
 }
 
+/* ─── Reset Password Modal (shared) ────────────────────── */
+
+function ResetPasswordModal({ username, onConfirm, onCancel }: {
+  username: string;
+  onConfirm: (customPw?: string) => void;
+  onCancel: () => void;
+}) {
+  const [mode, setMode] = useState<'auto' | 'custom'>('auto');
+  const [customPw, setCustomPw] = useState('');
+  const [showPw, setShowPw] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleConfirm = () => {
+    if (mode === 'custom') {
+      if (!customPw) return;
+      if (customPw.length < 8) { setError('Min 8 characters'); return; }
+      if (!/[a-zA-Z]/.test(customPw)) { setError('Must contain a letter'); return; }
+      if (!/[0-9]/.test(customPw)) { setError('Must contain a number'); return; }
+      onConfirm(customPw);
+    } else {
+      onConfirm();
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={onCancel}>
+      <div className="bg-dark-700 rounded-2xl p-6 max-w-sm w-full mx-4 border border-dark-400/30 shadow-2xl" onClick={e => e.stopPropagation()}>
+        <h3 className="font-semibold text-theme-heading mb-2">Reset Password</h3>
+        <p className="text-sm text-theme-muted mb-4">
+          Reset password for <span className="text-accent-400 font-medium">@{username}</span>?
+        </p>
+
+        <div className="space-y-2 mb-4">
+          <label className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all ${
+            mode === 'auto' ? 'bg-accent-500/10 border border-accent-500/20' : 'bg-dark-600/50 border border-transparent hover:bg-dark-600'
+          }`}>
+            <input type="radio" checked={mode === 'auto'} onChange={() => setMode('auto')} className="w-3.5 h-3.5 text-accent-500" />
+            <span className="text-sm text-theme-heading">Generate random password</span>
+          </label>
+          <label className={`flex items-start gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all ${
+            mode === 'custom' ? 'bg-accent-500/10 border border-accent-500/20' : 'bg-dark-600/50 border border-transparent hover:bg-dark-600'
+          }`}>
+            <input type="radio" checked={mode === 'custom'} onChange={() => setMode('custom')} className="w-3.5 h-3.5 mt-0.5 text-accent-500" />
+            <div className="flex-1">
+              <span className="text-sm text-theme-heading">Set custom password</span>
+              {mode === 'custom' && (
+                <div className="mt-2">
+                  <div className="relative">
+                    <input
+                      type={showPw ? 'text' : 'password'}
+                      value={customPw}
+                      onChange={e => { setCustomPw(e.target.value); setError(''); }}
+                      placeholder="Min 8 chars, letter + number"
+                      className="input text-sm w-full pr-9"
+                      autoFocus
+                    />
+                    <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-theme-faint hover:text-theme-secondary">
+                      {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </button>
+                  </div>
+                  {error && <p className="text-red-400 text-xs mt-1">{error}</p>}
+                </div>
+              )}
+            </div>
+          </label>
+        </div>
+
+        <div className="flex gap-2">
+          <button onClick={onCancel} className="btn-secondary text-sm flex-1">Cancel</button>
+          <button
+            onClick={handleConfirm}
+            disabled={mode === 'custom' && !customPw}
+            className="btn-primary text-sm flex-1"
+          >
+            Reset Password
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─── Add User Form ──────────────────────────────────────── */
 
 function AddUserForm({ slug, onAdded, onCancel }: { slug: string; onAdded: () => void; onCancel: () => void }) {
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
+  const [role, setRole] = useState<'user' | 'admin'>('user');
   const [showPw, setShowPw] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [created, setCreated] = useState<{username: string; password: string} | null>(null);
+  const [created, setCreated] = useState<{username: string; password: string; role: string} | null>(null);
 
   const save = async () => {
     setSaving(true); setError('');
     try {
-      await api.post(`/admin/clients/${slug}/users`, { username, password, display_name: displayName, role: 'user' });
-      setCreated({ username, password });
+      await api.post(`/admin/clients/${slug}/users`, { username, password, display_name: displayName, role });
+      setCreated({ username, password, role });
     } catch (err: any) { setError(err.response?.data?.error || 'Failed'); }
     setSaving(false);
   };
@@ -1825,6 +1922,7 @@ function AddUserForm({ slug, onAdded, onCancel }: { slug: string; onAdded: () =>
             <p className="text-theme-heading font-mono text-sm">Password: <span className="text-accent-400">{created.password}</span></p>
             <button onClick={() => navigator.clipboard.writeText(created.password)} className="text-theme-muted hover:text-accent-400"><Copy size={14} /></button>
           </div>
+          <p className="text-theme-heading font-mono text-sm mt-1">Role: <span className={created.role === 'admin' ? 'text-amber-400' : 'text-theme-muted'}>{created.role}</span></p>
         </div>
         <p className="text-xs text-amber-400 mb-3">Save these credentials — the password won't be shown again</p>
         <button onClick={onAdded} className="btn-primary text-xs">Done</button>
@@ -1847,11 +1945,18 @@ function AddUserForm({ slug, onAdded, onCancel }: { slug: string; onAdded: () =>
         <div>
           <label className="block text-xs font-medium text-theme-muted mb-1">Password</label>
           <div className="relative">
-            <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Strong password" className="input text-sm pr-9" />
+            <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Min 8 chars, letter + number" className="input text-sm pr-9" />
             <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-theme-faint hover:text-theme-secondary">
               {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
           </div>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-theme-muted mb-1">Role</label>
+          <select value={role} onChange={e => setRole(e.target.value as 'user' | 'admin')} className="input text-sm">
+            <option value="user">User</option>
+            <option value="admin">Admin</option>
+          </select>
         </div>
       </div>
       {error && <p className="text-red-400 text-xs mb-2">{error}</p>}
@@ -1874,6 +1979,7 @@ function TeamPanel() {
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [resetResult, setResetResult] = useState<{username: string; password: string} | null>(null);
+  const [resetConfirm, setResetConfirm] = useState<{id: number; username: string} | null>(null);
   const [assignMember, setAssignMember] = useState<TeamMember | null>(null);
 
   const loadTeam = useCallback(() => {
@@ -1882,13 +1988,19 @@ function TeamPanel() {
 
   useEffect(() => { loadTeam(); }, [loadTeam]);
 
-  const resetPassword = async (id: number, username: string) => {
+  const resetPassword = async (id: number, username: string, customPw?: string) => {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
-    const newPw = Array.from({length: 10}, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    const newPw = customPw || Array.from({length: 10}, () => chars[Math.floor(Math.random() * chars.length)]).join('');
     try {
       await api.put(`/admin/team/${id}`, { password: newPw });
+      setResetConfirm(null);
       setResetResult({ username, password: newPw });
     } catch (err: any) { alert(err.response?.data?.error || 'Failed'); }
+  };
+
+  const toggleMemberActive = async (id: number, isActive: number) => {
+    await api.put(`/admin/team/${id}`, { is_active: !isActive });
+    loadTeam();
   };
 
   return (
@@ -1951,16 +2063,28 @@ function TeamPanel() {
                   </button>
                 )}
                 <button
-                  onClick={() => resetPassword(member.id, member.username)}
+                  onClick={() => setResetConfirm({ id: member.id, username: member.username })}
                   className="text-xs px-2.5 py-1.5 rounded-lg text-theme-muted hover:text-theme-secondary bg-dark-600 hover:bg-dark-500 transition-all flex items-center gap-1"
                 >
                   <KeyRound size={11} /> Reset PW
                 </button>
-                <span className={`text-[11px] font-medium px-2.5 py-1 rounded-full ${
-                  member.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
-                }`}>
-                  {member.is_active ? 'Active' : 'Disabled'}
-                </span>
+                {!member.is_owner && (
+                  <button
+                    onClick={() => toggleMemberActive(member.id, member.is_active)}
+                    className={`text-xs px-2.5 py-1.5 rounded-lg font-medium transition-all ${
+                      member.is_active
+                        ? 'text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20'
+                        : 'text-red-400 bg-red-500/10 hover:bg-red-500/20'
+                    }`}
+                  >
+                    {member.is_active ? 'Active' : 'Disabled'}
+                  </button>
+                )}
+                {member.is_owner && (
+                  <span className="text-[11px] font-medium px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400">
+                    Active
+                  </span>
+                )}
               </div>
             </div>
           ))}
@@ -1975,10 +2099,23 @@ function TeamPanel() {
         />
       )}
 
+      {/* Password Reset Confirmation Modal */}
+      {resetConfirm && (
+        <ResetPasswordModal
+          username={resetConfirm.username}
+          onConfirm={(customPw) => resetPassword(resetConfirm.id, resetConfirm.username, customPw)}
+          onCancel={() => setResetConfirm(null)}
+        />
+      )}
+
+      {/* Password Reset Result Modal */}
       {resetResult && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setResetResult(null)}>
           <div className="bg-dark-700 rounded-2xl p-6 max-w-sm w-full mx-4 border border-dark-400/30 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <h3 className="font-semibold text-theme-heading mb-3">Password Reset</h3>
+            <div className="flex items-center gap-2 mb-3">
+              <CheckCircle size={18} className="text-emerald-400" />
+              <h3 className="font-semibold text-theme-heading">Password Reset</h3>
+            </div>
             <p className="text-sm text-theme-muted mb-3">New credentials for <span className="text-accent-400 font-medium">@{resetResult.username}</span></p>
             <div className="bg-dark-800 rounded-xl p-3 font-mono text-sm text-theme-heading mb-4 flex items-center justify-between border border-dark-400/20">
               <span>{resetResult.password}</span>
