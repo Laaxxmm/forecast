@@ -884,6 +884,7 @@ function ModulesSection({ slug, modules, onReload }: {
     { key: 'vcfo_portal', name: 'VCFO Portal', desc: 'Comprehensive Virtual CFO portal with Tally sync', icon: '💼' },
     { key: 'audit_view', name: 'Audit View', desc: 'Audit support and compliance tools', icon: '🔍' },
     { key: 'litigation_tool', name: 'Litigation Tool', desc: 'Track notices and prepare legal responses', icon: '⚖️' },
+    { key: 'analysis_access', name: 'User Analysis Access', desc: 'Allow regular users to view Analysis & Insights pages', icon: '📈' },
   ];
 
   return (

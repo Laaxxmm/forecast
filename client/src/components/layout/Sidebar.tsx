@@ -9,11 +9,11 @@ import { useTheme } from '../../contexts/ThemeContext';
 
 // Forecast & Operations navigation
 const forecastLinks = [
-  { to: '/actuals', icon: LayoutDashboard, label: 'Actuals', clientAdminOnly: false },
-  { to: '/forecast', icon: TrendingUp, label: 'Forecast', clientAdminOnly: false },
-  { to: '/analysis', icon: BarChart3, label: 'Analysis', clientAdminOnly: false },
-  { to: '/insights', icon: Activity, label: 'Insights', clientAdminOnly: false },
-  { to: '/revenue-sharing', icon: PieChart, label: 'Rev. Sharing', clientAdminOnly: false },
+  { to: '/actuals', icon: LayoutDashboard, label: 'Actuals', clientAdminOnly: false, analysisOnly: false },
+  { to: '/forecast', icon: TrendingUp, label: 'Forecast', clientAdminOnly: false, analysisOnly: false },
+  { to: '/analysis', icon: BarChart3, label: 'Analysis', clientAdminOnly: false, analysisOnly: true },
+  { to: '/insights', icon: Activity, label: 'Insights', clientAdminOnly: false, analysisOnly: true },
+  { to: '/revenue-sharing', icon: PieChart, label: 'Rev. Sharing', clientAdminOnly: false, analysisOnly: false },
 ];
 
 // VCFO Portal is served by the mounted TallyVision sub-app at /vcfo/* and has its own sidebar.
@@ -110,12 +110,17 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
   };
 
   const activeModule = localStorage.getItem('active_module') || 'forecast_ops';
+  const enabledModules: string[] = (() => {
+    try { return JSON.parse(localStorage.getItem('enabled_modules') || '[]'); } catch { return []; }
+  })();
   const mainLinks = forecastLinks;
   // Owner super_admin sees nothing (they use Admin Panel only).
   // Non-owner super_admin in client context sees module links like a client admin.
   const isOwnerAdmin = isSuperAdmin && isOwner;
   const visibleMain = isOwnerAdmin ? [] : mainLinks.filter(l => {
     if (!isClientAdmin && !isSuperAdmin && l.clientAdminOnly) return false;
+    // Hide Analysis & Insights for regular users when analysis_access is disabled
+    if (l.analysisOnly && !isClientAdmin && !isSuperAdmin && !enabledModules.includes('analysis_access')) return false;
     return true;
   });
   const visibleUtility = isOwnerAdmin ? [] : utilityLinks.filter(l => {
