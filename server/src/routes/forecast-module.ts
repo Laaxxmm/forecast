@@ -107,18 +107,31 @@ router.post('/scenarios/ensure', async (req, res) => {
     return res.json(scenario || null);
   }
 
-  // Prefer NULL-branch/stream scenarios (admin-populated) over branch-specific
-  // orphan stubs by ordering NULLs first.
+  // Find a matching scenario, preferring ones that actually have forecast items.
+  // An empty orphan stub (branch_id=NULL, stream_id=X) can otherwise sort before
+  // the admin's populated scenario (branch_id=Y, stream_id=NULL) when ordering by
+  // NULLs first, causing the stream-specific view to appear empty.
   let scenario = db.get(
-    `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where} ORDER BY branch_id IS NOT NULL, stream_id IS NOT NULL, id`,
+    `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where}
+       AND EXISTS (SELECT 1 FROM forecast_items WHERE scenario_id = scenarios.id)
+     ORDER BY branch_id IS NOT NULL, stream_id IS NOT NULL, id`,
     fy_id, ...bf.params, ...sf.params
   );
+  // Fallback: any matching default scenario (even empty)
+  if (!scenario) {
+    scenario = db.get(
+      `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where} ORDER BY branch_id IS NOT NULL, stream_id IS NOT NULL, id`,
+      fy_id, ...bf.params, ...sf.params
+    );
+  }
+  // Fallback: any matching scenario (non-default)
   if (!scenario) {
     scenario = db.get(
       `SELECT * FROM scenarios WHERE fy_id = ?${bf.where}${sf.where} ORDER BY branch_id IS NOT NULL, stream_id IS NOT NULL, id`,
       fy_id, ...bf.params, ...sf.params
     );
   }
+  // Last resort: create a new scenario for this stream
   if (!scenario) {
     db.run('INSERT INTO scenarios (fy_id, name, is_default, branch_id, stream_id) VALUES (?, ?, 1, ?, ?)', fy_id, 'Original Scenario', branchId, streamId);
     scenario = db.get(
