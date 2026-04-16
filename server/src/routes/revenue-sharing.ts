@@ -3,36 +3,36 @@ import { branchFilter } from '../utils/branch.js';
 
 const router = Router();
 
-// ── Helper: build CASE/WHEN SQL from active categories ──
-function buildCategoryCase(categories: any[]): string {
-  // Sort by priority DESC so higher-priority rules are checked first
-  const sorted = [...categories].filter(c => c.source === 'clinic').sort((a, b) => b.priority - a.priority);
-  const conditions: string[] = [];
-
-  for (const cat of sorted) {
-    const parts: string[] = [];
+// ── Helper: classify a clinic_actuals row into a revenue-sharing category ──
+// Replaces the former buildCategoryCase() which interpolated user-controlled
+// values directly into SQL (SQL injection risk). Classification now happens
+// entirely in JavaScript after the raw data is fetched.
+function classifyRow(row: { department?: string; service_name?: string }, clinicCategories: any[]): string {
+  for (const cat of clinicCategories) {
+    let matches = true;
 
     if (cat.match_department) {
-      parts.push(`ca.department = '${cat.match_department}'`);
+      if (row.department !== cat.match_department) matches = false;
     }
 
-    if (cat.match_keyword && cat.match_mode === 'contains') {
-      parts.push(`LOWER(ca.service_name) LIKE '%${cat.match_keyword.toLowerCase()}%'`);
-    } else if (cat.match_keyword && cat.match_mode === 'and_contains') {
-      const keywords = cat.match_keyword.split(',').map((k: string) => k.trim().toLowerCase());
-      for (const kw of keywords) {
-        parts.push(`LOWER(ca.service_name) LIKE '%${kw}%'`);
+    if (matches && cat.match_keyword) {
+      const serviceLower = (row.service_name || '').toLowerCase();
+      if (cat.match_mode === 'contains') {
+        if (!serviceLower.includes(cat.match_keyword.toLowerCase())) matches = false;
+      } else if (cat.match_mode === 'and_contains') {
+        const keywords = cat.match_keyword.split(',').map((k: string) => k.trim().toLowerCase());
+        for (const kw of keywords) {
+          if (!serviceLower.includes(kw)) { matches = false; break; }
+        }
       }
     }
 
-    if (parts.length > 0) {
-      conditions.push(`WHEN ${parts.join(' AND ')} THEN '${cat.name}'`);
-    }
-  }
+    // A category with no match_department and no match_keyword has no conditions — skip it
+    if (!cat.match_department && !cat.match_keyword) continue;
 
-  return conditions.length > 0
-    ? `CASE ${conditions.join(' ')} ELSE 'Other' END`
-    : `'Other'`;
+    if (matches) return cat.name;
+  }
+  return 'Other';
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -69,17 +69,30 @@ router.get('/dashboard', async (req, res) => {
   }
 
   // ── Clinic revenue by doctor × category ──
-  const caseExpr = buildCategoryCase(categories);
-  const clinicRows = db.all(
+  // Fetch raw rows without SQL-level classification to avoid SQL injection.
+  // Category classification is done in JavaScript below.
+  const clinicCategories = [...categories].filter(c => c.source === 'clinic').sort((a, b) => b.priority - a.priority);
+  const rawClinicRows = db.all(
     `SELECT ca.billed_doctor AS doctor_name, ca.bill_month,
-       ${caseExpr} AS service_category,
-       COALESCE(SUM(ca.item_price), 0) AS total_revenue
+       ca.department, ca.service_name,
+       COALESCE(ca.item_price, 0) AS item_price
      FROM clinic_actuals ca
      WHERE ca.bill_month >= ? AND ca.bill_month <= ?
-       AND ca.billed_doctor IS NOT NULL AND ca.billed_doctor != '-' AND ca.billed_doctor != ''${bf.where}
-     GROUP BY ca.billed_doctor, ca.bill_month, service_category`,
+       AND ca.billed_doctor IS NOT NULL AND ca.billed_doctor != '-' AND ca.billed_doctor != ''${bf.where}`,
     startMonth, endMonth, ...bf.params
   );
+
+  // Classify each row in JS, then aggregate by (doctor, month, category)
+  const clinicAgg: Record<string, { doctor_name: string; bill_month: string; service_category: string; total_revenue: number }> = {};
+  for (const row of rawClinicRows as any[]) {
+    const category = classifyRow(row, clinicCategories);
+    const key = `${row.doctor_name}|${row.bill_month}|${category}`;
+    if (!clinicAgg[key]) {
+      clinicAgg[key] = { doctor_name: row.doctor_name, bill_month: row.bill_month, service_category: category, total_revenue: 0 };
+    }
+    clinicAgg[key].total_revenue += row.item_price;
+  }
+  const clinicRows = Object.values(clinicAgg);
 
   // ── Pharmacy revenue by doctor ──
   const pharmacyCat = categories.find((c: any) => c.source === 'pharmacy');

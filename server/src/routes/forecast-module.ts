@@ -242,15 +242,20 @@ router.post('/values', requireWriteAccess, async (req, res) => {
   const { item_id, values } = req.body; // values: [{month, amount}]
   if (!item_id || !values?.length) return res.status(400).json({ error: 'item_id and values required' });
 
-  for (const v of values) {
-    // Upsert
-    const existing = db.get('SELECT id FROM forecast_values WHERE item_id = ? AND month = ?', item_id, v.month);
-    if (existing) {
-      db.run('UPDATE forecast_values SET amount = ? WHERE id = ?', v.amount || 0, existing.id);
-    } else {
-      db.run('INSERT INTO forecast_values (item_id, month, amount) VALUES (?, ?, ?)', item_id, v.month, v.amount || 0);
+  db.beginBatch();
+  try {
+    for (const v of values) {
+      // Upsert
+      const existing = db.get('SELECT id FROM forecast_values WHERE item_id = ? AND month = ?', item_id, v.month);
+      if (existing) {
+        db.run('UPDATE forecast_values SET amount = ? WHERE id = ?', v.amount || 0, existing.id);
+      } else {
+        db.run('INSERT INTO forecast_values (item_id, month, amount) VALUES (?, ?, ?)', item_id, v.month, v.amount || 0);
+      }
     }
-  }
+    db.endBatch();
+  } catch (e) { db.rollbackBatch(); throw e; }
+
   res.json({ ok: true, count: values.length });
 });
 
@@ -260,16 +265,21 @@ router.post('/values/bulk', requireWriteAccess, async (req, res) => {
   const { item_id, entries } = req.body; // item_id (optional top-level), entries: [{item_id?, month, amount}]
   if (!entries?.length) return res.status(400).json({ error: 'entries required' });
 
-  for (const e of entries) {
-    const effectiveItemId = e.item_id || item_id;
-    if (!effectiveItemId) continue;
-    const existing = db.get('SELECT id FROM forecast_values WHERE item_id = ? AND month = ?', effectiveItemId, e.month);
-    if (existing) {
-      db.run('UPDATE forecast_values SET amount = ? WHERE id = ?', e.amount || 0, existing.id);
-    } else {
-      db.run('INSERT INTO forecast_values (item_id, month, amount) VALUES (?, ?, ?)', effectiveItemId, e.month, e.amount || 0);
+  db.beginBatch();
+  try {
+    for (const e of entries) {
+      const effectiveItemId = e.item_id || item_id;
+      if (!effectiveItemId) continue;
+      const existing = db.get('SELECT id FROM forecast_values WHERE item_id = ? AND month = ?', effectiveItemId, e.month);
+      if (existing) {
+        db.run('UPDATE forecast_values SET amount = ? WHERE id = ?', e.amount || 0, existing.id);
+      } else {
+        db.run('INSERT INTO forecast_values (item_id, month, amount) VALUES (?, ?, ?)', effectiveItemId, e.month, e.amount || 0);
+      }
     }
-  }
+    db.endBatch();
+  } catch (e) { db.rollbackBatch(); throw e; }
+
   res.json({ ok: true, count: entries.length });
 });
 

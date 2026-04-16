@@ -80,21 +80,6 @@ export function getStreamIdForInsert(req: Request): number | null {
 }
 
 /**
- * Combined branch + stream filter for convenience.
- */
-export function branchStreamFilter(
-  req: Request,
-  alias?: string
-): { where: string; params: any[] } {
-  const bf = branchFilter(req, alias);
-  const sf = streamFilter(req, alias);
-  return {
-    where: bf.where + sf.where,
-    params: [...bf.params, ...sf.params],
-  };
-}
-
-/**
  * Returns a branch-prefixed settings key for multi-branch credential storage.
  * Single-branch clients use the base key as-is.
  */

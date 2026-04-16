@@ -75,7 +75,7 @@ app.use(session({
 }));
 
 // ─── Health check (no auth, always responds) ──────────────────────────────────
-app.get('/api/health', async (_req, res) => {
+app.get('/api/health', requireAuth, requireSuperAdmin, async (_req, res) => {
   try {
     const platformDb = await getPlatformHelper();
     const clients = platformDb.all('SELECT slug FROM clients WHERE is_active = 1');
@@ -118,7 +118,7 @@ app.get('/api/health', async (_req, res) => {
 });
 
 // ─── Phantom data cleanup (callable anytime, no auth — idempotent) ──────────
-app.post('/api/cleanup-pharmacy', async (_req, res) => {
+app.post('/api/cleanup-pharmacy', requireAuth, requireSuperAdmin, async (_req, res) => {
   try {
     const mcDb = await getClientHelper('magnacode');
     const currentMonth = new Date().toISOString().slice(0, 7);
@@ -174,7 +174,7 @@ app.post('/api/cleanup-pharmacy', async (_req, res) => {
 });
 
 // ─── Clinic dedup cleanup (wipe duplicated clinic rows, keep one copy) ───────
-app.post('/api/cleanup-clinic', async (_req, res) => {
+app.post('/api/cleanup-clinic', requireAuth, requireSuperAdmin, async (_req, res) => {
   try {
     const mcDb = await getClientHelper('magnacode');
     const before = mcDb.get('SELECT COUNT(*) as n FROM clinic_actuals')?.n || 0;
@@ -361,14 +361,13 @@ app.get('/api/branches', requireAuth, resolveTenant, resolveBranch, async (req, 
 });
 
 // ─── Debug screenshots (for diagnosing sync issues) ─────────────────────────
-const isProdEnv = process.env.NODE_ENV === 'production';
-const debugDir = path.join(process.env.DATA_DIR || (isProdEnv ? '/data' : '.'), 'uploads', 'debug');
-app.get('/api/debug/screenshots', (_req, res) => {
+const debugDir = path.join(process.env.DATA_DIR || (isProd ? '/data' : '.'), 'uploads', 'debug');
+app.get('/api/debug/screenshots', requireAuth, requireSuperAdmin, (_req, res) => {
   if (!fs.existsSync(debugDir)) return res.json([]);
   const files = fs.readdirSync(debugDir).filter(f => f.endsWith('.png')).sort();
   res.json(files);
 });
-app.get('/api/debug/screenshots/:name', (req, res) => {
+app.get('/api/debug/screenshots/:name', requireAuth, requireSuperAdmin, (req, res) => {
   const safe = path.basename(req.params.name); // prevent path traversal
   const filePath = path.join(debugDir, safe);
   if (!fs.existsSync(filePath) || !safe.endsWith('.png')) return res.status(404).send('Not found');
@@ -376,7 +375,7 @@ app.get('/api/debug/screenshots/:name', (req, res) => {
 });
 
 // ─── Debug: DB table status (for diagnosing data loss) ──────────────────────
-app.get('/api/debug/db-status', async (_req, res) => {
+app.get('/api/debug/db-status', requireAuth, requireSuperAdmin, async (_req, res) => {
   try {
     const mcDb = await getClientHelper('magnacode');
     const tables = ['clinic_actuals', 'pharmacy_sales_actuals', 'pharmacy_purchase_actuals',
@@ -394,6 +393,13 @@ app.get('/api/debug/db-status', async (_req, res) => {
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// Global error handler -- catches unhandled route errors
+app.use((err: any, _req: any, res: any, _next: any) => {
+  console.error('[Unhandled Error]', err);
+  const isProdMode = process.env.NODE_ENV === 'production';
+  res.status(500).json({ error: isProdMode ? 'Internal server error' : (err.message || 'Internal server error') });
 });
 
 // ─── Static files ───────────────────────────────────────────────────────────
@@ -860,126 +866,6 @@ async function start() {
   } catch (e) {
     console.error('Backup creation failed:', e);
   }
-
-  // ── One-time forecast data restore endpoint ──────────────────────────────────
-  // Call: POST /api/internal/inject-forecast  with header X-Token: magna-restore-2026
-  // Can be called multiple times safely (idempotent via INSERT OR REPLACE).
-  // Remove this endpoint after successful restore.
-  app.post('/api/internal/inject-forecast', async (req: any, res: any) => {
-    if (req.headers['x-token'] !== 'magna-restore-2026') {
-      return res.status(403).json({ error: 'Forbidden' });
-    }
-    try {
-      const mcDb = await getClientHelper('magnacode');
-
-      // Find Clinic stream ID from platform DB (by name, not hard-coded stream_id)
-      const platformDb = await getPlatformHelper();
-      const clientRow = platformDb.get("SELECT id FROM clients WHERE slug = 'magnacode'");
-      const clinicStreamRow = clientRow ? platformDb.get(
-        "SELECT id FROM business_streams WHERE client_id = ? AND (LOWER(name) LIKE '%clinic%' OR LOWER(name) LIKE '%health%') ORDER BY id LIMIT 1",
-        clientRow.id
-      ) : null;
-
-      // Diagnostic: show all scenarios and streams
-      const allScenarios = mcDb.all('SELECT id, name, branch_id, stream_id, is_default FROM scenarios ORDER BY id');
-      const allStreams = clientRow ? platformDb.all('SELECT id, name FROM business_streams WHERE client_id = ? ORDER BY id', clientRow.id) : [];
-
-      const clinicStreamId = clinicStreamRow?.id;
-      // Find scenario matching clinic stream
-      let scenario = clinicStreamId
-        ? mcDb.get('SELECT id FROM scenarios WHERE stream_id = ? LIMIT 1', clinicStreamId)
-        : mcDb.get('SELECT id FROM scenarios WHERE stream_id IS NOT NULL ORDER BY id LIMIT 1');
-      if (!scenario) scenario = mcDb.get('SELECT id FROM scenarios ORDER BY id LIMIT 1');
-      if (!scenario) return res.status(404).json({ error: 'No scenario found', allScenarios, allStreams });
-
-      const scenarioId = scenario.id;
-
-      // Clear any existing items in this scenario (clean slate for restore)
-      mcDb.run('DELETE FROM forecast_items WHERE scenario_id = ?', scenarioId);
-
-      // Define items to restore (from magna_tracker.db legacy export)
-      const ITEMS = [
-        { category: 'revenue', name: 'Consultation Revenue', item_type: 'unit_sales', entry_mode: 'varying', sort_order: 1,
-          meta: JSON.stringify({stepValues:{units:{"2026-04":1147,"2026-05":1191,"2026-06":1009,"2026-07":1372,"2026-08":1148,"2026-09":1020,"2026-10":1178,"2026-11":1231,"2026-12":1178,"2027-01":1142,"2027-02":1165,"2027-03":1162},prices:{"2026-04":901,"2026-05":901,"2026-06":901,"2026-07":901,"2026-08":901,"2026-09":901,"2026-10":901,"2026-11":901,"2026-12":901,"2027-01":901,"2027-02":901,"2027-03":901}},stepEntryModes:{units:"varying",prices:"constant"},stepConstants:{units:{amount:0,period:"month",startMonth:"2026-04"},prices:{amount:901,period:"month",startMonth:"2026-04"}}}) },
-        { category: 'revenue', name: 'Diagnostics Revenue', item_type: 'unit_sales', entry_mode: 'varying', sort_order: 2,
-          meta: JSON.stringify({stepValues:{units:{"2026-04":1032,"2026-05":845,"2026-06":689,"2026-07":970,"2026-08":909,"2026-09":744,"2026-10":960,"2026-11":1071,"2026-12":881,"2027-01":917,"2027-02":788,"2027-03":891},prices:{"2026-04":2087,"2026-05":2087,"2026-06":2087,"2026-07":2087,"2026-08":2087,"2026-09":2087,"2026-10":2087,"2026-11":2087,"2026-12":2087,"2027-01":2087,"2027-02":2087,"2027-03":2087}},stepEntryModes:{units:"varying",prices:"constant"},stepConstants:{units:{amount:0,period:"month",startMonth:"2026-04"},prices:{amount:2087,period:"month",startMonth:"2026-04"}}}) },
-        { category: 'revenue', name: 'New Patient-based Revenue', item_type: 'unit_sales', entry_mode: 'varying', sort_order: 3, meta: null },
-        { category: 'direct_costs', name: 'Directors Remuneration', item_type: 'general_cost', entry_mode: 'constant', sort_order: 1,
-          meta: JSON.stringify({stepValues:{cost:{"2026-04":350000,"2026-05":350000,"2026-06":350000,"2026-07":350000,"2026-08":350000,"2026-09":350000,"2026-10":350000,"2026-11":350000,"2026-12":350000,"2027-01":350000,"2027-02":350000,"2027-03":350000}},stepEntryModes:{cost:"constant"},stepConstants:{cost:{amount:350000,period:"month",startMonth:"2026-04"}},linkedRevenueId:null,percentOfStream:0,percentStartMonth:"2026-04"}) },
-        { category: 'direct_costs', name: 'New Specific Cost', item_type: 'specific_cost', entry_mode: 'varying', sort_order: 2, meta: null },
-        { category: 'expenses', name: 'New Expense', item_type: 'other', entry_mode: 'varying', sort_order: 1,
-          meta: JSON.stringify({stepValues:{amount:{"2026-04":50000}},stepEntryModes:{amount:"varying"},stepConstants:{amount:{amount:0,period:"month",startMonth:"2026-04"}},linkedRevenueId:null,percentOfStream:0,percentStartMonth:"2026-04",labor_type:"regular_labor",staffing_type:"on_staff",annual_raise_pct:0,percent_of_revenue:0,pct_revenue_start_month:"2026-04",linked_revenue_id:null,oneTimeMonth:"2026-04",oneTimeAmount:0}) },
-        { category: 'expenses', name: 'New Expense 2', item_type: 'other', entry_mode: 'varying', sort_order: 2, meta: null },
-      ];
-
-      // Insert items and build id map — use SELECT after INSERT (lastInsertRowid unreliable in sql.js)
-      const newIds: Record<string, number> = {};
-      for (const item of ITEMS) {
-        mcDb.run(
-          `INSERT INTO forecast_items (scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta)
-           VALUES (?, ?, ?, ?, ?, 0, 'month', '2026-04', 0, 0, ?, null, ?)`,
-          scenarioId, item.category, item.name, item.item_type, item.entry_mode, item.sort_order, item.meta || null
-        );
-        const inserted = mcDb.get('SELECT id FROM forecast_items WHERE scenario_id = ? AND name = ? ORDER BY id DESC LIMIT 1', scenarioId, item.name);
-        newIds[item.name] = inserted?.id;
-      }
-
-      // Insert Consultation share personnel — linked to Consultation Revenue
-      const consultRevId = newIds['Consultation Revenue'];
-      const consultShareMeta = JSON.stringify({stepValues:{headcount:{"2026-04":5,"2026-05":5,"2026-06":5,"2026-07":5,"2026-08":5,"2026-09":5,"2026-10":5,"2026-11":5,"2026-12":5,"2027-01":5,"2027-02":5,"2027-03":5},salary_per:{"2026-04":310034,"2026-05":321927,"2026-06":272733,"2026-07":370852,"2026-08":310304,"2026-09":275706,"2026-10":318413,"2026-11":332739,"2026-12":318413,"2027-01":308683,"2027-02":314900,"2027-03":314089}},stepEntryModes:{headcount:"constant",salary_per:"pct_specific"},stepConstants:{headcount:{amount:5,period:"month",startMonth:"2026-04"},salary_per:{amount:0,period:"month",startMonth:"2026-04"}},linkedRevenueId:consultRevId,percentOfStream:0,percentStartMonth:"2026-04",labor_type:"direct_labor",staffing_type:"contract",annual_raise_pct:0,percent_of_revenue:30,pct_revenue_start_month:"2026-04",linked_revenue_id:consultRevId});
-      mcDb.run(
-        `INSERT INTO forecast_items (scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta)
-         VALUES (?, 'personnel', 'Consultation Share', 'group', 'varying', 0, 'month', '2026-04', 0, 0, 1, null, ?)`,
-        scenarioId, consultShareMeta
-      );
-      const consultShareRow = mcDb.get('SELECT id FROM forecast_items WHERE scenario_id = ? AND name = ? ORDER BY id DESC LIMIT 1', scenarioId, 'Consultation Share');
-      const consultShareId = consultShareRow?.id;
-      mcDb.run(
-        `INSERT INTO forecast_items (scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta)
-         VALUES (?, 'personnel', 'New Employee', 'group', 'varying', 0, 'month', '2026-04', 0, 0, 2, null, ?)`,
-        scenarioId, JSON.stringify({labor_type:"regular_labor",staffing_type:"on_staff"})
-      );
-
-      // Insert forecast_values
-      const MONTHS = ['2026-04','2026-05','2026-06','2026-07','2026-08','2026-09','2026-10','2026-11','2026-12','2027-01','2027-02','2027-03'];
-      const CONSULT_REV = [1033447,1073091,909109,1236172,1034348,919020,1061378,1109131,1061378,1028942,1049665,1046962];
-      const DIAG_REV    = [2153784,1763515,1437943,2024390,1897083,1552728,2003520,2235177,1838647,1913779,1644556,1859517];
-      const DIR_REM     = [350000,350000,350000,350000,350000,350000,350000,350000,350000,350000,350000,350000];
-      const CONSULT_SHR = [1550170,1609635,1363665,1854260,1551520,1378530,1592065,1663695,1592065,1543415,1574500,1570445];
-      const EXPENSE_1   = [50000,0,0,0,0,0,0,0,0,0,0,0];
-
-      mcDb.beginBatch();
-      for (let i = 0; i < 12; i++) {
-        const m = MONTHS[i];
-        mcDb.run('INSERT OR REPLACE INTO forecast_values (item_id, month, amount) VALUES (?,?,?)', newIds['Consultation Revenue'], m, CONSULT_REV[i]);
-        mcDb.run('INSERT OR REPLACE INTO forecast_values (item_id, month, amount) VALUES (?,?,?)', newIds['Diagnostics Revenue'], m, DIAG_REV[i]);
-        mcDb.run('INSERT OR REPLACE INTO forecast_values (item_id, month, amount) VALUES (?,?,?)', newIds['Directors Remuneration'], m, DIR_REM[i]);
-        mcDb.run('INSERT OR REPLACE INTO forecast_values (item_id, month, amount) VALUES (?,?,?)', consultShareId, m, CONSULT_SHR[i]);
-        mcDb.run('INSERT OR REPLACE INTO forecast_values (item_id, month, amount) VALUES (?,?,?)', newIds['New Expense'], m, EXPENSE_1[i]);
-      }
-      mcDb.endBatch();
-
-      const itemCount = mcDb.get('SELECT COUNT(*) as n FROM forecast_items WHERE scenario_id = ?', scenarioId)?.n;
-      const valCount  = mcDb.get('SELECT COUNT(*) as n FROM forecast_values fv JOIN forecast_items fi ON fv.item_id = fi.id WHERE fi.scenario_id = ?', scenarioId)?.n;
-      // Clean up any forecast items that landed in wrong (non-clinic) scenarios from earlier failed attempts
-      const wrongItems = mcDb.all('SELECT DISTINCT scenario_id FROM forecast_items WHERE scenario_id != ?', scenarioId);
-      for (const w of wrongItems) {
-        // Only clean if it's a stream-specific scenario (not the default no-stream one)
-        const wrongScenario = mcDb.get('SELECT stream_id FROM scenarios WHERE id = ?', w.scenario_id);
-        if (wrongScenario?.stream_id) {
-          mcDb.run('DELETE FROM forecast_items WHERE scenario_id = ?', w.scenario_id);
-          console.log(`[Inject Forecast] Cleaned up wrong forecast items from scenario ${w.scenario_id}`);
-        }
-      }
-
-      const allItems = mcDb.all('SELECT id, scenario_id, category, name FROM forecast_items WHERE scenario_id = ?', scenarioId);
-      console.log(`[Inject Forecast] ✅ Restored ${itemCount} items + ${valCount} values into scenario ${scenarioId}`);
-      res.json({ ok: true, scenarioId, items: itemCount, values: valCount, clinicStreamId, allScenarios, allStreams, newIds, insertedItems: allItems });
-    } catch (e: any) {
-      console.error('[Inject Forecast] Error:', e);
-      res.status(500).json({ error: e.message });
-    }
-  });
 
   console.log('Database initialized and seeded');
   app.listen(PORT, () => {

@@ -504,4 +504,19 @@ export function initializeSchema(db: DbHelper) {
     CREATE INDEX IF NOT EXISTS idx_rs_rules_doctor ON revenue_sharing_rules(doctor_id, is_active);
     CREATE INDEX IF NOT EXISTS idx_rs_rules_category ON revenue_sharing_rules(category_id);
   `);
+
+  // ── Performance indexes for dashboard queries ──
+  const perfIndexes = [
+    'CREATE INDEX IF NOT EXISTS idx_dashboard_actuals_scenario ON dashboard_actuals(scenario_id)',
+    'CREATE INDEX IF NOT EXISTS idx_dashboard_actuals_lookup ON dashboard_actuals(scenario_id, category, month)',
+    'CREATE INDEX IF NOT EXISTS idx_dashboard_actuals_stream ON dashboard_actuals(scenario_id, stream_id)',
+    'CREATE INDEX IF NOT EXISTS idx_clinic_actuals_bill_date ON clinic_actuals(bill_date)',
+    'CREATE INDEX IF NOT EXISTS idx_clinic_actuals_bill_month ON clinic_actuals(bill_month)',
+    'CREATE INDEX IF NOT EXISTS idx_pharma_sales_bill_date ON pharmacy_sales_actuals(bill_date)',
+    'CREATE INDEX IF NOT EXISTS idx_budgets_fy ON budgets(fy_id)',
+    'CREATE INDEX IF NOT EXISTS idx_forecasts_fy ON forecasts(fy_id)',
+  ];
+  for (const idx of perfIndexes) {
+    try { db.exec(idx); } catch { /* index may already exist */ }
+  }
 }

@@ -40,15 +40,20 @@ router.post('/bulk', async (req, res) => {
   const branchId = getBranchIdForInsert(req);
   const streamId = getStreamIdForInsert(req);
 
-  for (const entry of entries) {
-    db.run(
-      `INSERT INTO dashboard_actuals (scenario_id, category, item_name, linked_item_id, month, amount, branch_id, stream_id, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-       ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
-       DO UPDATE SET amount = excluded.amount, linked_item_id = excluded.linked_item_id, updated_at = datetime('now')`,
-      scenario_id, entry.category, entry.item_name, entry.linked_item_id || null, entry.month, entry.amount || 0, branchId, streamId
-    );
-  }
+  db.beginBatch();
+  try {
+    for (const entry of entries) {
+      db.run(
+        `INSERT INTO dashboard_actuals (scenario_id, category, item_name, linked_item_id, month, amount, branch_id, stream_id, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
+         DO UPDATE SET amount = excluded.amount, linked_item_id = excluded.linked_item_id, updated_at = datetime('now')`,
+        scenario_id, entry.category, entry.item_name, entry.linked_item_id || null, entry.month, entry.amount || 0, branchId, streamId
+      );
+    }
+    db.endBatch();
+  } catch (e) { db.rollbackBatch(); throw e; }
+
   res.json({ success: true, count: entries.length });
 });
 

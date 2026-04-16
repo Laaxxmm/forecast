@@ -28,15 +28,20 @@ router.post('/', async (req, res) => {
   }
 
   const fDate = forecast_date || new Date().toISOString().slice(0, 10);
-  db.run(`DELETE FROM forecasts WHERE fy_id = ? AND business_unit = ? AND forecast_date = ?${bf.where}`, fy_id, business_unit, fDate, ...bf.params);
 
-  for (const e of entries) {
-    db.run(
-      `INSERT INTO forecasts (fy_id, business_unit, month, department_id, metric, amount, forecast_date, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      fy_id, business_unit, e.month, e.department_id || null, e.metric, e.amount || 0, fDate, e.notes || null
-    );
-  }
+  db.beginBatch();
+  try {
+    db.run(`DELETE FROM forecasts WHERE fy_id = ? AND business_unit = ? AND forecast_date = ?${bf.where}`, fy_id, business_unit, fDate, ...bf.params);
+
+    for (const e of entries) {
+      db.run(
+        `INSERT INTO forecasts (fy_id, business_unit, month, department_id, metric, amount, forecast_date, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        fy_id, business_unit, e.month, e.department_id || null, e.metric, e.amount || 0, fDate, e.notes || null
+      );
+    }
+    db.endBatch();
+  } catch (e) { db.rollbackBatch(); throw e; }
 
   res.json({ ok: true, count: entries.length, forecast_date: fDate });
 });

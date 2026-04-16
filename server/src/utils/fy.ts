@@ -1,24 +1,3 @@
-export function getFYMonths(startYear: number): string[] {
-  const months: string[] = [];
-  for (let m = 4; m <= 12; m++) {
-    months.push(`${startYear}-${String(m).padStart(2, '0')}`);
-  }
-  for (let m = 1; m <= 3; m++) {
-    months.push(`${startYear + 1}-${String(m).padStart(2, '0')}`);
-  }
-  return months;
-}
-
-export function getFYLabel(startYear: number): string {
-  return `FY ${startYear}-${String(startYear + 1).slice(-2)}`;
-}
-
-export function monthToFY(month: string): { startYear: number; label: string } {
-  const [year, m] = month.split('-').map(Number);
-  const startYear = m >= 4 ? year : year - 1;
-  return { startYear, label: getFYLabel(startYear) };
-}
-
 /**
  * Scan an array of raw date values from a file and detect whether the format
  * is DD/MM/YYYY ('dmy') or MM/DD/YYYY ('mdy'). Works by finding any date
@@ -100,16 +79,3 @@ function formatDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-export function getMonthLabel(month: string): string {
-  const [y, m] = month.split('-');
-  const months = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return `${months[parseInt(m)]}-${y.slice(-2)}`;
-}
-
-export function formatINR(amount: number): string {
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 0,
-  }).format(amount);
-}

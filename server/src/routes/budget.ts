@@ -32,15 +32,19 @@ router.post('/', async (req, res) => {
   }
 
   // Delete existing entries for this FY/unit (branch-scoped) and re-insert
-  db.run(`DELETE FROM budgets WHERE fy_id = ? AND business_unit = ?${bf.where}`, fy_id, business_unit, ...bf.params);
+  db.beginBatch();
+  try {
+    db.run(`DELETE FROM budgets WHERE fy_id = ? AND business_unit = ?${bf.where}`, fy_id, business_unit, ...bf.params);
 
-  for (const e of entries) {
-    db.run(
-      `INSERT INTO budgets (fy_id, business_unit, month, department_id, metric, amount, version, branch_id)
-       VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
-      fy_id, business_unit, e.month, e.department_id || null, e.metric, e.amount || 0, branchId
-    );
-  }
+    for (const e of entries) {
+      db.run(
+        `INSERT INTO budgets (fy_id, business_unit, month, department_id, metric, amount, version, branch_id)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+        fy_id, business_unit, e.month, e.department_id || null, e.metric, e.amount || 0, branchId
+      );
+    }
+    db.endBatch();
+  } catch (e) { db.rollbackBatch(); throw e; }
 
   res.json({ ok: true, count: entries.length });
 });
