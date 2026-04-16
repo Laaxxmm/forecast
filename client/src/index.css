@@ -75,6 +75,10 @@ body {
   background: var(--scrollbar-thumb-hover);
 }
 
+/* Hide scrollbar utility — for horizontal scroll containers */
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+.scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
 /* ═══════════════════════════════════════════════════════════
    Component classes — use CSS vars so they auto-switch
    ═══════════════════════════════════════════════════════════ */

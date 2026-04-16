@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, TrendingUp, Upload, Settings, LogOut, BarChart3, Building2, ArrowLeftRight,
-  ChevronLeft, MapPin, ChevronDown, Sun, Moon, ArrowRight, Activity, PieChart,
+  MapPin, ChevronDown, Sun, Moon, ArrowRight, Activity, PieChart,
+  Pin, PinOff, X,
 } from 'lucide-react';
 import api from '../../api/client';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -27,9 +28,14 @@ const utilityLinks = [
 interface SidebarProps {
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
+  pinned: boolean;
+  onPinnedChange: (pinned: boolean) => void;
+  isMobile: boolean;
+  mobileOpen: boolean;
+  onMobileClose: () => void;
 }
 
-export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
+export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedChange, isMobile, mobileOpen, onMobileClose }: SidebarProps) {
   const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
   const userType = localStorage.getItem('user_type');
@@ -195,12 +201,16 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
 
   return (
     <aside
-      className={`${w} bg-dark-800 flex flex-col min-h-screen fixed left-0 top-0 z-40 border-r border-dark-400/30 transition-all duration-200 ease-in-out overflow-hidden`}
-      onMouseEnter={() => onExpandedChange(true)}
-      onMouseLeave={() => { if (!showBranchDropdown) onExpandedChange(false); }}
+      className={
+        isMobile
+          ? `w-72 bg-dark-800 flex flex-col h-screen fixed left-0 top-0 z-50 border-r border-dark-400/30 shadow-2xl transition-transform duration-300 ease-in-out ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`
+          : `${w} bg-dark-800 flex flex-col min-h-screen fixed left-0 top-0 z-40 border-r border-dark-400/30 transition-all duration-200 ease-in-out overflow-hidden`
+      }
+      onMouseEnter={isMobile ? undefined : () => onExpandedChange(true)}
+      onMouseLeave={isMobile ? undefined : () => { if (!showBranchDropdown) onExpandedChange(false); }}
     >
       {/* Logo */}
-      <div className="px-4 py-5 border-b border-dark-400/30">
+      <div className="px-4 py-5 border-b border-dark-400/30 flex-shrink-0">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-accent-500 flex items-center justify-center flex-shrink-0">
             <BarChart3 size={18} className="text-white" />
@@ -211,15 +221,35 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
               <p className="text-[10px] text-theme-faint font-medium tracking-wide uppercase">by Indefine</p>
             </div>
           )}
-          {expanded && (
-            <ChevronLeft size={14} className="text-theme-faint ml-auto flex-shrink-0" />
+          {/* Pin toggle (desktop) or Close (mobile) */}
+          {expanded && !isMobile && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onPinnedChange(!pinned); }}
+              className={`ml-auto flex-shrink-0 p-1.5 rounded-lg transition-colors ${
+                pinned
+                  ? 'text-accent-400 bg-accent-500/10 hover:bg-accent-500/20'
+                  : 'text-theme-faint hover:text-theme-primary hover:bg-dark-600'
+              }`}
+              title={pinned ? 'Unpin sidebar' : 'Pin sidebar open'}
+            >
+              {pinned ? <PinOff size={14} /> : <Pin size={14} />}
+            </button>
+          )}
+          {isMobile && (
+            <button
+              onClick={onMobileClose}
+              className="ml-auto flex-shrink-0 p-1.5 rounded-lg text-theme-faint hover:text-theme-primary hover:bg-dark-600 transition-colors"
+              aria-label="Close menu"
+            >
+              <X size={16} />
+            </button>
           )}
         </div>
       </div>
 
       {/* Client context */}
       {clientName && expanded && (
-        <div className="px-3 py-3 border-b border-dark-400/30">
+        <div className="px-3 py-3 border-b border-dark-400/30 flex-shrink-0">
           <div className="flex items-center gap-2.5 bg-dark-600 rounded-xl px-3 py-2.5">
             <div className="w-7 h-7 rounded-lg bg-accent-500/15 flex items-center justify-center flex-shrink-0">
               <Building2 size={13} className="text-accent-400" />
@@ -242,7 +272,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
 
       {/* Collapsed client icon */}
       {clientName && !expanded && (
-        <div className="px-3 py-3 border-b border-dark-400/30 flex justify-center">
+        <div className="px-3 py-3 border-b border-dark-400/30 flex justify-center flex-shrink-0">
           <div className="w-9 h-9 rounded-lg bg-dark-600 flex items-center justify-center" title={clientName}>
             <Building2 size={15} className="text-accent-400" />
           </div>
@@ -251,7 +281,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
 
       {/* Branch selector — multi-branch clients only */}
       {isMultiBranch && !(isSuperAdmin && isOwner) && branches.length > 0 && expanded && (
-        <div className="px-3 py-2 border-b border-dark-400/30">
+        <div className="px-3 py-2 border-b border-dark-400/30 flex-shrink-0">
           <div className="relative" ref={branchDropdownRef}>
             <button
               onClick={() => setShowBranchDropdown(!showBranchDropdown)}
@@ -311,7 +341,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
 
       {/* Stream selector — shows when branch is selected and has streams */}
       {isMultiBranch && !(isSuperAdmin && isOwner) && expanded && getBranchStreams().length > 0 && selectedBranchId !== 'all' && (
-        <div className="px-3 py-2 border-b border-dark-400/30">
+        <div className="px-3 py-2 border-b border-dark-400/30 flex-shrink-0">
           <div className="flex gap-1 flex-wrap">
             <button
               onClick={() => selectStream('all', 'All Streams')}
@@ -342,7 +372,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
 
       {/* Collapsed branch icon */}
       {isMultiBranch && !(isSuperAdmin && isOwner) && branches.length > 0 && !expanded && (
-        <div className="px-3 py-2 border-b border-dark-400/30 flex justify-center">
+        <div className="px-3 py-2 border-b border-dark-400/30 flex justify-center flex-shrink-0">
           <div className="w-9 h-9 rounded-lg bg-dark-600 flex items-center justify-center" title={selectedBranchName}>
             <MapPin size={13} className="text-accent-400" />
           </div>
@@ -351,7 +381,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
 
       {/* Switch Module link */}
       {!isSuperAdmin && expanded && (
-        <div className="px-3 py-2 border-b border-dark-400/30">
+        <div className="px-3 py-2 border-b border-dark-400/30 flex-shrink-0">
           <button
             onClick={() => navigate('/modules')}
             className="w-full flex items-center gap-2 text-xs font-medium text-theme-muted hover:text-accent-400 transition-colors px-2 py-1.5"
@@ -362,8 +392,8 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
         </div>
       )}
 
-      {/* Main navigation */}
-      <nav className="flex-1 py-4 px-2">
+      {/* Main navigation — scrollable */}
+      <nav className="flex-1 py-4 px-2 overflow-y-auto">
         <div className="space-y-1">
           {visibleMain.map(renderLink)}
         </div>
@@ -392,7 +422,7 @@ export default function Sidebar({ expanded, onExpandedChange }: SidebarProps) {
       </nav>
 
       {/* Bottom utility links + theme toggle + logout */}
-      <div className="px-2 pb-2 border-t border-dark-400/30 pt-3 space-y-1">
+      <div className="px-2 pb-2 border-t border-dark-400/30 pt-3 space-y-1 flex-shrink-0">
         {visibleUtility.map(renderLink)}
 
         {/* Theme toggle */}

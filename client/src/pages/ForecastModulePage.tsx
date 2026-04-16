@@ -153,27 +153,27 @@ export default function ForecastModulePage() {
   return (
     <div className="forecast-module animate-fade-in">
       {/* Top Navigation Tabs */}
-      <div className="bg-dark-800 border-b border-dark-400/30 -mx-8 -mt-8 px-8 mb-0">
-        <div className="flex items-center justify-between">
-          <div className="flex">
+      <div className="bg-dark-800 border-b border-dark-400/30 -mx-4 -mt-4 px-4 md:-mx-8 md:-mt-8 md:px-8 mb-0">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between">
+          <div className="flex overflow-x-auto scrollbar-hide">
             {topTabs.map(tab => (
               <NavLink
                 key={tab.path}
                 to={`/forecast/${tab.path}`}
                 className={({ isActive }) =>
-                  `flex items-center gap-2 px-5 py-4 text-[13px] font-medium border-b-2 transition-all ${
+                  `flex items-center gap-1.5 md:gap-2 px-3 md:px-5 py-3 md:py-4 text-xs md:text-[13px] font-medium border-b-2 transition-all whitespace-nowrap ${
                     isActive
                       ? 'border-accent-500 text-accent-400'
                       : 'border-transparent text-theme-faint hover:text-theme-secondary hover:border-dark-300'
                   }`
                 }
               >
-                <tab.icon size={16} />
+                <tab.icon size={15} />
                 {tab.label}
               </NavLink>
             ))}
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 md:gap-3 pb-2 md:pb-0 px-1 md:px-0 flex-shrink-0">
             {isConsolidated && (
               <span className="text-xs font-medium text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-lg">
                 Consolidated View (Read-only)
@@ -200,7 +200,7 @@ export default function ForecastModulePage() {
                 const s = scenarios.find(sc => sc.id === Number(e.target.value));
                 if (s) setScenario(s);
               }}
-              className="input text-sm py-1.5 w-48"
+              className="input text-xs md:text-sm py-1 md:py-1.5 w-32 md:w-48"
             >
               {scenarios.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
@@ -211,7 +211,7 @@ export default function ForecastModulePage() {
                 const fy = fys.find(f => f.id === Number(e.target.value));
                 if (fy) setSelectedFY(fy);
               }}
-              className="input text-sm py-1.5 w-36"
+              className="input text-xs md:text-sm py-1 md:py-1.5 w-28 md:w-36"
             >
               {fys.map(fy => <option key={fy.id} value={fy.id}>{fy.label}</option>)}
             </select>
@@ -220,7 +220,7 @@ export default function ForecastModulePage() {
       </div>
 
       {/* Toolbar */}
-      <div className="flex items-center justify-between py-3 border-b border-dark-400/30 -mx-8 px-8 bg-dark-800/50">
+      <div className="flex flex-wrap items-center justify-between gap-2 py-3 border-b border-dark-400/30 -mx-4 px-4 md:-mx-8 md:px-8 bg-dark-800/50">
         <div className="flex items-center gap-2">
           <div className="flex bg-dark-700 border border-dark-400/50 rounded-xl overflow-hidden">
             <button
@@ -277,7 +277,7 @@ export default function ForecastModulePage() {
       </div>
 
       {/* Route Content */}
-      <div className="mt-6">
+      <div className="mt-4 md:mt-6">
         <Routes>
           <Route index element={<Navigate to="tables" replace />} />
           <Route path="overview" element={

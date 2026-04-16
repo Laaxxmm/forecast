@@ -132,15 +132,15 @@ export default function DashboardModulePage() {
   return (
     <div className="dashboard-module animate-fade-in">
       {/* Top Navigation */}
-      <div className="bg-dark-800 border-b border-dark-400/30 -mx-8 -mt-8 px-8 mb-0 rounded-none">
-        <div className="flex items-center justify-between">
-          <div className="flex overflow-x-auto">
+      <div className="bg-dark-800 border-b border-dark-400/30 -mx-4 -mt-4 px-4 md:-mx-8 md:-mt-8 md:px-8 mb-0 rounded-none">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between">
+          <div className="flex overflow-x-auto scrollbar-hide">
             {tabs.filter(tab => isClientAdmin || tab.path !== 'update-actuals').map(tab => (
               <NavLink
                 key={tab.path}
                 to={`/analysis/${tab.path}`}
                 className={({ isActive }) =>
-                  `flex items-center gap-2 px-4 py-4 text-[13px] font-medium border-b-2 whitespace-nowrap transition-all ${
+                  `flex items-center gap-1.5 md:gap-2 px-3 md:px-4 py-3 md:py-4 text-xs md:text-[13px] font-medium border-b-2 whitespace-nowrap transition-all ${
                     isActive
                       ? 'border-accent-500 text-accent-400'
                       : 'border-transparent text-theme-faint hover:text-theme-secondary hover:border-dark-300'
@@ -152,14 +152,14 @@ export default function DashboardModulePage() {
               </NavLink>
             ))}
           </div>
-          <div className="flex items-center gap-3 ml-4 flex-shrink-0">
+          <div className="flex items-center gap-2 md:gap-3 pb-2 md:pb-0 px-1 md:px-0 flex-shrink-0">
             <select
               value={scenario?.id || ''}
               onChange={e => {
                 const s = scenarios.find(sc => sc.id === Number(e.target.value));
                 if (s) setScenario(s);
               }}
-              className="input text-sm py-1.5 w-48"
+              className="input text-xs md:text-sm py-1 md:py-1.5 w-32 md:w-48"
             >
               {scenarios.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
@@ -169,7 +169,7 @@ export default function DashboardModulePage() {
                 const fy = fys.find(f => f.id === Number(e.target.value));
                 if (fy) setSelectedFY(fy);
               }}
-              className="input text-sm py-1.5 w-36"
+              className="input text-xs md:text-sm py-1 md:py-1.5 w-28 md:w-36"
             >
               {fys.map(fy => <option key={fy.id} value={fy.id}>{fy.label}</option>)}
             </select>
@@ -178,7 +178,7 @@ export default function DashboardModulePage() {
       </div>
 
       {/* Content */}
-      <div className="mt-6">
+      <div className="mt-4 md:mt-6">
         <Routes>
           <Route index element={<Navigate to="overview" replace />} />
           <Route path="overview" element={<DashboardOverview {...sharedProps} />} />
