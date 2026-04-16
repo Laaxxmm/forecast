@@ -669,7 +669,8 @@ router.get('/export/:source', async (req, res) => {
 
     res.json({ rows, count: rows.length });
   } catch (e: any) {
-    res.status(500).json({ error: e.message });
+    const isProd = process.env.NODE_ENV === 'production';
+    res.status(500).json({ error: isProd ? 'Data retrieval failed' : e.message });
   }
 });
 

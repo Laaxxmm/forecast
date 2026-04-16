@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import { createRequire } from 'module';
 import { validatePassword } from '../middleware/auth.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
@@ -138,8 +139,11 @@ router.post('/clients', async (req: Request, res: Response) => {
   );
   const clientId = result.lastInsertRowid;
 
-  // Create default admin user for this client
-  const adminHash = await bcrypt.hash('admin123', 12);
+  // Create default admin user with a random password (returned once in the response)
+  const defaultPassword = req.body.admin_password || crypto.randomBytes(12).toString('base64url');
+  const pwError = validatePassword(defaultPassword);
+  if (pwError) return res.status(400).json({ error: `Admin password: ${pwError}` });
+  const adminHash = await bcrypt.hash(defaultPassword, 12);
   db.run(
     'INSERT INTO client_users (client_id, username, password_hash, display_name, role) VALUES (?, ?, ?, ?, ?)',
     [clientId, 'admin', adminHash, `${name} Admin`, 'admin']
@@ -226,7 +230,8 @@ router.post('/clients', async (req: Request, res: Response) => {
     name,
     industry,
     db_filename: dbFilename,
-    message: `Client created. Default login: admin / admin123`,
+    message: `Client created. Default login: admin / ${defaultPassword}`,
+    defaultPassword,
   });
 });
 

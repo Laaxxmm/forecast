@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { requireAdmin } from '../middleware/auth.js';
 import { branchFilter } from '../utils/branch.js';
 
 const router = Router();
@@ -19,7 +20,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', requireAdmin, async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id, business_unit, entries, forecast_date } = req.body;
   const bf = branchFilter(req);

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { requireAdmin } from '../middleware/auth.js';
 import { branchFilter, getBranchIdForInsert } from '../utils/branch.js';
 
 const router = Router();
@@ -22,7 +23,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', requireAdmin, async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id, business_unit, entries } = req.body;
   const bf = branchFilter(req);
@@ -49,7 +50,7 @@ router.post('/', async (req, res) => {
   res.json({ ok: true, count: entries.length });
 });
 
-router.delete('/', async (req, res) => {
+router.delete('/', requireAdmin, async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id, business_unit } = req.query;
   const bf = branchFilter(req);

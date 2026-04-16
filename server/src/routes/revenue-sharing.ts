@@ -1,5 +1,7 @@
 import { Router } from 'express';
+import { requireAdmin } from '../middleware/auth.js';
 import { branchFilter } from '../utils/branch.js';
+import { requireInt, requireString, requireNumber, optionalString, optionalNumber, ValidationError } from '../middleware/validate.js';
 
 const router = Router();
 
@@ -40,8 +42,8 @@ function classifyRow(row: { department?: string; service_name?: string }, clinic
 // ══════════════════════════════════════════════════════════════════════
 router.get('/dashboard', async (req, res) => {
   const db = req.tenantDb!;
-  const { fy_id } = req.query;
   const bf = branchFilter(req);
+  const fy_id = req.query.fy_id ? requireInt(req.query.fy_id, 'fy_id') : null;
 
   const fy = fy_id
     ? db.get('SELECT * FROM financial_years WHERE id = ?', fy_id)
@@ -209,30 +211,42 @@ router.get('/categories', (req, res) => {
   res.json(rows);
 });
 
-router.post('/categories', (req, res) => {
+router.post('/categories', requireAdmin, (req, res) => {
   const db = req.tenantDb!;
-  const { name, source, match_department, match_keyword, match_mode, priority } = req.body;
-  if (!name) return res.status(400).json({ error: 'name required' });
+  const name = requireString(req.body.name, 'name', 100);
+  const source = optionalString(req.body.source, 'source', 50) || 'clinic';
+  const match_department = optionalString(req.body.match_department, 'match_department', 200);
+  const match_keyword = optionalString(req.body.match_keyword, 'match_keyword', 200);
+  const match_mode = optionalString(req.body.match_mode, 'match_mode', 50) || 'contains';
+  const priority = optionalNumber(req.body.priority, 'priority') ?? 0;
   db.run(
     `INSERT INTO revenue_sharing_categories (name, source, match_department, match_keyword, match_mode, priority) VALUES (?, ?, ?, ?, ?, ?)`,
-    name, source || 'clinic', match_department || null, match_keyword || null, match_mode || 'contains', priority || 0
+    name, source, match_department || null, match_keyword || null, match_mode, priority
   );
   res.json({ ok: true });
 });
 
-router.put('/categories/:id', (req, res) => {
+router.put('/categories/:id', requireAdmin, (req, res) => {
   const db = req.tenantDb!;
-  const { name, source, match_department, match_keyword, match_mode, priority, is_active } = req.body;
+  const id = requireInt(req.params.id, 'id');
+  const name = requireString(req.body.name, 'name', 100);
+  const source = optionalString(req.body.source, 'source', 50) || 'clinic';
+  const match_department = optionalString(req.body.match_department, 'match_department', 200);
+  const match_keyword = optionalString(req.body.match_keyword, 'match_keyword', 200);
+  const match_mode = optionalString(req.body.match_mode, 'match_mode', 50) || 'contains';
+  const priority = optionalNumber(req.body.priority, 'priority') ?? 0;
+  const is_active = req.body.is_active ?? 1;
   db.run(
     `UPDATE revenue_sharing_categories SET name=?, source=?, match_department=?, match_keyword=?, match_mode=?, priority=?, is_active=? WHERE id=?`,
-    name, source, match_department || null, match_keyword || null, match_mode, priority, is_active ?? 1, req.params.id
+    name, source, match_department || null, match_keyword || null, match_mode, priority, is_active, id
   );
   res.json({ ok: true });
 });
 
-router.delete('/categories/:id', (req, res) => {
+router.delete('/categories/:id', requireAdmin, (req, res) => {
   const db = req.tenantDb!;
-  db.run('DELETE FROM revenue_sharing_categories WHERE id = ?', req.params.id);
+  const id = requireInt(req.params.id, 'id');
+  db.run('DELETE FROM revenue_sharing_categories WHERE id = ?', id);
   res.json({ ok: true });
 });
 
@@ -251,11 +265,12 @@ router.get('/rules', (req, res) => {
   res.json(rows);
 });
 
-router.post('/rules', (req, res) => {
+router.post('/rules', requireAdmin, (req, res) => {
   const db = req.tenantDb!;
-  const { doctor_id, category_id, doctor_pct } = req.body;
-  if (!doctor_id || !category_id || doctor_pct == null) return res.status(400).json({ error: 'doctor_id, category_id, doctor_pct required' });
-  const magnaPct = 100 - Number(doctor_pct);
+  const doctor_id = requireInt(req.body.doctor_id, 'doctor_id');
+  const category_id = requireInt(req.body.category_id, 'category_id');
+  const doctor_pct = requireNumber(req.body.doctor_pct, 'doctor_pct');
+  const magnaPct = 100 - doctor_pct;
   db.run(
     `INSERT INTO revenue_sharing_rules (doctor_id, category_id, doctor_pct, magna_pct)
      VALUES (?, ?, ?, ?)
@@ -265,17 +280,19 @@ router.post('/rules', (req, res) => {
   res.json({ ok: true });
 });
 
-router.put('/rules/:id', (req, res) => {
+router.put('/rules/:id', requireAdmin, (req, res) => {
   const db = req.tenantDb!;
-  const { doctor_pct } = req.body;
-  const magnaPct = 100 - Number(doctor_pct);
-  db.run('UPDATE revenue_sharing_rules SET doctor_pct = ?, magna_pct = ? WHERE id = ?', doctor_pct, magnaPct, req.params.id);
+  const id = requireInt(req.params.id, 'id');
+  const doctor_pct = requireNumber(req.body.doctor_pct, 'doctor_pct');
+  const magnaPct = 100 - doctor_pct;
+  db.run('UPDATE revenue_sharing_rules SET doctor_pct = ?, magna_pct = ? WHERE id = ?', doctor_pct, magnaPct, id);
   res.json({ ok: true });
 });
 
-router.delete('/rules/:id', (req, res) => {
+router.delete('/rules/:id', requireAdmin, (req, res) => {
   const db = req.tenantDb!;
-  db.run('DELETE FROM revenue_sharing_rules WHERE id = ?', req.params.id);
+  const id = requireInt(req.params.id, 'id');
+  db.run('DELETE FROM revenue_sharing_rules WHERE id = ?', id);
   res.json({ ok: true });
 });
 

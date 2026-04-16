@@ -158,6 +158,32 @@ export async function getDb(): Promise<Database.Database> {
   return (helper as any).db;
 }
 
+/** Checkpoint WAL and close all cached client DB handles. */
+export function closeAll() {
+  for (const [slug, { db }] of clientDbCache) {
+    try {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+      db.close();
+      console.log(`[DB] Closed client DB: ${slug}`);
+    } catch (e) {
+      console.error(`[DB] Error closing ${slug}:`, e);
+    }
+  }
+  clientDbCache.clear();
+}
+
+process.on('SIGTERM', () => {
+  console.log('[DB] SIGTERM received — closing all client databases');
+  closeAll();
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('[DB] SIGINT received — closing all client databases');
+  closeAll();
+  process.exit(0);
+});
+
 /** Create daily backups for all client databases (call on startup). */
 export function createDailyBackups() {
   const backupDir = path.join(clientsDir, 'backups');

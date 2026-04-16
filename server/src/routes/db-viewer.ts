@@ -84,6 +84,10 @@ router.get('/table/:name', async (req: Request, res: Response) => {
  * Run a read-only SQL query (SELECT only)
  */
 router.get('/query', async (req: Request, res: Response) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ error: 'SQL query endpoint disabled in production' });
+  }
+
   const db = req.tenantDb!;
   const sql = (req.query.sql as string || '').trim();
 

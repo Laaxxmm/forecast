@@ -54,6 +54,33 @@ export async function getPlatformHelper(): Promise<DbHelper> {
   return platformHelper;
 }
 
+/** Checkpoint WAL and close the platform DB handle on shutdown. */
+function closePlatformDb() {
+  if (platformDb) {
+    try {
+      platformDb.pragma('wal_checkpoint(TRUNCATE)');
+      platformDb.close();
+      console.log('[Platform DB] Closed');
+    } catch (e) {
+      console.error('[Platform DB] Error closing:', e);
+    }
+    platformDb = null;
+    platformHelper = null;
+  }
+}
+
+process.on('SIGTERM', () => {
+  console.log('[Platform DB] SIGTERM received — closing platform database');
+  closePlatformDb();
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('[Platform DB] SIGINT received — closing platform database');
+  closePlatformDb();
+  process.exit(0);
+});
+
 /** Create daily backup of the platform database (call on startup) */
 export function createPlatformBackup() {
   if (!fs.existsSync(platformDbPath) || fs.statSync(platformDbPath).size === 0) return;

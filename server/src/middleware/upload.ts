@@ -45,10 +45,10 @@ export const logoUpload = multer({
   storage: logoStorage,
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (['.png', '.jpg', '.jpeg', '.svg', '.webp', '.ico'].includes(ext)) {
+    if (['.png', '.jpg', '.jpeg', '.webp', '.ico'].includes(ext)) {
       cb(null, true);
     } else {
-      cb(new Error('Only image files (PNG, JPG, SVG, WebP, ICO) are allowed'));
+      cb(new Error('Only image files (PNG, JPG, WebP, ICO) are allowed'));
     }
   },
   limits: { fileSize: 5 * 1024 * 1024 },

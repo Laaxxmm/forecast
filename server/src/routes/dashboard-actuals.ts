@@ -1,6 +1,8 @@
 import { Router } from 'express';
+import { requireAdmin } from '../middleware/auth.js';
 import { branchFilter, getBranchIdForInsert, streamFilter, getStreamIdForInsert } from '../utils/branch.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
+import { requireInt, requireString, requireNumber, requireMonth, optionalString, ValidationError } from '../middleware/validate.js';
 
 const router = Router();
 
@@ -8,10 +10,12 @@ const router = Router();
 // Returns all actuals for a scenario, optionally filtered by month
 router.get('/', async (req, res) => {
   const db = req.tenantDb!;
-  const { scenario_id, month, category } = req.query;
   const bf = branchFilter(req);
   const sf = streamFilter(req);
-  if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
+  if (!req.query.scenario_id) return res.status(400).json({ error: 'scenario_id required' });
+  const scenario_id = requireInt(req.query.scenario_id, 'scenario_id');
+  const month = optionalString(req.query.month as string | undefined, 'month', 7);
+  const category = optionalString(req.query.category as string | undefined, 'category', 100);
 
   let sql = 'SELECT * FROM dashboard_actuals WHERE scenario_id = ?';
   const params: any[] = [scenario_id];
@@ -32,10 +36,20 @@ router.get('/', async (req, res) => {
 // Bulk upsert actuals: { scenario_id, entries: [{ category, item_name, linked_item_id?, month, amount }] }
 // Scoped by the caller's current branch so manual entries for one branch don't
 // overwrite another branch's row with the same (scenario, category, item, month).
-router.post('/bulk', async (req, res) => {
+router.post('/bulk', requireAdmin, async (req, res) => {
   const db = req.tenantDb!;
-  const { scenario_id, entries } = req.body;
-  if (!scenario_id || !entries) return res.status(400).json({ error: 'scenario_id and entries required' });
+  const { entries } = req.body;
+  if (!req.body.scenario_id || !entries) return res.status(400).json({ error: 'scenario_id and entries required' });
+  const scenario_id = requireInt(req.body.scenario_id, 'scenario_id');
+
+  // Validate each entry before touching the database
+  if (!Array.isArray(entries)) throw new ValidationError('entries must be an array');
+  for (let i = 0; i < entries.length; i++) {
+    requireString(entries[i].category, `entries[${i}].category`, 100);
+    requireString(entries[i].item_name, `entries[${i}].item_name`, 200);
+    requireMonth(entries[i].month, `entries[${i}].month`);
+    requireNumber(entries[i].amount ?? 0, `entries[${i}].amount`);
+  }
 
   const branchId = getBranchIdForInsert(req);
   const streamId = getStreamIdForInsert(req);
@@ -61,10 +75,10 @@ router.post('/bulk', async (req, res) => {
 // Returns monthly category totals for actuals
 router.get('/summary', async (req, res) => {
   const db = req.tenantDb!;
-  const { scenario_id, fy_id } = req.query;
   const bf = branchFilter(req);
 
-  if (fy_id && !scenario_id) {
+  if (req.query.fy_id && !req.query.scenario_id) {
+    const fy_id = requireInt(req.query.fy_id, 'fy_id');
     // Consolidated mode: sum actuals across all scenarios for this FY
     const scenarios = db.all(
       `SELECT id FROM scenarios WHERE fy_id = ?${bf.where}`,
@@ -84,7 +98,8 @@ router.get('/summary', async (req, res) => {
     return res.json(rows);
   }
 
-  if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
+  if (!req.query.scenario_id) return res.status(400).json({ error: 'scenario_id required' });
+  const scenario_id = requireInt(req.query.scenario_id, 'scenario_id');
   const sf = streamFilter(req);
 
   const rows = db.all(
@@ -105,8 +120,8 @@ router.get('/summary', async (req, res) => {
 router.post('/sync-from-imports', async (req, res) => {
   try {
     const db = req.tenantDb!;
-    const { scenario_id } = req.body;
-    if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
+    if (!req.body.scenario_id) return res.status(400).json({ error: 'scenario_id required' });
+    const scenario_id = requireInt(req.body.scenario_id, 'scenario_id');
 
     const bf = branchFilter(req);
     const branchId = getBranchIdForInsert(req);
@@ -180,7 +195,8 @@ router.post('/sync-from-imports', async (req, res) => {
     res.json({ success: true, count });
   } catch (err: any) {
     console.error('sync-from-imports error:', err);
-    res.status(500).json({ error: err.message });
+    const isProd = process.env.NODE_ENV === 'production';
+    res.status(500).json({ error: isProd ? 'Sync failed' : err.message });
   }
 });
 

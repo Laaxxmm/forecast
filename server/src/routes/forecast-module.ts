@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { branchFilter, getBranchIdForInsert, streamFilter, getStreamIdForInsert } from '../utils/branch.js';
+import { requireInt, requireString, requireNumber, optionalString, optionalNumber, requireMonth, ValidationError } from '../middleware/validate.js';
 
 const router = Router();
 
@@ -12,9 +13,9 @@ function requireWriteAccess(req: Request, res: Response, next: NextFunction) {
 // === CONSOLIDATED VIEW (All Streams) ===
 router.get('/consolidated', async (req, res) => {
   const db = req.tenantDb!;
-  const { fy_id } = req.query;
   const bf = branchFilter(req);
-  if (!fy_id) return res.status(400).json({ error: 'fy_id required' });
+  if (!req.query.fy_id) return res.status(400).json({ error: 'fy_id required' });
+  const fy_id = requireInt(req.query.fy_id, 'fy_id');
 
   // Find ALL scenarios for this FY + branch.
   // Includes both per-stream (stream_id set) and company-level (stream_id NULL)
@@ -65,21 +66,21 @@ router.get('/consolidated', async (req, res) => {
 // === SCENARIOS ===
 router.get('/scenarios', async (req, res) => {
   const db = req.tenantDb!;
-  const { fy_id } = req.query;
   const bf = branchFilter(req);
   const sf = streamFilter(req);
-  if (!fy_id) return res.status(400).json({ error: 'fy_id required' });
+  if (!req.query.fy_id) return res.status(400).json({ error: 'fy_id required' });
+  const fy_id = requireInt(req.query.fy_id, 'fy_id');
   res.json(db.all(`SELECT * FROM scenarios WHERE fy_id = ?${bf.where}${sf.where} ORDER BY is_default DESC, name`, fy_id, ...bf.params, ...sf.params));
 });
 
 router.post('/scenarios', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
-  const { fy_id, name } = req.body;
+  const fy_id = requireInt(req.body.fy_id, 'fy_id');
+  const name = requireString(req.body.name, 'name', 200);
   const bf = branchFilter(req);
   const sf = streamFilter(req);
   const branchId = getBranchIdForInsert(req);
   const streamId = getStreamIdForInsert(req);
-  if (!fy_id || !name) return res.status(400).json({ error: 'fy_id and name required' });
   const existing = db.all(`SELECT id FROM scenarios WHERE fy_id = ?${bf.where}${sf.where}`, fy_id, ...bf.params, ...sf.params);
   const isDefault = existing.length === 0 ? 1 : 0;
   db.run('INSERT INTO scenarios (fy_id, name, is_default, branch_id, stream_id) VALUES (?, ?, ?, ?, ?)', fy_id, name, isDefault, branchId, streamId);
@@ -87,14 +88,14 @@ router.post('/scenarios', requireWriteAccess, async (req, res) => {
   res.json(created);
 });
 
-router.post('/scenarios/ensure', async (req, res) => {
+router.post('/scenarios/ensure', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
-  const { fy_id } = req.body;
+  if (!req.body.fy_id) return res.status(400).json({ error: 'fy_id required' });
+  const fy_id = requireInt(req.body.fy_id, 'fy_id');
   const bf = branchFilter(req);
   const sf = streamFilter(req);
   const branchId = getBranchIdForInsert(req);
   const streamId = getStreamIdForInsert(req);
-  if (!fy_id) return res.status(400).json({ error: 'fy_id required' });
 
   // Don't create scenarios for "all" stream mode — use /consolidated instead
   if (req.streamMode === 'all' || req.streamMode === 'none') {
@@ -145,8 +146,9 @@ router.post('/scenarios/ensure', async (req, res) => {
 // === FORECAST ITEMS ===
 router.get('/items', async (req, res) => {
   const db = req.tenantDb!;
-  const { scenario_id, category } = req.query;
-  if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
+  if (!req.query.scenario_id) return res.status(400).json({ error: 'scenario_id required' });
+  const scenario_id = requireInt(req.query.scenario_id, 'scenario_id');
+  const category = optionalString(req.query.category as string | undefined, 'category', 100);
   let items;
   if (category) {
     items = db.all('SELECT * FROM forecast_items WHERE scenario_id = ? AND category = ? ORDER BY sort_order, id', scenario_id, category);
@@ -163,10 +165,10 @@ router.get('/items', async (req, res) => {
 
 router.post('/items', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
-  const { scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta } = req.body;
-  if (!scenario_id || !category || !name) {
-    return res.status(400).json({ error: 'scenario_id, category, and name required' });
-  }
+  const scenario_id = requireInt(req.body.scenario_id, 'scenario_id');
+  const category = requireString(req.body.category, 'category', 100);
+  const name = requireString(req.body.name, 'name', 200);
+  const { item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta } = req.body;
   const maxOrder = db.get('SELECT COALESCE(MAX(sort_order), 0) as max_order FROM forecast_items WHERE scenario_id = ? AND category = ?', scenario_id, category);
   db.run(
     `INSERT INTO forecast_items (scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta)
@@ -197,7 +199,10 @@ router.put('/items/reorder', requireWriteAccess, async (req, res) => {
 
 router.put('/items/:id', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
-  const { name, item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta, category } = req.body;
+  const id = requireInt(req.params.id, 'id');
+  const { item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta } = req.body;
+  const name = req.body.name !== undefined ? requireString(req.body.name, 'name', 200) : undefined;
+  const category = req.body.category !== undefined ? requireString(req.body.category, 'category', 100) : undefined;
   const fields: string[] = [];
   const values: any[] = [];
 
@@ -216,28 +221,30 @@ router.put('/items/:id', requireWriteAccess, async (req, res) => {
 
   if (fields.length === 0) return res.status(400).json({ error: 'No fields to update' });
 
-  values.push(req.params.id);
+  values.push(id);
   db.run(`UPDATE forecast_items SET ${fields.join(', ')} WHERE id = ?`, ...values);
-  const item = db.get('SELECT * FROM forecast_items WHERE id = ?', req.params.id);
+  const item = db.get('SELECT * FROM forecast_items WHERE id = ?', id);
   res.json({ ...item, meta: (() => { try { return item?.meta ? JSON.parse(item.meta) : {}; } catch { return {}; } })() });
 });
 
 router.delete('/items/:id', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
+  const id = requireInt(req.params.id, 'id');
   // Verify item belongs to a scenario accessible by this tenant
-  const item = db.get('SELECT fi.id FROM forecast_items fi JOIN scenarios s ON fi.scenario_id = s.id WHERE fi.id = ?', req.params.id);
+  const item = db.get('SELECT fi.id FROM forecast_items fi JOIN scenarios s ON fi.scenario_id = s.id WHERE fi.id = ?', id);
   if (!item) return res.status(404).json({ error: 'Item not found' });
-  db.run('DELETE FROM forecast_items WHERE id = ?', req.params.id);
+  db.run('DELETE FROM forecast_items WHERE id = ?', id);
   res.json({ ok: true });
 });
 
 // === FORECAST VALUES (monthly amounts) ===
 router.get('/values', async (req, res) => {
   const db = req.tenantDb!;
-  const { item_id, scenario_id } = req.query;
-  if (item_id) {
+  if (req.query.item_id) {
+    const item_id = requireInt(req.query.item_id, 'item_id');
     res.json(db.all('SELECT * FROM forecast_values WHERE item_id = ? ORDER BY month', item_id));
-  } else if (scenario_id) {
+  } else if (req.query.scenario_id) {
+    const scenario_id = requireInt(req.query.scenario_id, 'scenario_id');
     // Get all values for all items in a scenario
     res.json(db.all(
       `SELECT fv.* FROM forecast_values fv
@@ -252,8 +259,15 @@ router.get('/values', async (req, res) => {
 
 router.post('/values', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
-  const { item_id, values } = req.body; // values: [{month, amount}]
-  if (!item_id || !values?.length) return res.status(400).json({ error: 'item_id and values required' });
+  const { values } = req.body; // values: [{month, amount}]
+  if (!req.body.item_id || !values?.length) return res.status(400).json({ error: 'item_id and values required' });
+  const item_id = requireInt(req.body.item_id, 'item_id');
+
+  // Validate each entry
+  for (let i = 0; i < values.length; i++) {
+    requireMonth(values[i].month, `values[${i}].month`);
+    requireNumber(values[i].amount ?? 0, `values[${i}].amount`);
+  }
 
   db.beginBatch();
   try {
@@ -275,8 +289,16 @@ router.post('/values', requireWriteAccess, async (req, res) => {
 // Bulk save all values for a scenario (used by the grid)
 router.post('/values/bulk', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
-  const { item_id, entries } = req.body; // item_id (optional top-level), entries: [{item_id?, month, amount}]
+  const { entries } = req.body; // entries: [{item_id?, month, amount}]
+  const item_id = req.body.item_id != null ? requireInt(req.body.item_id, 'item_id') : null;
   if (!entries?.length) return res.status(400).json({ error: 'entries required' });
+
+  // Validate each entry
+  for (let i = 0; i < entries.length; i++) {
+    if (entries[i].item_id != null) requireInt(entries[i].item_id, `entries[${i}].item_id`);
+    requireMonth(entries[i].month, `entries[${i}].month`);
+    requireNumber(entries[i].amount ?? 0, `entries[${i}].amount`);
+  }
 
   db.beginBatch();
   try {
@@ -299,8 +321,9 @@ router.post('/values/bulk', requireWriteAccess, async (req, res) => {
 // === AUTO-GENERATE VALUES from constant settings ===
 router.post('/items/:id/generate', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
+  const id = requireInt(req.params.id, 'id');
   const { months } = req.body; // array of month strings to generate for
-  const item = db.get('SELECT * FROM forecast_items WHERE id = ?', req.params.id);
+  const item = db.get('SELECT * FROM forecast_items WHERE id = ?', id);
   if (!item) return res.status(404).json({ error: 'Item not found' });
 
   if (item.entry_mode !== 'constant' || !months?.length) {
@@ -342,8 +365,8 @@ router.post('/items/:id/generate', requireWriteAccess, async (req, res) => {
 // === SETTINGS (tax rates, employee benefits %, etc.) ===
 router.get('/settings', async (req, res) => {
   const db = req.tenantDb!;
-  const { scenario_id } = req.query;
-  if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
+  if (!req.query.scenario_id) return res.status(400).json({ error: 'scenario_id required' });
+  const scenario_id = requireInt(req.query.scenario_id, 'scenario_id');
   const settings = db.all('SELECT * FROM forecast_settings WHERE scenario_id = ?', scenario_id);
   const obj: Record<string, any> = {};
   settings.forEach((s: any) => {
@@ -354,8 +377,9 @@ router.get('/settings', async (req, res) => {
 
 router.post('/settings', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
-  const { scenario_id, settings } = req.body; // settings: {key: value, ...}
-  if (!scenario_id || !settings) return res.status(400).json({ error: 'scenario_id and settings required' });
+  const { settings } = req.body; // settings: {key: value, ...}
+  if (!req.body.scenario_id || !settings) return res.status(400).json({ error: 'scenario_id and settings required' });
+  const scenario_id = requireInt(req.body.scenario_id, 'scenario_id');
 
   for (const [key, value] of Object.entries(settings)) {
     const val = typeof value === 'string' ? value : JSON.stringify(value);
@@ -372,8 +396,8 @@ router.post('/settings', requireWriteAccess, async (req, res) => {
 // === SUMMARY / REPORTS ===
 router.get('/summary', async (req, res) => {
   const db = req.tenantDb!;
-  const { scenario_id } = req.query;
-  if (!scenario_id) return res.status(400).json({ error: 'scenario_id required' });
+  if (!req.query.scenario_id) return res.status(400).json({ error: 'scenario_id required' });
+  const scenario_id = requireInt(req.query.scenario_id, 'scenario_id');
 
   const items = db.all('SELECT * FROM forecast_items WHERE scenario_id = ? ORDER BY category, sort_order', scenario_id);
   const values = db.all(
@@ -428,20 +452,19 @@ router.get('/category-mapping', async (req, res) => {
 
 router.post('/category-mapping', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
-  const { forecast_category, tally_group_name, ledger_filter } = req.body;
-  if (!forecast_category || !tally_group_name) {
-    return res.status(400).json({ error: 'forecast_category and tally_group_name are required' });
-  }
+  const forecast_category = requireString(req.body.forecast_category, 'forecast_category', 100);
+  const tally_group_name = requireString(req.body.tally_group_name, 'tally_group_name', 200);
+  const ledger_filter = optionalString(req.body.ledger_filter, 'ledger_filter', 500);
   try {
     db.run(
       'INSERT INTO forecast_category_mapping (forecast_category, tally_group_name, ledger_filter) VALUES (?, ?, ?)',
-      String(forecast_category).trim(),
-      String(tally_group_name).trim(),
-      ledger_filter ? String(ledger_filter).trim() : null
+      forecast_category,
+      tally_group_name,
+      ledger_filter || null
     );
     const row = db.get(
       'SELECT id, forecast_category, tally_group_name, ledger_filter FROM forecast_category_mapping WHERE forecast_category = ? AND tally_group_name = ?',
-      String(forecast_category).trim(), String(tally_group_name).trim()
+      forecast_category, tally_group_name
     );
     res.status(201).json(row);
   } catch (e: any) {
@@ -454,19 +477,18 @@ router.post('/category-mapping', requireWriteAccess, async (req, res) => {
 
 router.put('/category-mapping/:id', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
-  const id = parseInt(req.params.id);
-  const { forecast_category, tally_group_name, ledger_filter } = req.body;
-  if (!forecast_category || !tally_group_name) {
-    return res.status(400).json({ error: 'forecast_category and tally_group_name are required' });
-  }
+  const id = requireInt(req.params.id, 'id');
+  const forecast_category = requireString(req.body.forecast_category, 'forecast_category', 100);
+  const tally_group_name = requireString(req.body.tally_group_name, 'tally_group_name', 200);
+  const ledger_filter = optionalString(req.body.ledger_filter, 'ledger_filter', 500);
   const existing = db.get('SELECT id FROM forecast_category_mapping WHERE id = ?', id);
   if (!existing) return res.status(404).json({ error: 'Mapping not found' });
   try {
     db.run(
       'UPDATE forecast_category_mapping SET forecast_category = ?, tally_group_name = ?, ledger_filter = ? WHERE id = ?',
-      String(forecast_category).trim(),
-      String(tally_group_name).trim(),
-      ledger_filter ? String(ledger_filter).trim() : null,
+      forecast_category,
+      tally_group_name,
+      ledger_filter || null,
       id
     );
     const row = db.get(
@@ -484,7 +506,7 @@ router.put('/category-mapping/:id', requireWriteAccess, async (req, res) => {
 
 router.delete('/category-mapping/:id', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
-  const id = parseInt(req.params.id);
+  const id = requireInt(req.params.id, 'id');
   const existing = db.get('SELECT id FROM forecast_category_mapping WHERE id = ?', id);
   if (!existing) return res.status(404).json({ error: 'Mapping not found' });
   db.run('DELETE FROM forecast_category_mapping WHERE id = ?', id);
@@ -512,10 +534,8 @@ router.delete('/category-mapping/:id', requireWriteAccess, async (req, res) => {
 // — user can adjust mappings.
 router.get('/budget-vs-actual', async (req, res) => {
   const db = req.tenantDb!;
-  const scenarioIdRaw = req.query.scenario_id;
-  if (!scenarioIdRaw) return res.status(400).json({ error: 'scenario_id required' });
-  const scenarioId = parseInt(String(scenarioIdRaw));
-  if (Number.isNaN(scenarioId)) return res.status(400).json({ error: 'scenario_id must be numeric' });
+  if (!req.query.scenario_id) return res.status(400).json({ error: 'scenario_id required' });
+  const scenarioId = requireInt(req.query.scenario_id, 'scenario_id');
 
   // Resolve FY for this scenario
   const scenario = db.get(

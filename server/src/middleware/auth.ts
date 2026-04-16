@@ -42,6 +42,15 @@ export interface TokenData {
 // Simple token store (in-memory, survives for the lifetime of the process)
 const tokenStore = new Map<string, TokenData>();
 
+// Proactively clean up expired tokens every 15 minutes
+const tokenCleanupInterval = setInterval(() => {
+  const now = Date.now();
+  for (const [token, data] of tokenStore) {
+    if (data.expiresAt < now) tokenStore.delete(token);
+  }
+}, 15 * 60 * 1000);
+tokenCleanupInterval.unref();
+
 export function createToken(user: {
   id: number;
   username: string;

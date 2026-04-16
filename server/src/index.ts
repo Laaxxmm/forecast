@@ -13,6 +13,7 @@ import { getPlatformHelper, createPlatformBackup } from './db/platform-connectio
 import { initializePlatformSchema } from './db/platform-schema.js';
 import { seedPlatformDatabase } from './db/platform-seed.js';
 import { requireAuth, requireSuperAdmin, requireAdmin, requireModule } from './middleware/auth.js';
+import { validationErrorHandler } from './middleware/validate.js';
 import { resolveTenant } from './middleware/tenant.js';
 import { resolveBranch } from './middleware/branch.js';
 import authRoutes from './routes/auth.js';
@@ -249,7 +250,7 @@ app.use('/api/forecast-module', ...forecastOps, forecastModuleRoutes);
 app.use('/api/dashboard-actuals', ...forecastOps, dashboardActualsRoutes);
 app.use('/api/sync', ...forecastOps, requireAdmin, syncRoutes);
 app.use('/api/revenue-sharing', ...forecastOps, revenueSharingRoutes);
-app.use('/api/db', requireAuth, resolveTenant, resolveBranch, requireAdmin, dbViewerRoutes);
+app.use('/api/db', requireAuth, resolveTenant, resolveBranch, requireSuperAdmin, dbViewerRoutes);
 
 // ─── VCFO sub-app: TallyVision (CommonJS) mounted under /vcfo ────────────────
 // TallyVision is loaded via createRequire because our server is ESM.
@@ -396,6 +397,9 @@ app.get('/api/debug/db-status', requireAuth, requireSuperAdmin, async (_req, res
   }
 });
 
+// Validation error handler -- returns 400 for ValidationError instances
+app.use(validationErrorHandler);
+
 // Global error handler -- catches unhandled route errors
 app.use((err: any, _req: any, res: any, _next: any) => {
   console.error('[Unhandled Error]', err);
@@ -505,137 +509,7 @@ async function start() {
   // accidental re-execution after crash recovery loads a backup without the flag.
   // The flag remains in app_settings as a historical marker.
 
-  // ── One-time forecast migration: magna_tracker.db → magnacode.db ──
-  // Copies forecast scenario + items + values from legacy single-tenant DB into
-  // the multi-tenant magnacode.db (Clinic stream, branch=Head Office).
-  try {
-    const mcDb = await getClientHelper('magnacode');
-    const migDone = mcDb.get("SELECT value FROM app_settings WHERE key = 'forecast_migrate_v1'");
-    if (!migDone) {
-      const dataDir = process.env.DATA_DIR || (process.env.NODE_ENV === 'production' ? '/data' : path.join(__dirname, '..', '..', 'data'));
-      const legacyPath = path.join(dataDir, 'magna_tracker.db');
-      if (fs.existsSync(legacyPath) && fs.statSync(legacyPath).size > 0) {
-        console.log('[Forecast Migrate] Found legacy magna_tracker.db — migrating forecast data...');
-        const initSqlJs = (await import('sql.js')).default;
-        const SQL = await initSqlJs();
-        const legacyBuf = fs.readFileSync(legacyPath);
-        const legacyDb = new SQL.Database(legacyBuf);
-
-        // Check legacy DB has forecast_items
-        const legacyTables = legacyDb.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='forecast_items'");
-        const hasItems = legacyTables[0]?.values?.length > 0;
-
-        if (hasItems) {
-          const legacyItemsRes = legacyDb.exec('SELECT * FROM forecast_items WHERE scenario_id = 1 ORDER BY sort_order, id');
-          const legacyItems = (legacyItemsRes[0]?.values || []).map((r: any[]) => {
-            const obj: any = {};
-            (legacyItemsRes[0]!.columns as string[]).forEach((c, i) => obj[c] = r[i]);
-            return obj;
-          });
-
-          if (legacyItems.length > 0) {
-            // Find or create Clinic scenario in current DB (branch_id=1, stream_id from platform)
-            const clientRow = platformDb.get("SELECT id FROM clients WHERE slug = 'magnacode'");
-            const clinicStreamRow = clientRow ? platformDb.get(
-              "SELECT id FROM business_streams WHERE client_id = ? AND (LOWER(name) LIKE '%clinic%' OR LOWER(name) LIKE '%health%') LIMIT 1",
-              clientRow.id
-            ) : null;
-            const branchRow = clientRow ? platformDb.get(
-              "SELECT id FROM branches WHERE client_id = ? ORDER BY sort_order LIMIT 1",
-              clientRow.id
-            ) : null;
-
-            const activeFy = mcDb.get('SELECT id FROM financial_years WHERE is_active = 1');
-            if (activeFy) {
-              const clinicStreamId = clinicStreamRow?.id || null;
-              const branchId = branchRow?.id || null;
-
-              // Find or create the Clinic scenario
-              let targetScenario = mcDb.get(
-                'SELECT id FROM scenarios WHERE fy_id = ? AND stream_id = ? AND branch_id IS NOT NULL LIMIT 1',
-                activeFy.id, clinicStreamId
-              );
-              if (!targetScenario) {
-                mcDb.run(
-                  'INSERT INTO scenarios (fy_id, name, is_default, branch_id, stream_id) VALUES (?, ?, 1, ?, ?)',
-                  activeFy.id, 'Original Scenario', branchId, clinicStreamId
-                );
-                const newScId = mcDb.get('SELECT last_insert_rowid() as id')?.id;
-                targetScenario = { id: newScId };
-              }
-
-              const targetScenarioId = targetScenario.id;
-
-              // Remove any placeholder/test items in target scenario
-              mcDb.run('DELETE FROM forecast_items WHERE scenario_id = ? AND name IN (?, ?)', targetScenarioId, 'Test Revenue', 'New Item');
-
-              // Insert items, build ID mapping
-              const idMap: Record<number, number> = {};
-              mcDb.beginBatch();
-              for (const item of legacyItems) {
-                mcDb.run(
-                  `INSERT INTO forecast_items
-                   (scenario_id, category, name, item_type, entry_mode, constant_amount, constant_period,
-                    start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                  targetScenarioId, item.category, item.name, item.item_type, item.entry_mode,
-                  item.constant_amount || 0, item.constant_period || 'month', item.start_month || '2026-04',
-                  item.annual_raise_pct || 0, item.tax_rate_pct || 0, item.sort_order || 0,
-                  null, item.meta || null, item.created_at
-                );
-                const newId = mcDb.get('SELECT last_insert_rowid() as id')?.id;
-                idMap[item.id] = newId;
-              }
-              mcDb.endBatch();
-
-              // Fix linked_revenue_id in meta JSON
-              for (const [oldId, newId] of Object.entries(idMap)) {
-                const row = mcDb.get('SELECT meta FROM forecast_items WHERE id = ?', newId);
-                if (!row?.meta) continue;
-                try {
-                  const parsed = JSON.parse(row.meta);
-                  let changed = false;
-                  if (parsed.linked_revenue_id && idMap[parsed.linked_revenue_id]) {
-                    parsed.linked_revenue_id = idMap[parsed.linked_revenue_id]; changed = true;
-                  }
-                  if (changed) mcDb.run('UPDATE forecast_items SET meta = ? WHERE id = ?', JSON.stringify(parsed), newId);
-                } catch {}
-              }
-
-              // Insert values with remapped item IDs
-              const legacyValsRes = legacyDb.exec(
-                'SELECT fv.* FROM forecast_values fv JOIN forecast_items fi ON fv.item_id = fi.id WHERE fi.scenario_id = 1 ORDER BY fv.item_id, fv.month'
-              );
-              const legacyVals = (legacyValsRes[0]?.values || []).map((r: any[]) => {
-                const obj: any = {};
-                (legacyValsRes[0]!.columns as string[]).forEach((c, i) => obj[c] = r[i]);
-                return obj;
-              });
-
-              mcDb.beginBatch();
-              for (const val of legacyVals) {
-                const newItemId = idMap[val.item_id];
-                if (!newItemId) continue;
-                mcDb.run('INSERT OR REPLACE INTO forecast_values (item_id, month, amount) VALUES (?, ?, ?)', newItemId, val.month, val.amount);
-              }
-              mcDb.endBatch();
-
-              console.log(`[Forecast Migrate] ✅ Migrated ${legacyItems.length} items + ${legacyVals.length} values into scenario ${targetScenarioId}`);
-            }
-          } else {
-            console.log('[Forecast Migrate] Legacy DB has no forecast items — skipping');
-          }
-        }
-        legacyDb.close();
-      } else {
-        console.log('[Forecast Migrate] No legacy magna_tracker.db found — skipping');
-      }
-      // Mark done regardless (avoid re-running on each restart)
-      mcDb.run("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('forecast_migrate_v1', '1')");
-    }
-  } catch (e) {
-    console.error('[Forecast Migrate] Failed:', e);
-  }
+  // NOTE: One-time forecast migration (magna_tracker.db -> magnacode.db) completed. Code removed — flag 'forecast_migrate_v1' in app_settings.
 
   // 2. Initialize existing client databases (ensure schemas + seed data are up to date)
   const clients = platformDb.all('SELECT slug, name FROM clients WHERE is_active = 1');
