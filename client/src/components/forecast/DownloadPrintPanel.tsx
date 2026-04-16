@@ -21,205 +21,553 @@ interface ReportOption {
   checked: boolean;
 }
 
-/* ──────── helpers to build report data ──────── */
+/* ================================================================
+   COLOR / STYLE CONSTANTS
+   ================================================================ */
 
-function sumCat(items: ForecastItem[], cat: string, allValues: Record<number, Record<string, number>>, m: string) {
-  return items.filter(i => i.category === cat).reduce((s, i) => s + (allValues[i.id]?.[m] || 0), 0);
+const COLOR = {
+  headerBg:      [241, 245, 249] as [number, number, number],   // #f1f5f9
+  headerText:    [51, 65, 85]    as [number, number, number],    // #334155
+  sectionBg:     [248, 250, 252] as [number, number, number],    // #f8fafc
+  accentBg:      [240, 253, 250] as [number, number, number],    // very light teal for totals
+  lineColor:     [226, 232, 240] as [number, number, number],    // #e2e8f0
+  darkText:      [30, 41, 59]    as [number, number, number],    // #1e293b
+  bodyText:      [51, 65, 85]    as [number, number, number],    // #334155
+  mutedText:     [100, 116, 139] as [number, number, number],    // #64748b
+  footerText:    [148, 163, 184] as [number, number, number],    // #94a3b8
+  accent:        [13, 148, 136]  as [number, number, number],    // #0d9488
+  negativeText:  [153, 27, 27]   as [number, number, number],    // dark red
+  white:         [255, 255, 255] as [number, number, number],
+};
+
+/** Labels that mark a row as a "totals" row (bold + accent background) */
+const TOTAL_ROW_LABELS = [
+  'Total Revenue', 'Total Direct Costs', 'Total Operating Expenses',
+  'Gross Profit', 'Operating Income', 'Net Profit',
+  'Net Cash from Operations', 'Net Cash from Investing', 'Net Cash from Financing',
+  'Net Cash Flow', 'Cash Balance', 'Total Current Assets',
+  'Total Long-term Assets', 'Total Assets', 'Totals',
+  'Cash at End of Period',
+];
+
+/** Labels that mark a section header row (bold, slight bg, no indent) */
+const SECTION_HEADER_LABELS = [
+  'Revenue', 'Direct Costs', 'Operating Expenses',
+  'Cash from Operations', 'Cash from Investing', 'Cash from Financing',
+  'Assets', 'Current Assets', 'Long-term Assets',
+  'Liabilities', 'Current Liabilities', 'Equity',
+];
+
+/** Labels for percentage / margin rows (italic) */
+const PERCENT_ROW_LABELS = [
+  'Gross Margin', 'Net Profit Margin',
+];
+
+/* ================================================================
+   HELPER: sumCat
+   ================================================================ */
+
+function sumCat(
+  items: ForecastItem[],
+  cat: string,
+  allValues: Record<number, Record<string, number>>,
+  m: string,
+): number {
+  return items
+    .filter(i => i.category === cat)
+    .reduce((s, i) => s + (allValues[i.id]?.[m] || 0), 0);
 }
 
-function buildPnLRows(items: ForecastItem[], allValues: Record<number, Record<string, number>>, months: string[], benefitsPct: number) {
+/* ================================================================
+   formatNum  --  Professional number formatting
+   ================================================================ */
+
+function formatNum(v: string | number, isPercent = false): string {
+  if (typeof v === 'string') return v;
+  if (v === 0) return '\u2013'; // em dash
+  if (isPercent) {
+    const sign = v < 0 ? '(' : '';
+    const end  = v < 0 ? ')' : '';
+    return `${sign}${Math.abs(v).toFixed(1)}%${end}`;
+  }
+  if (v < 0) {
+    return '(Rs' + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.abs(v)) + ')';
+  }
+  return 'Rs' + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(v);
+}
+
+/* ================================================================
+   DATA BUILDERS
+   ================================================================ */
+
+/** Metadata flags attached to each row for styling purposes */
+interface RowMeta {
+  isSection?: boolean;
+  isTotal?: boolean;
+  isPercent?: boolean;
+}
+
+function buildPnLRows(
+  items: ForecastItem[],
+  allValues: Record<number, Record<string, number>>,
+  months: string[],
+  benefitsPct: number,
+) {
   const revenueItems = items.filter(i => i.category === 'revenue');
-  const dcItems = items.filter(i => i.category === 'direct_costs');
-  const persItems = items.filter(i => i.category === 'personnel');
-  const expItems = items.filter(i => i.category === 'expenses');
+  const dcItems      = items.filter(i => i.category === 'direct_costs');
+  const persItems    = items.filter(i => i.category === 'personnel');
+  const expItems     = items.filter(i => i.category === 'expenses');
 
   const header = ['Profit & Loss', ...months.map(m => getMonthLabel(m)), 'Total'];
   const rows: (string | number)[][] = [];
+  const meta: RowMeta[] = [];
 
-  // Revenue section
+  // --- Revenue ---
   rows.push(['Revenue', ...months.map(() => ''), '']);
+  meta.push({ isSection: true });
   revenueItems.forEach(item => {
     const vals = months.map(m => allValues[item.id]?.[m] || 0);
     rows.push([`  ${item.name}`, ...vals, vals.reduce((a, b) => a + b, 0)]);
+    meta.push({});
   });
   const revTotals = months.map(m => sumCat(items, 'revenue', allValues, m));
-  rows.push(['Total Revenue', ...revTotals, revTotals.reduce((a, b) => a + b, 0)]);
+  const revTotal = revTotals.reduce((a, b) => a + b, 0);
+  rows.push(['Total Revenue', ...revTotals, revTotal]);
+  meta.push({ isTotal: true });
 
-  // Direct Costs
+  // --- Direct Costs ---
   rows.push(['Direct Costs', ...months.map(() => ''), '']);
+  meta.push({ isSection: true });
   dcItems.forEach(item => {
     const vals = months.map(m => allValues[item.id]?.[m] || 0);
     rows.push([`  ${item.name}`, ...vals, vals.reduce((a, b) => a + b, 0)]);
+    meta.push({});
   });
   const dcTotals = months.map(m => sumCat(items, 'direct_costs', allValues, m));
   rows.push(['Total Direct Costs', ...dcTotals, dcTotals.reduce((a, b) => a + b, 0)]);
+  meta.push({ isTotal: true });
 
-  // Gross Profit
+  // --- Gross Profit ---
   const gpTotals = months.map((_, i) => revTotals[i] - dcTotals[i]);
-  rows.push(['Gross Profit', ...gpTotals, gpTotals.reduce((a, b) => a + b, 0)]);
+  const gpTotal = gpTotals.reduce((a, b) => a + b, 0);
+  rows.push(['Gross Profit', ...gpTotals, gpTotal]);
+  meta.push({ isTotal: true });
 
-  // Operating Expenses
+  // --- Gross Margin % ---
+  const gmPctMonths = months.map((_, i) => revTotals[i] !== 0 ? (gpTotals[i] / revTotals[i]) * 100 : 0);
+  const gmPctTotal = revTotal !== 0 ? (gpTotal / revTotal) * 100 : 0;
+  rows.push(['Gross Margin', ...gmPctMonths, gmPctTotal]);
+  meta.push({ isPercent: true });
+
+  // --- Operating Expenses ---
   rows.push(['Operating Expenses', ...months.map(() => ''), '']);
+  meta.push({ isSection: true });
   persItems.forEach(item => {
     const vals = months.map(m => allValues[item.id]?.[m] || 0);
     rows.push([`  ${item.name}`, ...vals, vals.reduce((a, b) => a + b, 0)]);
+    meta.push({});
   });
   const persTotals = months.map(m => sumCat(items, 'personnel', allValues, m));
   const empTaxTotals = persTotals.map(p => Math.round(p * benefitsPct / 100));
   rows.push(['  Employee Taxes & Benefits', ...empTaxTotals, empTaxTotals.reduce((a, b) => a + b, 0)]);
+  meta.push({});
   expItems.forEach(item => {
     const vals = months.map(m => allValues[item.id]?.[m] || 0);
     rows.push([`  ${item.name}`, ...vals, vals.reduce((a, b) => a + b, 0)]);
+    meta.push({});
   });
   const expTotals = months.map(m => sumCat(items, 'expenses', allValues, m));
   const opexTotals = months.map((_, i) => persTotals[i] + empTaxTotals[i] + expTotals[i]);
   rows.push(['Total Operating Expenses', ...opexTotals, opexTotals.reduce((a, b) => a + b, 0)]);
+  meta.push({ isTotal: true });
 
-  // Operating Income
+  // --- Operating Income ---
   const oiTotals = months.map((_, i) => gpTotals[i] - opexTotals[i]);
-  rows.push(['Operating Income', ...oiTotals, oiTotals.reduce((a, b) => a + b, 0)]);
+  const oiTotal = oiTotals.reduce((a, b) => a + b, 0);
+  rows.push(['Operating Income', ...oiTotals, oiTotal]);
+  meta.push({ isTotal: true });
 
-  // Taxes
+  // --- Taxes ---
   const taxTotals = months.map(m => sumCat(items, 'taxes', allValues, m));
-  rows.push(['Taxes', ...taxTotals, taxTotals.reduce((a, b) => a + b, 0)]);
+  rows.push(['Income Taxes', ...taxTotals, taxTotals.reduce((a, b) => a + b, 0)]);
+  meta.push({});
 
-  // Net Profit
+  // --- Depreciation placeholder ---
+  const depTotals = months.map(() => 0);
+  rows.push(['Depreciation', ...depTotals, 0]);
+  meta.push({});
+
+  // --- Total Expenses (OPEX + taxes + depreciation) ---
+  const totalExpenses = months.map((_, i) => opexTotals[i] + taxTotals[i] + depTotals[i]);
+  rows.push(['Total Expenses', ...totalExpenses, totalExpenses.reduce((a, b) => a + b, 0)]);
+  meta.push({ isTotal: true });
+
+  // --- Net Profit ---
   const npTotals = months.map((_, i) => oiTotals[i] - taxTotals[i]);
-  rows.push(['Net Profit', ...npTotals, npTotals.reduce((a, b) => a + b, 0)]);
+  const npTotal = npTotals.reduce((a, b) => a + b, 0);
+  rows.push(['Net Profit', ...npTotals, npTotal]);
+  meta.push({ isTotal: true });
 
-  return { header, rows };
+  // --- Net Profit Margin % ---
+  const npmPctMonths = months.map((_, i) => revTotals[i] !== 0 ? (npTotals[i] / revTotals[i]) * 100 : 0);
+  const npmPctTotal = revTotal !== 0 ? (npTotal / revTotal) * 100 : 0;
+  rows.push(['Net Profit Margin', ...npmPctMonths, npmPctTotal]);
+  meta.push({ isPercent: true });
+
+  return { header, rows, meta };
 }
 
-function buildBalanceSheetRows(items: ForecastItem[], allValues: Record<number, Record<string, number>>, months: string[]) {
+function buildBalanceSheetRows(
+  items: ForecastItem[],
+  allValues: Record<number, Record<string, number>>,
+  months: string[],
+) {
   const currentAssets = items.filter(i => i.category === 'assets' && i.item_type === 'current');
-  const ltAssets = items.filter(i => i.category === 'assets' && i.item_type === 'long_term');
+  const ltAssets      = items.filter(i => i.category === 'assets' && i.item_type === 'long_term');
 
   const header = ['Balance Sheet', ...months.map(m => getMonthLabel(m))];
   const rows: (string | number)[][] = [];
+  const meta: RowMeta[] = [];
 
-  rows.push(['Assets', ...months.map(() => '')]);
-  rows.push(['Current Assets', ...months.map(() => '')]);
+  rows.push(['Assets', ...months.map(() => '')]); meta.push({ isSection: true });
+  rows.push(['Current Assets', ...months.map(() => '')]); meta.push({ isSection: true });
 
-  // Cash (simplified — net income)
   const cashVals = months.map(m => {
-    const rev = sumCat(items, 'revenue', allValues, m);
+    const rev   = sumCat(items, 'revenue', allValues, m);
     const costs = sumCat(items, 'direct_costs', allValues, m);
-    const opex = sumCat(items, 'expenses', allValues, m) + sumCat(items, 'personnel', allValues, m);
+    const opex  = sumCat(items, 'expenses', allValues, m) + sumCat(items, 'personnel', allValues, m);
     return Math.max(rev - costs - opex, 0);
   });
-  rows.push(['  Cash', ...cashVals]);
+  rows.push(['  Cash', ...cashVals]); meta.push({});
   currentAssets.forEach(item => {
     rows.push([`  ${item.name}`, ...months.map(m => allValues[item.id]?.[m] || 0)]);
+    meta.push({});
   });
-  const caTotal = months.map((m, i) => cashVals[i] + currentAssets.reduce((s, it) => s + (allValues[it.id]?.[m] || 0), 0));
-  rows.push(['Total Current Assets', ...caTotal]);
+  const caTotal = months.map((m, i) =>
+    cashVals[i] + currentAssets.reduce((s, it) => s + (allValues[it.id]?.[m] || 0), 0),
+  );
+  rows.push(['Total Current Assets', ...caTotal]); meta.push({ isTotal: true });
 
-  rows.push(['Long-term Assets', ...months.map(() => '')]);
+  rows.push(['Long-term Assets', ...months.map(() => '')]); meta.push({ isSection: true });
   ltAssets.forEach(item => {
     rows.push([`  ${item.name}`, ...months.map(m => allValues[item.id]?.[m] || 0)]);
+    meta.push({});
   });
   const ltTotal = months.map(m => ltAssets.reduce((s, it) => s + (allValues[it.id]?.[m] || 0), 0));
-  rows.push(['Total Long-term Assets', ...ltTotal]);
+  rows.push(['Total Long-term Assets', ...ltTotal]); meta.push({ isTotal: true });
 
   const totalAssets = months.map((_, i) => caTotal[i] + ltTotal[i]);
-  rows.push(['Total Assets', ...totalAssets]);
+  rows.push(['Total Assets', ...totalAssets]); meta.push({ isTotal: true });
 
-  return { header, rows };
+  return { header, rows, meta };
 }
 
-function buildCashFlowRows(items: ForecastItem[], allValues: Record<number, Record<string, number>>, months: string[]) {
+function buildCashFlowRows(
+  items: ForecastItem[],
+  allValues: Record<number, Record<string, number>>,
+  months: string[],
+) {
   const header = ['Cash Flow', ...months.map(m => getMonthLabel(m)), 'Total'];
   const rows: (string | number)[][] = [];
+  const meta: RowMeta[] = [];
   let cumCash = 0;
 
   const mData = months.map(m => {
-    const rev = sumCat(items, 'revenue', allValues, m);
-    const dc = sumCat(items, 'direct_costs', allValues, m);
-    const pers = sumCat(items, 'personnel', allValues, m);
-    const exp = sumCat(items, 'expenses', allValues, m);
-    const tax = sumCat(items, 'taxes', allValues, m);
+    const rev    = sumCat(items, 'revenue', allValues, m);
+    const dc     = sumCat(items, 'direct_costs', allValues, m);
+    const pers   = sumCat(items, 'personnel', allValues, m);
+    const exp    = sumCat(items, 'expenses', allValues, m);
+    const tax    = sumCat(items, 'taxes', allValues, m);
     const assets = sumCat(items, 'assets', allValues, m);
-    const div = sumCat(items, 'dividends', allValues, m);
+    const div    = sumCat(items, 'dividends', allValues, m);
     const cashOps = rev - dc - pers - exp - tax;
     const cashInv = -assets;
     const cashFin = -div;
-    const net = cashOps + cashInv + cashFin;
+    const net     = cashOps + cashInv + cashFin;
     cumCash += net;
     return { rev, dc, pers, exp, tax, cashOps, assets, cashInv, div, cashFin, net, balance: cumCash };
   });
 
-  rows.push(['Cash from Operations', ...months.map(() => ''), '']);
-  rows.push(['  Cash Receipts', ...mData.map(d => d.rev), mData.reduce((s, d) => s + d.rev, 0)]);
-  rows.push(['  Direct Costs Paid', ...mData.map(d => -d.dc), -mData.reduce((s, d) => s + d.dc, 0)]);
-  rows.push(['  Personnel Paid', ...mData.map(d => -d.pers), -mData.reduce((s, d) => s + d.pers, 0)]);
-  rows.push(['  Expenses Paid', ...mData.map(d => -d.exp), -mData.reduce((s, d) => s + d.exp, 0)]);
-  rows.push(['  Taxes Paid', ...mData.map(d => -d.tax), -mData.reduce((s, d) => s + d.tax, 0)]);
-  rows.push(['Net Cash from Operations', ...mData.map(d => d.cashOps), mData.reduce((s, d) => s + d.cashOps, 0)]);
-  rows.push(['Cash from Investing', ...months.map(() => ''), '']);
-  rows.push(['  Assets Purchased', ...mData.map(d => d.cashInv), mData.reduce((s, d) => s + d.cashInv, 0)]);
-  rows.push(['Net Cash from Investing', ...mData.map(d => d.cashInv), mData.reduce((s, d) => s + d.cashInv, 0)]);
-  rows.push(['Cash from Financing', ...months.map(() => ''), '']);
-  rows.push(['  Dividends Paid', ...mData.map(d => d.cashFin), mData.reduce((s, d) => s + d.cashFin, 0)]);
-  rows.push(['Net Cash from Financing', ...mData.map(d => d.cashFin), mData.reduce((s, d) => s + d.cashFin, 0)]);
-  rows.push(['Net Cash Flow', ...mData.map(d => d.net), mData.reduce((s, d) => s + d.net, 0)]);
-  rows.push(['Cash Balance', ...mData.map(d => d.balance), mData[mData.length - 1]?.balance || 0]);
+  rows.push(['Cash from Operations', ...months.map(() => ''), '']); meta.push({ isSection: true });
+  rows.push(['  Net Profit',       ...mData.map(d => d.rev - d.dc - d.pers - d.exp - d.tax), mData.reduce((s, d) => s + (d.rev - d.dc - d.pers - d.exp - d.tax), 0)]); meta.push({});
+  rows.push(['  Depreciation',     ...months.map(() => 0), 0]); meta.push({});
+  rows.push(['  Cash Receipts',    ...mData.map(d => d.rev), mData.reduce((s, d) => s + d.rev, 0)]); meta.push({});
+  rows.push(['  Direct Costs Paid',...mData.map(d => -d.dc), -mData.reduce((s, d) => s + d.dc, 0)]); meta.push({});
+  rows.push(['  Personnel Paid',   ...mData.map(d => -d.pers), -mData.reduce((s, d) => s + d.pers, 0)]); meta.push({});
+  rows.push(['  Expenses Paid',    ...mData.map(d => -d.exp), -mData.reduce((s, d) => s + d.exp, 0)]); meta.push({});
+  rows.push(['  Taxes Paid',       ...mData.map(d => -d.tax), -mData.reduce((s, d) => s + d.tax, 0)]); meta.push({});
+  rows.push(['Net Cash from Operations', ...mData.map(d => d.cashOps), mData.reduce((s, d) => s + d.cashOps, 0)]); meta.push({ isTotal: true });
 
-  return { header, rows };
+  rows.push(['Cash from Investing', ...months.map(() => ''), '']); meta.push({ isSection: true });
+  rows.push(['  Assets Purchased',  ...mData.map(d => d.cashInv), mData.reduce((s, d) => s + d.cashInv, 0)]); meta.push({});
+  rows.push(['Net Cash from Investing', ...mData.map(d => d.cashInv), mData.reduce((s, d) => s + d.cashInv, 0)]); meta.push({ isTotal: true });
+
+  rows.push(['Cash from Financing', ...months.map(() => ''), '']); meta.push({ isSection: true });
+  rows.push(['  Dividends Paid',    ...mData.map(d => d.cashFin), mData.reduce((s, d) => s + d.cashFin, 0)]); meta.push({});
+  rows.push(['Net Cash from Financing', ...mData.map(d => d.cashFin), mData.reduce((s, d) => s + d.cashFin, 0)]); meta.push({ isTotal: true });
+
+  rows.push(['Net Cash Flow', ...mData.map(d => d.net), mData.reduce((s, d) => s + d.net, 0)]); meta.push({ isTotal: true });
+  rows.push(['Cash Balance',  ...mData.map(d => d.balance), mData[mData.length - 1]?.balance || 0]); meta.push({ isTotal: true });
+
+  return { header, rows, meta };
 }
 
-function buildCategoryRows(items: ForecastItem[], cat: string, catLabel: string, allValues: Record<number, Record<string, number>>, months: string[]) {
+function buildCategoryRows(
+  items: ForecastItem[],
+  cat: string,
+  catLabel: string,
+  allValues: Record<number, Record<string, number>>,
+  months: string[],
+  benefitsPct: number,
+) {
   const catItems = items.filter(i => i.category === cat);
   const header = [catLabel, ...months.map(m => getMonthLabel(m)), 'Total'];
   const rows: (string | number)[][] = [];
+  const meta: RowMeta[] = [];
 
   catItems.forEach(item => {
     const vals = months.map(m => allValues[item.id]?.[m] || 0);
-    rows.push([item.name, ...vals, vals.reduce((a, b) => a + b, 0)]);
+    rows.push([`  ${item.name}`, ...vals, vals.reduce((a, b) => a + b, 0)]);
+    meta.push({});
   });
 
   const totals = months.map(m => catItems.reduce((s, i) => s + (allValues[i.id]?.[m] || 0), 0));
-  rows.push(['Totals', ...totals, totals.reduce((a, b) => a + b, 0)]);
+  const grandTotal = totals.reduce((a, b) => a + b, 0);
+  rows.push(['Totals', ...totals, grandTotal]);
+  meta.push({ isTotal: true });
 
-  return { header, rows };
+  // Personnel gets extra computed rows
+  if (cat === 'personnel') {
+    const headCount = catItems.length;
+    const revTotals = months.map(m => sumCat(items, 'revenue', allValues, m));
+    const revGrand = revTotals.reduce((a, b) => a + b, 0);
+    const dcTotals = months.map(m => sumCat(items, 'direct_costs', allValues, m));
+    const opexTotals = months.map((m, i) =>
+      totals[i] + Math.round(totals[i] * benefitsPct / 100) +
+      sumCat(items, 'expenses', allValues, m),
+    );
+    const npTotals = months.map((_, i) => revTotals[i] - dcTotals[i] - opexTotals[i]);
+    const npGrand = npTotals.reduce((a, b) => a + b, 0);
+
+    // Head Count
+    rows.push(['Head Count', ...months.map(() => headCount), headCount]);
+    meta.push({});
+    // Average Salary
+    if (headCount > 0) {
+      const avgSal = months.map((_, i) => Math.round(totals[i] / headCount));
+      rows.push(['Average Salary', ...avgSal, Math.round(grandTotal / headCount)]);
+      meta.push({});
+    }
+    // Revenue Per Employee
+    if (headCount > 0) {
+      const rpe = months.map((_, i) => Math.round(revTotals[i] / headCount));
+      rows.push(['Revenue Per Employee', ...rpe, Math.round(revGrand / headCount)]);
+      meta.push({});
+    }
+    // Net Profit Per Employee
+    if (headCount > 0) {
+      const npe = months.map((_, i) => Math.round(npTotals[i] / headCount));
+      rows.push(['Net Profit Per Employee', ...npe, Math.round(npGrand / headCount)]);
+      meta.push({});
+    }
+  }
+
+  return { header, rows, meta };
 }
 
-/* ──────── PDF Generation ──────── */
+/* ================================================================
+   ANNUAL SUMMARY BUILDER  --  2-column tables (Item | FY Total)
+   ================================================================ */
 
-function formatNum(v: string | number): string {
-  if (typeof v === 'string') return v;
-  if (v === 0) return '-';
-  return formatRs(v);
+function buildAnnualSummaryRows(
+  items: ForecastItem[],
+  cat: string,
+  catLabel: string,
+  allValues: Record<number, Record<string, number>>,
+  months: string[],
+  benefitsPct: number,
+) {
+  const catItems = items.filter(i => i.category === cat);
+  const header = [catLabel, `Annual Total`];
+  const rows: (string | number)[][] = [];
+  const meta: RowMeta[] = [];
+
+  catItems.forEach(item => {
+    const total = months.reduce((s, m) => s + (allValues[item.id]?.[m] || 0), 0);
+    rows.push([`  ${item.name}`, total]);
+    meta.push({});
+  });
+
+  const grandTotal = catItems.reduce((s, item) =>
+    s + months.reduce((sm, m) => sm + (allValues[item.id]?.[m] || 0), 0), 0,
+  );
+  rows.push(['Totals', grandTotal]);
+  meta.push({ isTotal: true });
+
+  // Personnel extra rows
+  if (cat === 'personnel') {
+    const headCount = catItems.length;
+    const revTotal = months.reduce((s, m) => s + sumCat(items, 'revenue', allValues, m), 0);
+    const dcTotal = months.reduce((s, m) => s + sumCat(items, 'direct_costs', allValues, m), 0);
+    const opexTotal = grandTotal + Math.round(grandTotal * benefitsPct / 100) +
+      months.reduce((s, m) => s + sumCat(items, 'expenses', allValues, m), 0);
+    const npTotal = revTotal - dcTotal - opexTotal;
+
+    rows.push(['Head Count', headCount]); meta.push({});
+    if (headCount > 0) {
+      rows.push(['Average Salary', Math.round(grandTotal / headCount)]); meta.push({});
+      rows.push(['Revenue Per Employee', Math.round(revTotal / headCount)]); meta.push({});
+      rows.push(['Net Profit Per Employee', Math.round(npTotal / headCount)]); meta.push({});
+    }
+  }
+
+  return { header, rows, meta };
 }
 
+/* ================================================================
+   PDF RENDERING FUNCTIONS
+   ================================================================ */
+
+/**
+ * Adds a professional cover page to the PDF document.
+ */
+function addCoverPage(
+  doc: jsPDF,
+  fyLabel: string,
+  scenarioName: string,
+  includeScenarioTitle: boolean,
+) {
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const cx = pageW / 2;
+
+  // Subtle top accent line
+  doc.setDrawColor(...COLOR.accent);
+  doc.setLineWidth(1.5);
+  doc.line(40, 60, pageW - 40, 60);
+
+  // Main title
+  doc.setFontSize(32);
+  doc.setTextColor(...COLOR.darkText);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`${fyLabel} Forecast`, cx, 90, { align: 'center' });
+
+  // Scenario / company name
+  if (includeScenarioTitle) {
+    doc.setFontSize(16);
+    doc.setTextColor(...COLOR.mutedText);
+    doc.setFont('helvetica', 'normal');
+    doc.text(scenarioName, cx, 108, { align: 'center' });
+  }
+
+  // Bottom accent line
+  doc.setDrawColor(...COLOR.accent);
+  doc.setLineWidth(0.5);
+  doc.line(60, pageH - 60, pageW - 60, pageH - 60);
+
+  // Generated date
+  doc.setFontSize(10);
+  doc.setTextColor(...COLOR.mutedText);
+  doc.setFont('helvetica', 'normal');
+  const dateStr = new Date().toLocaleDateString('en-IN', {
+    day: 'numeric', month: 'long', year: 'numeric',
+  });
+  doc.text(`Generated ${dateStr}`, cx, pageH - 45, { align: 'center' });
+}
+
+/**
+ * Adds a section title page (e.g., "Annual Summary", "Monthly Detail").
+ */
+function addSectionTitle(
+  doc: jsPDF,
+  title: string,
+  subtitle: string,
+) {
+  doc.addPage();
+  const pageW = doc.internal.pageSize.getWidth();
+  const cx = pageW / 2;
+
+  doc.setDrawColor(...COLOR.accent);
+  doc.setLineWidth(0.8);
+  doc.line(30, 50, pageW - 30, 50);
+
+  doc.setFontSize(22);
+  doc.setTextColor(...COLOR.darkText);
+  doc.setFont('helvetica', 'bold');
+  doc.text(title, cx, 70, { align: 'center' });
+
+  doc.setFontSize(11);
+  doc.setTextColor(...COLOR.mutedText);
+  doc.setFont('helvetica', 'normal');
+  doc.text(subtitle, cx, 84, { align: 'center' });
+}
+
+/**
+ * Renders a report title + subtitle above a table.
+ */
+function addReportHeader(
+  doc: jsPDF,
+  title: string,
+  fyLabel: string,
+  y: number,
+): number {
+  doc.setFontSize(14);
+  doc.setTextColor(...COLOR.darkText);
+  doc.setFont('helvetica', 'bold');
+  doc.text(title, 15, y);
+
+  doc.setFontSize(9);
+  doc.setTextColor(...COLOR.mutedText);
+  doc.setFont('helvetica', 'normal');
+  doc.text(fyLabel, 15, y + 6);
+
+  return y + 12;
+}
+
+/**
+ * Core table renderer with professional styling.
+ *
+ * @returns The Y position below the rendered table (with spacing).
+ */
 function addTableToPDF(
   doc: jsPDF,
   title: string,
+  fyLabel: string,
   header: string[],
   rows: (string | number)[][],
-  startY: number,
+  rowMeta: RowMeta[],
   isAnnual: boolean,
 ): number {
-  // Title
-  doc.setFontSize(13);
-  doc.setTextColor(30, 41, 59);
-  doc.text(title, 14, startY);
-  startY += 6;
+  // Always start on a new page
+  doc.addPage();
+  let startY = addReportHeader(doc, title, fyLabel, 20);
 
-  // Build display rows — if annual, collapse months into single total
+  // Build display rows
   let displayHeader: string[];
   let displayRows: string[][];
+  const displayMeta = [...rowMeta];
 
   if (isAnnual) {
+    // Collapse months into single "Annual Total" column
     displayHeader = [header[0], 'Annual Total'];
-    displayRows = rows.map(row => {
+    displayRows = rows.map((row, ri) => {
       const label = String(row[0]);
       const total = row[row.length - 1];
-      return [label, typeof total === 'number' ? formatNum(total) : String(total)];
+      const isPct = displayMeta[ri]?.isPercent;
+      return [label, typeof total === 'number' ? formatNum(total, isPct) : String(total)];
     });
   } else {
     displayHeader = header;
-    displayRows = rows.map(row => row.map(cell => typeof cell === 'number' ? formatNum(cell) : String(cell)));
+    displayRows = rows.map((row, ri) => {
+      const isPct = displayMeta[ri]?.isPercent;
+      return row.map((cell, ci) => {
+        if (ci === 0) return String(cell);
+        return typeof cell === 'number' ? formatNum(cell, isPct) : String(cell);
+      });
+    });
   }
+
+  const firstColWidth = isAnnual ? 90 : 45;
 
   autoTable(doc, {
     startY,
@@ -227,40 +575,502 @@ function addTableToPDF(
     body: displayRows,
     theme: 'grid',
     styles: {
-      fontSize: 7,
-      cellPadding: 2,
-      lineColor: [226, 232, 240],
-      lineWidth: 0.2,
+      fontSize: 7.5,
+      cellPadding: 2.5,
+      lineColor: COLOR.lineColor,
+      lineWidth: 0.15,
+      textColor: COLOR.bodyText,
+      font: 'helvetica',
     },
     headStyles: {
-      fillColor: [241, 245, 249],
-      textColor: [51, 65, 85],
+      fillColor: COLOR.headerBg,
+      textColor: COLOR.headerText,
       fontStyle: 'bold',
-      fontSize: 7,
+      fontSize: 7.5,
+      cellPadding: 2.5,
     },
     columnStyles: Object.fromEntries(
-      displayHeader.map((_, i) => [i, i === 0 ? { cellWidth: isAnnual ? 80 : 42, fontStyle: 'normal' } : { halign: 'right' as const, cellWidth: 'auto' }])
+      displayHeader.map((_, i) => [
+        i,
+        i === 0
+          ? { cellWidth: firstColWidth, fontStyle: 'normal' as const }
+          : { halign: 'right' as const, cellWidth: 'auto' as const },
+      ]),
     ),
     didParseCell: (data) => {
-      const text = String(data.cell.raw);
-      // Bold section headers and totals
-      if (data.section === 'body' && data.column.index === 0) {
-        if (!text.startsWith('  ') && text !== '') {
-          data.cell.styles.fontStyle = 'bold';
-        }
+      if (data.section !== 'body') return;
+      const rowIdx = data.row.index;
+      const colIdx = data.column.index;
+      const rowM = displayMeta[rowIdx];
+      const cellText = String(data.cell.raw);
+
+      if (!rowM) return;
+
+      // Section header rows
+      if (rowM.isSection) {
+        data.cell.styles.fontStyle = 'bold';
+        data.cell.styles.fillColor = COLOR.sectionBg;
       }
-      // Red for negative values
-      if (data.section === 'body' && data.column.index > 0 && text.startsWith('-')) {
-        data.cell.styles.textColor = [220, 38, 38];
+
+      // Total rows
+      if (rowM.isTotal) {
+        data.cell.styles.fontStyle = 'bold';
+        data.cell.styles.fillColor = COLOR.accentBg;
+      }
+
+      // Percentage rows
+      if (rowM.isPercent) {
+        data.cell.styles.fontStyle = 'italic';
+        data.cell.styles.textColor = COLOR.mutedText;
+      }
+
+      // Negative values in data columns — text with parentheses is negative
+      if (colIdx > 0 && cellText.startsWith('(')) {
+        data.cell.styles.textColor = COLOR.negativeText;
+      }
+
+      // First column: if not section/total, keep normal weight
+      if (colIdx === 0 && !rowM.isSection && !rowM.isTotal && !rowM.isPercent) {
+        data.cell.styles.fontStyle = 'normal';
       }
     },
-    margin: { left: 14, right: 14 },
+    margin: { left: 15, right: 15, top: 15 },
   });
 
-  return (doc as any).lastAutoTable.finalY + 12;
+  return (doc as any).lastAutoTable.finalY + 10;
 }
 
-/* ──────── Component ──────── */
+/**
+ * Adds page footers to all pages in the document.
+ */
+function addFooters(
+  doc: jsPDF,
+  scenarioName: string,
+  fyLabel: string,
+  startPage: number,
+) {
+  const totalPages = doc.getNumberOfPages();
+  for (let p = startPage; p <= totalPages; p++) {
+    doc.setPage(p);
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    doc.setFontSize(7);
+    doc.setTextColor(...COLOR.footerText);
+    doc.setFont('helvetica', 'normal');
+    doc.text(
+      `Vision by Indefine \u2014 ${scenarioName} \u2014 ${fyLabel}`,
+      15,
+      pageH - 8,
+    );
+    doc.text(
+      `Page ${p} of ${totalPages}`,
+      pageW - 15,
+      pageH - 8,
+      { align: 'right' },
+    );
+  }
+}
+
+/* ================================================================
+   MAIN PDF GENERATION
+   ================================================================ */
+
+async function generateFullPDF(
+  items: ForecastItem[],
+  allValues: Record<number, Record<string, number>>,
+  months: string[],
+  settings: Record<string, any>,
+  scenarioName: string,
+  fyLabel: string,
+  reports: ReportOption[],
+  detailLevel: 'annual' | 'monthly',
+  paperSize: 'a4' | 'letter',
+  coverPage: boolean,
+  includeScenarioTitle: boolean,
+) {
+  const format = paperSize === 'a4' ? 'a4' : 'letter';
+  const benefitsPct = settings.employee_benefits_pct || 0;
+
+  // Start in portrait for cover + annual pages
+  const doc = new jsPDF({ orientation: 'portrait', format, unit: 'mm' });
+
+  const isAllReports = reports.every(r => r.checked);
+  const checked = (key: string) => reports.find(r => r.key === key)?.checked ?? false;
+  const hasItems = (cat: string) => items.some(i => i.category === cat);
+
+  // Track the first content page (cover page is page 1)
+  let firstContentPage = 1;
+
+  // ── COVER PAGE ──
+  if (coverPage) {
+    addCoverPage(doc, fyLabel, scenarioName, includeScenarioTitle);
+    firstContentPage = 2;
+  }
+
+  // ── ANNUAL SUMMARY SECTION ──
+  if (isAllReports || checked('revenue') || checked('direct_costs') || checked('personnel') || checked('expenses') || checked('assets')) {
+    addSectionTitle(doc, 'Annual Summary', fyLabel);
+
+    const categories: [string, string][] = [
+      ['revenue', 'Revenue'],
+      ['direct_costs', 'Direct Costs'],
+      ['personnel', 'Personnel'],
+      ['expenses', 'Expenses'],
+      ['assets', 'Assets'],
+    ];
+
+    for (const [catKey, catLabel] of categories) {
+      if (!isAllReports && !checked(catKey)) continue;
+      if (!hasItems(catKey)) continue;
+
+      const { header, rows, meta } = buildAnnualSummaryRows(
+        items, catKey, catLabel, allValues, months, benefitsPct,
+      );
+      addTableToPDF(doc, catLabel, fyLabel, header, rows, meta, true);
+    }
+  }
+
+  // ── ANNUAL FINANCIAL REPORTS ──
+  if (isAllReports || checked('pnl') || checked('balance_sheet') || checked('cash_flow')) {
+    addSectionTitle(doc, 'Annual Financial Reports', fyLabel);
+  }
+
+  // Annual P&L
+  if (isAllReports || checked('pnl')) {
+    const { header, rows, meta } = buildPnLRows(items, allValues, months, benefitsPct);
+    addTableToPDF(doc, 'Projected Profit & Loss', fyLabel, header, rows, meta, true);
+  }
+
+  // Annual Balance Sheet
+  if (isAllReports || checked('balance_sheet')) {
+    const { header, rows, meta } = buildBalanceSheetRows(items, allValues, months);
+    addTableToPDF(doc, 'Projected Balance Sheet', fyLabel, header, rows, meta, true);
+  }
+
+  // Annual Cash Flow
+  if (isAllReports || checked('cash_flow')) {
+    const { header, rows, meta } = buildCashFlowRows(items, allValues, months);
+    addTableToPDF(doc, 'Projected Cash Flow', fyLabel, header, rows, meta, true);
+  }
+
+  // ── MONTHLY DETAIL SECTION (only if monthly detail selected) ──
+  if (detailLevel === 'monthly') {
+    // Monthly category tables
+    if (isAllReports || checked('revenue') || checked('direct_costs') || checked('personnel') || checked('expenses') || checked('assets')) {
+      addSectionTitle(doc, 'Monthly Detail', fyLabel);
+
+      // Switch to landscape for monthly tables
+      // jsPDF does not support mid-document orientation change per page with autoTable,
+      // but we can add landscape pages individually.
+
+      const categories: [string, string][] = [
+        ['revenue', 'Revenue'],
+        ['direct_costs', 'Direct Costs'],
+        ['personnel', 'Personnel'],
+        ['expenses', 'Expenses'],
+        ['assets', 'Assets'],
+      ];
+
+      for (const [catKey, catLabel] of categories) {
+        if (!isAllReports && !checked(catKey)) continue;
+        if (!hasItems(catKey)) continue;
+
+        const { header, rows, meta } = buildCategoryRows(
+          items, catKey, catLabel, allValues, months, benefitsPct,
+        );
+        // Add landscape page
+        doc.addPage(format, 'landscape');
+        let y = addReportHeader(doc, catLabel, fyLabel, 20);
+
+        const displayHeader = header;
+        const displayRows = rows.map((row, ri) => {
+          const isPct = meta[ri]?.isPercent;
+          return row.map((cell, ci) => {
+            if (ci === 0) return String(cell);
+            return typeof cell === 'number' ? formatNum(cell, isPct) : String(cell);
+          });
+        });
+
+        autoTable(doc, {
+          startY: y,
+          head: [displayHeader],
+          body: displayRows,
+          theme: 'grid',
+          styles: {
+            fontSize: 7.5,
+            cellPadding: 2.5,
+            lineColor: COLOR.lineColor,
+            lineWidth: 0.15,
+            textColor: COLOR.bodyText,
+            font: 'helvetica',
+          },
+          headStyles: {
+            fillColor: COLOR.headerBg,
+            textColor: COLOR.headerText,
+            fontStyle: 'bold',
+            fontSize: 7.5,
+            cellPadding: 2.5,
+          },
+          columnStyles: Object.fromEntries(
+            displayHeader.map((_, i) => [
+              i,
+              i === 0
+                ? { cellWidth: 45, fontStyle: 'normal' as const }
+                : { halign: 'right' as const, cellWidth: 'auto' as const },
+            ]),
+          ),
+          didParseCell: (data) => {
+            if (data.section !== 'body') return;
+            const rowIdx = data.row.index;
+            const colIdx = data.column.index;
+            const rowM = meta[rowIdx];
+            const cellText = String(data.cell.raw);
+            if (!rowM) return;
+            if (rowM.isSection) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = COLOR.sectionBg;
+            }
+            if (rowM.isTotal) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = COLOR.accentBg;
+            }
+            if (rowM.isPercent) {
+              data.cell.styles.fontStyle = 'italic';
+              data.cell.styles.textColor = COLOR.mutedText;
+            }
+            if (colIdx > 0 && cellText.startsWith('(')) {
+              data.cell.styles.textColor = COLOR.negativeText;
+            }
+            if (colIdx === 0 && !rowM.isSection && !rowM.isTotal && !rowM.isPercent) {
+              data.cell.styles.fontStyle = 'normal';
+            }
+          },
+          margin: { left: 15, right: 15, top: 15 },
+        });
+      }
+    }
+
+    // Monthly Financial Reports
+    if (isAllReports || checked('pnl') || checked('balance_sheet') || checked('cash_flow')) {
+      addSectionTitle(doc, 'Monthly Financial Reports', fyLabel);
+    }
+
+    // Monthly P&L (landscape)
+    if (isAllReports || checked('pnl')) {
+      const { header, rows, meta } = buildPnLRows(items, allValues, months, benefitsPct);
+      doc.addPage(format, 'landscape');
+      let y = addReportHeader(doc, 'Projected Profit & Loss', fyLabel, 20);
+
+      const displayRows = rows.map((row, ri) => {
+        const isPct = meta[ri]?.isPercent;
+        return row.map((cell, ci) => {
+          if (ci === 0) return String(cell);
+          return typeof cell === 'number' ? formatNum(cell, isPct) : String(cell);
+        });
+      });
+
+      autoTable(doc, {
+        startY: y,
+        head: [header],
+        body: displayRows,
+        theme: 'grid',
+        styles: {
+          fontSize: 7.5,
+          cellPadding: 2.5,
+          lineColor: COLOR.lineColor,
+          lineWidth: 0.15,
+          textColor: COLOR.bodyText,
+          font: 'helvetica',
+        },
+        headStyles: {
+          fillColor: COLOR.headerBg,
+          textColor: COLOR.headerText,
+          fontStyle: 'bold',
+          fontSize: 7.5,
+          cellPadding: 2.5,
+        },
+        columnStyles: Object.fromEntries(
+          header.map((_, i) => [
+            i,
+            i === 0
+              ? { cellWidth: 45, fontStyle: 'normal' as const }
+              : { halign: 'right' as const, cellWidth: 'auto' as const },
+          ]),
+        ),
+        didParseCell: (data) => {
+          if (data.section !== 'body') return;
+          const rowIdx = data.row.index;
+          const colIdx = data.column.index;
+          const rowM = meta[rowIdx];
+          const cellText = String(data.cell.raw);
+          if (!rowM) return;
+          if (rowM.isSection) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = COLOR.sectionBg; }
+          if (rowM.isTotal) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = COLOR.accentBg; }
+          if (rowM.isPercent) { data.cell.styles.fontStyle = 'italic'; data.cell.styles.textColor = COLOR.mutedText; }
+          if (colIdx > 0 && cellText.startsWith('(')) { data.cell.styles.textColor = COLOR.negativeText; }
+          if (colIdx === 0 && !rowM.isSection && !rowM.isTotal && !rowM.isPercent) { data.cell.styles.fontStyle = 'normal'; }
+        },
+        margin: { left: 15, right: 15, top: 15 },
+      });
+    }
+
+    // Monthly Balance Sheet (landscape)
+    if (isAllReports || checked('balance_sheet')) {
+      const { header, rows, meta } = buildBalanceSheetRows(items, allValues, months);
+      doc.addPage(format, 'landscape');
+      let y = addReportHeader(doc, 'Projected Balance Sheet', fyLabel, 20);
+
+      const displayRows = rows.map((row, ri) => {
+        const isPct = meta[ri]?.isPercent;
+        return row.map((cell, ci) => {
+          if (ci === 0) return String(cell);
+          return typeof cell === 'number' ? formatNum(cell, isPct) : String(cell);
+        });
+      });
+
+      autoTable(doc, {
+        startY: y,
+        head: [header],
+        body: displayRows,
+        theme: 'grid',
+        styles: {
+          fontSize: 7.5,
+          cellPadding: 2.5,
+          lineColor: COLOR.lineColor,
+          lineWidth: 0.15,
+          textColor: COLOR.bodyText,
+          font: 'helvetica',
+        },
+        headStyles: {
+          fillColor: COLOR.headerBg,
+          textColor: COLOR.headerText,
+          fontStyle: 'bold',
+          fontSize: 7.5,
+          cellPadding: 2.5,
+        },
+        columnStyles: Object.fromEntries(
+          header.map((_, i) => [
+            i,
+            i === 0
+              ? { cellWidth: 45, fontStyle: 'normal' as const }
+              : { halign: 'right' as const, cellWidth: 'auto' as const },
+          ]),
+        ),
+        didParseCell: (data) => {
+          if (data.section !== 'body') return;
+          const rowIdx = data.row.index;
+          const colIdx = data.column.index;
+          const rowM = meta[rowIdx];
+          const cellText = String(data.cell.raw);
+          if (!rowM) return;
+          if (rowM.isSection) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = COLOR.sectionBg; }
+          if (rowM.isTotal) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = COLOR.accentBg; }
+          if (rowM.isPercent) { data.cell.styles.fontStyle = 'italic'; data.cell.styles.textColor = COLOR.mutedText; }
+          if (colIdx > 0 && cellText.startsWith('(')) { data.cell.styles.textColor = COLOR.negativeText; }
+          if (colIdx === 0 && !rowM.isSection && !rowM.isTotal && !rowM.isPercent) { data.cell.styles.fontStyle = 'normal'; }
+        },
+        margin: { left: 15, right: 15, top: 15 },
+      });
+    }
+
+    // Monthly Cash Flow (landscape)
+    if (isAllReports || checked('cash_flow')) {
+      const { header, rows, meta } = buildCashFlowRows(items, allValues, months);
+      doc.addPage(format, 'landscape');
+      let y = addReportHeader(doc, 'Projected Cash Flow', fyLabel, 20);
+
+      const displayRows = rows.map((row, ri) => {
+        const isPct = meta[ri]?.isPercent;
+        return row.map((cell, ci) => {
+          if (ci === 0) return String(cell);
+          return typeof cell === 'number' ? formatNum(cell, isPct) : String(cell);
+        });
+      });
+
+      autoTable(doc, {
+        startY: y,
+        head: [header],
+        body: displayRows,
+        theme: 'grid',
+        styles: {
+          fontSize: 7.5,
+          cellPadding: 2.5,
+          lineColor: COLOR.lineColor,
+          lineWidth: 0.15,
+          textColor: COLOR.bodyText,
+          font: 'helvetica',
+        },
+        headStyles: {
+          fillColor: COLOR.headerBg,
+          textColor: COLOR.headerText,
+          fontStyle: 'bold',
+          fontSize: 7.5,
+          cellPadding: 2.5,
+        },
+        columnStyles: Object.fromEntries(
+          header.map((_, i) => [
+            i,
+            i === 0
+              ? { cellWidth: 45, fontStyle: 'normal' as const }
+              : { halign: 'right' as const, cellWidth: 'auto' as const },
+          ]),
+        ),
+        didParseCell: (data) => {
+          if (data.section !== 'body') return;
+          const rowIdx = data.row.index;
+          const colIdx = data.column.index;
+          const rowM = meta[rowIdx];
+          const cellText = String(data.cell.raw);
+          if (!rowM) return;
+          if (rowM.isSection) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = COLOR.sectionBg; }
+          if (rowM.isTotal) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = COLOR.accentBg; }
+          if (rowM.isPercent) { data.cell.styles.fontStyle = 'italic'; data.cell.styles.textColor = COLOR.mutedText; }
+          if (colIdx > 0 && cellText.startsWith('(')) { data.cell.styles.textColor = COLOR.negativeText; }
+          if (colIdx === 0 && !rowM.isSection && !rowM.isTotal && !rowM.isPercent) { data.cell.styles.fontStyle = 'normal'; }
+        },
+        margin: { left: 15, right: 15, top: 15 },
+      });
+    }
+  }
+
+  // ── Cash at End of Period (standalone, if selected) ──
+  if (checked('cash_at_end')) {
+    let cumCash = 0;
+    const cashHeader = ['Cash at End of Period', ...months.map(m => getMonthLabel(m))];
+    const cashRow = months.map(m => {
+      const net = sumCat(items, 'revenue', allValues, m)
+        - sumCat(items, 'direct_costs', allValues, m)
+        - sumCat(items, 'personnel', allValues, m)
+        - sumCat(items, 'expenses', allValues, m)
+        - sumCat(items, 'taxes', allValues, m)
+        - sumCat(items, 'assets', allValues, m)
+        - sumCat(items, 'dividends', allValues, m);
+      cumCash += net;
+      return cumCash;
+    });
+    const cashRows: (string | number)[][] = [['Cash Balance', ...cashRow]];
+    const cashMeta: RowMeta[] = [{ isTotal: true }];
+    addTableToPDF(doc, 'Cash at End of Period', fyLabel, cashHeader, cashRows, cashMeta, false);
+  }
+
+  // ── Remove blank first page if cover was added (jsPDF starts with one) ──
+  // The initial jsPDF constructor creates page 1. If we used it for the cover, it's fine.
+  // If we didn't add a cover, the first page is blank because addTableToPDF always calls addPage().
+  // Remove page 1 if it's blank.
+  if (!coverPage && doc.getNumberOfPages() > 1) {
+    doc.deletePage(1);
+  }
+
+  // ── FOOTERS ──
+  addFooters(doc, scenarioName, fyLabel, 1);
+
+  // ── SAVE ──
+  doc.save(`Forecast_Report_${fyLabel.replace(/\s+/g, '_')}.pdf`);
+}
+
+/* ================================================================
+   COMPONENT  (UI unchanged)
+   ================================================================ */
 
 export default function DownloadPrintPanel({ open, onClose, items, allValues, months, settings, scenarioName, fyLabel }: Props) {
   const [reportType, setReportType] = useState<'forecast' | 'actuals_forecast'>('forecast');
@@ -300,133 +1110,19 @@ export default function DownloadPrintPanel({ open, onClose, items, allValues, mo
     setGenerating(true);
 
     try {
-      const isAnnual = detailLevel === 'annual';
-      const orientation = isAnnual ? 'portrait' : 'landscape';
-      const format = paperSize === 'a4' ? 'a4' : 'letter';
-
-      const doc = new jsPDF({ orientation, format, unit: 'mm' });
-      const pageW = doc.internal.pageSize.getWidth();
-      const benefitsPct = settings.employee_benefits_pct || 0;
-
-      // Cover page
-      if (coverPage) {
-        doc.setFillColor(13, 148, 136); // primary teal
-        doc.rect(0, 0, pageW, 80, 'F');
-
-        doc.setTextColor(255, 255, 255);
-        doc.setFontSize(28);
-        doc.text('Financial Forecast Report', pageW / 2, 35, { align: 'center' });
-
-        if (includeScenarioTitle) {
-          doc.setFontSize(16);
-          doc.text(scenarioName, pageW / 2, 50, { align: 'center' });
-        }
-
-        doc.setFontSize(12);
-        doc.text(fyLabel, pageW / 2, 62, { align: 'center' });
-
-        doc.setTextColor(100, 116, 139);
-        doc.setFontSize(10);
-        doc.text(`Generated on ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}`, pageW / 2, 95, { align: 'center' });
-
-        doc.setFontSize(9);
-        doc.text(`Report Type: ${reportType === 'forecast' ? 'Forecast Only' : 'Actuals + Forecast'}`, pageW / 2, 105, { align: 'center' });
-        doc.text(`Detail Level: ${isAnnual ? 'Annual Totals' : 'Monthly Totals'}`, pageW / 2, 112, { align: 'center' });
-
-        // Reports included
-        const selected = reports.filter(r => r.checked).map(r => r.label);
-        doc.setFontSize(9);
-        doc.setTextColor(71, 85, 105);
-        doc.text('Reports Included:', pageW / 2, 130, { align: 'center' });
-        selected.forEach((name, i) => {
-          doc.text(`• ${name}`, pageW / 2, 140 + i * 7, { align: 'center' });
-        });
-
-        doc.addPage();
-      }
-
-      let y = 16;
-
-      // P&L
-      if (reports.find(r => r.key === 'pnl')?.checked) {
-        const { header, rows } = buildPnLRows(items, allValues, months, benefitsPct);
-        y = addTableToPDF(doc, 'Projected Profit & Loss', header, rows, y, isAnnual);
-        if (y > doc.internal.pageSize.getHeight() - 30) { doc.addPage(); y = 16; }
-      }
-
-      // Balance Sheet
-      if (reports.find(r => r.key === 'balance_sheet')?.checked) {
-        if (y > 40) { doc.addPage(); y = 16; }
-        const { header, rows } = buildBalanceSheetRows(items, allValues, months);
-        y = addTableToPDF(doc, 'Projected Balance Sheet', header, rows, y, isAnnual);
-      }
-
-      // Cash Flow
-      if (reports.find(r => r.key === 'cash_flow')?.checked) {
-        if (y > 40) { doc.addPage(); y = 16; }
-        const { header, rows } = buildCashFlowRows(items, allValues, months);
-        y = addTableToPDF(doc, 'Projected Cash Flow', header, rows, y, isAnnual);
-      }
-
-      // Category-level tables
-      const catMap: Record<string, string> = {
-        revenue: 'Revenue',
-        direct_costs: 'Direct Costs',
-        personnel: 'Personnel',
-        expenses: 'Expenses',
-        assets: 'Assets',
-        financing: 'Financing',
-      };
-
-      for (const [catKey, catLabel] of Object.entries(catMap)) {
-        if (!reports.find(r => r.key === catKey)?.checked) continue;
-        const catItems = items.filter(i => i.category === catKey);
-        if (catItems.length === 0) continue;
-        if (y > 60) { doc.addPage(); y = 16; }
-        const { header, rows } = buildCategoryRows(items, catKey, catLabel, allValues, months);
-        y = addTableToPDF(doc, catLabel, header, rows, y, isAnnual);
-      }
-
-      // Cash at end of period
-      if (reports.find(r => r.key === 'cash_at_end')?.checked) {
-        if (y > 60) { doc.addPage(); y = 16; }
-        let cumCash = 0;
-        const cashHeader = ['Cash at End of Period', ...months.map(m => getMonthLabel(m))];
-        const cashRow = months.map(m => {
-          const net = sumCat(items, 'revenue', allValues, m)
-            - sumCat(items, 'direct_costs', allValues, m)
-            - sumCat(items, 'personnel', allValues, m)
-            - sumCat(items, 'expenses', allValues, m)
-            - sumCat(items, 'taxes', allValues, m)
-            - sumCat(items, 'assets', allValues, m)
-            - sumCat(items, 'dividends', allValues, m);
-          cumCash += net;
-          return cumCash;
-        });
-        const cashRows: (string | number)[][] = [['Cash Balance', ...cashRow]];
-        y = addTableToPDF(doc, 'Cash at End of Period', cashHeader, cashRows, y, isAnnual);
-      }
-
-      // Footer on each page
-      const totalPages = doc.getNumberOfPages();
-      for (let p = 1; p <= totalPages; p++) {
-        doc.setPage(p);
-        doc.setFontSize(7);
-        doc.setTextColor(148, 163, 184);
-        doc.text(
-          `Vision by Indefine — ${scenarioName} — ${fyLabel}`,
-          14,
-          doc.internal.pageSize.getHeight() - 8
-        );
-        doc.text(
-          `Page ${p} of ${totalPages}`,
-          pageW - 14,
-          doc.internal.pageSize.getHeight() - 8,
-          { align: 'right' }
-        );
-      }
-
-      doc.save(`Forecast_Report_${fyLabel.replace(/\s+/g, '_')}.pdf`);
+      await generateFullPDF(
+        items,
+        allValues,
+        months,
+        settings,
+        scenarioName,
+        fyLabel,
+        reports,
+        detailLevel,
+        paperSize,
+        coverPage,
+        includeScenarioTitle,
+      );
     } catch (err) {
       console.error('PDF generation error:', err);
       alert('Failed to generate PDF. Please try again.');
