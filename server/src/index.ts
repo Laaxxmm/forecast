@@ -54,7 +54,7 @@ app.use((req, res, next) => {
 });
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin) return cb(null, false);
+    if (!origin) return cb(null, true);
     if (allowedOrigins.includes(origin)) return cb(null, true);
     console.log('CORS blocked origin:', origin);
     cb(null, false);
