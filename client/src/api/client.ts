@@ -62,9 +62,16 @@ api.interceptors.response.use(
       if (res.data.enabledIntegrations) {
         localStorage.setItem('enabled_integrations', JSON.stringify(res.data.enabledIntegrations));
       }
-      // Store streams
+      // Store streams — and auto-select the first stream if none is already
+      // chosen, so the forecast module doesn't land in the "no stream" path
+      // which returns empty data.
       if (res.data.streams) {
         localStorage.setItem('streams', JSON.stringify(res.data.streams));
+        if (!localStorage.getItem('stream_id') && res.data.streams.length > 0) {
+          const first = res.data.streams[0];
+          localStorage.setItem('stream_id', String(first.id));
+          localStorage.setItem('stream_name', first.name);
+        }
       }
       if (res.data.streamAccess) {
         localStorage.setItem('stream_access', JSON.stringify(res.data.streamAccess));

@@ -16,9 +16,11 @@ router.get('/consolidated', async (req, res) => {
   const bf = branchFilter(req);
   if (!fy_id) return res.status(400).json({ error: 'fy_id required' });
 
-  // Find ALL per-stream scenarios for this FY + branch
+  // Find ALL scenarios for this FY + branch.
+  // Includes both per-stream (stream_id set) and company-level (stream_id NULL)
+  // scenarios so that admin-created forecasts are visible in the "All" view.
   const scenarios = db.all(
-    `SELECT * FROM scenarios WHERE fy_id = ? AND stream_id IS NOT NULL${bf.where}`,
+    `SELECT * FROM scenarios WHERE fy_id = ?${bf.where} ORDER BY stream_id IS NULL, id`,
     fy_id, ...bf.params
   );
 
