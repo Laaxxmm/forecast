@@ -430,11 +430,11 @@ function drawAlertBox(doc: jsPDF, x: number, y: number, w: number, alerts: strin
   const items: string[][] = alerts.map(a => doc.splitTextToSize(safeText(a), innerW));
   const totalLines = items.reduce((sum, lns) => sum + lns.length, 0);
 
-  const headerH = 8;
-  const lineH = 4.4;
-  const itemGap = 1.2;
+  const headerH = 10;
+  const lineH = 4.6;
+  const itemGap = 2.4;
   const bodyH = totalLines * lineH + (items.length - 1) * itemGap;
-  const padB = 3.5;
+  const padB = 5;
   const h = headerH + bodyH + padB;
 
   // background
@@ -458,7 +458,7 @@ function drawAlertBox(doc: jsPDF, x: number, y: number, w: number, alerts: strin
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.5);
   doc.setTextColor(...DARK_TEXT);
-  let ly = y + headerH + 2.8;
+  let ly = y + headerH + 3.6;
   for (const lines of items) {
     drawBullet(doc, bulletX, ly, DANGER_BORDER);
     for (let i = 0; i < lines.length; i++) {
@@ -467,7 +467,7 @@ function drawAlertBox(doc: jsPDF, x: number, y: number, w: number, alerts: strin
     }
     ly += itemGap;
   }
-  return y + h + 5;
+  return y + h + 9;
 }
 
 /** Thin progress bar with RAG fill, used inside scorecards and KPI rows. */
@@ -917,10 +917,10 @@ function drawExecutiveBlock(
   const pageW = doc.internal.pageSize.getWidth();
   drawCardTitle(doc, 'Executive Summary', x, y, PRIMARY);
   drawRAGPill(doc, data.combined.rag, pageW - 60, y, 46, 6.5);
-  y += 6;
+  y += 8;
 
   y = addParagraph(doc, narrative.executive, y, { size: 10 });
-  y += 4;
+  y += 8;
 
   if (data.combined.targetRevenue > 0) {
     const mtdPct = (data.combined.mtdRevenue / data.combined.targetRevenue) * 100;
@@ -934,7 +934,7 @@ function drawExecutiveBlock(
     doc.text('Combined Revenue -- MTD vs Monthly Target', x, y);
     doc.setTextColor(...barColor);
     doc.text(`${Math.round(mtdPct)}% MTD`, x + w, y, { align: 'right' });
-    y += 3;
+    y += 4;
 
     // Pace context line above the bar — clarifies what "MTD%" actually means
     doc.setFontSize(7.8);
@@ -944,10 +944,10 @@ function drawExecutiveBlock(
       `Day ${data.daysElapsed} of ${data.daysInMonth} -- expected pace ~${Math.round(expectedPct)}%`,
       x, y
     );
-    y += 2;
+    y += 4;
 
     drawProgressBar(doc, x, y, w, 7, mtdPct, projPct, barColor);
-    y += 11;
+    y += 14;
 
     // Three-up label row: MTD | Projected | Target
     doc.setFontSize(8.8);
@@ -959,7 +959,7 @@ function drawExecutiveBlock(
       x + w / 2, y, { align: 'center' }
     );
     doc.text(`Target: ${fmtRs(data.combined.targetRevenue)}`, x + w, y, { align: 'right' });
-    y += 5;
+    y += 7;
 
     const gap = data.combined.targetRevenue - data.combined.projectedRevenue;
     doc.setFontSize(8.8);
@@ -975,13 +975,13 @@ function drawExecutiveBlock(
       doc.setTextColor(...GREEN);
       doc.text(`Projected to clear target with ${fmtRs(Math.abs(gap))} cushion`, x, y);
     }
-    y += 6;
+    y += 10;
   } else {
     doc.setFontSize(9);
     doc.setFont('helvetica', 'italic');
     doc.setTextColor(...MUTED_TEXT);
     doc.text('No monthly target configured. Showing actuals only.', x, y);
-    y += 6;
+    y += 10;
   }
   return y;
 }
@@ -1016,18 +1016,19 @@ function drawStreamSection(
 ): number {
   const pageW = doc.internal.pageSize.getWidth();
 
-  // Light divider above this section
+  // Light divider above this section — with extra breathing room
+  y += 2;
   doc.setDrawColor(...CARD_BORDER);
   doc.setLineWidth(0.2);
   doc.line(x, y - 3, x + w, y - 3);
 
   drawCardTitle(doc, stream.name.toUpperCase(), x, y, PRIMARY);
-  y += 5.5;
+  y += 8;
 
   const narr = narrative.streamInsights[idx];
   if (narr) {
     y = addParagraph(doc, narr, y, { size: 9.5 });
-    y += 2;
+    y += 6;
   }
 
   // ── Summary Scorecard ──
@@ -1036,7 +1037,7 @@ function drawStreamSection(
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...DARK_TEXT);
   doc.text('Summary Scorecard', x, y);
-  y += 2;
+  y += 4;
 
   const rows = computeScorecardRows(stream);
   autoTable(doc, {
@@ -1062,19 +1063,19 @@ function drawStreamSection(
     },
     margin: { left: x, right: pageW - (x + w) },
   });
-  y = (doc as any).lastAutoTable.finalY + 5;
+  y = (doc as any).lastAutoTable.finalY + 9;
 
   // ── KPI Progress Bars ──
   if (rows.length > 0) {
-    y = ensureRoom(doc, y, 12 + rows.length * 8);
+    y = ensureRoom(doc, y, 12 + rows.length * 9);
     doc.setFontSize(9.5);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(...DARK_TEXT);
     doc.text('KPI Progress (MTD vs Target)', x, y);
-    y += 4;
+    y += 6;
 
     for (const r of rows) {
-      y = ensureRoom(doc, y, 10);
+      y = ensureRoom(doc, y, 11);
       const color = paceColor(r.mtdPct, expectedPct);
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8.5);
@@ -1084,9 +1085,9 @@ function drawStreamSection(
       doc.setTextColor(...color);
       doc.text(`${Math.round(r.mtdPct)}%`, x + w, y, { align: 'right' });
       drawInlineBarPaced(doc, x, y + 1.2, w, r.mtdPct, expectedPct);
-      y += 7.5;
+      y += 8.5;
     }
-    y += 2;
+    y += 4;
   }
 
   // ── This Week vs Last Week ──
@@ -1095,7 +1096,7 @@ function drawStreamSection(
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...DARK_TEXT);
   doc.text('This Week vs Last Week', x, y);
-  y += 2;
+  y += 4;
 
   const isClinic = stream.name.toLowerCase().includes('clinic') || stream.name.toLowerCase().includes('health');
   const tw = stream.thisWeek;
@@ -1141,7 +1142,7 @@ function drawStreamSection(
     },
     margin: { left: x, right: pageW - (x + w) },
   });
-  y = (doc as any).lastAutoTable.finalY + 7;
+  y = (doc as any).lastAutoTable.finalY + 10;
 
   return y;
 }
@@ -1157,12 +1158,12 @@ function drawObservationsBlock(
 ): number {
   y = ensureRoom(doc, y, 20);
   drawCardTitle(doc, title, x, y, PRIMARY);
-  y += 5;
+  y += 8;
 
   const bulletX = x + 1.6;
   const textX = x + 5.4;
   const innerW = w - (textX - x);
-  const lineH = 4.4;
+  const lineH = 4.6;
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.5);
@@ -1170,15 +1171,15 @@ function drawObservationsBlock(
 
   for (const obs of observations) {
     const lines = doc.splitTextToSize(safeText(obs), innerW);
-    y = ensureRoom(doc, y, lines.length * lineH + 2);
+    y = ensureRoom(doc, y, lines.length * lineH + 3);
     drawBullet(doc, bulletX, y, PRIMARY);
     for (let i = 0; i < lines.length; i++) {
       doc.text(lines[i], textX, y);
       y += lineH;
     }
-    y += 1;
+    y += 2.5;
   }
-  return y + 3;
+  return y + 6;
 }
 
 /** Numbered action list with PRIORITY/WATCH prefix pills (no row restyle). */
@@ -1193,7 +1194,7 @@ function drawActionsBlock(
   if (actions.length === 0) return y;
   y = ensureRoom(doc, y, 20);
   drawCardTitle(doc, title, x, y, PRIMARY);
-  y += 5;
+  y += 8;
 
   const numW = 6;
   const pillW = 16;          // fixed pill width — keeps text aligned
@@ -1202,8 +1203,8 @@ function drawActionsBlock(
   const pillX = numX + numW;
   const textX = pillX + pillW + gap;
   const innerW = w - (textX - x) - 1;
-  const lineH = 4.5;
-  const itemGap = 1.8;
+  const lineH = 4.7;
+  const itemGap = 3.2;
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.5);
@@ -1248,7 +1249,7 @@ function drawActionsBlock(
     }
     y += blockH + itemGap;
   }
-  return y + 2;
+  return y + 5;
 }
 
 /** Daily trend bar chart used by weekly + monthly reports. */
@@ -1261,7 +1262,8 @@ function drawDailyTrendBlock(
   w: number,
 ): number {
   if (stream.daily.length === 0) return y;
-  y = ensureRoom(doc, y, 48);
+  y = ensureRoom(doc, y, 54);
+  y += 2;
 
   const revs = stream.daily.map(d => d.revenue || 0);
   const peak = Math.max(...revs, 0);
@@ -1281,10 +1283,10 @@ function drawDailyTrendBlock(
   const statsTxt = `${stream.daily.length} days  |  Peak ${fmtRsCompact(peak)}  |  Avg ${fmtRsCompact(avg)}` +
     (dailyTarget > 0 ? `  |  Target ${fmtRsCompact(dailyTarget)}/day` : '');
   doc.text(statsTxt, x + w, y, { align: 'right' });
-  y += 3;
+  y += 5;
 
   drawMiniBarChart(doc, x, y, w, 26, revs, PRIMARY, dailyTarget);
-  y += 28;
+  y += 30;
 
   // X-axis dates (only at chart bounds)
   doc.setFontSize(7.5);
@@ -1293,7 +1295,7 @@ function drawDailyTrendBlock(
   doc.text(prettyDate(stream.daily[0].date), x + 14, y);
   doc.text(prettyDate(stream.daily[stream.daily.length - 1].date), x + w, y, { align: 'right' });
 
-  return y + 6;
+  return y + 10;
 }
 
 /* ──────── Daily PDF ──────── */
