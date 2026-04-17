@@ -96,6 +96,24 @@ function formatNum(v: string | number, isPercent = false): string {
   return 'Rs' + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(v);
 }
 
+/** Plain integer formatting (no Rs prefix) — for unit counts */
+function formatUnits(v: number): string {
+  if (v === 0) return '\u2013';
+  return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(v);
+}
+
+/** Compact Indian-style formatting for chart axis labels (1.2Cr, 84K, 5.3L) */
+function formatCompact(v: number): string {
+  const abs = Math.abs(v);
+  if (abs >= 1e7) return `${(v / 1e7).toFixed(abs >= 1e8 ? 0 : 1)}Cr`;
+  if (abs >= 1e5) return `${(v / 1e5).toFixed(abs >= 1e6 ? 0 : 1)}L`;
+  if (abs >= 1e3) return `${(v / 1e3).toFixed(0)}K`;
+  return v.toFixed(0);
+}
+
+/** Categories that render a trend chart (matches portal's showChart flag) */
+const CHART_CATEGORIES = new Set(['revenue', 'direct_costs', 'personnel', 'expenses']);
+
 /* ================================================================
    DATA BUILDERS
    ================================================================ */
@@ -105,6 +123,7 @@ interface RowMeta {
   isSection?: boolean;
   isTotal?: boolean;
   isPercent?: boolean;
+  isSubItem?: boolean; // sub-rows under an item (e.g., units/mo, Rs per unit)
 }
 
 function buildPnLRows(
@@ -329,6 +348,33 @@ function buildCategoryRows(
     const vals = months.map(m => allValues[item.id]?.[m] || 0);
     rows.push([`  ${item.name}`, ...vals, vals.reduce((a, b) => a + b, 0)]);
     meta.push({});
+
+    // Basis-of-calculation sub-rows for unit-sales style items
+    const units = item.meta?.stepValues?.units as Record<string, number> | undefined;
+    const prices = item.meta?.stepValues?.prices as Record<string, number> | undefined;
+    if (item.item_type === 'unit_sales' && units && prices) {
+      const unitVals = months.map(m => Number(units[m]) || 0);
+      const priceVals = months.map(m => Number(prices[m]) || 0);
+      const totalUnits = unitVals.reduce((a, b) => a + b, 0);
+      const nonZeroPrices = priceVals.filter(p => p > 0);
+      const avgPrice = nonZeroPrices.length > 0
+        ? Math.round(nonZeroPrices.reduce((a, b) => a + b, 0) / nonZeroPrices.length)
+        : 0;
+
+      rows.push([
+        '      Units / month',
+        ...unitVals.map(v => formatUnits(v)),
+        formatUnits(totalUnits),
+      ]);
+      meta.push({ isSubItem: true });
+
+      rows.push([
+        '      Rs per unit',
+        ...priceVals.map(v => v === 0 ? '\u2013' : formatNum(v)),
+        avgPrice === 0 ? '\u2013' : formatNum(avgPrice) + ' avg',
+      ]);
+      meta.push({ isSubItem: true });
+    }
   });
 
   const totals = months.map(m => catItems.reduce((s, i) => s + (allValues[i.id]?.[m] || 0), 0));
@@ -396,6 +442,24 @@ function buildAnnualSummaryRows(
     const total = months.reduce((s, m) => s + (allValues[item.id]?.[m] || 0), 0);
     rows.push([`  ${item.name}`, total]);
     meta.push({});
+
+    // Basis-of-calculation rollups for unit-sales style items
+    const units = item.meta?.stepValues?.units as Record<string, number> | undefined;
+    const prices = item.meta?.stepValues?.prices as Record<string, number> | undefined;
+    if (item.item_type === 'unit_sales' && units && prices) {
+      const unitVals = months.map(m => Number(units[m]) || 0);
+      const priceVals = months.map(m => Number(prices[m]) || 0);
+      const totalUnits = unitVals.reduce((a, b) => a + b, 0);
+      const nonZeroPrices = priceVals.filter(p => p > 0);
+      const avgPrice = nonZeroPrices.length > 0
+        ? Math.round(nonZeroPrices.reduce((a, b) => a + b, 0) / nonZeroPrices.length)
+        : 0;
+
+      rows.push(['      Total units / year', formatUnits(totalUnits)]);
+      meta.push({ isSubItem: true });
+      rows.push(['      Avg Rs per unit', avgPrice === 0 ? '\u2013' : formatNum(avgPrice)]);
+      meta.push({ isSubItem: true });
+    }
   });
 
   const grandTotal = catItems.reduce((s, item) =>
@@ -441,38 +505,75 @@ function addCoverPage(
   const pageH = doc.internal.pageSize.getHeight();
   const cx = pageW / 2;
 
-  // Subtle top accent line
+  // Soft teal band at top
+  doc.setFillColor(...COLOR.accent);
+  doc.rect(0, 0, pageW, 12, 'F');
+
+  // Brand mark
+  doc.setFontSize(10);
+  doc.setTextColor(...COLOR.mutedText);
+  doc.setFont('helvetica', 'normal');
+  doc.text('VISION BY INDEFINE', cx, 38, { align: 'center', charSpace: 1.5 });
+
+  // Accent underline
   doc.setDrawColor(...COLOR.accent);
-  doc.setLineWidth(1.5);
-  doc.line(40, 60, pageW - 40, 60);
+  doc.setLineWidth(0.6);
+  doc.line(cx - 16, 42, cx + 16, 42);
+
+  // Report category eyebrow
+  doc.setFontSize(11);
+  doc.setTextColor(...COLOR.accent);
+  doc.setFont('helvetica', 'bold');
+  doc.text('FINANCIAL FORECAST', cx, pageH / 2 - 28, { align: 'center', charSpace: 2 });
 
   // Main title
-  doc.setFontSize(32);
+  doc.setFontSize(34);
   doc.setTextColor(...COLOR.darkText);
   doc.setFont('helvetica', 'bold');
-  doc.text(`${fyLabel} Forecast`, cx, 90, { align: 'center' });
+  doc.text(`${fyLabel}`, cx, pageH / 2 - 10, { align: 'center' });
 
-  // Scenario / company name
-  if (includeScenarioTitle) {
-    doc.setFontSize(16);
-    doc.setTextColor(...COLOR.mutedText);
-    doc.setFont('helvetica', 'normal');
-    doc.text(scenarioName, cx, 108, { align: 'center' });
+  // Subtitle
+  doc.setFontSize(14);
+  doc.setTextColor(...COLOR.bodyText);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Projected Financial Statements', cx, pageH / 2 + 2, { align: 'center' });
+
+  // Scenario / company name pill
+  if (includeScenarioTitle && scenarioName) {
+    const pillY = pageH / 2 + 18;
+    doc.setFontSize(11);
+    const scenarioText = scenarioName;
+    const w = doc.getTextWidth(scenarioText) + 10;
+    doc.setFillColor(...COLOR.accentBg);
+    doc.setDrawColor(...COLOR.accent);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(cx - w / 2, pillY - 5, w, 8, 1.5, 1.5, 'FD');
+    doc.setTextColor(...COLOR.accent);
+    doc.setFont('helvetica', 'bold');
+    doc.text(scenarioText, cx, pillY + 0.5, { align: 'center' });
   }
 
-  // Bottom accent line
-  doc.setDrawColor(...COLOR.accent);
-  doc.setLineWidth(0.5);
-  doc.line(60, pageH - 60, pageW - 60, pageH - 60);
+  // Bottom accent rule
+  doc.setDrawColor(...COLOR.lineColor);
+  doc.setLineWidth(0.3);
+  doc.line(40, pageH - 42, pageW - 40, pageH - 42);
 
   // Generated date
-  doc.setFontSize(10);
+  doc.setFontSize(9);
   doc.setTextColor(...COLOR.mutedText);
   doc.setFont('helvetica', 'normal');
   const dateStr = new Date().toLocaleDateString('en-IN', {
     day: 'numeric', month: 'long', year: 'numeric',
   });
-  doc.text(`Generated ${dateStr}`, cx, pageH - 45, { align: 'center' });
+  doc.text(`Generated ${dateStr}`, cx, pageH - 32, { align: 'center' });
+
+  // Confidential footer note
+  doc.setFontSize(7.5);
+  doc.setTextColor(...COLOR.footerText);
+  doc.text('CONFIDENTIAL \u2014 for internal planning use only', cx, pageH - 22, {
+    align: 'center',
+    charSpace: 0.8,
+  });
 }
 
 /**
@@ -485,21 +586,30 @@ function addSectionTitle(
 ) {
   doc.addPage();
   const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
   const cx = pageW / 2;
+  const cy = pageH / 2 - 10;
 
-  doc.setDrawColor(...COLOR.accent);
-  doc.setLineWidth(0.8);
-  doc.line(30, 50, pageW - 30, 50);
+  // Centered teal eyebrow bar
+  doc.setFillColor(...COLOR.accent);
+  doc.rect(cx - 18, cy - 24, 36, 1.2, 'F');
 
-  doc.setFontSize(22);
+  // Main title
+  doc.setFontSize(26);
   doc.setTextColor(...COLOR.darkText);
   doc.setFont('helvetica', 'bold');
-  doc.text(title, cx, 70, { align: 'center' });
+  doc.text(title, cx, cy - 8, { align: 'center' });
 
-  doc.setFontSize(11);
+  // Subtitle
+  doc.setFontSize(12);
   doc.setTextColor(...COLOR.mutedText);
   doc.setFont('helvetica', 'normal');
-  doc.text(subtitle, cx, 84, { align: 'center' });
+  doc.text(subtitle, cx, cy + 4, { align: 'center' });
+
+  // Lower accent rule
+  doc.setDrawColor(...COLOR.lineColor);
+  doc.setLineWidth(0.3);
+  doc.line(cx - 40, cy + 14, cx + 40, cy + 14);
 }
 
 /**
@@ -511,17 +621,149 @@ function addReportHeader(
   fyLabel: string,
   y: number,
 ): number {
+  // Accent dot
+  doc.setFillColor(...COLOR.accent);
+  doc.circle(17, y - 1.5, 1.2, 'F');
+
   doc.setFontSize(14);
   doc.setTextColor(...COLOR.darkText);
   doc.setFont('helvetica', 'bold');
-  doc.text(title, 15, y);
+  doc.text(title, 21, y);
 
   doc.setFontSize(9);
   doc.setTextColor(...COLOR.mutedText);
   doc.setFont('helvetica', 'normal');
-  doc.text(fyLabel, 15, y + 6);
+  doc.text(fyLabel, 21, y + 5.5);
 
-  return y + 12;
+  // Divider rule under header
+  const pageW = doc.internal.pageSize.getWidth();
+  doc.setDrawColor(...COLOR.lineColor);
+  doc.setLineWidth(0.2);
+  doc.line(15, y + 9, pageW - 15, y + 9);
+
+  return y + 14;
+}
+
+/**
+ * Draws an area chart (filled polyline) for category monthly totals.
+ * Mirrors the portal's AreaChart (teal stroke, light teal fill).
+ *
+ * @returns The Y position below the rendered chart (with spacing).
+ */
+function drawAreaChart(
+  doc: jsPDF,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  labels: string[],
+  values: number[],
+  caption: string,
+): number {
+  const padL = 22, padR = 6, padT = 14, padB = 14;
+  const plotX = x + padL;
+  const plotY = y + padT;
+  const plotW = w - padL - padR;
+  const plotH = h - padT - padB;
+
+  // Container card
+  doc.setFillColor(252, 253, 254);
+  doc.setDrawColor(...COLOR.lineColor);
+  doc.setLineWidth(0.2);
+  doc.roundedRect(x, y, w, h, 1.8, 1.8, 'FD');
+
+  // Caption (top-left)
+  doc.setFontSize(8.5);
+  doc.setTextColor(...COLOR.darkText);
+  doc.setFont('helvetica', 'bold');
+  doc.text(caption, x + 4, y + 7);
+
+  // Trend badge top-right (first vs last month delta)
+  const vals = values.map(v => Math.max(Number(v) || 0, 0));
+  const first = vals[0] ?? 0;
+  const last = vals[vals.length - 1] ?? 0;
+  if (first > 0) {
+    const deltaPct = ((last - first) / first) * 100;
+    const sign = deltaPct >= 0 ? '+' : '';
+    const badge = `${sign}${deltaPct.toFixed(0)}% first \u2192 last month`;
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...(deltaPct >= 0 ? COLOR.accent : COLOR.negativeText));
+    doc.text(badge, x + w - 4, y + 7, { align: 'right' });
+  }
+
+  const maxV = Math.max(...vals, 1);
+  const n = vals.length;
+  if (n < 1) return y + h + 6;
+
+  const stepX = n > 1 ? plotW / (n - 1) : plotW / 2;
+
+  // Horizontal grid + y-axis labels
+  doc.setDrawColor(...COLOR.lineColor);
+  doc.setLineWidth(0.1);
+  doc.setFontSize(6);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...COLOR.mutedText);
+  const gridSteps = 3;
+  for (let i = 0; i <= gridSteps; i++) {
+    const t = i / gridSteps;
+    const gy = plotY + plotH - t * plotH;
+    doc.line(plotX, gy, plotX + plotW, gy);
+    const val = maxV * t;
+    doc.text(formatCompact(val), plotX - 1.5, gy + 1.2, { align: 'right' });
+  }
+
+  if (maxV === 0) {
+    // No data state
+    doc.setFontSize(8);
+    doc.setTextColor(...COLOR.mutedText);
+    doc.text('No data', plotX + plotW / 2, plotY + plotH / 2, { align: 'center' });
+    return y + h + 6;
+  }
+
+  // Point positions
+  const pts: [number, number][] = vals.map((v, i) => [
+    plotX + (n > 1 ? i * stepX : plotW / 2),
+    plotY + plotH - (v / maxV) * plotH,
+  ]);
+
+  // Filled area (light teal)
+  if (n > 1) {
+    const lineDeltas: [number, number][] = [];
+    lineDeltas.push([pts[0][0] - plotX, pts[0][1] - (plotY + plotH)]);
+    for (let i = 1; i < pts.length; i++) {
+      lineDeltas.push([pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]]);
+    }
+    lineDeltas.push([0, (plotY + plotH) - pts[pts.length - 1][1]]);
+    lineDeltas.push([-(pts[pts.length - 1][0] - plotX), 0]);
+
+    doc.setFillColor(204, 236, 232);
+    (doc as any).lines(lineDeltas, plotX, plotY + plotH, [1, 1], 'F', false);
+
+    // Line stroke
+    doc.setDrawColor(...COLOR.accent);
+    doc.setLineWidth(0.7);
+    for (let i = 0; i < pts.length - 1; i++) {
+      doc.line(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
+    }
+  }
+
+  // Point markers
+  doc.setFillColor(...COLOR.accent);
+  pts.forEach(p => doc.circle(p[0], p[1], 0.7, 'F'));
+
+  // X-axis labels (skip every other for tight layouts)
+  doc.setFontSize(5.8);
+  doc.setTextColor(...COLOR.mutedText);
+  const skip = n > 9 ? 2 : 1;
+  labels.forEach((lbl, i) => {
+    if (i % skip !== 0 && i !== n - 1) return;
+    doc.text(lbl, plotX + (n > 1 ? i * stepX : plotW / 2), plotY + plotH + 4, {
+      align: 'center',
+    });
+  });
+
+  return y + h + 6;
 }
 
 /**
@@ -537,10 +779,14 @@ function addTableToPDF(
   rows: (string | number)[][],
   rowMeta: RowMeta[],
   isAnnual: boolean,
+  preTableDraw?: (doc: jsPDF, y: number) => number,
 ): number {
   // Always start on a new page
   doc.addPage();
   let startY = addReportHeader(doc, title, fyLabel, 20);
+  if (preTableDraw) {
+    startY = preTableDraw(doc, startY);
+  }
 
   // Build display rows
   let displayHeader: string[];
@@ -624,13 +870,20 @@ function addTableToPDF(
         data.cell.styles.textColor = COLOR.mutedText;
       }
 
+      // Sub-item rows (units / Rs-per-unit beneath a line item)
+      if (rowM.isSubItem) {
+        data.cell.styles.fontStyle = 'italic';
+        data.cell.styles.textColor = COLOR.mutedText;
+        data.cell.styles.fontSize = 7;
+      }
+
       // Negative values in data columns — text with parentheses is negative
       if (colIdx > 0 && cellText.startsWith('(')) {
         data.cell.styles.textColor = COLOR.negativeText;
       }
 
       // First column: if not section/total, keep normal weight
-      if (colIdx === 0 && !rowM.isSection && !rowM.isTotal && !rowM.isPercent) {
+      if (colIdx === 0 && !rowM.isSection && !rowM.isTotal && !rowM.isPercent && !rowM.isSubItem) {
         data.cell.styles.fontStyle = 'normal';
       }
     },
@@ -687,6 +940,7 @@ async function generateFullPDF(
   paperSize: 'a4' | 'letter',
   coverPage: boolean,
   includeScenarioTitle: boolean,
+  includeCharts: boolean,
 ) {
   const format = paperSize === 'a4' ? 'a4' : 'letter';
   const benefitsPct = settings.employee_benefits_pct || 0;
@@ -726,7 +980,19 @@ async function generateFullPDF(
       const { header, rows, meta } = buildAnnualSummaryRows(
         items, catKey, catLabel, allValues, months, benefitsPct,
       );
-      addTableToPDF(doc, catLabel, fyLabel, header, rows, meta, true);
+
+      // Category chart (when enabled) — drawn above the annual table
+      let preDraw: ((doc: jsPDF, y: number) => number) | undefined;
+      if (includeCharts && CHART_CATEGORIES.has(catKey)) {
+        const monthlyTotals = months.map(m => sumCat(items, catKey, allValues, m));
+        const monthLabels = months.map(m => getMonthLabel(m));
+        preDraw = (doc, y) => drawAreaChart(
+          doc, 15, y, doc.internal.pageSize.getWidth() - 30, 55,
+          monthLabels, monthlyTotals, `${catLabel} \u2014 monthly trend`,
+        );
+      }
+
+      addTableToPDF(doc, catLabel, fyLabel, header, rows, meta, true, preDraw);
     }
   }
 
@@ -781,6 +1047,17 @@ async function generateFullPDF(
         // Add landscape page
         doc.addPage(format, 'landscape');
         let y = addReportHeader(doc, catLabel, fyLabel, 20);
+
+        // Category chart (when enabled) — drawn above the monthly table
+        if (includeCharts && CHART_CATEGORIES.has(catKey)) {
+          const monthlyTotals = months.map(m => sumCat(items, catKey, allValues, m));
+          const monthLabels = months.map(m => getMonthLabel(m));
+          const pageW = doc.internal.pageSize.getWidth();
+          y = drawAreaChart(
+            doc, 15, y, pageW - 30, 50,
+            monthLabels, monthlyTotals, `${catLabel} \u2014 monthly trend`,
+          );
+        }
 
         const displayHeader = header;
         const displayRows = rows.map((row, ri) => {
@@ -907,8 +1184,9 @@ async function generateFullPDF(
           if (rowM.isSection) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = COLOR.sectionBg; }
           if (rowM.isTotal) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = COLOR.accentBg; }
           if (rowM.isPercent) { data.cell.styles.fontStyle = 'italic'; data.cell.styles.textColor = COLOR.mutedText; }
+          if (rowM.isSubItem) { data.cell.styles.fontStyle = 'italic'; data.cell.styles.textColor = COLOR.mutedText; data.cell.styles.fontSize = 7; }
           if (colIdx > 0 && cellText.startsWith('(')) { data.cell.styles.textColor = COLOR.negativeText; }
-          if (colIdx === 0 && !rowM.isSection && !rowM.isTotal && !rowM.isPercent) { data.cell.styles.fontStyle = 'normal'; }
+          if (colIdx === 0 && !rowM.isSection && !rowM.isTotal && !rowM.isPercent && !rowM.isSubItem) { data.cell.styles.fontStyle = 'normal'; }
         },
         margin: { left: 15, right: 15, top: 15 },
       });
@@ -966,8 +1244,9 @@ async function generateFullPDF(
           if (rowM.isSection) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = COLOR.sectionBg; }
           if (rowM.isTotal) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = COLOR.accentBg; }
           if (rowM.isPercent) { data.cell.styles.fontStyle = 'italic'; data.cell.styles.textColor = COLOR.mutedText; }
+          if (rowM.isSubItem) { data.cell.styles.fontStyle = 'italic'; data.cell.styles.textColor = COLOR.mutedText; data.cell.styles.fontSize = 7; }
           if (colIdx > 0 && cellText.startsWith('(')) { data.cell.styles.textColor = COLOR.negativeText; }
-          if (colIdx === 0 && !rowM.isSection && !rowM.isTotal && !rowM.isPercent) { data.cell.styles.fontStyle = 'normal'; }
+          if (colIdx === 0 && !rowM.isSection && !rowM.isTotal && !rowM.isPercent && !rowM.isSubItem) { data.cell.styles.fontStyle = 'normal'; }
         },
         margin: { left: 15, right: 15, top: 15 },
       });
@@ -1025,8 +1304,9 @@ async function generateFullPDF(
           if (rowM.isSection) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = COLOR.sectionBg; }
           if (rowM.isTotal) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = COLOR.accentBg; }
           if (rowM.isPercent) { data.cell.styles.fontStyle = 'italic'; data.cell.styles.textColor = COLOR.mutedText; }
+          if (rowM.isSubItem) { data.cell.styles.fontStyle = 'italic'; data.cell.styles.textColor = COLOR.mutedText; data.cell.styles.fontSize = 7; }
           if (colIdx > 0 && cellText.startsWith('(')) { data.cell.styles.textColor = COLOR.negativeText; }
-          if (colIdx === 0 && !rowM.isSection && !rowM.isTotal && !rowM.isPercent) { data.cell.styles.fontStyle = 'normal'; }
+          if (colIdx === 0 && !rowM.isSection && !rowM.isTotal && !rowM.isPercent && !rowM.isSubItem) { data.cell.styles.fontStyle = 'normal'; }
         },
         margin: { left: 15, right: 15, top: 15 },
       });
@@ -1122,6 +1402,7 @@ export default function DownloadPrintPanel({ open, onClose, items, allValues, mo
         paperSize,
         coverPage,
         includeScenarioTitle,
+        includeCharts,
       );
     } catch (err) {
       console.error('PDF generation error:', err);
