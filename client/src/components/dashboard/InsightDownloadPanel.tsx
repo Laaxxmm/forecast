@@ -116,11 +116,12 @@ const DANGER_TEXT: [number, number, number] = [153, 27, 27];
 
 const GREEN: [number, number, number] = [16, 185, 129];
 const AMBER: [number, number, number] = [245, 158, 11];
-const RED: [number, number, number] = [220, 38, 38];
+const RED: [number, number, number] = [225, 70, 80];   // softened (was 220,38,38 — too alarming)
 const MUTED: [number, number, number] = [148, 163, 184];
 
-/** Classify a percent-of-target into a RAG band.
- *  >=100 green · 80–100 amber · <80 red. */
+/** Classify an end-of-period projection into a RAG band.
+ *  Used for status pills + bar fill colour where actual is final.
+ *  >=100 green · 80-100 amber · <80 red. */
 function pctToRAG(pct: number): 'GREEN' | 'AMBER' | 'RED' {
   if (!isFinite(pct)) return 'RED';
   if (pct >= 100) return 'GREEN';
@@ -131,6 +132,81 @@ function pctToRAG(pct: number): 'GREEN' | 'AMBER' | 'RED' {
 function pctToColor(pct: number): [number, number, number] {
   const r = pctToRAG(pct);
   return r === 'GREEN' ? GREEN : r === 'AMBER' ? AMBER : RED;
+}
+
+/** Pace-aware classifier for MTD progress bars. Compares actual MTD% against the
+ *  expected MTD% (e.g. day 17/30 = 56.7% expected). Coloring partial-period MTD by
+ *  static thresholds (the old behaviour) makes everything look red mid-month even
+ *  when the business is on pace. */
+function paceRAG(actualPct: number, expectedPct: number): 'GREEN' | 'AMBER' | 'RED' {
+  if (!isFinite(actualPct)) return 'RED';
+  if (expectedPct <= 0) return pctToRAG(actualPct);
+  const ratio = actualPct / expectedPct;
+  if (ratio >= 0.95) return 'GREEN';   // at or above expected pace
+  if (ratio >= 0.75) return 'AMBER';   // slipping but recoverable
+  return 'RED';
+}
+
+function paceColor(actualPct: number, expectedPct: number): [number, number, number] {
+  const r = paceRAG(actualPct, expectedPct);
+  return r === 'GREEN' ? GREEN : r === 'AMBER' ? AMBER : RED;
+}
+
+/** Scrub characters jsPDF's WinAnsi-encoded Helvetica can't render. The biggest
+ *  offender is the rupee sign which falls back to a "¹" glyph AND reports zero
+ *  width — that throws off splitTextToSize and causes downstream truncation
+ *  ("Need ¹89,451/day to recover (g..."). Backend-supplied action messages and
+ *  any other untrusted text must pass through this before rendering. */
+function safeText(s: string | undefined | null): string {
+  if (!s) return '';
+  return String(s)
+    .replace(/\u20B9\s*/g, 'Rs. ')   // ₹ → Rs.
+    .replace(/[\u2018\u2019]/g, "'") // smart single quotes → '
+    .replace(/[\u201C\u201D]/g, '"') // smart double quotes → "
+    .replace(/\u2013/g, '-')         // en-dash → hyphen
+    .replace(/\u2014/g, '--')        // em-dash → double hyphen (visually clearer than single)
+    .replace(/\u2026/g, '...')       // ellipsis
+    .replace(/\u00A0/g, ' ')         // nbsp → space
+    .replace(/\u2192/g, '->')        // right arrow → ->
+    .replace(/\u2190/g, '<-');       // left arrow → <-
+}
+
+/** Resolve the stream's primary revenue card. Top-level Revenue/Sales when
+ *  present; otherwise synthesise a stream total by summing all category Revenue
+ *  cards (fixes Clinic where every revenue card has a category and the old
+ *  fallback returned the first "Patients" card). */
+function getStreamPrimary(s: StreamData): CardData | null {
+  const top = s.cards.find(c => c.label === 'Revenue' && !c.category)
+    || s.cards.find(c => c.label === 'Sales');
+  if (top) return top;
+
+  const revCards = s.cards.filter(c => c.label === 'Revenue' && c.target > 0);
+  if (revCards.length > 0) {
+    const sum = (k: keyof CardData) => revCards.reduce((a, c) => a + (c[k] as number || 0), 0);
+    const synth: CardData = {
+      label: 'Revenue',
+      mtd: sum('mtd'),
+      target: sum('target'),
+      projected: sum('projected'),
+      dailyRate: sum('dailyRate'),
+      requiredRate: sum('requiredRate'),
+      lastMonthMtd: sum('lastMonthMtd'),
+      rag: '',
+      unit: 'currency',
+    };
+    const projPct = synth.target > 0 ? (synth.projected / synth.target) * 100 : 0;
+    synth.rag = pctToRAG(projPct);
+    return synth;
+  }
+  return s.cards[0] || null;
+}
+
+/** Draw a small filled circle as a list bullet. Decoupling the bullet from the
+ *  text means we don't depend on the font supporting any unicode bullet glyph
+ *  (the previous ">" prefix looked like terminal output). */
+function drawBullet(doc: jsPDF, x: number, y: number, color: [number, number, number]) {
+  doc.setFillColor(...color);
+  doc.circle(x, y - 1.4, 0.85, 'F');
 }
 
 /* ──────── Visual primitives ──────── */
@@ -194,10 +270,13 @@ function drawProgressBar(
 
   doc.setLineWidth(0.2);
 
-  // "Target" tick label below the 100% mark
-  doc.setFontSize(6.5);
+  // Tick labels above the bar so they don't collide with the MTD/Target row
+  // that sits below.
+  doc.setFontSize(6.4);
+  doc.setFont('helvetica', 'bold');
   doc.setTextColor(...MUTED_TEXT);
-  doc.text('100%', targetX, y + h + 3.8, { align: 'center' });
+  doc.text('TARGET', targetX, y - 2.4, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
 }
 
 function drawMiniBarChart(
@@ -208,36 +287,61 @@ function drawMiniBarChart(
   targetLine?: number
 ) {
   if (values.length === 0) return;
-  const maxVal = Math.max(...values, targetLine || 0) || 1;
+  const peak = Math.max(...values);
+  const maxVal = Math.max(peak, targetLine || 0) || 1;
+  // Reserve a sliver on the left for the y-max label
+  const labelW = 14;
+  const chartX = x + labelW;
+  const chartW = w - labelW;
   const gap = 1.2;
-  const barW = Math.max((w - gap * (values.length - 1)) / values.length, 1);
+  const barW = Math.max((chartW - gap * (values.length - 1)) / values.length, 1);
 
-  // Axis line
+  // Y-axis grid: 0, 50%, 100% of maxVal
   doc.setDrawColor(...BAR_BG);
-  doc.setLineWidth(0.3);
-  doc.line(x, y + h, x + w, y + h);
+  doc.setLineWidth(0.15);
+  doc.line(chartX, y, chartX + chartW, y);                // top (max)
+  doc.line(chartX, y + h / 2, chartX + chartW, y + h / 2); // mid
+  doc.line(chartX, y + h, chartX + chartW, y + h);        // baseline (0)
 
-  // Bars
+  // Y-axis labels
+  doc.setFontSize(6.5);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...MUTED_TEXT);
+  doc.text(fmtRsCompact(maxVal), chartX - 1, y + 1.6, { align: 'right' });
+  doc.text(fmtRsCompact(maxVal / 2), chartX - 1, y + h / 2 + 1.6, { align: 'right' });
+  doc.text('0', chartX - 1, y + h, { align: 'right' });
+
+  // Bars (slightly soft fill, clean stroke)
   for (let i = 0; i < values.length; i++) {
     const v = values[i];
     const bh = (v / maxVal) * h;
-    const bx = x + i * (barW + gap);
+    const bx = chartX + i * (barW + gap);
     const by = y + h - bh;
     doc.setFillColor(...color);
     doc.rect(bx, by, barW, bh, 'F');
   }
 
-  // Target line (dashed-ish — simulate with short segments)
+  // Target line (subtle amber dashed; less alarming than red)
   if (targetLine && targetLine > 0) {
     const ty = y + h - (targetLine / maxVal) * h;
-    doc.setDrawColor(220, 38, 38);
+    doc.setDrawColor(...AMBER);
     doc.setLineWidth(0.3);
-    const step = 2;
-    for (let lx = x; lx < x + w; lx += step * 2) {
-      doc.line(lx, ty, Math.min(lx + step, x + w), ty);
+    const step = 1.6;
+    for (let lx = chartX; lx < chartX + chartW; lx += step * 2) {
+      doc.line(lx, ty, Math.min(lx + step, chartX + chartW), ty);
     }
   }
   doc.setLineWidth(0.2);
+}
+
+/** Compact rupee formatter for axis labels: 1.2L, 84K, etc. */
+function fmtRsCompact(n: number): string {
+  if (!isFinite(n)) return '-';
+  const abs = Math.abs(n);
+  if (abs >= 1e7) return `${(n / 1e7).toFixed(1)}Cr`;
+  if (abs >= 1e5) return `${(n / 1e5).toFixed(1)}L`;
+  if (abs >= 1e3) return `${Math.round(n / 1e3)}K`;
+  return Math.round(n).toString();
 }
 
 function drawRAGPill(doc: jsPDF, rag: string, x: number, y: number, w = 42, h = 6) {
@@ -316,17 +420,20 @@ function drawStatusPill(doc: jsPDF, status: string, x: number, y: number) {
 /** Red callout box for critical issues (WoW drops, margin gaps, etc.). */
 function drawAlertBox(doc: jsPDF, x: number, y: number, w: number, alerts: string[]): number {
   if (alerts.length === 0) return y;
-  const innerW = w - 12;
+  const bulletX = x + 6;
+  const textX = x + 9.5;
+  const innerW = w - (textX - x) - 5;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.5);
-  const wrapped: string[] = [];
-  for (const a of alerts) {
-    const lines = doc.splitTextToSize('>  ' + a, innerW);
-    wrapped.push(...lines);
-  }
+
+  // Pre-wrap each alert into lines so we can position bullets per item (not per wrapped line)
+  const items: string[][] = alerts.map(a => doc.splitTextToSize(safeText(a), innerW));
+  const totalLines = items.reduce((sum, lns) => sum + lns.length, 0);
+
   const headerH = 8;
   const lineH = 4.4;
-  const bodyH = wrapped.length * lineH;
+  const itemGap = 1.2;
+  const bodyH = totalLines * lineH + (items.length - 1) * itemGap;
   const padB = 3.5;
   const h = headerH + bodyH + padB;
 
@@ -345,16 +452,20 @@ function drawAlertBox(doc: jsPDF, x: number, y: number, w: number, alerts: strin
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
   doc.setTextColor(...DANGER_TEXT);
-  doc.text('! CRITICAL ALERTS', x + 5, y + 5.5);
+  doc.text('CRITICAL ALERTS', x + 5, y + 5.5);
 
   // body
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.5);
   doc.setTextColor(...DARK_TEXT);
   let ly = y + headerH + 2.8;
-  for (const line of wrapped) {
-    doc.text(line, x + 5, ly);
-    ly += lineH;
+  for (const lines of items) {
+    drawBullet(doc, bulletX, ly, DANGER_BORDER);
+    for (let i = 0; i < lines.length; i++) {
+      doc.text(lines[i], textX, ly);
+      ly += lineH;
+    }
+    ly += itemGap;
   }
   return y + h + 5;
 }
@@ -374,6 +485,40 @@ function drawInlineBar(doc: jsPDF, x: number, y: number, w: number, pct: number)
     doc.roundedRect(x, y, fillW, h, 1, 1, 'F');
   }
   // over-shoot cap marker
+  if (pct > 100) {
+    doc.setDrawColor(...DARK_TEXT);
+    doc.setLineWidth(0.3);
+    doc.line(x + w, y - 0.5, x + w, y + h + 0.5);
+    doc.setLineWidth(0.2);
+  }
+}
+
+/** Pace-aware variant. Fill colour depends on actual vs expected MTD%, and a
+ *  tick mark on the track shows where the bar SHOULD be at the current point in
+ *  the period — so a 50% bar at day 17/30 reads green (on pace) instead of red. */
+function drawInlineBarPaced(
+  doc: jsPDF, x: number, y: number, w: number, pct: number, expectedPct: number,
+) {
+  const color = paceColor(pct, expectedPct);
+  const h = 2.6;
+  // track
+  doc.setFillColor(...BAR_BG);
+  doc.roundedRect(x, y, w, h, 1, 1, 'F');
+  // fill (capped at 100%)
+  const displayPct = Math.max(0, Math.min(pct, 100));
+  const fillW = (w * displayPct) / 100;
+  if (fillW > 0) {
+    doc.setFillColor(...color);
+    doc.roundedRect(x, y, fillW, h, 1, 1, 'F');
+  }
+  // expected-pace tick mark — only when meaningful (early/mid period)
+  if (expectedPct > 5 && expectedPct < 100) {
+    const tickX = x + (w * Math.min(expectedPct, 100)) / 100;
+    doc.setDrawColor(...DARK_TEXT);
+    doc.setLineWidth(0.4);
+    doc.line(tickX, y - 0.8, tickX, y + h + 0.8);
+    doc.setLineWidth(0.2);
+  }
   if (pct > 100) {
     doc.setDrawColor(...DARK_TEXT);
     doc.setLineWidth(0.3);
@@ -467,9 +612,8 @@ function buildAlerts(data: InsightsData): string[] {
         alerts.push(`${s.name} gross margin is ${margin.mtd}% vs ${margin.target}% forecast — ${Math.abs(delta).toFixed(1)}pp below plan.`);
       }
     }
-    // Primary revenue materially behind target
-    const primary = s.cards.find(c => c.label === 'Revenue' && !c.category)
-      || s.cards.find(c => c.label === 'Sales');
+    // Primary revenue materially behind target (uses synthetic total when needed)
+    const primary = getStreamPrimary(s);
     if (primary && primary.target > 0) {
       const projPct = (primary.projected / primary.target) * 100;
       if (projPct < 70) {
@@ -539,9 +683,7 @@ function buildNarrative(data: InsightsData, variant: ReportVariant): InsightNarr
   const streamInsights: string[] = [];
   for (const s of streams) {
     const isClinic = s.name.toLowerCase().includes('clinic') || s.name.toLowerCase().includes('health');
-    const primary = s.cards.find(c => c.label === 'Revenue' && !c.category)
-      || s.cards.find(c => c.label === 'Sales')
-      || s.cards[0];
+    const primary = getStreamPrimary(s);
     if (!primary) continue;
 
     let para = `${s.name}: `;
@@ -600,7 +742,7 @@ function buildNarrative(data: InsightsData, variant: ReportVariant): InsightNarr
 
   for (const s of streams) {
     // Positive: stream already cleared target
-    const primary = s.cards.find(c => c.label === 'Revenue' && !c.category) || s.cards.find(c => c.label === 'Sales');
+    const primary = getStreamPrimary(s);
     if (primary && primary.target > 0 && primary.mtd >= primary.target) {
       const overshoot = Math.round((primary.mtd / primary.target) * 100);
       observations.push(`${s.name} has already cleared the monthly target (${overshoot}% of ${fmtRs(primary.target)}). Remaining days are pure upside -- protect margin and sustain pace.`);
@@ -686,8 +828,7 @@ function buildNarrative(data: InsightsData, variant: ReportVariant): InsightNarr
   }
 
   for (const s of streams) {
-    const primary = s.cards.find(c => c.label === 'Revenue' && !c.category)
-      || s.cards.find(c => c.label === 'Sales');
+    const primary = getStreamPrimary(s);
     if (!primary || primary.target === 0) continue;
 
     // Only recommend "lift pace" when genuinely behind (mtd < target and required rate is positive).
@@ -710,8 +851,11 @@ function buildNarrative(data: InsightsData, variant: ReportVariant): InsightNarr
 
   for (const a of actions) {
     if (a.severity === 'RED' || a.severity === 'AMBER') {
-      if (!actionList.some(x => x.includes(a.message))) {
-        actionList.push(`${a.severity === 'RED' ? 'PRIORITY' : 'WATCH'}: ${a.message}`);
+      // Backend message contains real ₹ glyphs and unicode dashes — sanitise
+      // before adding so jsPDF wrap/measure doesn't break.
+      const msg = safeText(a.message);
+      if (!actionList.some(x => x.includes(msg))) {
+        actionList.push(`${a.severity === 'RED' ? 'PRIORITY' : 'WATCH'}: ${msg}`);
       }
     }
   }
@@ -720,7 +864,13 @@ function buildNarrative(data: InsightsData, variant: ReportVariant): InsightNarr
     actionList.push('All metrics tracking at or above target -- maintain current operational cadence and continue monitoring.');
   }
 
-  return { executive, streamInsights, observations, actions: actionList, alerts: buildAlerts(data) };
+  return {
+    executive: safeText(executive),
+    streamInsights: streamInsights.map(safeText),
+    observations: observations.map(safeText),
+    actions: actionList.map(safeText),
+    alerts: buildAlerts(data).map(safeText),
+  };
 }
 
 /* ──────── Shared section builders (card-based layout) ──────── */
@@ -775,24 +925,37 @@ function drawExecutiveBlock(
   if (data.combined.targetRevenue > 0) {
     const mtdPct = (data.combined.mtdRevenue / data.combined.targetRevenue) * 100;
     const projPct = (data.combined.projectedRevenue / data.combined.targetRevenue) * 100;
+    const expectedPct = (data.daysElapsed / Math.max(data.daysInMonth, 1)) * 100;
+    const barColor = paceColor(mtdPct, expectedPct);
 
     doc.setFontSize(9.5);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(...DARK_TEXT);
-    doc.text('Combined Revenue — MTD vs Monthly Target', x, y);
-    doc.setTextColor(...pctToColor(mtdPct));
-    doc.text(`${Math.round(mtdPct)}%`, x + w, y, { align: 'right' });
+    doc.text('Combined Revenue -- MTD vs Monthly Target', x, y);
+    doc.setTextColor(...barColor);
+    doc.text(`${Math.round(mtdPct)}% MTD`, x + w, y, { align: 'right' });
+    y += 3;
+
+    // Pace context line above the bar — clarifies what "MTD%" actually means
+    doc.setFontSize(7.8);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...MUTED_TEXT);
+    doc.text(
+      `Day ${data.daysElapsed} of ${data.daysInMonth} -- expected pace ~${Math.round(expectedPct)}%`,
+      x, y
+    );
     y += 2;
 
-    drawProgressBar(doc, x, y, w, 7, mtdPct, projPct, pctToColor(mtdPct));
+    drawProgressBar(doc, x, y, w, 7, mtdPct, projPct, barColor);
     y += 11;
 
+    // Three-up label row: MTD | Projected | Target
     doc.setFontSize(8.8);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(...MUTED_TEXT);
     doc.text(`MTD: ${fmtRs(data.combined.mtdRevenue)}`, x, y);
     doc.text(
-      `Projected EOM: ${fmtRs(data.combined.projectedRevenue)} (${Math.round(projPct)}%)`,
+      `Projected: ${fmtRs(data.combined.projectedRevenue)} (${Math.round(projPct)}%)`,
       x + w / 2, y, { align: 'center' }
     );
     doc.text(`Target: ${fmtRs(data.combined.targetRevenue)}`, x + w, y, { align: 'right' });
@@ -805,7 +968,7 @@ function drawExecutiveBlock(
       const perDay = gap / Math.max(data.daysRemaining, 1);
       doc.setTextColor(...RED);
       doc.text(
-        `Gap to target: ${fmtRs(gap)} — needs ${fmtRs(perDay)}/day for ${data.daysRemaining} days`,
+        `Gap to target: ${fmtRs(gap)} -- needs ${fmtRs(perDay)}/day for ${data.daysRemaining} days`,
         x, y
       );
     } else {
@@ -849,6 +1012,7 @@ function drawStreamSection(
   y: number,
   x: number,
   w: number,
+  expectedPct: number = 100,
 ): number {
   const pageW = doc.internal.pageSize.getWidth();
 
@@ -911,14 +1075,15 @@ function drawStreamSection(
 
     for (const r of rows) {
       y = ensureRoom(doc, y, 10);
+      const color = paceColor(r.mtdPct, expectedPct);
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8.5);
       doc.setTextColor(...DARK_TEXT);
       doc.text(r.label, x, y);
       doc.setFont('helvetica', 'bold');
-      doc.setTextColor(...pctToColor(r.mtdPct));
+      doc.setTextColor(...color);
       doc.text(`${Math.round(r.mtdPct)}%`, x + w, y, { align: 'right' });
-      drawInlineBar(doc, x, y + 1.2, w, r.mtdPct);
+      drawInlineBarPaced(doc, x, y + 1.2, w, r.mtdPct, expectedPct);
       y += 7.5;
     }
     y += 2;
@@ -993,15 +1158,30 @@ function drawObservationsBlock(
   y = ensureRoom(doc, y, 20);
   drawCardTitle(doc, title, x, y, PRIMARY);
   y += 5;
+
+  const bulletX = x + 1.6;
+  const textX = x + 5.4;
+  const innerW = w - (textX - x);
+  const lineH = 4.4;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.setTextColor(...DARK_TEXT);
+
   for (const obs of observations) {
-    y = ensureRoom(doc, y, 10);
-    y = addParagraph(doc, '>  ' + obs, y, { size: 9.5 });
+    const lines = doc.splitTextToSize(safeText(obs), innerW);
+    y = ensureRoom(doc, y, lines.length * lineH + 2);
+    drawBullet(doc, bulletX, y, PRIMARY);
+    for (let i = 0; i < lines.length; i++) {
+      doc.text(lines[i], textX, y);
+      y += lineH;
+    }
     y += 1;
   }
   return y + 3;
 }
 
-/** Numbered action list with colour-coded WATCH/PRIORITY lines. */
+/** Numbered action list with PRIORITY/WATCH prefix pills (no row restyle). */
 function drawActionsBlock(
   doc: jsPDF,
   title: string,
@@ -1010,35 +1190,65 @@ function drawActionsBlock(
   x: number,
   w: number,
 ): number {
+  if (actions.length === 0) return y;
   y = ensureRoom(doc, y, 20);
   drawCardTitle(doc, title, x, y, PRIMARY);
-  y += 4;
+  y += 5;
 
-  const pageW = doc.internal.pageSize.getWidth();
-  autoTable(doc, {
-    startY: y,
-    body: actions.map((r, i) => [String(i + 1), r]),
-    theme: 'plain',
-    styles: { fontSize: 9.5, cellPadding: 2.6, valign: 'top' },
-    columnStyles: {
-      0: { cellWidth: 10, halign: 'center', fontStyle: 'bold', textColor: PRIMARY },
-      1: { cellWidth: 'auto', textColor: DARK_TEXT },
-    },
-    didParseCell: (cell) => {
-      if (cell.section === 'body' && cell.column.index === 1) {
-        const txt = String(cell.cell.raw || '');
-        if (/^(URGENT|PRIORITY)/.test(txt)) {
-          cell.cell.styles.textColor = DANGER_BORDER;
-          cell.cell.styles.fontStyle = 'bold';
-        } else if (/^WATCH/.test(txt)) {
-          cell.cell.styles.textColor = AMBER;
-          cell.cell.styles.fontStyle = 'bold';
-        }
-      }
-    },
-    margin: { left: x, right: pageW - (x + w) },
-  });
-  return (doc as any).lastAutoTable.finalY + 4;
+  const numW = 6;
+  const pillW = 16;          // fixed pill width — keeps text aligned
+  const gap = 2.5;
+  const numX = x + 1.5;
+  const pillX = numX + numW;
+  const textX = pillX + pillW + gap;
+  const innerW = w - (textX - x) - 1;
+  const lineH = 4.5;
+  const itemGap = 1.8;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+
+  for (let i = 0; i < actions.length; i++) {
+    const raw = safeText(actions[i]);
+    let kind: 'PRIORITY' | 'WATCH' | null = null;
+    let body = raw;
+    const m = /^(PRIORITY|URGENT|WATCH):\s*(.*)$/.exec(raw);
+    if (m) {
+      kind = m[1] === 'WATCH' ? 'WATCH' : 'PRIORITY';
+      body = m[2];
+    }
+
+    const lines = doc.splitTextToSize(body, innerW);
+    const blockH = Math.max(lines.length * lineH, 5.4);
+    y = ensureRoom(doc, y, blockH + itemGap);
+
+    // Number
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(...PRIMARY);
+    doc.text(`${i + 1}.`, numX, y);
+
+    // Pill (drawn even if no kind, for alignment — use neutral grey)
+    const pillColor: [number, number, number] = kind === 'PRIORITY' ? RED : kind === 'WATCH' ? AMBER : [148, 163, 184];
+    const pillLabel = kind === 'PRIORITY' ? 'PRIORITY' : kind === 'WATCH' ? 'WATCH' : 'NOTE';
+    doc.setFillColor(...pillColor);
+    doc.roundedRect(pillX, y - 3.4, pillW, 4.6, 1, 1, 'F');
+    doc.setFontSize(7);
+    doc.setTextColor(255, 255, 255);
+    doc.text(pillLabel, pillX + pillW / 2, y - 0.3, { align: 'center' });
+
+    // Body
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(...DARK_TEXT);
+    let ly = y;
+    for (const ln of lines) {
+      doc.text(ln, textX, ly);
+      ly += lineH;
+    }
+    y += blockH + itemGap;
+  }
+  return y + 2;
 }
 
 /** Daily trend bar chart used by weekly + monthly reports. */
@@ -1051,30 +1261,38 @@ function drawDailyTrendBlock(
   w: number,
 ): number {
   if (stream.daily.length === 0) return y;
-  y = ensureRoom(doc, y, 45);
+  y = ensureRoom(doc, y, 48);
 
+  const revs = stream.daily.map(d => d.revenue || 0);
+  const peak = Math.max(...revs, 0);
+  const avg = revs.length > 0 ? revs.reduce((a, b) => a + b, 0) / revs.length : 0;
+  const primary = getStreamPrimary(stream);
+  const dailyTarget = primary && primary.target > 0 ? primary.target / daysInMonth : 0;
+
+  // Header row: title (left) + inline stats (right)
   doc.setFontSize(9.5);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...DARK_TEXT);
-  doc.text(`${stream.name} — Daily Revenue Trend (${stream.daily.length} days)`, x, y);
+  doc.text(`${stream.name} — Daily Revenue Trend`, x, y);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(...MUTED_TEXT);
+  const statsTxt = `${stream.daily.length} days  |  Peak ${fmtRsCompact(peak)}  |  Avg ${fmtRsCompact(avg)}` +
+    (dailyTarget > 0 ? `  |  Target ${fmtRsCompact(dailyTarget)}/day` : '');
+  doc.text(statsTxt, x + w, y, { align: 'right' });
   y += 3;
 
-  const revs = stream.daily.map(d => d.revenue || 0);
-  const primary = stream.cards.find(c => c.label === 'Revenue' && !c.category)
-    || stream.cards.find(c => c.label === 'Sales');
-  const dailyTarget = primary && primary.target > 0 ? primary.target / daysInMonth : 0;
   drawMiniBarChart(doc, x, y, w, 26, revs, PRIMARY, dailyTarget);
   y += 28;
 
+  // X-axis dates (only at chart bounds)
   doc.setFontSize(7.5);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...MUTED_TEXT);
-  doc.text(prettyDate(stream.daily[0].date), x, y);
+  doc.text(prettyDate(stream.daily[0].date), x + 14, y);
   doc.text(prettyDate(stream.daily[stream.daily.length - 1].date), x + w, y, { align: 'right' });
-  if (dailyTarget > 0) {
-    doc.setTextColor(...RED);
-    doc.text(`Red dashed line = daily target ${fmtRs(dailyTarget)}`, x + w / 2, y, { align: 'center' });
-  }
+
   return y + 6;
 }
 
@@ -1238,6 +1456,7 @@ function generateWeeklyPDF(data: InsightsData, clientName: string) {
   const pageW = doc.internal.pageSize.getWidth();
   const INNER_X = 14;
   const INNER_W = pageW - 28;
+  const expectedPct = (data.daysElapsed / Math.max(data.daysInMonth, 1)) * 100;
 
   let y = drawFirstPageChrome(
     doc,
@@ -1261,7 +1480,7 @@ function generateWeeklyPDF(data: InsightsData, clientName: string) {
   for (let idx = 0; idx < data.streams.length; idx++) {
     const stream = data.streams[idx];
     y = ensureRoom(doc, y, 100);
-    y = drawStreamSection(doc, stream, idx, narrative, y, INNER_X, INNER_W);
+    y = drawStreamSection(doc, stream, idx, narrative, y, INNER_X, INNER_W, expectedPct);
     y = drawDailyTrendBlock(doc, stream, data.daysInMonth, y, INNER_X, INNER_W);
   }
 
@@ -1284,6 +1503,7 @@ function generateMonthlyPDF(data: InsightsData, clientName: string) {
   const pageW = doc.internal.pageSize.getWidth();
   const INNER_X = 14;
   const INNER_W = pageW - 28;
+  const expectedPct = (data.daysElapsed / Math.max(data.daysInMonth, 1)) * 100;
 
   let y = drawFirstPageChrome(
     doc,
@@ -1307,7 +1527,7 @@ function generateMonthlyPDF(data: InsightsData, clientName: string) {
   for (let idx = 0; idx < data.streams.length; idx++) {
     const stream = data.streams[idx];
     y = ensureRoom(doc, y, 100);
-    y = drawStreamSection(doc, stream, idx, narrative, y, INNER_X, INNER_W);
+    y = drawStreamSection(doc, stream, idx, narrative, y, INNER_X, INNER_W, expectedPct);
     y = drawDailyTrendBlock(doc, stream, data.daysInMonth, y, INNER_X, INNER_W);
   }
 
