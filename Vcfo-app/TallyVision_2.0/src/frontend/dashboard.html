@@ -42,12 +42,13 @@
             --text-inverse: #ffffff;
             --text-sidebar: #94a3b8;
             --text-sidebar-active: #ffffff;
-            --text-link: #2563eb;
+            --text-link: #059669;
 
-            --accent: #4f46e5;
-            --accent-hover: #4338ca;
-            --accent-light: #eef2ff;
-            --accent-border: #c7d2fe;
+            --accent: #10b981;
+            --accent-hover: #059669;
+            --accent-light: #ecfdf5;
+            --accent-border: #a7f3d0;
+            --accent-gradient: linear-gradient(135deg, #10b981 0%, #059669 100%);
             --accent-green: #059669;
             --accent-green-bg: #ecfdf5;
             --accent-red: #dc2626;
@@ -68,7 +69,7 @@
             --kpi-label: #64748b;
             --kpi-value: #0f172a;
             --kpi-bg: #ffffff;
-            --kpi-bg-highlight: linear-gradient(135deg, #f8faff 0%, #f0f4ff 100%);
+            --kpi-bg-highlight: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
 
             --chart-grid: rgba(226,232,240,0.5);
             --chart-text: #64748b;
@@ -82,8 +83,8 @@
             --scrollbar-thumb: #cbd5e1;
 
             --setup-tab-bg: transparent;
-            --setup-tab-active-border: #4f46e5;
-            --setup-tab-active-text: #4f46e5;
+            --setup-tab-active-border: #10b981;
+            --setup-tab-active-text: #059669;
         }
 
         /* ── Dark Theme ── */
@@ -110,12 +111,13 @@
             --text-inverse: #ffffff;
             --text-sidebar: #64748b;
             --text-sidebar-active: #ffffff;
-            --text-link: #818cf8;
+            --text-link: #34d399;
 
-            --accent: #6366f1;
-            --accent-hover: #818cf8;
-            --accent-light: #1e1b4b;
-            --accent-border: #3730a3;
+            --accent: #34d399;
+            --accent-hover: #10b981;
+            --accent-light: #064e3b;
+            --accent-border: #047857;
+            --accent-gradient: linear-gradient(135deg, #34d399 0%, #10b981 100%);
             --accent-green: #34d399;
             --accent-green-bg: #022c22;
             --accent-red: #f87171;
@@ -145,8 +147,8 @@
             --scrollbar-thumb: #334155;
 
             --setup-tab-bg: transparent;
-            --setup-tab-active-border: #818cf8;
-            --setup-tab-active-text: #818cf8;
+            --setup-tab-active-border: #34d399;
+            --setup-tab-active-text: #34d399;
         }
 
         /* ══════════════════════════════════════════
@@ -180,8 +182,9 @@
             transition: transform 0.15s, box-shadow 0.2s, background 0.3s;
         }
         .kpi-card:hover {
-            transform: translateY(-2px);
+            transform: translateY(-3px);
             box-shadow: var(--shadow-md);
+            border-color: var(--accent-border);
         }
 
         .kpi-card-hero {
@@ -191,11 +194,22 @@
             box-shadow: var(--shadow-md);
             padding: 28px 32px;
             grid-column: span 2;
-            transition: transform 0.15s, box-shadow 0.2s, background 0.3s;
+            position: relative;
+            overflow: hidden;
+            transition: transform 0.2s, box-shadow 0.2s, background 0.3s, border-color 0.3s;
+        }
+        .kpi-card-hero::before {
+            content: '';
+            position: absolute;
+            inset: 0 0 auto 0;
+            height: 3px;
+            background: var(--accent-gradient);
+            opacity: 0.85;
         }
         .kpi-card-hero:hover {
-            transform: translateY(-2px);
+            transform: translateY(-3px);
             box-shadow: var(--shadow-lg);
+            border-color: var(--accent-border);
         }
 
         .kpi-card-lg {
@@ -234,7 +248,7 @@
         .fm-month-cell.has-file:hover { background: #bbf7d0; border-color: #4ade80; }
         [data-theme="dark"] .fm-month-cell.has-file { background: #064e3b; border-color: #065f46; }
         [data-theme="dark"] .fm-month-cell.has-file:hover { background: #065f46; }
-        .fm-month-cell.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(99,102,241,0.2); }
+        .fm-month-cell.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(16,185,129,0.2); }
         .fm-month-cell .fm-month-name { font-size: 0.8rem; font-weight: 600; color: var(--text-primary); }
         .fm-month-cell .fm-month-status { font-size: 0.6rem; margin-top: 4px; color: var(--text-tertiary); }
         .fm-month-cell.has-file .fm-month-status { color: var(--accent-green); }
@@ -276,7 +290,7 @@
             color: var(--text-primary); border-radius: var(--radius-sm); font-size: 0.8rem;
             padding: 5px 10px; cursor: pointer; transition: border-color 0.15s; appearance: auto;
         }
-        .geo-select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(99,102,241,0.15); }
+        .geo-select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(16,185,129,0.15); }
 
         /* ── Sync period preset buttons ── */
         .sync-preset-btn {
@@ -289,7 +303,7 @@
         .sync-preset-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
         .sync-preset-btn.active {
             background: var(--accent); border-color: var(--accent);
-            color: #ffffff; font-weight: 600; box-shadow: 0 2px 6px rgba(99,102,241,0.35);
+            color: #ffffff; font-weight: 600; box-shadow: 0 2px 6px rgba(16,185,129,0.35);
         }
 
         /* ── Batch Sync Cards ── */
@@ -335,7 +349,7 @@
         }
         input:focus, select:focus {
             outline: none; border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
+            box-shadow: 0 0 0 3px rgba(16,185,129,0.12);
         }
 
         /* ── Scrollbar ── */
@@ -433,7 +447,7 @@
             padding: 5px 18px !important; font-size: 0.8rem !important; font-weight: 600 !important;
             background: var(--accent) !important; border: none !important; color: #fff !important;
             border-radius: 6px !important; cursor: pointer; transition: all 0.15s;
-            box-shadow: 0 1px 3px rgba(99,102,241,0.3); font-family: 'Inter', sans-serif; white-space: nowrap;
+            box-shadow: 0 1px 3px rgba(16,185,129,0.3); font-family: 'Inter', sans-serif; white-space: nowrap;
         }
         .lp-btn-apply:hover { background: var(--accent-hover) !important; }
 
@@ -2463,7 +2477,7 @@
                 <div class="grid grid-cols-1 lg:grid-cols-5 gap-5">
                     <!-- LEFT: Client List (3 cols) -->
                     <div class="lg:col-span-3">
-                        <div class="card rounded-xl p-5" style="border-left: 3px solid #6366f1;">
+                        <div class="card rounded-xl p-5" style="border-left: 3px solid var(--accent);">
                             <div class="flex items-center justify-between mb-1">
                                 <h3 class="text-xs font-bold uppercase tracking-wider" style="color: var(--text-primary);">&#128100; Client Dashboard Users</h3>
                             </div>
@@ -2475,7 +2489,7 @@
 
                             <button onclick="showAddClientForm()"
                                 class="w-full py-2.5 rounded-xl text-xs font-medium transition"
-                                style="border: 2px dashed var(--border-main); color: #6366f1; background: transparent;"
+                                style="border: 2px dashed var(--border-main); color: var(--accent); background: transparent;"
                                 onmouseover="this.style.background='var(--bg-body)'" onmouseout="this.style.background='transparent'">
                                 + Add Client User
                             </button>
@@ -2485,7 +2499,7 @@
                     <!-- RIGHT: Add/Edit Client Form (2 cols) -->
                     <div class="lg:col-span-2">
                         <div id="clientFormSection" class="hidden">
-                            <div class="card rounded-xl p-5" style="border-left: 3px solid #6366f1;">
+                            <div class="card rounded-xl p-5" style="border-left: 3px solid var(--accent);">
                                 <h4 id="clientFormTitle" class="text-xs font-bold uppercase tracking-wider mb-4" style="color: var(--text-primary);">Add New Client</h4>
                                 <input type="hidden" id="clientFormId">
 
@@ -2536,7 +2550,7 @@
                                     </div>
                                     <div class="flex gap-2 pt-2">
                                         <button onclick="saveClientUser()"
-                                            class="flex-1 py-2.5 rounded-xl text-xs font-medium text-white transition" style="background: #6366f1;">
+                                            class="flex-1 py-2.5 rounded-xl text-xs font-medium text-white transition" style="background: var(--accent);">
                                             Save Client
                                         </button>
                                         <button onclick="hideClientForm()"
@@ -2873,8 +2887,8 @@
             purple: 'rgba(139, 92, 246, 0.7)',
             cyan: 'rgba(6, 182, 212, 0.7)',
             pink: 'rgba(236, 72, 153, 0.6)',
-            palette: ['#4f46e5', '#059669', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#16a34a', '#ea580c', '#2563eb'],
-            pieColors: ['#4f46e5', '#059669', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#16a34a', '#ea580c', '#2563eb', '#0d9488', '#b45309', '#4338ca', '#be185d', '#0e7490']
+            palette: ['#10b981', '#0d9488', '#059669', '#14b8a6', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#2563eb'],
+            pieColors: ['#10b981', '#059669', '#0d9488', '#14b8a6', '#34d399', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#16a34a', '#ea580c', '#2563eb', '#b45309', '#be185d']
         };
 
         // Register datalabels plugin globally
@@ -5668,7 +5682,7 @@
                 return;
             }
             const featLabels = { overview:'Overview', table_view:'Table View', adjustments:'Adjustments', reports:'Reports' };
-            const featColors = { overview:'#6366f1', table_view:'#0891b2', adjustments:'#7c3aed', reports:'#dc2626' };
+            const featColors = { overview:'#10b981', table_view:'#0891b2', adjustments:'#7c3aed', reports:'#dc2626' };
             container.innerHTML = _clientUsers.map(c => {
                 const feat = c.features || {};
                 const enabledFeats = Object.entries(featLabels).filter(([k]) => k === 'overview' || feat[k]).map(([k,v]) =>
@@ -5683,7 +5697,7 @@
                             <div class="text-xs mt-0.5 truncate" style="color:var(--text-secondary)">${c.companies && c.companies.length ? c.companies.map(co => esc(co.name)).join(', ') : '<span style="color:#f87171">No companies assigned</span>'}</div>
                         </div>
                         <div class="flex gap-1 flex-shrink-0 ml-2">
-                            <button onclick="editClientUser(${c.id})" class="text-xs px-2 py-1 rounded" style="color:#6366f1">Edit</button>
+                            <button onclick="editClientUser(${c.id})" class="text-xs px-2 py-1 rounded" style="color:var(--accent)">Edit</button>
                             <button onclick="deleteClientUser(${c.id}, '${esc(c.username)}')" class="text-xs px-2 py-1 rounded" style="color:#ef4444">Delete</button>
                         </div>
                     </div>
@@ -6893,7 +6907,7 @@
                 { label: 'Total Collections', value: fmt(k.totalCollections), accent: '#3b82f6' },
                 { label: 'Collection Rate', value: k.collectionRate.toFixed(1) + '%', accent: '#14b8a6' },
                 { label: 'Total Orders', value: k.totalOrders.toLocaleString('en-IN'), accent: '#8b5cf6' },
-                { label: 'Unique Patients', value: k.uniquePatients.toLocaleString('en-IN'), accent: '#6366f1' },
+                { label: 'Unique Patients', value: k.uniquePatients.toLocaleString('en-IN'), accent: '#10b981' },
                 { label: 'Avg. Billing', value: fmt(k.avgBillingValue), accent: '#f59e0b' },
                 { label: 'Total Returns', value: k.totalReturns.toLocaleString('en-IN'), accent: '#ef4444' },
                 { label: 'Total Refunds', value: fmt(k.totalRefunds), accent: '#f43f5e' },
@@ -7055,7 +7069,7 @@
                 { label: 'Profit Margin', value: k.profitMarginPct.toFixed(1) + '%', accent: '#3b82f6' },
                 { label: 'Total Qty Sold', value: k.totalQtySold.toLocaleString('en-IN'), accent: '#8b5cf6' },
                 { label: 'Avg Bill Value', value: fmt(k.avgBillValue), accent: '#f59e0b' },
-                { label: 'Unique Bills', value: k.uniqueBills.toLocaleString('en-IN'), accent: '#6366f1' },
+                { label: 'Unique Bills', value: k.uniqueBills.toLocaleString('en-IN'), accent: '#10b981' },
             ];
             document.getElementById('pharmaKpiGrid').innerHTML = cards.map(c => `
                 <div class="analysis-kpi" style="border-left-color: ${c.accent}">
@@ -7232,7 +7246,7 @@
 
         function renderCstkKPIs(k) {
             const cards = [
-                { label: 'Total Stock Value', value: fmt(k.totalStockValue), accent: '#6366f1' },
+                { label: 'Total Stock Value', value: fmt(k.totalStockValue), accent: '#10b981' },
                 { label: 'Purchase Value', value: fmt(k.totalPurchaseValue), accent: '#3b82f6' },
                 { label: 'Margin %', value: k.marginPct.toFixed(1) + '%', accent: '#10b981' },
                 { label: 'Active SKUs', value: k.activeSKUs.toLocaleString('en-IN'), accent: '#8b5cf6' },
@@ -7352,7 +7366,7 @@
                 const pct = max ? (Math.abs(s.stockValue) / max * 100) : 0;
                 return `<div class="expense-bar-item">
                     <span class="expense-bar-label">${name}</span>
-                    <div class="expense-bar-track"><div class="expense-bar-fill" style="width:${pct}%; background:rgba(99,102,241,0.75);"></div></div>
+                    <div class="expense-bar-track"><div class="expense-bar-fill" style="width:${pct}%; background:rgba(16,185,129,0.75);"></div></div>
                     <span class="expense-bar-amount">${fmt(Math.abs(s.stockValue))}</span>
                 </div>`;
             }).join('');
@@ -7386,7 +7400,7 @@
             }
 
             const catColors = [
-                '#6366f1', '#3b82f6', '#14b8a6', '#10b981', '#f59e0b',
+                '#10b981', '#14b8a6', '#3b82f6', '#0d9488', '#f59e0b',
                 '#ef4444', '#8b5cf6', '#ec4899', '#0ea5e9', '#84cc16',
                 '#f97316', '#06b6d4', '#a855f7', '#d946ef', '#64748b'
             ];
@@ -7481,8 +7495,8 @@
             });
             const ctx = canvas.getContext('2d');
             const stockGrad = ctx.createLinearGradient(0, 0, 0, 250);
-            stockGrad.addColorStop(0, 'rgba(99, 102, 241, 0.7)');
-            stockGrad.addColorStop(1, 'rgba(99, 102, 241, 0.3)');
+            stockGrad.addColorStop(0, 'rgba(16, 185, 129, 0.7)');
+            stockGrad.addColorStop(1, 'rgba(16, 185, 129, 0.3)');
             const purchGrad = ctx.createLinearGradient(0, 0, 0, 250);
             purchGrad.addColorStop(0, 'rgba(59, 130, 246, 0.7)');
             purchGrad.addColorStop(1, 'rgba(59, 130, 246, 0.3)');
@@ -9251,7 +9265,7 @@
                 chartCard.classList.remove('hidden');
                 if (TV.chartInstance) { TV.chartInstance.destroy(); TV.chartInstance = null; }
                 const canvas = document.getElementById('tvChart');
-                const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#6366f1';
+                const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#10b981';
 
                 const revData = months.map(m => (data.sections.find(s => s.key === 'revenue')?.totals[m] || 0) + (data.sections.find(s => s.key === 'directIncome')?.totals[m] || 0));
                 const npData = months.map(m => data.computed.netProfit[m] || 0);
@@ -9368,7 +9382,7 @@
                     data: {
                         labels: months.map(m => TV.monthShort(m)),
                         datasets: [
-                            { label: 'Total Assets', data: assetData, backgroundColor: '#6366f140', borderColor: '#6366f1', borderWidth: 1, borderRadius: 4 },
+                            { label: 'Total Assets', data: assetData, backgroundColor: '#10b98140', borderColor: '#10b981', borderWidth: 1, borderRadius: 4 },
                             { label: 'Total Liabilities', data: liabData, backgroundColor: '#f4364540', borderColor: '#f43645', borderWidth: 1, borderRadius: 4 },
                         ]
                     },
@@ -9466,7 +9480,7 @@
                 chartCard.classList.remove('hidden');
                 if (TV.chartInstance) { TV.chartInstance.destroy(); TV.chartInstance = null; }
                 const canvas = document.getElementById('tvChart');
-                const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#6366f1';
+                const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#10b981';
 
                 const cashData = months.map(m => data.closingCash[m] || 0);
 
