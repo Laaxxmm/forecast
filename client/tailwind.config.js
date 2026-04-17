@@ -55,17 +55,54 @@ export default {
         'xl': '12px',
         '2xl': '16px',
         '3xl': '20px',
+        '4xl': '24px',
       },
       boxShadow: {
-        'glow': '0 0 20px rgba(16, 185, 129, 0.15)',
-        'glow-lg': '0 0 40px rgba(16, 185, 129, 0.2)',
+        // Brand glow
+        'glow': '0 0 20px rgba(16, 185, 129, 0.18)',
+        'glow-lg': '0 0 40px rgba(16, 185, 129, 0.22)',
+        'glow-soft': '0 8px 32px -8px rgba(16, 185, 129, 0.35)',
+        // Legacy card shadows (kept for compat)
         'card': '0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2)',
         'card-hover': '0 4px 12px rgba(0, 0, 0, 0.4)',
         'card-light': '0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06)',
         'card-light-hover': '0 4px 12px rgba(0, 0, 0, 0.1)',
+        // New elevation system — layered shadows for proper depth
+        'elev-1': '0 1px 2px 0 rgb(0 0 0 / 0.04), 0 1px 3px 0 rgb(0 0 0 / 0.06)',
+        'elev-2': '0 2px 4px -1px rgb(0 0 0 / 0.05), 0 4px 6px -2px rgb(0 0 0 / 0.04)',
+        'elev-3': '0 4px 8px -2px rgb(0 0 0 / 0.06), 0 12px 24px -4px rgb(0 0 0 / 0.08)',
+        'elev-4': '0 8px 16px -4px rgb(0 0 0 / 0.08), 0 20px 40px -8px rgb(0 0 0 / 0.12)',
+        // Inner highlight for glass surfaces
+        'inner-highlight': 'inset 0 1px 0 0 rgb(255 255 255 / 0.06)',
+        'inner-highlight-light': 'inset 0 1px 0 0 rgb(255 255 255 / 0.8)',
       },
       backgroundImage: {
         'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
+        'gradient-conic': 'conic-gradient(from 180deg at 50% 50%, var(--tw-gradient-stops))',
+        'shimmer': 'linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)',
+        'accent-gradient': 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+        'accent-gradient-soft': 'linear-gradient(135deg, rgba(16,185,129,0.12) 0%, rgba(5,150,105,0.04) 100%)',
+      },
+      backdropBlur: {
+        xs: '2px',
+      },
+      transitionTimingFunction: {
+        'spring': 'cubic-bezier(0.34, 1.56, 0.64, 1)',
+        'smooth': 'cubic-bezier(0.4, 0, 0.2, 1)',
+      },
+      keyframes: {
+        'shimmer': {
+          '0%': { backgroundPosition: '-200% 0' },
+          '100%': { backgroundPosition: '200% 0' },
+        },
+        'float': {
+          '0%, 100%': { transform: 'translateY(0px)' },
+          '50%': { transform: 'translateY(-4px)' },
+        },
+      },
+      animation: {
+        'shimmer': 'shimmer 2s linear infinite',
+        'float': 'float 4s ease-in-out infinite',
       },
     },
   },

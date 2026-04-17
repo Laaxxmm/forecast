@@ -91,7 +91,7 @@ function LayoutInner() {
       >
         {/* Mobile top bar */}
         {isMobile && (
-          <div className="sticky top-0 z-30 flex items-center gap-3 px-4 py-3 bg-dark-800/95 backdrop-blur border-b border-dark-400/30">
+          <div className="sticky top-0 z-30 flex items-center gap-3 px-4 py-3 surface-glass border-b">
             <button
               onClick={() => setMobileOpen(true)}
               className="p-1.5 rounded-lg text-theme-muted hover:text-theme-primary hover:bg-dark-600 transition-colors"
@@ -100,10 +100,10 @@ function LayoutInner() {
               <Menu size={20} />
             </button>
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-accent-500 flex items-center justify-center">
+              <div className="w-7 h-7 rounded-lg bg-accent-gradient flex items-center justify-center shadow-glow ring-1 ring-accent-400/30">
                 <BarChart3 size={14} className="text-white" />
               </div>
-              <span className="text-sm font-bold text-theme-heading">Vision</span>
+              <span className="text-sm font-bold text-theme-heading tracking-tight">Vision</span>
             </div>
           </div>
         )}
@@ -114,7 +114,7 @@ function LayoutInner() {
         <button
           onClick={handleHelp}
           data-tour="help-button"
-          className="fixed bottom-6 right-6 z-30 w-10 h-10 rounded-full bg-accent-500 text-white shadow-lg shadow-accent-500/20 hover:bg-accent-600 hover:scale-110 flex items-center justify-center transition-all"
+          className="fixed bottom-6 right-6 z-30 w-11 h-11 rounded-full bg-accent-gradient text-white shadow-glow-soft hover:scale-110 hover:shadow-glow-lg flex items-center justify-center transition-all duration-200 ring-1 ring-accent-400/30"
           title="Take a guided tour"
         >
           <HelpCircle size={18} />

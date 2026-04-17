@@ -23,33 +23,52 @@ const BAR_COLORS = ['#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#10b981'];
 function KPICard({ title, value, subtitle, icon: Icon, trend, color = 'accent', onClick }: {
   title: string; value: string; subtitle?: string; icon: any; trend?: number; color?: string; onClick?: () => void;
 }) {
-  const colorMap: Record<string, { bg: string; icon: string; glow: string }> = {
-    accent: { bg: 'bg-accent-500/10', icon: 'text-accent-400', glow: 'border-accent-500/20' },
-    blue: { bg: 'bg-blue-500/10', icon: 'text-blue-400', glow: 'border-blue-500/20' },
-    purple: { bg: 'bg-purple-500/10', icon: 'text-purple-400', glow: 'border-purple-500/20' },
-    amber: { bg: 'bg-amber-500/10', icon: 'text-amber-400', glow: 'border-amber-500/20' },
+  const colorMap: Record<string, { gradient: string; iconColor: string; ring: string }> = {
+    accent: {
+      gradient: 'from-accent-500/20 to-accent-500/5',
+      iconColor: 'text-accent-500 dark:text-accent-400',
+      ring: 'ring-accent-500/15',
+    },
+    blue: {
+      gradient: 'from-blue-500/20 to-blue-500/5',
+      iconColor: 'text-blue-600 dark:text-blue-400',
+      ring: 'ring-blue-500/15',
+    },
+    purple: {
+      gradient: 'from-purple-500/20 to-purple-500/5',
+      iconColor: 'text-purple-600 dark:text-purple-400',
+      ring: 'ring-purple-500/15',
+    },
+    amber: {
+      gradient: 'from-amber-500/20 to-amber-500/5',
+      iconColor: 'text-amber-600 dark:text-amber-400',
+      ring: 'ring-amber-500/15',
+    },
   };
   const c = colorMap[color] || colorMap.accent;
 
   return (
-    <div className={`card border ${c.glow}${onClick ? ' cursor-pointer hover:scale-[1.02] transition-transform' : ''}`} onClick={onClick}>
+    <div
+      className={`card-elevated group ${onClick ? 'cursor-pointer' : ''}`}
+      onClick={onClick}
+    >
       <div className="flex items-start justify-between mb-4">
-        <div className={`p-2.5 rounded-xl ${c.bg}`}>
-          <Icon size={20} className={c.icon} />
+        <div className={`p-2.5 rounded-xl bg-gradient-to-br ${c.gradient} ring-1 ${c.ring} transition-transform duration-200 group-hover:scale-105`}>
+          <Icon size={20} className={c.iconColor} />
         </div>
         {trend !== undefined && (
-          <div className={`flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-lg ${
+          <div className={`flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-lg ring-1 ${
             trend >= 0
-              ? 'text-emerald-400 bg-emerald-500/10'
-              : 'text-red-400 bg-red-500/10'
+              ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 ring-emerald-500/20'
+              : 'text-red-600 dark:text-red-400 bg-red-500/10 ring-red-500/20'
           }`}>
             {trend >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
             {trend >= 0 ? '+' : ''}{trend.toFixed(1)}%
           </div>
         )}
       </div>
-      <p className="text-xs text-theme-faint font-medium uppercase tracking-wide">{title}</p>
-      <p className="text-2xl font-bold text-theme-heading mt-1">{value}</p>
+      <p className="text-[11px] text-theme-faint font-semibold uppercase tracking-[0.08em]">{title}</p>
+      <p className="text-2xl font-bold text-theme-heading mt-1.5 tracking-tight">{value}</p>
       {subtitle && <p className="text-xs text-theme-faint mt-2">{subtitle}</p>}
     </div>
   );

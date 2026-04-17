@@ -210,17 +210,24 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
       end={to === '/actuals'}
       title={!expanded ? label : undefined}
       className={({ isActive }) =>
-        `flex items-center gap-3 px-3 py-2.5 text-[13px] font-medium rounded-xl transition-all ${
+        `group relative flex items-center gap-3 px-3 py-2.5 text-[13px] font-medium rounded-xl transition-all duration-150 ${
           expanded ? '' : 'justify-center'
         } ${
           isActive
-            ? 'bg-accent-500/15 text-accent-400 shadow-sm'
-            : 'text-theme-muted hover:bg-dark-600 hover:text-theme-primary'
+            ? 'text-accent-500 bg-gradient-to-r from-accent-500/15 to-accent-500/5'
+            : 'text-theme-muted hover:bg-dark-600/70 hover:text-theme-primary'
         }`
       }
     >
-      <Icon size={17} className="flex-shrink-0" />
-      {expanded && <span className="truncate">{label}</span>}
+      {({ isActive }) => (
+        <>
+          {isActive && (
+            <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-accent-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+          )}
+          <Icon size={17} className={`flex-shrink-0 transition-transform duration-150 ${isActive ? 'scale-105' : 'group-hover:scale-105'}`} />
+          {expanded && <span className="truncate">{label}</span>}
+        </>
+      )}
     </NavLink>
   );
 
@@ -228,8 +235,8 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
     <aside
       className={
         isMobile
-          ? `w-72 bg-dark-800 flex flex-col h-screen fixed left-0 top-0 z-50 border-r border-dark-400/30 shadow-2xl transition-transform duration-300 ease-in-out ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`
-          : `${w} bg-dark-800 flex flex-col min-h-screen fixed left-0 top-0 z-40 border-r border-dark-400/30 transition-all duration-200 ease-in-out overflow-hidden`
+          ? `w-72 surface-glass flex flex-col h-screen fixed left-0 top-0 z-50 border-r shadow-2xl transition-transform duration-300 ease-in-out ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`
+          : `${w} surface-glass flex flex-col min-h-screen fixed left-0 top-0 z-40 border-r transition-all duration-200 ease-in-out overflow-hidden`
       }
       onMouseEnter={isMobile ? undefined : () => onExpandedChange(true)}
       onMouseLeave={isMobile ? undefined : () => { if (!showBranchDropdown) onExpandedChange(false); }}
@@ -237,7 +244,7 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
       {/* Logo */}
       <div className="px-4 py-5 border-b border-dark-400/30 flex-shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-accent-500 flex items-center justify-center flex-shrink-0 overflow-hidden">
+          <div className="w-9 h-9 rounded-xl bg-accent-gradient flex items-center justify-center flex-shrink-0 overflow-hidden shadow-glow ring-1 ring-accent-400/30">
             {platformLogo ? (
               <img src={platformLogo} alt="Vision" className="w-full h-full object-contain p-1" />
             ) : (
