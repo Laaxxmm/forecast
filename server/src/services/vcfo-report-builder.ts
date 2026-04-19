@@ -58,6 +58,10 @@ export interface PLSection {
   /** Per-column values for monthly view, or a single key 'total' for yearly. */
   values: Record<string, number>;
   grandTotal: number;
+  /** If present, this is a parent row — the UI renders an expand toggle and
+   *  shows these child rows (one per Tally account group, own ledgers under
+   *  that category). Leaf sections omit this field. */
+  children?: PLSection[];
 }
 
 export interface PLStatement {
@@ -72,11 +76,9 @@ export interface PLStatement {
   };
   grandTotals: {
     revenue: number;
-    directIncome: number;
-    purchase: number;
-    directExpenses: number;
-    indirectExpenses: number;
+    directCosts: number;
     indirectIncome: number;
+    indirectExpenses: number;
     grossProfit: number;
     netProfit: number;
   };
@@ -403,6 +405,94 @@ function computePLForPeriod(
   };
 }
 
+/**
+ * Per-column group movements for a given group set. Returns
+ * `{ [groupName]: { [col]: movement } }` in credit-positive convention —
+ * callers apply display sign (flip for expense sides).
+ */
+function getGroupMovementsByColumn(
+  db: DbHelper,
+  companyId: number,
+  groupNames: Set<string>,
+  columns: string[],
+  columnRange: (col: string) => { from: string; to: string },
+): Map<string, Record<string, number>> {
+  const out = new Map<string, Record<string, number>>();
+  if (groupNames.size === 0) return out;
+  const ph = [...groupNames].map(() => '?').join(',');
+  for (const col of columns) {
+    const { from, to } = columnRange(col);
+    const rows = db.all(
+      `SELECT group_name,
+              SUM(net_credit) - SUM(net_debit) AS movement
+       FROM vcfo_trial_balance
+       WHERE company_id = ? AND period_from >= ? AND period_to <= ?
+         AND group_name IN (${ph})
+       GROUP BY group_name`,
+      [companyId, from, to, ...groupNames],
+    );
+    for (const r of rows) {
+      const mv = Number(r.movement) || 0;
+      if (!out.has(r.group_name)) out.set(r.group_name, {});
+      out.get(r.group_name)![col] = mv;
+    }
+  }
+  return out;
+}
+
+/**
+ * Build a parent P&L section from a set of Tally account groups. Emits one
+ * child row per group that had nonzero movement in the window, sorted by
+ * absolute contribution desc. Applies display sign (expense sides flip so
+ * costs show as positive on screen).
+ */
+function buildPLSectionWithChildren(
+  db: DbHelper,
+  companyId: number,
+  key: string,
+  label: string,
+  isExpense: boolean,
+  displaySign: 1 | -1,
+  groupSet: Set<string>,
+  columns: string[],
+  columnRange: (col: string) => { from: string; to: string },
+): PLSection {
+  const parentValues: Record<string, number> = {};
+  for (const c of columns) parentValues[c] = 0;
+
+  const raw = getGroupMovementsByColumn(db, companyId, groupSet, columns, columnRange);
+  const children: PLSection[] = [];
+  for (const [groupName, perCol] of raw.entries()) {
+    const values: Record<string, number> = {};
+    let grandTotal = 0;
+    for (const c of columns) {
+      const v = (perCol[c] || 0) * displaySign;
+      values[c] = v;
+      grandTotal += v;
+      parentValues[c] += v;
+    }
+    if (Math.abs(grandTotal) < 0.01) continue; // skip dormant groups
+    children.push({
+      key: `${key}:${groupName}`,
+      label: groupName,
+      isExpense,
+      values,
+      grandTotal,
+    });
+  }
+  children.sort((a, b) => Math.abs(b.grandTotal) - Math.abs(a.grandTotal));
+
+  const parentGrandTotal = columns.reduce((s, c) => s + parentValues[c], 0);
+  return {
+    key,
+    label,
+    isExpense,
+    values: parentValues,
+    grandTotal: parentGrandTotal,
+    children,
+  };
+}
+
 export function buildProfitLoss(
   db: DbHelper,
   companyId: number,
@@ -411,66 +501,58 @@ export function buildProfitLoss(
   view: 'yearly' | 'monthly' = 'yearly',
 ): PLStatement {
   const sets = buildPLGroupSets(db, companyId);
-  const salesGroups = new Set(getGroupTree(db, companyId, 'Sales Accounts'));
-  const purchaseGroups = new Set(getGroupTree(db, companyId, 'Purchase Accounts'));
-
-  const sectionDefs = [
-    { key: 'revenue',          label: 'Revenue (Sales)',   field: 'revenue' as const,          isExpense: false },
-    { key: 'directIncome',     label: 'Direct Income',     field: 'directIncome' as const,     isExpense: false },
-    { key: 'purchase',         label: 'COGS (Purchase)',   field: 'purchase' as const,         isExpense: true },
-    { key: 'directExpenses',   label: 'Direct Expenses',   field: 'directExpenses' as const,   isExpense: true },
-    { key: 'indirectIncome',   label: 'Indirect Income',   field: 'indirectIncome' as const,   isExpense: false },
-    { key: 'indirectExpenses', label: 'Indirect Expenses', field: 'indirectExpenses' as const, isExpense: true },
-  ];
-
   const columns = view === 'monthly' ? monthsInRange(from, to) : ['total'];
+  const columnRange = (col: string): { from: string; to: string } =>
+    view === 'monthly' ? monthRange(col) : { from, to };
 
-  // Compute each column once, then project each section out.
-  const columnData: Record<string, ReturnType<typeof computePLForPeriod>> = {};
-  if (view === 'monthly') {
-    for (const month of columns) {
-      const mr = monthRange(month);
-      columnData[month] = computePLForPeriod(db, companyId, mr.from, mr.to, sets, salesGroups, purchaseGroups);
-    }
-  } else {
-    columnData.total = computePLForPeriod(db, companyId, from, to, sets, salesGroups, purchaseGroups);
-  }
+  // Four top-level sections. Revenue + Direct Costs are gross-profit drivers;
+  // Indirect Income + Indirect Expenses cascade into net profit.
+  //
+  // displaySign flips the credit-positive raw movement into a display-positive
+  // number for expense sections (so "Direct Costs" and "Indirect Expenses"
+  // show as positive on screen, matching mgmt-reporting convention).
+  const revenue = buildPLSectionWithChildren(
+    db, companyId, 'revenue', 'Revenue', false, +1,
+    sets.directCredit, columns, columnRange,
+  );
+  const directCosts = buildPLSectionWithChildren(
+    db, companyId, 'directCosts', 'Direct Costs', true, -1,
+    sets.directDebit, columns, columnRange,
+  );
+  const indirectIncome = buildPLSectionWithChildren(
+    db, companyId, 'indirectIncome', 'Indirect Income', false, +1,
+    sets.indirectCredit, columns, columnRange,
+  );
+  const indirectExpenses = buildPLSectionWithChildren(
+    db, companyId, 'indirectExpenses', 'Indirect Expenses', true, -1,
+    sets.indirectDebit, columns, columnRange,
+  );
 
-  const sections: PLSection[] = sectionDefs.map(def => {
-    const values: Record<string, number> = {};
-    let grandTotal = 0;
-    for (const col of columns) {
-      const v = columnData[col][def.field] || 0;
-      values[col] = v;
-      grandTotal += v;
-    }
-    return { key: def.key, label: def.label, isExpense: def.isExpense, values, grandTotal };
-  });
+  const sections: PLSection[] = [revenue, directCosts, indirectIncome, indirectExpenses];
 
+  // Gross Profit / Margin / Net Profit per column.
+  // Stock adjustment (opening - closing) is folded into GP the same way as
+  // the pre-refactor builder — closing stock still on hand reduces COGS.
   const grossProfit: Record<string, number> = {};
   const grossMargin: Record<string, number> = {};
   const netProfit: Record<string, number> = {};
   let gpGrand = 0, npGrand = 0;
-  for (const col of columns) {
-    const cd = columnData[col];
-    const revPlusDI = cd.revenue + cd.directIncome;
-    grossProfit[col] = cd.grossProfit;
-    grossMargin[col] = revPlusDI !== 0 ? Math.round((cd.grossProfit / revPlusDI) * 10000) / 100 : 0;
-    netProfit[col] = cd.netProfit;
-    gpGrand += cd.grossProfit;
-    npGrand += cd.netProfit;
-  }
 
-  const grandTotals = {
-    revenue: sections[0].grandTotal,
-    directIncome: sections[1].grandTotal,
-    purchase: sections[2].grandTotal,
-    directExpenses: sections[3].grandTotal,
-    indirectIncome: sections[4].grandTotal,
-    indirectExpenses: sections[5].grandTotal,
-    grossProfit: gpGrand,
-    netProfit: npGrand,
-  };
+  for (const col of columns) {
+    const { from: cf, to: ct } = columnRange(col);
+    const stock = getStockAdjustment(db, companyId, cf, ct);
+    const rev = revenue.values[col] || 0;
+    const dc = directCosts.values[col] || 0;      // positive (expense)
+    const ii = indirectIncome.values[col] || 0;
+    const ie = indirectExpenses.values[col] || 0; // positive (expense)
+    const gp = rev - dc + stock.adjustment;
+    const np = gp + ii - ie;
+    grossProfit[col] = gp;
+    grossMargin[col] = rev !== 0 ? Math.round((gp / rev) * 10000) / 100 : 0;
+    netProfit[col] = np;
+    gpGrand += gp;
+    npGrand += np;
+  }
 
   return {
     period: { from, to },
@@ -478,7 +560,14 @@ export function buildProfitLoss(
     columns,
     sections,
     computed: { grossProfit, grossMargin, netProfit },
-    grandTotals,
+    grandTotals: {
+      revenue: revenue.grandTotal,
+      directCosts: directCosts.grandTotal,
+      indirectIncome: indirectIncome.grandTotal,
+      indirectExpenses: indirectExpenses.grandTotal,
+      grossProfit: gpGrand,
+      netProfit: npGrand,
+    },
   };
 }
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ChevronRight, ChevronDown } from 'lucide-react';
 import api from '../../api/client';
 import { formatRs, getMonthLabel } from '../../pages/ForecastModulePage';
 
@@ -8,6 +9,7 @@ interface PLSection {
   isExpense: boolean;
   values: Record<string, number>;
   grandTotal: number;
+  children?: PLSection[];
 }
 
 interface PLStatement {
@@ -22,11 +24,9 @@ interface PLStatement {
   };
   grandTotals: {
     revenue: number;
-    directIncome: number;
-    purchase: number;
-    directExpenses: number;
-    indirectExpenses: number;
+    directCosts: number;
     indirectIncome: number;
+    indirectExpenses: number;
     grossProfit: number;
     netProfit: number;
   };
@@ -43,6 +43,7 @@ export default function ProfitLossReport({ companyId, from, to, view }: Props) {
   const [data, setData] = useState<PLStatement | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!companyId) {
@@ -80,10 +81,73 @@ export default function ProfitLossReport({ companyId, from, to, view }: Props) {
   const { columns, sections, computed, view: reportView } = data;
   const labelFor = (col: string) => (reportView === 'monthly' ? getMonthLabel(col) : 'Total');
 
-  const rowClasses = (isExpense: boolean) =>
-    isExpense
-      ? 'text-rose-300'
-      : 'text-emerald-300';
+  const rowTextColor = (isExpense: boolean) =>
+    isExpense ? 'text-rose-300' : 'text-emerald-300';
+
+  const toggle = (key: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const renderRow = (section: PLSection, depth: number) => {
+    const hasChildren = !!(section.children && section.children.length > 0);
+    const isOpen = expanded.has(section.key);
+    const paddingLeft = 16 + depth * 20;
+    const isParent = depth === 0;
+
+    return (
+      <>
+        <tr
+          key={section.key}
+          className={`border-b border-dark-400/20 transition-colors ${
+            hasChildren ? 'cursor-pointer hover:bg-dark-600/40' : 'hover:bg-dark-600/20'
+          }`}
+          onClick={hasChildren ? () => toggle(section.key) : undefined}
+        >
+          <td
+            className={`py-2 sticky left-0 bg-dark-800 ${
+              isParent ? 'font-semibold' : 'font-normal text-[13px]'
+            } ${rowTextColor(section.isExpense)}`}
+            style={{ paddingLeft, paddingRight: 16 }}
+          >
+            <span className="inline-flex items-center gap-1.5">
+              {hasChildren ? (
+                isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />
+              ) : (
+                <span style={{ width: 14, display: 'inline-block' }} />
+              )}
+              {section.label}
+            </span>
+          </td>
+          {columns.map(c => (
+            <td
+              key={c}
+              className={`px-4 py-2 text-right font-mono ${
+                isParent ? 'font-semibold' : 'font-normal text-[13px]'
+              } ${rowTextColor(section.isExpense)}`}
+            >
+              {formatRs(section.values[c] || 0)}
+            </td>
+          ))}
+          {reportView === 'monthly' && (
+            <td
+              className={`px-4 py-2 text-right font-mono ${
+                isParent ? 'font-semibold' : 'font-normal text-[13px]'
+              } ${rowTextColor(section.isExpense)}`}
+            >
+              {formatRs(section.grandTotal)}
+            </td>
+          )}
+        </tr>
+        {hasChildren && isOpen &&
+          section.children!.map(child => renderRow(child, depth + 1))}
+      </>
+    );
+  };
 
   return (
     <div className="bg-dark-800 border border-dark-400/30 rounded-2xl shadow-elev-2 overflow-hidden">
@@ -109,29 +173,7 @@ export default function ProfitLossReport({ companyId, from, to, view }: Props) {
             </tr>
           </thead>
           <tbody>
-            {sections.map(section => (
-              <tr
-                key={section.key}
-                className="border-b border-dark-400/20 hover:bg-dark-600/30 transition-colors"
-              >
-                <td className={`px-4 py-2 font-medium sticky left-0 bg-dark-800 ${rowClasses(section.isExpense)}`}>
-                  {section.label}
-                </td>
-                {columns.map(c => (
-                  <td
-                    key={c}
-                    className={`px-4 py-2 text-right font-mono ${rowClasses(section.isExpense)}`}
-                  >
-                    {formatRs(section.values[c] || 0)}
-                  </td>
-                ))}
-                {reportView === 'monthly' && (
-                  <td className={`px-4 py-2 text-right font-mono font-semibold ${rowClasses(section.isExpense)}`}>
-                    {formatRs(section.grandTotal)}
-                  </td>
-                )}
-              </tr>
-            ))}
+            {sections.map(section => renderRow(section, 0))}
 
             {/* Gross Profit line */}
             <tr className="bg-dark-700/50 border-b border-accent-500/30">
