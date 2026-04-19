@@ -46,6 +46,26 @@ function resolveCompanyId(db: DbHelper, companyName: string): number | null {
   return result.lastInsertRowid ?? null;
 }
 
+/**
+ * Stamp `last_full_sync_at` whenever any batch lands for a company so the
+ * `/api/vcfo/companies` endpoint can (a) filter out seed/ghost rows that
+ * have never received data and (b) order by "most recently active" for
+ * auto-selection in the UI. Called on every batch (not just `companies`
+ * pushes) because a Trial Balance or ledgers push is equally a sign of
+ * "this company is live".
+ */
+function bumpLastSyncedAt(db: DbHelper, companyId: number): void {
+  try {
+    db.run(
+      `UPDATE vcfo_companies SET last_full_sync_at = datetime('now') WHERE id = ?`,
+      companyId,
+    );
+  } catch {
+    // Non-fatal — older tenant DBs that haven't run the ALTER migration
+    // will throw "no such column" here; don't let that block the ingest.
+  }
+}
+
 function ingestCompanies(db: DbHelper, rows: any[]): number {
   let n = 0;
   db.beginBatch();
@@ -292,6 +312,16 @@ router.post('/batch', requireAgentKey, (req: Request, res: Response) => {
 
     if (kind === 'companies') {
       accepted = ingestCompanies(req.tenantDb, rows);
+      // Stamp every company we just accepted so seed/ghost rows get filtered
+      // out of the UI dropdown once their first real data lands.
+      for (const r of rows) {
+        if (!r?.name) continue;
+        const row = req.tenantDb.get(
+          'SELECT id FROM vcfo_companies WHERE name = ?',
+          String(r.name).trim(),
+        );
+        if (row?.id) bumpLastSyncedAt(req.tenantDb, row.id);
+      }
     } else if (
       kind === 'ledgers' ||
       kind === 'vouchers' ||
@@ -311,6 +341,9 @@ router.post('/batch', requireAgentKey, (req: Request, res: Response) => {
       else if (kind === 'groups') accepted = ingestGroups(req.tenantDb, companyId, rows);
       else if (kind === 'stockSummary') accepted = ingestStockSummary(req.tenantDb, companyId, rows);
       else accepted = ingestTrialBalance(req.tenantDb, companyId, rows);
+      // Any successful child-entity push marks this company as "active" so
+      // the UI auto-selection picks the most recently touched one.
+      if (accepted > 0) bumpLastSyncedAt(req.tenantDb, companyId);
     } else {
       return res.status(400).json({ error: `Unknown kind: ${kind}` });
     }

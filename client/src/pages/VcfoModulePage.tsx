@@ -46,6 +46,7 @@ export default function VcfoModulePage() {
   const [viewMode, setViewMode] = useState<'monthly' | 'yearly'>('yearly');
   const [companies, setCompanies] = useState<VcfoCompany[]>([]);
   const [companiesLoading, setCompaniesLoading] = useState(false);
+  const [companiesError, setCompaniesError] = useState<string | null>(null);
   const [selectedCompanyId, setSelectedCompanyId] = useState<number | null>(null);
   const [activeReportKey, setActiveReportKey] = useState<ReportKey>(detectActiveReportKey());
 
@@ -72,23 +73,34 @@ export default function VcfoModulePage() {
     });
   }, []);
 
-  // Load companies (re-loads when branch/stream context changes; we can't
-  // easily observe localStorage, so just reload when the user changes FY or
-  // the page mounts).
+  // Load companies. The server now returns only companies that have actually
+  // received data from the sync-agent (seed/ghost rows are filtered out) and
+  // orders them by most-recent sync first, so auto-picking `data[0]` lands
+  // the user on the company they most recently worked with — no dropdown
+  // interaction required before the report renders.
   useEffect(() => {
     setCompaniesLoading(true);
+    setCompaniesError(null);
     api
       .get('/vcfo/companies')
       .then(res => {
-        setCompanies(res.data || []);
-        if (res.data?.length > 0 && selectedCompanyId == null) {
-          setSelectedCompanyId(res.data[0].id);
-        } else if (res.data?.length > 0 && !res.data.find((c: VcfoCompany) => c.id === selectedCompanyId)) {
-          // If current selection is no longer in the visible set (e.g. branch switched), pick the first.
-          setSelectedCompanyId(res.data[0].id);
+        const list: VcfoCompany[] = res.data || [];
+        setCompanies(list);
+        if (list.length === 0) {
+          setSelectedCompanyId(null);
+        } else if (selectedCompanyId == null || !list.find(c => c.id === selectedCompanyId)) {
+          // First load OR current selection is no longer in the visible set
+          // (e.g. branch just switched) — auto-pick the most recently synced.
+          setSelectedCompanyId(list[0].id);
         }
       })
-      .catch(() => setCompanies([]))
+      .catch(err => {
+        setCompanies([]);
+        setSelectedCompanyId(null);
+        setCompaniesError(
+          err?.response?.data?.error || err?.message || 'Failed to load companies',
+        );
+      })
       .finally(() => setCompaniesLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -236,7 +248,7 @@ export default function VcfoModulePage() {
               <ChevronRight size={14} />
             </button>
           </div>
-          {selectedCompany && (
+          {selectedCompany && companies.length > 1 && (
             <span className="text-xs font-medium text-accent-400 bg-accent-500/10 px-2.5 py-1 rounded-lg ml-3">
               {selectedCompany.name}
             </span>
@@ -246,12 +258,21 @@ export default function VcfoModulePage() {
 
       {/* Route Content */}
       <div className="mt-4 md:mt-6">
-        {companies.length === 0 && !companiesLoading ? (
+        {companiesLoading ? (
           <div className="bg-dark-800 border border-dark-400/30 rounded-2xl p-10 text-center">
-            <p className="text-theme-muted mb-2 font-medium">No companies synced yet.</p>
+            <p className="text-theme-muted">Loading…</p>
+          </div>
+        ) : companiesError ? (
+          <div className="bg-dark-800 border border-red-500/30 rounded-2xl p-10 text-center">
+            <p className="text-red-400 mb-2 font-medium">Couldn't load companies.</p>
+            <p className="text-sm text-theme-faint">{companiesError}</p>
+          </div>
+        ) : companies.length === 0 ? (
+          <div className="bg-dark-800 border border-dark-400/30 rounded-2xl p-10 text-center">
+            <p className="text-theme-muted mb-2 font-medium">No data synced yet.</p>
             <p className="text-sm text-theme-faint">
               Install the VCFO Sync desktop agent and point it at your Tally ERP. Once a sync completes,
-              companies appear here automatically.
+              reports appear here automatically.
             </p>
           </div>
         ) : (

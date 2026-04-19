@@ -70,12 +70,22 @@ async function listAccessibleCompanies(req: Request): Promise<Array<{
   const activeBranchId = req.branchMode === 'specific' ? req.branchId : null;
   const activeStreamId = req.streamMode === 'specific' ? req.streamId : null;
 
-  // Pull all active companies from the tenant DB
+  // Pull companies that have actually received data from the sync-agent.
+  // `last_full_sync_at IS NOT NULL` excludes the seed/ghost row that
+  // `ensureVcfoForSlug` plants on tenant creation (it carries the client
+  // display name, e.g. "MagnaCode Healthcare", which is NOT a real Tally
+  // company). Ordering by `last_full_sync_at DESC` means the UI's default
+  // auto-selection lands on the company the user most recently worked with
+  // — no "pick a company to see anything" friction on page load.
+  //
+  // Tie-breaker by name keeps results stable when two companies happened
+  // to be synced in the same second.
   const companies = db.all(
     `SELECT id, name, location, entity_type, last_full_sync_at
      FROM vcfo_companies
      WHERE is_active = 1
-     ORDER BY name`,
+       AND last_full_sync_at IS NOT NULL
+     ORDER BY last_full_sync_at DESC, name ASC`,
   ) as Array<{ id: number; name: string; location: string; entity_type: string; last_full_sync_at: string }>;
 
   if (companies.length === 0) return [];

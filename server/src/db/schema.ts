@@ -404,6 +404,33 @@ export function initializeSchema(db: DbHelper) {
     try { db.exec(sql); } catch { /* column already exists */ }
   }
 
+  // ── vcfo_companies.last_full_sync_at backfill ─────────────────────────────
+  // The `/api/vcfo/companies` endpoint filters by `last_full_sync_at IS NOT
+  // NULL` so the seed/ghost row planted by `ensureVcfoForSlug` (e.g. a
+  // placeholder row named after the tenant itself) drops out of the picker.
+  // Tenants that were synced before that column started being bumped on
+  // every batch still have NULL on real companies — backfill by stamping
+  // any company that has at least one row in a child table (ledgers, trial
+  // balance, groups, vouchers, stock summary). Safe to re-run: the
+  // predicate skips rows that already have a timestamp.
+  try {
+    db.exec(`
+      UPDATE vcfo_companies
+      SET last_full_sync_at = datetime('now')
+      WHERE last_full_sync_at IS NULL
+        AND id IN (
+          SELECT DISTINCT company_id FROM vcfo_ledgers
+          UNION SELECT DISTINCT company_id FROM vcfo_trial_balance
+          UNION SELECT DISTINCT company_id FROM vcfo_account_groups
+          UNION SELECT DISTINCT company_id FROM vcfo_vouchers
+          UNION SELECT DISTINCT company_id FROM vcfo_stock_summary
+        );
+    `);
+  } catch {
+    // Any of the child tables may not exist yet on a fresh tenant; swallow
+    // and let the normal ingest path stamp timestamps going forward.
+  }
+
   // ── dashboard_actuals UNIQUE fix ───────────────────────────────────────────
   // The original table definition had UNIQUE(scenario_id, category, item_name,
   // month) — branch_id NOT in the key. Consequence: any multi-branch client's
