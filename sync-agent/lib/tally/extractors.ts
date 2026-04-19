@@ -58,6 +58,25 @@ export interface StockSummaryRow {
   closingQty: number;
   closingValue: number;
 }
+export interface TrialBalanceRow {
+  /** Window this row describes (inclusive, YYYY-MM-DD). Canonical quarter
+   *  boundaries — see quarterChunks() — so repeated syncs collapse via
+   *  UNIQUE(company_id, period_from, period_to, ledger_name) + REPLACE. */
+  periodFrom: string;
+  periodTo: string;
+  ledgerName: string;
+  /** Parent group name from Tally (e.g. "Sundry Debtors"). Used by the
+   *  server to classify ledgers BS vs PL when joining to vcfo_account_groups. */
+  groupName?: string;
+  /** Credit-positive convention (matches TallyVision's historic output):
+   *   openingBalance = -NumValue if IsDebit else +NumValue
+   *   closingBalance same rule
+   *   netDebit / netCredit are raw magnitudes from DebitTotals / CreditTotals. */
+  openingBalance: number;
+  netDebit: number;
+  netCredit: number;
+  closingBalance: number;
+}
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -477,6 +496,100 @@ export async function extractStockSummary(
         outwardValue: parseAmount(r.F08),
         closingQty: parseAmount(r.F09),
         closingValue: parseAmount(r.F10),
+      });
+    }
+  }
+  return out;
+}
+
+// ── Trial balance ───────────────────────────────────────────────────────────
+// Ports TEMPLATES['trial-balance'] from the retired TallyVision codebase.
+// One row per Ledger with opening / debit-totals / credit-totals / closing for
+// the [fromDate, toDate] window. This is the primary data source every VCFO
+// financial report (TB / P&L / BS / CF) derives from — without it the server
+// has only vouchers (activity) and no account-level net balances.
+//
+// Debit-sign correction: Tally stores opening/closing as unsigned magnitudes
+// with a separate $IsDebit flag. We negate the magnitude when IsDebit is
+// true so the stored number is credit-positive (expense/asset ledgers come
+// out negative, income/liability ledgers positive). The server's report
+// builders assume credit-positive and roll up accordingly.
+//
+// Chunking: same Indian-FY quarter strategy as stockSummary. SVFROMDATE/
+// SVTODATE narrow the Ledger-collection query to one quarter at a time so a
+// multi-year window doesn't timeout at 30s. Per-quarter failures are logged
+// and swallowed — a fresh company with no ledger entries in a given quarter
+// should not abort the whole pull.
+
+function tdlTrialBalance(fromDate: string, toDate: string): string {
+  return `<?xml version="1.0" encoding="utf-8"?>
+<ENVELOPE>
+<HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>TVTB</ID></HEADER>
+<BODY><DESC>
+<STATICVARIABLES>
+<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVFROMDATE>${formatTallyDate(fromDate)}</SVFROMDATE>
+<SVTODATE>${formatTallyDate(toDate)}</SVTODATE>
+</STATICVARIABLES>
+<TDL><TDLMESSAGE>
+<REPORT NAME="TVTB"><FORMS>TVTBF</FORMS></REPORT>
+<FORM NAME="TVTBF"><PARTS>TVTBP</PARTS><XMLTAG>DATA</XMLTAG></FORM>
+<PART NAME="TVTBP"><LINES>L1</LINES><REPEAT>L1:C1</REPEAT><SCROLLED>Vertical</SCROLLED></PART>
+<LINE NAME="L1"><FIELDS>F01,F02,F03,F04,F05,F06</FIELDS><XMLTAG>ROW</XMLTAG></LINE>
+<FIELD NAME="F01"><SET>$Name</SET><XMLTAG>F01</XMLTAG></FIELD>
+<FIELD NAME="F02"><SET>$Parent</SET><XMLTAG>F02</XMLTAG></FIELD>
+<FIELD NAME="F03"><SET>if $$IsDebit:$OpeningBalance then -$$NumValue:$OpeningBalance else $$NumValue:$OpeningBalance</SET><XMLTAG>F03</XMLTAG></FIELD>
+<FIELD NAME="F04"><SET>$$NumValue:$DebitTotals</SET><XMLTAG>F04</XMLTAG></FIELD>
+<FIELD NAME="F05"><SET>$$NumValue:$CreditTotals</SET><XMLTAG>F05</XMLTAG></FIELD>
+<FIELD NAME="F06"><SET>if $$IsDebit:$ClosingBalance then -$$NumValue:$ClosingBalance else $$NumValue:$ClosingBalance</SET><XMLTAG>F06</XMLTAG></FIELD>
+<COLLECTION NAME="C1"><TYPE>Ledger</TYPE></COLLECTION>
+</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
+}
+
+/**
+ * Extract trial-balance rows for [fromDate, toDate], fanned out across
+ * Indian-FY quarters. Ledgers that have no activity in a given quarter
+ * still get a row (opening == closing, debits == credits == 0) so the
+ * server can render a complete account list even for dormant ledgers.
+ *
+ * Per-quarter errors are swallowed and logged — a fresh company with no
+ * Ledger records, or a quarter where Tally returns an empty envelope,
+ * must not abort the whole multi-quarter pull.
+ */
+export async function extractTrialBalance(
+  conn: TallyConnector,
+  companyName: string,
+  fromDate: string,
+  toDate: string,
+): Promise<TrialBalanceRow[]> {
+  if (!companyName) throw new Error('companyName required for extractTrialBalance');
+  const chunks = quarterChunks(fromDate, toDate);
+  const out: TrialBalanceRow[] = [];
+  for (const { periodFrom, periodTo, queryFrom, queryTo } of chunks) {
+    let rows: any[] = [];
+    try {
+      const raw = await conn.sendXML(tdlTrialBalance(queryFrom, queryTo));
+      rows = rowsFromReport(raw);
+    } catch (err: any) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[tally] trialBalance quarter ${periodFrom}..${periodTo} (query ${queryFrom}..${queryTo}) failed: ${err?.message || err}`,
+      );
+      continue;
+    }
+    for (const r of rows) {
+      const ledgerName = cleanString(r.F01);
+      if (!ledgerName) continue;
+      out.push({
+        // Canonical quarter boundaries (stable DB key across re-syncs).
+        periodFrom,
+        periodTo,
+        ledgerName,
+        groupName: cleanString(r.F02) || undefined,
+        openingBalance: parseAmount(r.F03),
+        netDebit: parseAmount(r.F04),
+        netCredit: parseAmount(r.F05),
+        closingBalance: parseAmount(r.F06),
       });
     }
   }

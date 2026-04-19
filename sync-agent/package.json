@@ -1,6 +1,6 @@
 {
   "name": "vcfo-sync-agent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "VCFO Sync — desktop agent that pushes Tally data to the VCFO server",
   "main": "dist-electron/electron/main.js",
   "author": "Magnacode",

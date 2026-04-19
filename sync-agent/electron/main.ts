@@ -24,6 +24,7 @@ import {
   extractVouchers,
   extractGroups,
   extractStockSummary,
+  extractTrialBalance,
 } from '../lib/tally/extractors';
 import type { AgentClient, AgentConfig, AuthState, AuthUser, ChooseClientResult, ClientStructure, CompanyMapping, LoginResult, MyClient, MyClientsResult, RemoveClientResult, SyncClientSummary, SyncResult, SyncStepLog, TallyStatus } from '../lib/types';
 import { OfflineQueue, isRetryableError } from '../lib/offline-queue';
@@ -877,6 +878,18 @@ async function runSync(): Promise<SyncResult> {
           const rows = await extractStockSummary(conn, companyName, stockFrom, toDate);
           if (rows.length === 0) return { sent: 0, accepted: 0 };
           const res = await tryPush(clientApi, { kind: 'stockSummary', companyName, clientSlug: client.slug, rows });
+          return { sent: rows.length, accepted: res.rowsAccepted };
+        });
+
+        // Trial balance — primary data source for every VCFO financial report
+        // (TB / P&L / BS / CF all derive from vcfo_trial_balance). Same window
+        // as stockSummary (syncFromDate → today), same quarter-chunking, same
+        // "never advance the cursor based on this step" policy: TB is
+        // point-in-time and must always reflect the full requested span.
+        await runStep('trialBalance', companyName, client, steps, counts, async () => {
+          const rows = await extractTrialBalance(conn, companyName, stockFrom, toDate);
+          if (rows.length === 0) return { sent: 0, accepted: 0 };
+          const res = await tryPush(clientApi, { kind: 'trialBalance', companyName, clientSlug: client.slug, rows });
           return { sent: rows.length, accepted: res.rowsAccepted };
         });
 

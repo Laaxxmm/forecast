@@ -40,6 +40,7 @@ export interface SyncStepLog {
     | 'vouchers'
     | 'groups'
     | 'stockSummary'
+    | 'trialBalance'
     | 'skipped'
     | 'retry';
   /** When kind='retry', this holds the original ingest kind being replayed. */
@@ -48,7 +49,8 @@ export interface SyncStepLog {
     | 'ledgers'
     | 'vouchers'
     | 'groups'
-    | 'stockSummary';
+    | 'stockSummary'
+    | 'trialBalance';
   rowsSent: number;
   rowsAccepted: number;
   ok: boolean;

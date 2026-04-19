@@ -13,5 +13,5 @@ export interface BakedDefaults {
 export const BAKED: BakedDefaults = {
   "serverUrl": "http://localhost:3001",
   "buildChannel": "dev",
-  "buildTime": "2026-04-18T15:38:55.404Z"
+  "buildTime": "2026-04-19T10:09:57.159Z"
 };
