@@ -386,6 +386,19 @@ export function initializeSchema(db: DbHelper) {
     // Stream scoping
     'ALTER TABLE scenarios ADD COLUMN stream_id INTEGER',
     'ALTER TABLE dashboard_actuals ADD COLUMN stream_id INTEGER',
+    // vcfo_companies column backfills — retrofit tenants whose table was
+    // created by an older TallyVision schema version that was missing these
+    // columns. CREATE TABLE IF NOT EXISTS is a no-op on existing tables so
+    // the declarations above don't help; explicit ALTER is needed. Wrapped
+    // in try/catch so it's idempotent (skips if column already exists).
+    // Symptom this fixes: "no such column: last_full_sync_at" 500 on
+    // GET /api/vcfo/companies immediately after the cutover.
+    "ALTER TABLE vcfo_companies ADD COLUMN location TEXT DEFAULT ''",
+    "ALTER TABLE vcfo_companies ADD COLUMN entity_type TEXT DEFAULT ''",
+    'ALTER TABLE vcfo_companies ADD COLUMN fy_start_month INTEGER DEFAULT 4',
+    'ALTER TABLE vcfo_companies ADD COLUMN is_active INTEGER DEFAULT 1',
+    'ALTER TABLE vcfo_companies ADD COLUMN last_full_sync_at TEXT',
+    "ALTER TABLE vcfo_companies ADD COLUMN created_at TEXT DEFAULT (datetime('now'))",
   ];
   for (const sql of branchMigrations) {
     try { db.exec(sql); } catch { /* column already exists */ }
