@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import api from '../../api/client';
 import { formatRs, getMonthLabel } from '../../pages/ForecastModulePage';
@@ -93,16 +93,15 @@ export default function ProfitLossReport({ companyId, from, to, view }: Props) {
     });
   };
 
-  const renderRow = (section: PLSection, depth: number) => {
+  const renderRow = (section: PLSection, depth: number): ReactNode => {
     const hasChildren = !!(section.children && section.children.length > 0);
     const isOpen = expanded.has(section.key);
     const paddingLeft = 16 + depth * 20;
     const isParent = depth === 0;
 
     return (
-      <>
+      <Fragment key={section.key}>
         <tr
-          key={section.key}
           className={`border-b border-dark-400/20 transition-colors ${
             hasChildren ? 'cursor-pointer hover:bg-dark-600/40' : 'hover:bg-dark-600/20'
           }`}
@@ -145,7 +144,7 @@ export default function ProfitLossReport({ companyId, from, to, view }: Props) {
         </tr>
         {hasChildren && isOpen &&
           section.children!.map(child => renderRow(child, depth + 1))}
-      </>
+      </Fragment>
     );
   };
 
