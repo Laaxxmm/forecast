@@ -1,0 +1,44 @@
+{
+  "name": "vcfo-sync-agent",
+  "version": "0.2.0",
+  "description": "VCFO Sync — desktop agent that pushes Tally data to the VCFO server",
+  "main": "dist-electron/electron/main.js",
+  "author": "Magnacode",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -k -n vite,tsc,electron -c blue,cyan,magenta \"npm:dev:vite\" \"npm:dev:tsc\" \"npm:dev:electron\"",
+    "dev:vite": "vite",
+    "dev:tsc": "npm run bake:defaults && tsc -p tsconfig.electron.json --watch --preserveWatchOutput",
+    "dev:electron": "wait-on tcp:5174 dist-electron/electron/main.js && electron .",
+    "bake:defaults": "node scripts/bake-defaults.js",
+    "build:icon": "node scripts/build-icon.js",
+    "prebuild": "npm run bake:defaults && npm run build:icon",
+    "build": "npm run build:renderer && npm run build:electron",
+    "build:renderer": "vite build",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "start": "electron .",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:linux": "npm run build && electron-builder --linux"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.3.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^8.2.2",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "wait-on": "^8.0.1"
+  }
+}

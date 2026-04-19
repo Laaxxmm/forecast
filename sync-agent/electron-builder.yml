@@ -1,0 +1,62 @@
+appId: com.magnacode.vcfo.sync
+productName: VCFO Sync
+copyright: Copyright © 2026 Magnacode
+# Human-readable version is read from package.json.
+directories:
+  output: release
+  buildResources: resources
+
+asar: true
+
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+  - '!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}'
+  - '!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}'
+  - '!**/*.{ts,tsx,map}'
+
+# resources/icon.png ships alongside the exe so the tray/window can load it
+# at process.resourcesPath at runtime.
+extraResources:
+  - from: resources/icon.png
+    to: icon.png
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: resources/icon.ico
+  # Signed releases will set publisherName + certificateFile here; unsigned
+  # builds still install, Windows just shows the usual SmartScreen prompt.
+  publisherName: Magnacode
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: VCFO Sync
+  # Include the per-user uninstaller in Add/Remove Programs.
+  deleteAppDataOnUninstall: false
+  # Artifact file name pattern: "VCFO Sync Setup 0.1.0.exe"
+  artifactName: ${productName} Setup ${version}.${ext}
+
+mac:
+  target: dmg
+  category: public.app-category.business
+  icon: resources/icon.ico  # electron-builder auto-derives icns from ico if icns is missing
+  artifactName: ${productName}-${version}.${ext}
+
+linux:
+  target:
+    - AppImage
+  icon: resources/icon.png
+  category: Office
+  artifactName: ${productName}-${version}.${ext}
+
+# Auto-update wiring lands in Milestone 3+; for now, no publish config.
+# publish:
+#   provider: generic
+#   url: https://releases.magnacode.in/vcfo-sync
