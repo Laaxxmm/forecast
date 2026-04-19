@@ -13,7 +13,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import api from '../api/client';
-import { FileSpreadsheet, TrendingUp, Scale, Banknote, ChevronLeft, ChevronRight, Calendar } from 'lucide-react';
+import { FileSpreadsheet, TrendingUp, Scale, Banknote, ChevronLeft, ChevronRight, Calendar, Trash2 } from 'lucide-react';
 import VcfoCompanyPicker, { VcfoCompany } from '../components/vcfo/VcfoCompanyPicker';
 import VcfoDownloadMenu from '../components/vcfo/VcfoDownloadMenu';
 import TrialBalanceReport from '../components/vcfo/TrialBalanceReport';
@@ -49,6 +49,32 @@ export default function VcfoModulePage() {
   const [companiesError, setCompaniesError] = useState<string | null>(null);
   const [selectedCompanyId, setSelectedCompanyId] = useState<number | null>(null);
   const [activeReportKey, setActiveReportKey] = useState<ReportKey>(detectActiveReportKey());
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+
+  const userType = typeof window !== 'undefined' ? localStorage.getItem('user_type') : null;
+  const userRole = typeof window !== 'undefined' ? localStorage.getItem('user_role') : null;
+  const canResetData = userType === 'super_admin' || userRole === 'admin';
+
+  const performReset = async () => {
+    setResetting(true);
+    setResetError(null);
+    try {
+      const res = await api.delete('/vcfo/data', { data: { confirm: 'DELETE' } });
+      console.log('[vcfo] reset result', res.data);
+      setResetOpen(false);
+      setResetConfirmText('');
+      // Hard reload so React state, cached companies, and the report views
+      // all rehydrate from the now-empty DB.
+      window.location.reload();
+    } catch (err: any) {
+      setResetError(err?.response?.data?.error || err?.message || 'Reset failed');
+    } finally {
+      setResetting(false);
+    }
+  };
 
   // Track the active route so the download menu knows which report to export.
   useEffect(() => {
@@ -176,6 +202,16 @@ export default function VcfoModulePage() {
               buildParams={buildDownloadParams}
               filenameHint={filenameHint}
             />
+            {canResetData && (
+              <button
+                onClick={() => { setResetOpen(true); setResetError(null); setResetConfirmText(''); }}
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-theme-faint hover:text-red-400 hover:bg-red-500/10 border border-dark-400/50 hover:border-red-500/30 rounded-lg transition-colors"
+                title="Delete all synced Tally data for this tenant"
+              >
+                <Trash2 size={13} />
+                <span className="hidden md:inline">Reset</span>
+              </button>
+            )}
             <div className="h-6 w-px bg-dark-400" />
             <VcfoCompanyPicker
               companies={companies}
@@ -311,6 +347,64 @@ export default function VcfoModulePage() {
           </Routes>
         )}
       </div>
+
+      {/* Reset-data confirm modal (admin-only, typed confirmation) */}
+      {resetOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-dark-800 border border-red-500/30 rounded-2xl shadow-2xl max-w-md w-[92%] p-6">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="p-2 bg-red-500/10 rounded-lg">
+                <Trash2 size={18} className="text-red-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-theme-primary">Delete all synced Tally data?</h3>
+                <p className="text-xs text-theme-faint mt-1">
+                  This clears every <code className="text-[11px] bg-dark-700 px-1 py-0.5 rounded">vcfo_*</code> table
+                  for this tenant: companies, ledgers, account groups, vouchers, stock summary, trial balance.
+                  Non-VCFO data (forecast, budgets, dashboards) is untouched.
+                </p>
+                <p className="text-xs text-red-300 mt-2 font-medium">
+                  Cannot be undone. The next Sync Now in the desktop agent will repopulate.
+                </p>
+              </div>
+            </div>
+
+            <label className="block text-xs text-theme-secondary mb-1.5">
+              Type <span className="font-mono font-semibold text-red-300">DELETE</span> to confirm:
+            </label>
+            <input
+              type="text"
+              value={resetConfirmText}
+              onChange={e => setResetConfirmText(e.target.value)}
+              autoFocus
+              className="input w-full text-sm py-1.5 font-mono"
+              placeholder="DELETE"
+              disabled={resetting}
+            />
+
+            {resetError && (
+              <p className="text-xs text-red-400 mt-2">{resetError}</p>
+            )}
+
+            <div className="flex justify-end gap-2 mt-5">
+              <button
+                onClick={() => { setResetOpen(false); setResetConfirmText(''); setResetError(null); }}
+                disabled={resetting}
+                className="px-3 py-1.5 text-xs text-theme-secondary hover:text-theme-primary hover:bg-dark-700 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={performReset}
+                disabled={resetting || resetConfirmText !== 'DELETE'}
+                className="px-3 py-1.5 text-xs font-medium bg-red-500/20 text-red-300 hover:bg-red-500/30 border border-red-500/40 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {resetting ? 'Deleting…' : 'Delete everything'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

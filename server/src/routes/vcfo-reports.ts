@@ -18,6 +18,7 @@
 
 import { Router, Request, Response } from 'express';
 import { getPlatformHelper } from '../db/platform-connection.js';
+import { requireAdmin } from '../middleware/auth.js';
 import {
   buildTrialBalance,
   buildProfitLoss,
@@ -133,6 +134,79 @@ router.get('/companies', async (req, res) => {
   } catch (err: any) {
     console.error('[vcfo-reports] /companies error', err);
     res.status(500).json({ error: err?.message || 'Failed to list companies' });
+  }
+});
+
+/**
+ * DESTRUCTIVE: wipe every sync-agent-populated vcfo_* table for the current
+ * tenant so a fresh Tally sync can start from a clean slate. Intended for
+ * debugging "is the data wrong because of bad ingest logic, or because it
+ * was imported during a previous buggy build?" scenarios.
+ *
+ * Scope: only the tenant resolved by `resolveTenant` middleware (the session's
+ * active client). Never cross-tenant.
+ *
+ * Safety:
+ *   - Requires `admin` or `super_admin` session role.
+ *   - Requires body `{ confirm: "DELETE" }` — a misfiring script or curl
+ *     without the literal confirmation string hits a 400.
+ *   - Runs inside a transaction so a failure mid-way rolls back.
+ *   - Does NOT touch platform.db (agent keys, mappings) or any non-vcfo table.
+ */
+router.delete('/data', requireAdmin, async (req, res) => {
+  if (req.body?.confirm !== 'DELETE') {
+    return res.status(400).json({
+      error: 'Missing confirmation. POST/DELETE body must be { "confirm": "DELETE" }',
+    });
+  }
+  if (!req.tenantDb) {
+    return res.status(500).json({ error: 'Tenant DB not resolved' });
+  }
+
+  const tables = [
+    'vcfo_trial_balance',
+    'vcfo_stock_summary',
+    'vcfo_vouchers',
+    'vcfo_account_groups',
+    'vcfo_ledgers',
+    'vcfo_companies', // last — other tables FK to this
+  ];
+  const counts: Record<string, number> = {};
+
+  try {
+    req.tenantDb.beginBatch();
+    try {
+      for (const t of tables) {
+        try {
+          const before = req.tenantDb.get(`SELECT COUNT(*) AS n FROM ${t}`) as { n: number };
+          req.tenantDb.run(`DELETE FROM ${t}`);
+          counts[t] = before?.n ?? 0;
+        } catch (e: any) {
+          // Table may not exist on very old tenants; log and continue.
+          counts[t] = -1;
+        }
+      }
+      req.tenantDb.endBatch();
+    } catch (e) {
+      req.tenantDb.rollbackBatch();
+      throw e;
+    }
+
+    // Reclaim freed pages (VACUUM cannot run inside a transaction).
+    try { req.tenantDb.exec('VACUUM'); } catch { /* non-fatal */ }
+
+    console.log(
+      `[vcfo-reports] /data DELETE by ${req.session?.username || req.session?.userId} slug=${req.tenantSlug}`,
+      counts,
+    );
+    res.json({
+      ok: true,
+      tenantSlug: req.tenantSlug,
+      cleared: counts,
+    });
+  } catch (err: any) {
+    console.error('[vcfo-reports] /data DELETE error', err);
+    res.status(500).json({ error: err?.message || 'Wipe failed' });
   }
 });
 
