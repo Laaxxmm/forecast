@@ -8,6 +8,7 @@ import LoginPage from './pages/LoginPage';
 import DashboardModulePage from './pages/DashboardModulePage';
 import DashboardPage from './pages/DashboardPage';
 import ForecastModulePage from './pages/ForecastModulePage';
+import VcfoModulePage from './pages/VcfoModulePage';
 import ImportPage from './pages/ImportPage';
 import StreamDetailPage from './pages/StreamDetailPage';
 import SettingsPage from './pages/SettingsPage';
@@ -113,7 +114,7 @@ export default function App() {
           <Route path="/revenue-sharing" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><RevenueSharingPage /></ModuleRoute></ClientRoute>} />
           <Route path="/import" element={<ClientRoute><ClientAdminRoute><ModuleRoute moduleKey="forecast_ops"><ImportPage /></ModuleRoute></ClientAdminRoute></ClientRoute>} />
           <Route path="/stream/:streamId" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><StreamDetailPage /></ModuleRoute></ClientRoute>} />
-          {/* VCFO Portal is served by the mounted TallyVision sub-app at /vcfo/* (non-React) */}
+          <Route path="/vcfo/*" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><VcfoModulePage /></ModuleRoute></ClientRoute>} />
           <Route path="/settings" element={<ClientRoute><ClientAdminRoute><SettingsPage /></ClientAdminRoute></ClientRoute>} />
           <Route path="/admin/*" element={<SuperAdminRoute><AdminPage /></SuperAdminRoute>} />
           <Route path="/" element={<DefaultRedirect />} />

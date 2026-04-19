@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Magna_Tracker + TallyVision full-database backup script.
+ * Magna_Tracker full-database backup script.
  *
  * Usage (from repo root):
  *   node scripts/backup-databases.mjs
@@ -9,7 +9,7 @@
  * ------------
  *   1. Creates `backups/{YYYY-MM-DD_HH-MM-SS}/` under the repo root.
  *   2. Finds every *.db file (+ its sibling *.db-shm / *.db-wal for WAL-mode DBs)
- *      under `data/` and `Vcfo-app/TallyVision_2.0/data/`.
+ *      under `data/` (platform.db and data/clients/*.db).
  *   3. Copies them to the backup dir preserving their relative paths.
  *   4. Computes sha256 of source and destination; aborts on mismatch.
  *   5. Opens each copied *.db file with better-sqlite3 (read-only) and runs
@@ -36,16 +36,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
-// better-sqlite3 is installed in Vcfo-app's node_modules (native binding).
-// Resolve it from there so we don't need a duplicate install at the repo root.
-const vcfoPkgJson = path.join(repoRoot, 'Vcfo-app', 'TallyVision_2.0', 'package.json');
-const requireFromVcfo = createRequire(vcfoPkgJson);
+// better-sqlite3 is installed in the server workspace's node_modules.
+const serverPkgJson = path.join(repoRoot, 'server', 'package.json');
+const requireFromServer = createRequire(serverPkgJson);
 let Database;
 try {
-  Database = requireFromVcfo('better-sqlite3');
+  Database = requireFromServer('better-sqlite3');
 } catch (err) {
-  console.error('Failed to load better-sqlite3 from Vcfo-app/TallyVision_2.0/node_modules.');
-  console.error('Run `cd Vcfo-app/TallyVision_2.0 && npm install` first.');
+  console.error('Failed to load better-sqlite3 from server/node_modules.');
+  console.error('Run `cd server && npm install` first.');
   console.error('Underlying error:', err.message);
   process.exit(1);
 }
@@ -127,7 +126,6 @@ async function main() {
 
   const searchRoots = [
     path.join(repoRoot, 'data'),
-    path.join(repoRoot, 'Vcfo-app', 'TallyVision_2.0', 'data'),
   ];
 
   console.log('Scanning for .db files under:');

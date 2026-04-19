@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, TrendingUp, Upload, Settings, LogOut, BarChart3, Building2, ArrowLeftRight,
   MapPin, ChevronDown, Sun, Moon, ArrowRight, Activity, PieChart,
-  Pin, PinOff, X,
+  Pin, PinOff, X, FileBarChart,
 } from 'lucide-react';
 import api from '../../api/client';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -12,12 +12,11 @@ import { useTheme } from '../../contexts/ThemeContext';
 const forecastLinks = [
   { to: '/actuals', icon: LayoutDashboard, label: 'Actuals', clientAdminOnly: false, requiresModule: '' },
   { to: '/forecast', icon: TrendingUp, label: 'Forecast', clientAdminOnly: false, requiresModule: '' },
+  { to: '/vcfo', icon: FileBarChart, label: 'VCFO', clientAdminOnly: false, requiresModule: '' },
   { to: '/analysis', icon: BarChart3, label: 'Analysis', clientAdminOnly: false, requiresModule: 'user_analysis' },
   { to: '/insights', icon: Activity, label: 'Insights', clientAdminOnly: false, requiresModule: 'user_insights' },
   { to: '/revenue-sharing', icon: PieChart, label: 'Rev. Sharing', clientAdminOnly: false, requiresModule: '' },
 ];
-
-// VCFO Portal is served by the mounted TallyVision sub-app at /vcfo/* and has its own sidebar.
 
 // Utility links — bottom section above logout
 const utilityLinks = [

@@ -4,7 +4,6 @@ import helmet from 'helmet';
 import session from 'express-session';
 import path from 'path';
 import fs from 'fs';
-import { createRequire } from 'module';
 import { getLogosDir, getClientLogosDir } from './middleware/upload.js';
 import { getClientHelper, createDailyBackups } from './db/connection.js';
 import { initializeSchema } from './db/schema.js';
@@ -29,7 +28,8 @@ import dashboardActualsRoutes from './routes/dashboard-actuals.js';
 import syncRoutes from './routes/sync.js';
 import revenueSharingRoutes from './routes/revenue-sharing.js';
 import dbViewerRoutes from './routes/db-viewer.js';
-import { setVcfoBridge } from './services/vcfo-bridge.js';
+import ingestRoutes from './routes/ingest.js';
+import vcfoReportsRoutes from './routes/vcfo-reports.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -44,17 +44,7 @@ const allowedOrigins = isProd
 console.log('CORS allowed origins:', allowedOrigins);
 
 app.set('trust proxy', 1);
-// TallyVision (mounted at /vcfo) relies on inline <script> and onclick handlers,
-// which strict CSP blocks. Apply relaxed helmet (CSP disabled) for /vcfo/* only;
-// all other routes keep the full strict helmet defaults.
-const strictHelmet = helmet();
-const relaxedHelmet = helmet({ contentSecurityPolicy: false });
-app.use((req, res, next) => {
-  if (req.path === '/vcfo' || req.path.startsWith('/vcfo/')) {
-    return relaxedHelmet(req, res, next);
-  }
-  return strictHelmet(req, res, next);
-});
+app.use(helmet());
 app.use(cors({
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
@@ -236,6 +226,11 @@ app.post('/api/cleanup-clinic', requireAuth, requireSuperAdmin, async (_req, res
 // ─── Auth (no tenant needed — login determines tenant) ──────────────────────
 app.use('/api/auth', authRoutes);
 
+// ─── Sync-agent ingest (agent-key bearer auth, no user session) ─────────────
+// Agent keys live in platform.db.agent_keys; the requireAgentKey middleware
+// (see routes/ingest.ts) handles auth + tenant resolution per request.
+app.use('/api/ingest', ingestRoutes);
+
 // ─── Admin routes (super admin only, no tenant context) ─────────────────────
 app.use('/api/admin', requireAuth, requireSuperAdmin, adminRoutes);
 
@@ -248,63 +243,11 @@ app.use('/api/budgets', ...forecastOps, budgetRoutes);
 app.use('/api/forecasts', ...forecastOps, forecastRoutes);
 app.use('/api/dashboard', ...forecastOps, dashboardRoutes);
 app.use('/api/forecast-module', ...forecastOps, forecastModuleRoutes);
+app.use('/api/vcfo', ...forecastOps, vcfoReportsRoutes);
 app.use('/api/dashboard-actuals', ...forecastOps, dashboardActualsRoutes);
 app.use('/api/sync', ...forecastOps, requireAdmin, syncRoutes);
 app.use('/api/revenue-sharing', ...forecastOps, revenueSharingRoutes);
 app.use('/api/db', requireAuth, resolveTenant, resolveBranch, requireSuperAdmin, dbViewerRoutes);
-
-// ─── VCFO sub-app: TallyVision (CommonJS) mounted under /vcfo ────────────────
-// TallyVision is loaded via createRequire because our server is ESM.
-// It brings its own express-session, better-sqlite3 DB and static assets;
-// the sub-app does not run app.listen() when required (guarded in server.js).
-//
-// SSO bridge: /api/vcfo/sso-token mints a short-lived HMAC-signed token, and
-// the browser redirects to /vcfo/sso?token=... — TallyVision verifies the
-// signature and seeds its own session. The shared secret lives in the sso
-// module, which Node caches by absolute path — both sides get the same value.
-const requireCJS = createRequire(import.meta.url);
-let vcfoSso: { sign: (payload: any, ttlSec?: number) => string } | null = null;
-try {
-  // Path resolves from the compiled dist/ output at runtime; src/index.ts → ../../Vcfo-app/...
-  const vcfoApp = requireCJS('../../Vcfo-app/TallyVision_2.0/src/backend/server.js');
-  vcfoSso = requireCJS('../../Vcfo-app/TallyVision_2.0/src/backend/sso.js');
-  app.use('/vcfo', vcfoApp);
-  // Pull out the helpers the sub-app attached to its own exported app so
-  // sync-agent auth routes can mint agent-keys without proxying HTTP through
-  // the sub-app's session-based adminOnly middleware.
-  setVcfoBridge(vcfoApp && (vcfoApp as any)._vcfo ? (vcfoApp as any)._vcfo : null);
-  console.log('✓ TallyVision sub-app mounted at /vcfo');
-} catch (err: any) {
-  console.warn('⚠ TallyVision sub-app not mounted:', err?.message || err);
-}
-
-// ─── SSO token mint: called by ModuleSelectPage before redirecting to /vcfo/sso
-// Auth-gated + tenant-resolved, so the token is bound to the authenticated
-// user's current client slug. TallyVision verifies + auto-seeds its session.
-app.post('/api/vcfo/sso-token', requireAuth, resolveTenant, async (req, res) => {
-  if (!vcfoSso) {
-    return res.status(503).json({ error: 'VCFO sub-app not available' });
-  }
-  if (!req.tenantSlug) {
-    return res.status(400).json({ error: 'No active client' });
-  }
-
-  // Post-unification (Step 6): company scoping is per-tenant inside the
-  // client DB (vcfo_companies), not a cross-cutting SSO claim. The SSO
-  // token carries only tenant + identity + role.
-  const token = vcfoSso.sign({
-    slug: req.tenantSlug,
-    userId: req.session.userId,
-    username: req.session.username,
-    displayName: req.session.displayName,
-    userType: req.userType,
-    role: req.session.role,
-    isOwner: req.isOwner,
-    clientId: req.clientId,
-    clientName: req.clientName,
-  });
-  res.json({ token });
-});
 
 // ─── Client modules & integrations (for module selection page) ──────────────
 app.get('/api/client-modules', requireAuth, resolveTenant, async (req, res) => {
@@ -524,11 +467,11 @@ async function start() {
       initializeSchema(clientDb);
       await seedDatabase(clientDb);
 
-      // Idempotent VCFO top-up (Step 6): applies vcfo_* schema on every
-      // boot so pre-Step-6 clients gain it without a manual migration,
-      // and seeds a default vcfo_companies row for clients that never
-      // had one (zero-row tenants would see a blank VCFO dashboard).
-      ensureVcfoForSlug(client.slug, client.name);
+      // Idempotent VCFO top-up: seeds a default vcfo_companies row for
+      // any client that has none, so the VCFO dashboard isn't blank on
+      // first visit. The vcfo_* schema itself is created by
+      // initializeSchema above.
+      await ensureVcfoForSlug(client.slug, client.name);
 
       // Auto-create default scenario if FY exists but no scenario does
       const activeFy = clientDb.get('SELECT id FROM financial_years WHERE is_active = 1');

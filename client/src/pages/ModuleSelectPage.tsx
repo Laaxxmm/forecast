@@ -24,8 +24,8 @@ const MODULE_CATALOG: ModuleInfo[] = [
   },
   {
     key: 'vcfo_portal',
-    name: 'VCFO Portal',
-    description: 'Comprehensive Virtual CFO portal with advisory dashboards, KPIs, and strategic insights.',
+    name: 'VCFO',
+    description: 'Tally-synced financial reports — Trial Balance, P&L, Balance Sheet and Cash Flow — with one-click XLSX/PDF/DOCX export.',
     icon: ShieldCheck,
     color: 'blue',
     path: '/vcfo',
@@ -76,24 +76,8 @@ export default function ModuleSelectPage() {
     if (!enabledModules.includes(mod.key)) return;
     if (!mod.path) return;
     localStorage.setItem('active_module', mod.key);
-    // VCFO Portal is a separate sub-app (TallyVision) mounted at /vcfo/* — use a hard nav
-    // so the browser loads the non-React app instead of the SPA router.
-    // Mint a short-lived SSO token so TallyVision auto-binds the tenant and
-    // skips its own login screen. Server validates the HMAC, seeds its session,
-    // and redirects to /vcfo/. If the mint fails, surface the error rather than
-    // falling back to an unauthenticated ?clientSlug=… (that path is dev-only).
-    if (mod.key === 'vcfo_portal') {
-      try {
-        const res = await api.post('/vcfo/sso-token');
-        const token = res.data?.token;
-        if (!token) throw new Error('No token returned');
-        window.location.href = `/vcfo/sso?token=${encodeURIComponent(token)}`;
-      } catch (err: any) {
-        console.error('VCFO SSO mint failed:', err);
-        alert('Could not open VCFO Portal. Please try signing in again.');
-      }
-      return;
-    }
+    // VCFO is now a first-class React tab under /vcfo/* — same-origin SPA nav,
+    // no SSO token mint required. The old TallyVision sub-app has been retired.
     navigate(mod.path);
   };
 

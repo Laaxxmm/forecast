@@ -165,7 +165,61 @@ export function initializePlatformSchema(db: DbHelper) {
       UNIQUE(client_id, tally_company_name)
     );
     CREATE INDEX IF NOT EXISTS idx_vcm_client ON vcfo_company_mapping(client_id);
+
+    -- Sync-agent authentication keys (Slice 5a — rehomed from TallyVision's
+    -- vcfo_agent_keys so all auth state lives in platform.db). Each desktop
+    -- agent install authenticates with an opaque Bearer token of the form
+    -- "vcfo_live_" + 40 hex chars; only the SHA-256 hash is persisted so a
+    -- DB leak does not expose usable credentials. The FK to clients keeps
+    -- cross-tenant isolation tight (one key maps to one client), and
+    -- ON DELETE CASCADE means deactivating a client auto-revokes its keys.
+    CREATE TABLE IF NOT EXISTS agent_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+      client_slug TEXT NOT NULL,
+      key_hash TEXT NOT NULL UNIQUE,
+      key_prefix TEXT NOT NULL,
+      label TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      last_used_at TEXT,
+      revoked_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_keys_hash ON agent_keys(key_hash);
+    CREATE INDEX IF NOT EXISTS idx_agent_keys_client ON agent_keys(client_id);
   `);
+
+  // One-time migration: copy legacy TallyVision `vcfo_agent_keys` rows (if the
+  // table exists in this platform.db from the pre-Slice-5 era) into the new
+  // `agent_keys` table. Idempotent — rows already migrated are skipped by the
+  // UNIQUE(key_hash) constraint. TallyVision's own table is left in place so
+  // the existing sub-app keeps working until cutover; the rows are just
+  // duplicated here so the new middleware can authenticate the same keys.
+  try {
+    const legacyTable = db.get(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='vcfo_agent_keys'"
+    );
+    if (legacyTable) {
+      const legacyRows = db.all(
+        `SELECT key_hash, key_prefix, client_slug, label, created_at, last_used_at, revoked_at
+         FROM vcfo_agent_keys`
+      );
+      for (const r of legacyRows) {
+        const client = db.get('SELECT id FROM clients WHERE slug = ?', r.client_slug);
+        if (!client) continue; // orphan row — skip
+        db.run(
+          `INSERT OR IGNORE INTO agent_keys
+             (client_id, client_slug, key_hash, key_prefix, label, created_at, last_used_at, revoked_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [client.id, r.client_slug, r.key_hash, r.key_prefix, r.label || '', r.created_at, r.last_used_at, r.revoked_at],
+        );
+      }
+      if (legacyRows.length > 0) {
+        console.log(`[Platform Migration] Copied ${legacyRows.length} row(s) from vcfo_agent_keys → agent_keys`);
+      }
+    }
+  } catch (e: any) {
+    console.warn('[Platform Migration] vcfo_agent_keys → agent_keys copy skipped:', e?.message || e);
+  }
 
   // Safe migrations for existing DBs
   const migrations = [

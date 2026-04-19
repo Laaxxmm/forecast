@@ -273,7 +273,95 @@ export function initializeSchema(db: DbHelper) {
     )
   `);
 
-  // ── VCFO tables removed ─ TallyVision is now mounted as a sub-app at /vcfo ──
+  // ── VCFO (sync-agent) tables ──────────────────────────────────────────────
+  // Populated by the Electron VCFO Sync agent via /api/ingest/*. Report
+  // builders in `services/vcfo-report-builder.ts` read from these tables.
+  // Schema ported from the retired TallyVision_2.0 sub-app (which used to
+  // create them at runtime via its own db/tenant.js). Keep CREATE TABLE IF
+  // NOT EXISTS statements idempotent so existing tenants who already have
+  // these tables from the TallyVision era are not re-initialised.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vcfo_companies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      location TEXT DEFAULT '',
+      entity_type TEXT DEFAULT '',
+      fy_start_month INTEGER DEFAULT 4,
+      is_active INTEGER DEFAULT 1,
+      last_full_sync_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS vcfo_ledgers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES vcfo_companies(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      group_name TEXT,
+      parent_group TEXT,
+      UNIQUE(company_id, name)
+    );
+
+    CREATE TABLE IF NOT EXISTS vcfo_account_groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES vcfo_companies(id) ON DELETE CASCADE,
+      group_name TEXT NOT NULL,
+      parent_group TEXT,
+      bs_pl TEXT CHECK (bs_pl IN ('BS', 'PL') OR bs_pl IS NULL),
+      dr_cr TEXT CHECK (dr_cr IN ('D', 'C') OR dr_cr IS NULL),
+      affects_gross_profit TEXT CHECK (affects_gross_profit IN ('Y', 'N') OR affects_gross_profit IS NULL),
+      UNIQUE(company_id, group_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS vcfo_vouchers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES vcfo_companies(id) ON DELETE CASCADE,
+      date TEXT NOT NULL,
+      voucher_type TEXT,
+      voucher_number TEXT,
+      ledger_name TEXT NOT NULL,
+      amount REAL DEFAULT 0,
+      party_name TEXT,
+      narration TEXT,
+      sync_month TEXT,
+      UNIQUE(company_id, date, voucher_type, voucher_number, ledger_name, amount)
+    );
+    CREATE INDEX IF NOT EXISTS idx_vcfo_vouchers_company_date
+      ON vcfo_vouchers(company_id, date);
+
+    CREATE TABLE IF NOT EXISTS vcfo_stock_summary (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES vcfo_companies(id) ON DELETE CASCADE,
+      period_from TEXT NOT NULL,
+      period_to TEXT NOT NULL,
+      item_name TEXT NOT NULL,
+      stock_group TEXT,
+      opening_qty REAL DEFAULT 0,
+      opening_value REAL DEFAULT 0,
+      inward_qty REAL DEFAULT 0,
+      inward_value REAL DEFAULT 0,
+      outward_qty REAL DEFAULT 0,
+      outward_value REAL DEFAULT 0,
+      closing_qty REAL DEFAULT 0,
+      closing_value REAL DEFAULT 0,
+      UNIQUE(company_id, period_from, period_to, item_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS vcfo_trial_balance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES vcfo_companies(id) ON DELETE CASCADE,
+      period_from TEXT NOT NULL,
+      period_to TEXT NOT NULL,
+      ledger_name TEXT NOT NULL,
+      group_name TEXT,
+      opening_balance REAL DEFAULT 0,
+      net_debit REAL DEFAULT 0,
+      net_credit REAL DEFAULT 0,
+      closing_balance REAL DEFAULT 0,
+      UNIQUE(company_id, period_from, period_to, ledger_name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_vcfo_trial_balance_period
+      ON vcfo_trial_balance(company_id, period_from, period_to);
+  `);
 
   // Branch-related migrations (add branch_id to data tables)
   const branchMigrations = [

@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
 import { getPlatformHelper } from '../db/platform-connection.js';
 import { createToken, removeToken, getTokenData, requireAuth } from '../middleware/auth.js';
-import { getVcfoBridge } from '../services/vcfo-bridge.js';
+import { hashAgentKey, mintAgentKeyPlaintext } from '../middleware/agentKey.js';
 
 const router = Router();
 
@@ -334,7 +334,7 @@ router.get('/my-clients', requireAuth, async (req, res) => {
  *
  * Body: { clientSlug: string, label?: string }
  * Returns the plaintext key exactly once — the agent must persist it
- * immediately. The server stores only a SHA-256 hash.
+ * immediately. The server stores only a SHA-256 hash in platform.db.agent_keys.
  *
  * Authorization rules mirror /my-clients: Owners can mint for any client;
  * non-owner team members must have the slug in team_member_clients.
@@ -347,6 +347,9 @@ router.post('/agent-keys', requireAuth, async (req, res) => {
   const clientSlug = String(req.body?.clientSlug || '').trim().toLowerCase();
   const label = typeof req.body?.label === 'string' ? req.body.label.slice(0, 120) : '';
   if (!clientSlug) return res.status(400).json({ error: 'clientSlug is required' });
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(clientSlug)) {
+    return res.status(400).json({ error: 'Invalid clientSlug' });
+  }
 
   const platformDb = await getPlatformHelper();
   const client = platformDb.get(
@@ -366,26 +369,80 @@ router.post('/agent-keys', requireAuth, async (req, res) => {
     }
   }
 
-  // TallyVision owns the vcfo_agent_keys table and the hash+label insert path.
-  // We reach into it via the bridge captured at mount time.
-  const bridge = getVcfoBridge();
-  if (!bridge) {
-    return res.status(503).json({ error: 'VCFO sub-app not available' });
-  }
-
   try {
-    const created = bridge.createAgentKey(clientSlug, label || `sync-agent (${req.session.username})`);
+    const { plaintext, prefix } = mintAgentKeyPlaintext();
+    const keyHash = hashAgentKey(plaintext);
+    const finalLabel = label || `sync-agent (${req.session.username})`;
+    const result = platformDb.run(
+      `INSERT INTO agent_keys (client_id, client_slug, key_hash, key_prefix, label)
+       VALUES (?, ?, ?, ?, ?)`,
+      [client.id, client.slug, keyHash, prefix, finalLabel],
+    );
     return res.json({
       ok: true,
-      apiKey: created.plaintext,        // shown exactly once
-      prefix: created.prefix,
-      clientSlug: created.clientSlug,
+      id: result.lastInsertRowid,
+      apiKey: plaintext,            // shown exactly once
+      prefix,
+      clientSlug: client.slug,
       clientName: client.name,
-      label: created.label,
+      label: finalLabel,
     });
   } catch (err: any) {
     return res.status(400).json({ error: err?.message || 'Failed to create agent key' });
   }
+});
+
+/**
+ * GET /api/auth/agent-keys?clientSlug=... — list keys (hash redacted) for
+ * a client the user has access to. Used by the admin UI to show "this
+ * install's last-used at …" per agent and to offer a revoke button.
+ */
+router.get('/agent-keys', requireAuth, async (req, res) => {
+  const clientSlug = String(req.query?.clientSlug || '').trim().toLowerCase();
+  if (!clientSlug) return res.status(400).json({ error: 'clientSlug is required' });
+  const ok = await requireClientAccess(req, res, clientSlug);
+  if (!ok) return;
+
+  const platformDb = await getPlatformHelper();
+  const rows = platformDb.all(
+    `SELECT id, key_prefix AS prefix, label, created_at AS createdAt,
+            last_used_at AS lastUsedAt, revoked_at AS revokedAt
+     FROM agent_keys
+     WHERE client_id = ?
+     ORDER BY created_at DESC`,
+    ok.client.id,
+  );
+  res.json({ keys: rows });
+});
+
+/**
+ * DELETE /api/auth/agent-keys/:id — soft-revoke (sets revoked_at). The row
+ * stays for audit; the middleware rejects any future request using it. We
+ * verify the key belongs to a client the caller has access to so a non-
+ * owner can't revoke another tenant's key.
+ */
+router.delete('/agent-keys/:id', requireAuth, async (req, res) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  const platformDb = await getPlatformHelper();
+  const key = platformDb.get(
+    'SELECT id, client_id, client_slug, revoked_at FROM agent_keys WHERE id = ?',
+    id,
+  );
+  if (!key) return res.status(404).json({ error: 'Key not found' });
+
+  const ok = await requireClientAccess(req, res, key.client_slug);
+  if (!ok) return;
+
+  if (key.revoked_at) {
+    return res.json({ ok: true, alreadyRevoked: true });
+  }
+  platformDb.run(
+    "UPDATE agent_keys SET revoked_at = datetime('now') WHERE id = ?",
+    id,
+  );
+  res.json({ ok: true });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
