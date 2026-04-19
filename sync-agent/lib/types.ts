@@ -33,6 +33,9 @@ export interface SyncStepLog {
    * `skipped` — informational row (e.g. whitelisted company not loaded in Tally). Not a failure.
    * `retry`   — a batch drained from the offline queue (replay of a previously-failed push).
    *             When `retry` is present, the original payload's kind is preserved in `retryOfKind`.
+   * `voucherLedgerEntries` / `fyOpeningBalances` — feeds the voucher-driven dynamic TB.
+   *   The fyOpeningBalances kind may appear with a `:YYYY-MM-DD` suffix when the
+   *   window spans multiple FYs (one step per FY start).
    */
   kind:
     | 'companies'
@@ -41,6 +44,9 @@ export interface SyncStepLog {
     | 'groups'
     | 'stockSummary'
     | 'trialBalance'
+    | 'voucherLedgerEntries'
+    | 'fyOpeningBalances'
+    | `fyOpeningBalances:${string}`
     | 'skipped'
     | 'retry';
   /** When kind='retry', this holds the original ingest kind being replayed. */
@@ -50,7 +56,9 @@ export interface SyncStepLog {
     | 'vouchers'
     | 'groups'
     | 'stockSummary'
-    | 'trialBalance';
+    | 'trialBalance'
+    | 'voucherLedgerEntries'
+    | 'fyOpeningBalances';
   rowsSent: number;
   rowsAccepted: number;
   ok: boolean;

@@ -209,6 +209,8 @@ router.delete('/data', requireAdmin, async (req, res) => {
 
   const tables = [
     'vcfo_trial_balance',
+    'vcfo_voucher_ledger_entries',
+    'vcfo_fy_opening_balances',
     'vcfo_stock_summary',
     'vcfo_vouchers',
     'vcfo_account_groups',

@@ -25,6 +25,8 @@ import {
   extractGroups,
   extractStockSummary,
   extractTrialBalance,
+  extractVoucherLedgerEntries,
+  extractFyOpeningBalances,
 } from '../lib/tally/extractors';
 import type { AgentClient, AgentConfig, AuthState, AuthUser, ChooseClientResult, ClientStructure, CompanyMapping, LoginResult, MyClient, MyClientsResult, RemoveClientResult, SyncClientSummary, SyncResult, SyncStepLog, TallyStatus } from '../lib/types';
 import { OfflineQueue, isRetryableError } from '../lib/offline-queue';
@@ -83,6 +85,18 @@ function defaultSyncFromDate(): string {
   const now = new Date();
   const year = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
   return `${year}-04-01`;
+}
+
+// Enumerate every Indian FY start (April 1) that falls inside [fromDate, toDate].
+// Dynamic TB needs a per-FY opening snapshot so reports spanning multiple FYs
+// can anchor to the correct opening.
+function fyStartsInWindow(fromDate: string, toDate: string): string[] {
+  const startFY = (d: Date) => (d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1);
+  const fromYear = startFY(new Date(fromDate));
+  const toYear = startFY(new Date(toDate));
+  const out: string[] = [];
+  for (let y = fromYear; y <= toYear; y++) out.push(`${y}-04-01`);
+  return out;
 }
 
 /**
@@ -892,6 +906,50 @@ async function runSync(): Promise<SyncResult> {
           const res = await tryPush(clientApi, { kind: 'trialBalance', companyName, clientSlug: client.slug, rows });
           return { sent: rows.length, accepted: res.rowsAccepted };
         });
+
+        // Voucher-level ledger entries — feeds the new dynamic-TB pipeline.
+        // Uses the SAME cursor window as plain vouchers (voucherFrom..toDate)
+        // because the two tables must stay aligned: a voucher landing in
+        // vcfo_vouchers without its double-entry rows would make the dynamic TB
+        // disagree with Tally for that voucher's ledgers.
+        if (voucherFrom <= toDate) {
+          await runStep('voucherLedgerEntries', companyName, client, steps, counts, async () => {
+            const rows = await extractVoucherLedgerEntries(conn, companyName, voucherFrom, toDate);
+            if (rows.length === 0) return { sent: 0, accepted: 0 };
+            const res = await tryPush(clientApi, {
+              kind: 'voucherLedgerEntries',
+              companyName,
+              clientSlug: client.slug,
+              rows,
+            });
+            return { sent: rows.length, accepted: res.rowsAccepted };
+          });
+        }
+
+        // FY-start opening balances — one snapshot per FY touching the sync
+        // window. Cheap (one TDL per FY), always re-fetched so late back-dated
+        // openings in Tally propagate here; the server uses INSERT OR REPLACE.
+        const fyStarts = fyStartsInWindow(stockFrom, toDate);
+        for (const fyStart of fyStarts) {
+          await runStep(
+            `fyOpeningBalances:${fyStart}`,
+            companyName,
+            client,
+            steps,
+            counts,
+            async () => {
+              const rows = await extractFyOpeningBalances(conn, companyName, fyStart);
+              if (rows.length === 0) return { sent: 0, accepted: 0 };
+              const res = await tryPush(clientApi, {
+                kind: 'fyOpeningBalances',
+                companyName,
+                clientSlug: client.slug,
+                rows,
+              });
+              return { sent: rows.length, accepted: res.rowsAccepted };
+            },
+          );
+        }
 
         // Advance THIS client's cursor for this company only on voucher success.
         // Deliberately keyed to vouchers, not stock — a stock failure shouldn't

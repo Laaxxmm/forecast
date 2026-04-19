@@ -362,6 +362,54 @@ export function initializeSchema(db: DbHelper) {
     CREATE INDEX IF NOT EXISTS idx_vcfo_trial_balance_period
       ON vcfo_trial_balance(company_id, period_from, period_to);
 
+    -- Voucher-level per-ledger allocations (full double-entry). Feeds the
+    -- Dynamic TB service which composes: FY-start opening + pre-period voucher
+    -- delta + period voucher delta = closing-as-of-any-date. Unlike
+    -- vcfo_vouchers (header-only, one row per voucher against the party
+    -- ledger), this table has one row per voucher per ledger allocation — a
+    -- sales voucher that hits Sales + Debtors + GST lands as three rows.
+    -- debit/credit are magnitudes (>= 0); the sign is carried by the column
+    -- choice so SUM(credit) - SUM(debit) yields credit-positive movement.
+    -- Including (debit, credit) in the UNIQUE handles Tally's legitimate case
+    -- of the same ledger appearing twice in one voucher with different amounts
+    -- (e.g. a voucher with two line items that both hit the same GST ledger
+    -- at different rates).
+    CREATE TABLE IF NOT EXISTS vcfo_voucher_ledger_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES vcfo_companies(id) ON DELETE CASCADE,
+      voucher_date TEXT NOT NULL,
+      voucher_type TEXT NOT NULL,
+      voucher_number TEXT NOT NULL,
+      ledger_name TEXT NOT NULL,
+      debit REAL NOT NULL DEFAULT 0,
+      credit REAL NOT NULL DEFAULT 0,
+      is_party_ledger INTEGER DEFAULT 0,
+      narration TEXT,
+      sync_month TEXT NOT NULL,
+      UNIQUE(company_id, voucher_date, voucher_type, voucher_number, ledger_name, debit, credit)
+    );
+    CREATE INDEX IF NOT EXISTS idx_vle_company_date
+      ON vcfo_voucher_ledger_entries(company_id, voucher_date);
+    CREATE INDEX IF NOT EXISTS idx_vle_company_ledger_date
+      ON vcfo_voucher_ledger_entries(company_id, ledger_name, voucher_date);
+
+    -- FY-start opening balance per ledger. Captured once per FY via a single
+    -- TB-style TDL call with fromDate == toDate == fy-start, which makes Tally
+    -- return $OpeningBalance evaluated at FY-start (not the company's
+    -- book-beginning balance). Credit-positive convention matches
+    -- vcfo_trial_balance.opening_balance storage.
+    CREATE TABLE IF NOT EXISTS vcfo_fy_opening_balances (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES vcfo_companies(id) ON DELETE CASCADE,
+      fy_start TEXT NOT NULL,
+      ledger_name TEXT NOT NULL,
+      group_name TEXT,
+      opening_balance REAL DEFAULT 0,
+      UNIQUE(company_id, fy_start, ledger_name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_fyob_company_fystart
+      ON vcfo_fy_opening_balances(company_id, fy_start);
+
     -- Retrofit unique indices for tenants whose vcfo_* tables were created
     -- pre-cutover by the retired TallyVision sub-app. CREATE TABLE IF NOT
     -- EXISTS won't alter an existing table, so any column-level UNIQUE in

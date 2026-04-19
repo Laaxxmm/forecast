@@ -33,6 +33,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { DbHelper } from '../db/connection.js';
+import {
+  computeDynamicTB,
+  getBalancesAsOf,
+  getBalancesBefore,
+  fyStartFor,
+  type LedgerBalance,
+} from './dynamic-tb.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -249,13 +256,13 @@ function dayBefore(dateStr: string): string {
 // ─── Core builders ──────────────────────────────────────────────────────────
 
 /**
- * Trial Balance — direct read from `vcfo_trial_balance`. For a multi-month
- * range we sum opening/debit/credit/closing across all the TB rows that fall
- * in the window. One row per ledger.
+ * Trial Balance — voucher-level composition via `computeDynamicTB`. Works for
+ * any arbitrary `[from, to]` window at day precision (no more quarter-boundary
+ * approximations). Credit-positive throughout.
  *
- * Opening = earliest period's opening_balance
- * Closing = latest period's closing_balance
- * Debit/Credit = summed across all periods
+ * Opening = FY-start snapshot + net movement from FY-start to `from`.
+ * Debit / Credit = magnitudes over [from, to].
+ * Closing = opening + (credit - debit).
  */
 export function buildTrialBalance(
   db: DbHelper,
@@ -263,37 +270,22 @@ export function buildTrialBalance(
   from: string,
   to: string,
 ): TrialBalanceReport {
-  // For each ledger, pick the earliest period's opening and latest period's
-  // closing. Use SQL window-style aggregation emulated via MIN/MAX per ledger.
-  const rows = db.all(
-    `SELECT
-       tb.ledger_name AS ledgerName,
-       tb.group_name  AS groupName,
-       SUM(tb.net_debit)  AS debit,
-       SUM(tb.net_credit) AS credit,
-       (SELECT opening_balance FROM vcfo_trial_balance
-          WHERE company_id = tb.company_id AND ledger_name = tb.ledger_name
-            AND period_from >= ? AND period_to <= ?
-          ORDER BY period_from ASC LIMIT 1) AS opening,
-       (SELECT closing_balance FROM vcfo_trial_balance
-          WHERE company_id = tb.company_id AND ledger_name = tb.ledger_name
-            AND period_from >= ? AND period_to <= ?
-          ORDER BY period_to DESC LIMIT 1) AS closing
-     FROM vcfo_trial_balance tb
-     WHERE tb.company_id = ? AND tb.period_from >= ? AND tb.period_to <= ?
-     GROUP BY tb.ledger_name, tb.group_name
-     ORDER BY tb.group_name, tb.ledger_name`,
-    [from, to, from, to, companyId, from, to],
-  );
-
-  const cleanRows: TrialBalanceRow[] = rows.map((r: any) => ({
-    ledgerName: r.ledgerName,
-    groupName: r.groupName || null,
-    opening: Number(r.opening) || 0,
-    debit: Number(r.debit) || 0,
-    credit: Number(r.credit) || 0,
-    closing: Number(r.closing) || 0,
-  }));
+  const balances = computeDynamicTB(db, companyId, from, to, fyStartFor(from));
+  const cleanRows: TrialBalanceRow[] = balances
+    .map((b) => ({
+      ledgerName: b.ledgerName,
+      groupName: b.groupName,
+      opening: b.opening,
+      debit: b.debit,
+      credit: b.credit,
+      closing: b.closing,
+    }))
+    .sort((a, b) => {
+      const ga = a.groupName || '';
+      const gb = b.groupName || '';
+      if (ga !== gb) return ga.localeCompare(gb);
+      return a.ledgerName.localeCompare(b.ledgerName);
+    });
 
   const totals = cleanRows.reduce(
     (acc, r) => ({
@@ -310,8 +302,8 @@ export function buildTrialBalance(
 
 /**
  * Net movement per ledger over [from, to], joined with its group_name.
- * Movement is credit-positive (net_credit - net_debit). Stock groups are
- * excluded — their effect is captured via the stock adjustment in GP.
+ * Movement is credit-positive (credit - debit). Derived from the voucher-level
+ * dynamic TB so the result is day-accurate regardless of FY-start alignment.
  */
 function getLedgerMovements(
   db: DbHelper,
@@ -319,21 +311,23 @@ function getLedgerMovements(
   from: string,
   to: string,
 ): Array<{ ledgerName: string; groupName: string; movement: number }> {
-  return db.all(
-    `SELECT ledger_name AS ledgerName,
-            group_name  AS groupName,
-            SUM(net_credit) - SUM(net_debit) AS movement
-     FROM vcfo_trial_balance
-     WHERE company_id = ? AND period_from >= ? AND period_to <= ?
-       AND group_name IS NOT NULL
-     GROUP BY ledger_name, group_name`,
-    companyId, from, to,
-  );
+  const balances = computeDynamicTB(db, companyId, from, to, fyStartFor(from));
+  const out: Array<{ ledgerName: string; groupName: string; movement: number }> = [];
+  for (const b of balances) {
+    if (!b.groupName) continue;
+    // Skip dormant ledgers (zero movement) — original SQL implicitly excluded
+    // them by only surfacing rows with SUM(net_credit) - SUM(net_debit) != 0.
+    const movement = b.credit - b.debit;
+    if (movement === 0) continue;
+    out.push({ ledgerName: b.ledgerName, groupName: b.groupName, movement });
+  }
+  return out;
 }
 
 /**
- * Opening + closing stock for a period (from earliest TB opening to latest
- * TB closing over Stock-in-Hand groups). Used for COGS correction in GP.
+ * Opening + closing stock for a period. Opening = as-of day-before-from;
+ * closing = as-of to. Balance convention is credit-positive; stock is a
+ * debit-side asset so `-balance.closing` is the display-positive stock value.
  */
 function getStockAdjustment(
   db: DbHelper,
@@ -341,37 +335,21 @@ function getStockAdjustment(
   from: string,
   to: string,
 ): { opening: number; closing: number; adjustment: number } {
-  const stockGroups = getGroupTree(db, companyId, 'Stock-in-Hand');
-  if (stockGroups.length === 0) return { opening: 0, closing: 0, adjustment: 0 };
-  const ph = stockGroups.map(() => '?').join(',');
+  const stockGroups = new Set(getGroupTree(db, companyId, 'Stock-in-Hand'));
+  if (stockGroups.size === 0) return { opening: 0, closing: 0, adjustment: 0 };
 
-  const firstPF = db.get(
-    `SELECT MIN(period_from) AS pf FROM vcfo_trial_balance
-     WHERE company_id = ? AND group_name IN (${ph}) AND period_from >= ?`,
-    [companyId, ...stockGroups, from],
-  )?.pf;
-  const openingRow = firstPF
-    ? db.get(
-        `SELECT SUM(opening_balance) AS v FROM vcfo_trial_balance
-         WHERE company_id = ? AND group_name IN (${ph}) AND period_from = ?`,
-        [companyId, ...stockGroups, firstPF],
-      )
-    : null;
-  const opening = Number(openingRow?.v) || 0;
+  const sumStockClosing = (balances: LedgerBalance[]): number => {
+    // Assets are debit-side (closing < 0 in credit-positive convention);
+    // flip sign so stock values display as positive.
+    let total = 0;
+    for (const b of balances) {
+      if (b.groupName && stockGroups.has(b.groupName)) total += -b.closing;
+    }
+    return total;
+  };
 
-  const lastPT = db.get(
-    `SELECT MAX(period_to) AS pt FROM vcfo_trial_balance
-     WHERE company_id = ? AND group_name IN (${ph}) AND period_to <= ?`,
-    [companyId, ...stockGroups, to],
-  )?.pt;
-  const closingRow = lastPT
-    ? db.get(
-        `SELECT SUM(closing_balance) AS v FROM vcfo_trial_balance
-         WHERE company_id = ? AND group_name IN (${ph}) AND period_to = ?`,
-        [companyId, ...stockGroups, lastPT],
-      )
-    : null;
-  const closing = Number(closingRow?.v) || 0;
+  const opening = sumStockClosing(getBalancesBefore(db, companyId, from));
+  const closing = sumStockClosing(getBalancesAsOf(db, companyId, to));
 
   // opening - closing: when closing stock > opening, stockAdjustment is negative
   // (more inventory on hand = less COGS consumed = better GP).
@@ -447,22 +425,15 @@ function getGroupMovementsByColumn(
 ): Map<string, Record<string, number>> {
   const out = new Map<string, Record<string, number>>();
   if (groupNames.size === 0) return out;
-  const ph = [...groupNames].map(() => '?').join(',');
   for (const col of columns) {
     const { from, to } = columnRange(col);
-    const rows = db.all(
-      `SELECT group_name,
-              SUM(net_credit) - SUM(net_debit) AS movement
-       FROM vcfo_trial_balance
-       WHERE company_id = ? AND period_from >= ? AND period_to <= ?
-         AND group_name IN (${ph})
-       GROUP BY group_name`,
-      [companyId, from, to, ...groupNames],
-    );
-    for (const r of rows) {
-      const mv = Number(r.movement) || 0;
-      if (!out.has(r.group_name)) out.set(r.group_name, {});
-      out.get(r.group_name)![col] = mv;
+    const balances = computeDynamicTB(db, companyId, from, to, fyStartFor(from));
+    for (const b of balances) {
+      if (!b.groupName || !groupNames.has(b.groupName)) continue;
+      const mv = b.credit - b.debit;
+      if (!out.has(b.groupName)) out.set(b.groupName, {});
+      const bucket = out.get(b.groupName)!;
+      bucket[col] = (bucket[col] || 0) + mv;
     }
   }
   return out;
@@ -620,9 +591,9 @@ const BS_SECTIONS: Array<{
 ];
 
 /**
- * Closing balance for a set of groups as of a given date. Uses the TB row
- * whose period_to is closest to (but not after) asOf — the sync-agent
- * typically stores monthly snapshots, so there's one row per ledger per month.
+ * Closing balance for a set of groups as of a given date. Day-accurate via
+ * `getBalancesAsOf`: sums credit-positive closings of every ledger whose
+ * group is in `groupNames`. Callers flip sign for asset sides as needed.
  */
 function computeBSClosing(
   db: DbHelper,
@@ -631,23 +602,13 @@ function computeBSClosing(
   groupNames: string[],
 ): number {
   if (!groupNames.length) return 0;
-  const ph = groupNames.map(() => '?').join(',');
-
-  // Find the latest TB window that ends on/before asOf for this company.
-  const tbMonth = db.get(
-    `SELECT period_to FROM vcfo_trial_balance
-     WHERE company_id = ? AND period_to <= ?
-     ORDER BY period_to DESC LIMIT 1`,
-    companyId, asOfDate,
-  );
-  if (!tbMonth) return 0;
-
-  const row = db.get(
-    `SELECT SUM(closing_balance) AS total FROM vcfo_trial_balance
-     WHERE company_id = ? AND period_to = ? AND group_name IN (${ph})`,
-    [companyId, tbMonth.period_to, ...groupNames],
-  );
-  return Number(row?.total) || 0;
+  const groupSet = new Set(groupNames);
+  const balances = getBalancesAsOf(db, companyId, asOfDate);
+  let total = 0;
+  for (const b of balances) {
+    if (b.groupName && groupSet.has(b.groupName)) total += b.closing;
+  }
+  return total;
 }
 
 /** Quick net profit YTD (fy-start → asOf) — used to plug the BS balancing row. */
@@ -685,24 +646,13 @@ function computeBSClosingByLedger(
 ): Map<string, number> {
   const out = new Map<string, number>();
   if (!groupNames.length) return out;
-  const ph = groupNames.map(() => '?').join(',');
-
-  const tbMonth = db.get(
-    `SELECT period_to FROM vcfo_trial_balance
-     WHERE company_id = ? AND period_to <= ?
-     ORDER BY period_to DESC LIMIT 1`,
-    companyId, asOfDate,
-  );
-  if (!tbMonth) return out;
-
-  const rows = db.all(
-    `SELECT ledger_name AS ledgerName, SUM(closing_balance) AS total
-     FROM vcfo_trial_balance
-     WHERE company_id = ? AND period_to = ? AND group_name IN (${ph})
-     GROUP BY ledger_name`,
-    [companyId, tbMonth.period_to, ...groupNames],
-  );
-  for (const r of rows) out.set(r.ledgerName, Number(r.total) || 0);
+  const groupSet = new Set(groupNames);
+  const balances = getBalancesAsOf(db, companyId, asOfDate);
+  for (const b of balances) {
+    if (b.groupName && groupSet.has(b.groupName)) {
+      out.set(b.ledgerName, (out.get(b.ledgerName) || 0) + b.closing);
+    }
+  }
   return out;
 }
 

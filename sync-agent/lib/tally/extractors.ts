@@ -78,6 +78,29 @@ export interface TrialBalanceRow {
   closingBalance: number;
 }
 
+export interface VoucherLedgerEntryRow {
+  /** YYYY-MM-DD voucher header date. */
+  voucherDate: string;
+  voucherType: string;
+  voucherNumber: string;
+  ledgerName: string;
+  /** Magnitude only (>= 0). Sign is carried by the debit-vs-credit column
+   *  choice, so SUM(credit) - SUM(debit) yields credit-positive movement. */
+  debit: number;
+  credit: number;
+  isPartyLedger: boolean;
+  narration?: string;
+}
+
+export interface FyOpeningBalanceRow {
+  /** FY start date in YYYY-MM-DD (e.g. '2026-04-01' for FY 2026-27). */
+  fyStart: string;
+  ledgerName: string;
+  groupName?: string;
+  /** Credit-positive, same convention as TrialBalanceRow.openingBalance. */
+  openingBalance: number;
+}
+
 // ── Utilities ────────────────────────────────────────────────────────────────
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -619,6 +642,215 @@ export async function extractTrialBalance(
         closingBalance: parseAmount(r.F06),
       });
     }
+  }
+  return out;
+}
+
+// ── Voucher ledger entries (full double-entry) ─────────────────────────────
+// Unlike tdlDaybook which returns one row per voucher (header amount vs party
+// ledger), this extractor walks $AllLedgerEntries inside each voucher and
+// emits ONE row per voucher-per-ledger posting. Required to compose a
+// voucher-driven Dynamic Trial Balance for arbitrary date ranges.
+//
+// Response size risk: the retired TallyVision_2.0 codebase reported 15 MB for
+// one week on a real company, which is why the lightweight daybook extractor
+// deliberately avoids AllLedgerEntries. We mitigate two ways:
+//   1. Month chunks (not quarter) — smaller XML per request.
+//   2. Adaptive retry: if a monthly call fails (TALLY_TIMEOUT or parse error),
+//      split into 4 weekly sub-chunks and retry. Worst case: 48 requests/FY.
+//
+// Sign convention: Tally stores LedgerEntries $Amount signed (negative = debit,
+// positive = credit). We split into two unsigned columns (debit, credit) with
+// magnitudes only — the column choice carries the sign so SUM(credit) -
+// SUM(debit) yields a credit-positive movement that matches the existing TB
+// storage convention.
+
+/**
+ * Chunk [fromDate, toDate] into calendar months. Parallel to quarterChunks
+ * but at month granularity — smaller XML responses keep AllLedgerEntries
+ * requests within the connector timeout budget.
+ */
+export function monthChunks(
+  fromDate: string,
+  toDate: string,
+): { periodFrom: string; periodTo: string }[] {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) throw new Error('fromDate must be YYYY-MM-DD');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(toDate)) throw new Error('toDate must be YYYY-MM-DD');
+  if (fromDate > toDate) throw new Error(`fromDate ${fromDate} is after toDate ${toDate}`);
+
+  const chunks: { periodFrom: string; periodTo: string }[] = [];
+  const start = new Date(fromDate + 'T00:00:00Z');
+  const end = new Date(toDate + 'T00:00:00Z');
+  let cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
+  // Safety valve — at most 240 months (20 years).
+  for (let i = 0; i < 240 && cursor <= end; i++) {
+    const monthStart = cursor;
+    const monthEnd = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0));
+    const queryFrom = monthStart < start ? start : monthStart;
+    const queryTo = monthEnd > end ? end : monthEnd;
+    chunks.push({ periodFrom: iso(queryFrom), periodTo: iso(queryTo) });
+    cursor = new Date(Date.UTC(monthEnd.getUTCFullYear(), monthEnd.getUTCMonth() + 1, 1));
+  }
+  return chunks;
+}
+
+/** Same shape as monthChunks but one chunk per ISO week (7 days, clipped). */
+function weekChunks(fromDate: string, toDate: string): { periodFrom: string; periodTo: string }[] {
+  const chunks: { periodFrom: string; periodTo: string }[] = [];
+  const start = new Date(fromDate + 'T00:00:00Z');
+  const end = new Date(toDate + 'T00:00:00Z');
+  let cursor = start;
+  for (let i = 0; i < 60 && cursor <= end; i++) {
+    const next = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() + 6));
+    const chunkEnd = next > end ? end : next;
+    chunks.push({ periodFrom: iso(cursor), periodTo: iso(chunkEnd) });
+    cursor = new Date(Date.UTC(chunkEnd.getUTCFullYear(), chunkEnd.getUTCMonth(), chunkEnd.getUTCDate() + 1));
+  }
+  return chunks;
+}
+
+function tdlVoucherLedgerEntries(companyName: string, fromDate: string, toDate: string): string {
+  // COLLECTION TYPE="Voucher" with WALK over AllLedgerEntries — each LINE
+  // emits one row per ledger entry inside each voucher. Voucher-level fields
+  // (date, type, number, narration) are carried across the walk via TDL
+  // VARIABLE bindings (CurVchDate etc.), a pattern borrowed from the legacy
+  // TallyVision_2.0 cost-allocations template.
+  //
+  // F05 / F06: sign-split. `$Amount` on LedgerEntries is negative for debits
+  // and positive for credits. `$$IsDebit:$Amount` returns true when the amount
+  // is negative; negating the debit branch yields a positive magnitude and
+  // zeros-out the credit column for that side, and vice versa.
+  return `<?xml version="1.0" encoding="utf-8"?>
+<ENVELOPE>
+<HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>TVVLE</ID></HEADER>
+<BODY><DESC>
+<STATICVARIABLES>
+<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${xmlEscape(companyName)}</SVCURRENTCOMPANY>
+<SVFROMDATE>${formatTallyDate(fromDate)}</SVFROMDATE>
+<SVTODATE>${formatTallyDate(toDate)}</SVTODATE>
+</STATICVARIABLES>
+<TDL><TDLMESSAGE>
+<REPORT NAME="TVVLE"><FORMS>TVVLEF</FORMS></REPORT>
+<FORM NAME="TVVLEF"><PARTS>TVVLEP</PARTS><XMLTAG>DATA</XMLTAG></FORM>
+<PART NAME="TVVLEP"><LINES>L1</LINES><REPEAT>L1:C1</REPEAT><SCROLLED>Vertical</SCROLLED></PART>
+<LINE NAME="L1"><FIELDS>F01,F02,F03,F04,F05,F06,F07,F08</FIELDS><XMLTAG>ROW</XMLTAG></LINE>
+<FIELD NAME="F01"><SET>$Date</SET><XMLTAG>F01</XMLTAG></FIELD>
+<FIELD NAME="F02"><SET>$VoucherTypeName</SET><XMLTAG>F02</XMLTAG></FIELD>
+<FIELD NAME="F03"><SET>$VoucherNumber</SET><XMLTAG>F03</XMLTAG></FIELD>
+<FIELD NAME="F04"><SET>$LedgerEntries.LedgerName</SET><XMLTAG>F04</XMLTAG></FIELD>
+<FIELD NAME="F05"><SET>if $$IsDebit:$LedgerEntries.Amount then -$$NumValue:$LedgerEntries.Amount else 0</SET><XMLTAG>F05</XMLTAG></FIELD>
+<FIELD NAME="F06"><SET>if $$IsDebit:$LedgerEntries.Amount then 0 else $$NumValue:$LedgerEntries.Amount</SET><XMLTAG>F06</XMLTAG></FIELD>
+<FIELD NAME="F07"><SET>if $LedgerEntries.IsPartyLedger then "Y" else "N"</SET><XMLTAG>F07</XMLTAG></FIELD>
+<FIELD NAME="F08"><SET>$Narration</SET><XMLTAG>F08</XMLTAG></FIELD>
+<COLLECTION NAME="C1"><TYPE>Voucher</TYPE><WALK>LedgerEntries</WALK></COLLECTION>
+</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
+}
+
+/** Parse one chunk of voucher-ledger-entry rows. Shared between the monthly
+ *  path and the weekly-fallback path so both apply the same filters. */
+function parseVLERows(raw: string, fromDate: string, toDate: string): VoucherLedgerEntryRow[] {
+  const rows = rowsFromReport(raw);
+  const out: VoucherLedgerEntryRow[] = [];
+  for (const r of rows) {
+    const voucherDate = parseTallyDate(r.F01);
+    if (!voucherDate) continue;
+    if (voucherDate < fromDate || voucherDate > toDate) continue;
+    const ledgerName = cleanString(r.F04);
+    if (!ledgerName) continue;
+    const debit = Math.max(0, parseAmount(r.F05));
+    const credit = Math.max(0, parseAmount(r.F06));
+    if (debit === 0 && credit === 0) continue; // skip zero-amount walk artifacts
+    out.push({
+      voucherDate,
+      voucherType: cleanString(r.F02),
+      voucherNumber: cleanString(r.F03),
+      ledgerName,
+      debit,
+      credit,
+      isPartyLedger: cleanString(r.F07).toUpperCase() === 'Y',
+      narration: cleanString(r.F08) || undefined,
+    });
+  }
+  return out;
+}
+
+/**
+ * Extract voucher-level per-ledger debit/credit rows for [fromDate, toDate],
+ * fanned out across calendar months. On per-month failure, fall back to 4
+ * weekly sub-chunks before giving up on that window.
+ *
+ * Enforces the date filter client-side (parseVLERows) because Tally's WALK
+ * collection is not guaranteed to honour SVFROMDATE/SVTODATE consistently
+ * across versions — same defensive pattern as extractVouchers.
+ */
+export async function extractVoucherLedgerEntries(
+  conn: TallyConnector,
+  companyName: string,
+  fromDate: string,
+  toDate: string,
+): Promise<VoucherLedgerEntryRow[]> {
+  if (!companyName) throw new Error('companyName required for extractVoucherLedgerEntries');
+  const chunks = monthChunks(fromDate, toDate);
+  const out: VoucherLedgerEntryRow[] = [];
+  for (const { periodFrom, periodTo } of chunks) {
+    try {
+      const raw = await conn.sendXML(tdlVoucherLedgerEntries(companyName, periodFrom, periodTo));
+      out.push(...parseVLERows(raw, periodFrom, periodTo));
+    } catch (err: any) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[tally] voucherLedgerEntries month ${periodFrom}..${periodTo} failed (${err?.message || err}); splitting into weekly chunks`,
+      );
+      for (const { periodFrom: wFrom, periodTo: wTo } of weekChunks(periodFrom, periodTo)) {
+        try {
+          const raw = await conn.sendXML(tdlVoucherLedgerEntries(companyName, wFrom, wTo));
+          out.push(...parseVLERows(raw, wFrom, wTo));
+        } catch (wErr: any) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[tally] voucherLedgerEntries week ${wFrom}..${wTo} failed: ${wErr?.message || wErr}`,
+          );
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// ── FY-start opening balances ──────────────────────────────────────────────
+// Tally's `$OpeningBalance` on a Ledger object is evaluated at SVFROMDATE, so
+// calling tdlTrialBalance with fromDate == toDate == fyStart returns every
+// ledger's balance as-of FY-start. We reuse the existing TDL rather than
+// adding a dedicated one — one TDL call per (company, FY) is cheap enough.
+// The alternative of storing $OpeningBalance directly on tdlLedgers is wrong
+// because that returns the company's book-beginning balance (often years in
+// the past), not a FY-scoped opening.
+
+/**
+ * Extract every ledger's opening balance as of `fyStart` (YYYY-MM-DD). Uses
+ * the existing TB TDL with a zero-width window so Tally returns only the
+ * opening-balance column populated; debit/credit/closing totals are 0.
+ */
+export async function extractFyOpeningBalances(
+  conn: TallyConnector,
+  companyName: string,
+  fyStart: string,
+): Promise<FyOpeningBalanceRow[]> {
+  if (!companyName) throw new Error('companyName required for extractFyOpeningBalances');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fyStart)) throw new Error('fyStart must be YYYY-MM-DD');
+  const raw = await conn.sendXML(tdlTrialBalance(companyName, fyStart, fyStart));
+  const rows = rowsFromReport(raw);
+  const out: FyOpeningBalanceRow[] = [];
+  for (const r of rows) {
+    const ledgerName = cleanString(r.F01);
+    if (!ledgerName) continue;
+    out.push({
+      fyStart,
+      ledgerName,
+      groupName: cleanString(r.F02) || undefined,
+      openingBalance: parseAmount(r.F03),
+    });
   }
   return out;
 }

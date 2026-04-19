@@ -13,12 +13,14 @@
 //
 // Idempotency: each kind uses the same upsert semantics as TallyVision so
 // agents can safely re-push the same window without creating duplicates.
-//   companies    → INSERT ... ON CONFLICT(name) DO UPDATE
-//   ledgers      → INSERT OR REPLACE  by (company_id, name)
-//   groups       → INSERT OR REPLACE  by (company_id, group_name)
-//   vouchers     → INSERT OR IGNORE   by the composite voucher UNIQUE index
-//   stockSummary → INSERT OR REPLACE  by (company_id, period_from, period_to, item_name)
-//   trialBalance → INSERT OR REPLACE  by (company_id, period_from, period_to, ledger_name)
+//   companies            → INSERT ... ON CONFLICT(name) DO UPDATE
+//   ledgers              → INSERT OR REPLACE  by (company_id, name)
+//   groups               → INSERT OR REPLACE  by (company_id, group_name)
+//   vouchers             → INSERT OR IGNORE   by the composite voucher UNIQUE index
+//   stockSummary         → INSERT OR REPLACE  by (company_id, period_from, period_to, item_name)
+//   trialBalance         → INSERT OR REPLACE  by (company_id, period_from, period_to, ledger_name)
+//   voucherLedgerEntries → INSERT OR IGNORE   by composite (company, date, type, number, ledger, debit, credit)
+//   fyOpeningBalances    → INSERT OR REPLACE  by (company_id, fy_start, ledger_name)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Router, Request, Response } from 'express';
@@ -270,6 +272,85 @@ function ingestTrialBalance(db: DbHelper, companyId: number, rows: any[]): numbe
   return n;
 }
 
+/**
+ * Voucher-level ledger entries — one row per (voucher, ledger allocation).
+ * Feeds the dynamic-TB service which composes any date range from these plus
+ * FY-start openings. Composite UNIQUE includes (debit, credit) so Tally's
+ * legitimate "same ledger appears twice in one voucher with different amounts"
+ * case (e.g. split GST entries) lands as distinct rows. IGNORE (not REPLACE)
+ * because a re-pull of the same month must be idempotent.
+ */
+function ingestVoucherLedgerEntries(db: DbHelper, companyId: number, rows: any[]): number {
+  const num = (v: any) => (v == null ? 0 : Number(v) || 0);
+  let n = 0;
+  db.beginBatch();
+  try {
+    for (const r of rows) {
+      if (!r?.voucherDate || !r?.ledgerName) continue;
+      const syncMonth = String(r.voucherDate).slice(0, 7);
+      db.run(
+        `INSERT OR IGNORE INTO vcfo_voucher_ledger_entries
+           (company_id, voucher_date, voucher_type, voucher_number, ledger_name,
+            debit, credit, is_party_ledger, narration, sync_month)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          companyId,
+          String(r.voucherDate),
+          r.voucherType ? String(r.voucherType) : '',
+          r.voucherNumber ? String(r.voucherNumber) : '',
+          String(r.ledgerName).trim(),
+          num(r.debit),
+          num(r.credit),
+          r.isPartyLedger ? 1 : 0,
+          r.narration ? String(r.narration) : null,
+          syncMonth,
+        ],
+      );
+      n++;
+    }
+    db.endBatch();
+  } catch (e) {
+    db.rollbackBatch();
+    throw e;
+  }
+  return n;
+}
+
+/**
+ * FY-start opening balances — one row per (company, fy_start, ledger). REPLACE
+ * because a re-pull must pick up any back-dated openings the user posted in
+ * Tally after the last sync. Credit-positive convention matches
+ * vcfo_trial_balance.opening_balance.
+ */
+function ingestFyOpeningBalances(db: DbHelper, companyId: number, rows: any[]): number {
+  const num = (v: any) => (v == null ? 0 : Number(v) || 0);
+  let n = 0;
+  db.beginBatch();
+  try {
+    for (const r of rows) {
+      if (!r?.fyStart || !r?.ledgerName) continue;
+      db.run(
+        `INSERT OR REPLACE INTO vcfo_fy_opening_balances
+           (company_id, fy_start, ledger_name, group_name, opening_balance)
+         VALUES (?, ?, ?, ?, ?)`,
+        [
+          companyId,
+          String(r.fyStart),
+          String(r.ledgerName).trim(),
+          r.groupName ? String(r.groupName) : null,
+          num(r.openingBalance),
+        ],
+      );
+      n++;
+    }
+    db.endBatch();
+  } catch (e) {
+    db.rollbackBatch();
+    throw e;
+  }
+  return n;
+}
+
 // ─── Routes ─────────────────────────────────────────────────────────────────
 
 /** Handshake — verifies the key works and reports server identity back. */
@@ -292,7 +373,7 @@ router.post('/ping', requireAgentKey, (req: Request, res: Response) => {
 /**
  * Bulk upsert entry point. Body:
  *   {
- *     kind: 'companies' | 'ledgers' | 'vouchers' | 'groups' | 'stockSummary' | 'trialBalance',
+ *     kind: 'companies' | 'ledgers' | 'vouchers' | 'groups' | 'stockSummary' | 'trialBalance' | 'voucherLedgerEntries' | 'fyOpeningBalances',
  *     companyName?: string,  // required for everything except 'companies'
  *     rows: Array<object>    // shape depends on `kind`
  *   }
@@ -327,7 +408,9 @@ router.post('/batch', requireAgentKey, (req: Request, res: Response) => {
       kind === 'vouchers' ||
       kind === 'groups' ||
       kind === 'stockSummary' ||
-      kind === 'trialBalance'
+      kind === 'trialBalance' ||
+      kind === 'voucherLedgerEntries' ||
+      kind === 'fyOpeningBalances'
     ) {
       if (!companyName) {
         return res.status(400).json({ error: 'companyName required for ' + kind });
@@ -340,7 +423,9 @@ router.post('/batch', requireAgentKey, (req: Request, res: Response) => {
       else if (kind === 'vouchers') accepted = ingestVouchers(req.tenantDb, companyId, rows);
       else if (kind === 'groups') accepted = ingestGroups(req.tenantDb, companyId, rows);
       else if (kind === 'stockSummary') accepted = ingestStockSummary(req.tenantDb, companyId, rows);
-      else accepted = ingestTrialBalance(req.tenantDb, companyId, rows);
+      else if (kind === 'trialBalance') accepted = ingestTrialBalance(req.tenantDb, companyId, rows);
+      else if (kind === 'voucherLedgerEntries') accepted = ingestVoucherLedgerEntries(req.tenantDb, companyId, rows);
+      else accepted = ingestFyOpeningBalances(req.tenantDb, companyId, rows);
       // Any successful child-entity push marks this company as "active" so
       // the UI auto-selection picks the most recently touched one.
       if (accepted > 0) bumpLastSyncedAt(req.tenantDb, companyId);
