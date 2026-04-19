@@ -1839,6 +1839,10 @@
                     class="setup-tab settings-only-tab px-5 py-2 text-xs font-semibold uppercase tracking-wider rounded-lg transition">
                     Client Access
                 </button>
+                <button id="setupTab_agents" onclick="switchSetupTab('agents')"
+                    class="setup-tab settings-only-tab px-5 py-2 text-xs font-semibold uppercase tracking-wider rounded-lg transition">
+                    Tally Agents
+                </button>
                 <!-- Adjustments tabs (shown in adjustments mode) -->
                 <button id="setupTab_alloc" onclick="switchSetupTab('alloc')"
                     class="setup-tab adjustments-only-tab px-5 py-2 text-xs font-semibold uppercase tracking-wider rounded-lg transition hidden">
@@ -2578,6 +2582,79 @@
                     </div>
                 </div>
             </div><!-- /setupTabContent_clients -->
+
+            <!-- ===== TAB 3: TALLY AGENT KEYS ===== -->
+            <div id="setupTabContent_agents" class="hidden">
+                <div class="grid grid-cols-1 lg:grid-cols-5 gap-5">
+                    <!-- LEFT: Keys list (3 cols) -->
+                    <div class="lg:col-span-3">
+                        <div class="card rounded-xl p-5" style="border-left: 3px solid var(--accent);">
+                            <div class="flex items-center justify-between mb-1">
+                                <h3 class="text-xs font-bold uppercase tracking-wider" style="color: var(--text-primary);">&#128273; Tally Sync Agent Keys</h3>
+                                <button onclick="loadAgentKeys()" class="text-[10px] px-2 py-1 rounded-md" style="background: var(--bg-body); color: var(--text-secondary); border: 1px solid var(--border-main);">
+                                    &#8635; Refresh
+                                </button>
+                            </div>
+                            <p class="text-[11px] mb-4" style="color: var(--text-tertiary);">
+                                Tokens used by the desktop sync agent to push Tally data for a given client.
+                                Mint a new key per client install; revoke if the laptop is lost or compromised.
+                            </p>
+
+                            <div id="agentKeysList" class="space-y-2">
+                                <p class="text-xs italic" style="color: var(--text-tertiary);">Loading keys...</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- RIGHT: Mint form (2 cols) -->
+                    <div class="lg:col-span-2">
+                        <div class="card rounded-xl p-5" style="border-left: 3px solid var(--accent);">
+                            <h4 class="text-xs font-bold uppercase tracking-wider mb-4" style="color: var(--text-primary);">Mint New Key</h4>
+
+                            <div class="space-y-3">
+                                <div>
+                                    <label class="block text-[11px] font-medium mb-1" style="color: var(--text-tertiary);">Client Slug</label>
+                                    <input id="agentKeyFormSlug" type="text" placeholder="e.g. magnacode" autocomplete="off"
+                                        class="w-full rounded-lg px-3 py-2.5 text-sm" style="background: var(--bg-input); border: 1px solid var(--border-main); color: var(--text-primary); font-family: ui-monospace, 'SF Mono', Menlo, monospace;">
+                                    <p class="text-[10px] mt-1" style="color: var(--text-tertiary);">
+                                        Lowercase, matches the tenant folder under <code>data/clients/</code>.
+                                    </p>
+                                </div>
+                                <div>
+                                    <label class="block text-[11px] font-medium mb-1" style="color: var(--text-tertiary);">Label <span style="color: var(--text-tertiary); font-weight: 400;">(optional)</span></label>
+                                    <input id="agentKeyFormLabel" type="text" placeholder="e.g. Pharmacy laptop — Bangalore"
+                                        class="w-full rounded-lg px-3 py-2.5 text-sm" style="background: var(--bg-input); border: 1px solid var(--border-main); color: var(--text-primary);">
+                                </div>
+                                <button onclick="createAgentKey_UI()" id="agentKeyMintBtn"
+                                    class="w-full py-2.5 rounded-xl text-xs font-medium text-white transition" style="background: var(--accent);">
+                                    Create Key
+                                </button>
+                            </div>
+
+                            <!-- One-time plaintext reveal (hidden until mint succeeds) -->
+                            <div id="agentKeyRevealBox" class="hidden mt-5 rounded-lg p-3" style="background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.35);">
+                                <div class="flex items-center gap-2 mb-2">
+                                    <span style="color:#10b981; font-weight:600; font-size:11px;">&#10003; Key created</span>
+                                </div>
+                                <p class="text-[11px] mb-2" style="color: var(--text-secondary);">
+                                    Copy this now. You won't be able to see it again.
+                                </p>
+                                <div class="flex gap-2">
+                                    <input id="agentKeyRevealInput" type="text" readonly
+                                        class="flex-1 rounded-md px-2 py-1.5 text-[11px]"
+                                        style="background: var(--bg-body); border: 1px solid var(--border-main); color: var(--text-primary); font-family: ui-monospace, 'SF Mono', Menlo, monospace;">
+                                    <button onclick="copyAgentKeyReveal()" class="px-3 py-1.5 rounded-md text-[11px] font-medium" style="background: var(--accent); color: #fff;">
+                                        Copy
+                                    </button>
+                                </div>
+                                <button onclick="dismissAgentKeyReveal()" class="mt-2 text-[10px]" style="color: var(--text-tertiary);">
+                                    I've copied it — dismiss
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div><!-- /setupTabContent_agents -->
 
             <!-- Bottom action bar -->
                 <div class="flex justify-end gap-3 mt-6 pt-4" style="border-top: 1px solid var(--border-main);">
@@ -4455,11 +4532,14 @@
             document.getElementById('setupTabContent_alloc').classList.toggle('hidden', tab !== 'alloc');
             document.getElementById('setupTabContent_clients').classList.toggle('hidden', tab !== 'clients');
             document.getElementById('setupTabContent_writeoff').classList.toggle('hidden', tab !== 'writeoff');
+            const agentsContent = document.getElementById('setupTabContent_agents');
+            if (agentsContent) agentsContent.classList.toggle('hidden', tab !== 'agents');
 
             if (tab === 'sync') { refreshBatchCompanies(); loadBatchGroupSelect(); }
             if (tab === 'alloc') updateAllocSectionVisibility();
             if (tab === 'writeoff') updateWriteoffSectionVisibility();
             if (tab === 'clients') loadClientUsers();
+            if (tab === 'agents') loadAgentKeys();
         }
 
         async function loadAllocationRules(groupId) {
@@ -5816,6 +5896,128 @@
                 await loadClientUsers();
             } catch (err) {
                 alert('Error deleting client: ' + err.message);
+            }
+        }
+
+        // ===== TALLY AGENT KEYS (admin) =====
+        let _agentKeys = [];
+
+        async function loadAgentKeys() {
+            const container = document.getElementById('agentKeysList');
+            if (!container) return;
+            try {
+                const data = await api('/admin/agent-keys');
+                _agentKeys = (data && data.keys) || [];
+            } catch { _agentKeys = []; }
+            renderAgentKeysList();
+        }
+
+        function renderAgentKeysList() {
+            const container = document.getElementById('agentKeysList');
+            if (!container) return;
+            if (!_agentKeys.length) {
+                container.innerHTML = '<p class="text-xs italic" style="color:var(--text-tertiary);">No agent keys yet. Mint one on the right to connect a sync agent.</p>';
+                return;
+            }
+            const fmt = (s) => {
+                if (!s) return '—';
+                const d = new Date(s.endsWith('Z') ? s : s + 'Z');
+                if (isNaN(d.getTime())) return esc(s);
+                return d.toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' });
+            };
+            container.innerHTML = _agentKeys.map(k => {
+                const revoked = !!k.revoked_at;
+                const slugBadge = `<span style="font-size:10px;padding:1px 6px;border-radius:9px;background:rgba(16,185,129,0.10);color:#059669;border:1px solid rgba(16,185,129,0.35);font-family:ui-monospace,'SF Mono',Menlo,monospace;">${esc(k.client_slug)}</span>`;
+                const statusBadge = revoked
+                    ? '<span style="font-size:10px;padding:1px 6px;border-radius:9px;background:rgba(239,68,68,0.10);color:#dc2626;border:1px solid rgba(239,68,68,0.35);">revoked</span>'
+                    : '<span style="font-size:10px;padding:1px 6px;border-radius:9px;background:rgba(59,130,246,0.10);color:#2563eb;border:1px solid rgba(59,130,246,0.35);">active</span>';
+                const action = revoked
+                    ? ''
+                    : `<button onclick="revokeAgentKey_UI(${k.id})" class="text-xs px-2 py-1 rounded" style="color:#ef4444">Revoke</button>`;
+                return `
+                <div class="rounded-lg px-3 py-2" style="background:var(--bg-surface);border:1px solid var(--border-main); ${revoked ? 'opacity:0.55;' : ''}">
+                    <div class="flex items-center justify-between gap-2">
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="text-sm font-medium" style="color:var(--text-primary); font-family: ui-monospace, 'SF Mono', Menlo, monospace;">${esc(k.key_prefix || '')}…</span>
+                                ${slugBadge}
+                                ${statusBadge}
+                            </div>
+                            <div class="text-[11px] mt-0.5" style="color:var(--text-secondary);">
+                                ${k.label ? esc(k.label) : '<span style="color:var(--text-tertiary);font-style:italic;">no label</span>'}
+                            </div>
+                            <div class="text-[10px] mt-0.5" style="color:var(--text-tertiary);">
+                                Created ${fmt(k.created_at)} · Last used ${fmt(k.last_used_at)}${revoked ? ' · Revoked ' + fmt(k.revoked_at) : ''}
+                            </div>
+                        </div>
+                        <div class="flex-shrink-0">${action}</div>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        async function createAgentKey_UI() {
+            const slugEl = document.getElementById('agentKeyFormSlug');
+            const labelEl = document.getElementById('agentKeyFormLabel');
+            const btn = document.getElementById('agentKeyMintBtn');
+            const slug = (slugEl.value || '').trim().toLowerCase();
+            const label = (labelEl.value || '').trim();
+            if (!slug) return alert('Client slug is required');
+            if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(slug)) {
+                return alert('Slug must be lowercase letters/numbers/underscore/hyphen, starting with a letter or digit.');
+            }
+            btn.disabled = true; btn.textContent = 'Creating...';
+            try {
+                const res = await fetch(API + '/admin/agent-keys', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ clientSlug: slug, label })
+                });
+                const body = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+                // Show the plaintext once
+                const reveal = document.getElementById('agentKeyRevealBox');
+                const input = document.getElementById('agentKeyRevealInput');
+                input.value = body.plaintext || '';
+                reveal.classList.remove('hidden');
+                input.focus(); input.select();
+                labelEl.value = '';
+                await loadAgentKeys();
+            } catch (err) {
+                alert('Failed to create key: ' + err.message);
+            } finally {
+                btn.disabled = false; btn.textContent = 'Create Key';
+            }
+        }
+
+        function copyAgentKeyReveal() {
+            const input = document.getElementById('agentKeyRevealInput');
+            input.focus(); input.select();
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(input.value);
+                } else {
+                    document.execCommand('copy');
+                }
+            } catch (_) { /* ignore, selection is good enough for manual Ctrl+C */ }
+        }
+
+        function dismissAgentKeyReveal() {
+            const reveal = document.getElementById('agentKeyRevealBox');
+            const input = document.getElementById('agentKeyRevealInput');
+            input.value = '';
+            reveal.classList.add('hidden');
+        }
+
+        async function revokeAgentKey_UI(id) {
+            if (!confirm('Revoke this agent key? The sync agent using it will stop working immediately.')) return;
+            try {
+                const res = await fetch(API + '/admin/agent-keys/' + id, { method: 'DELETE' });
+                const body = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+                await loadAgentKeys();
+            } catch (err) {
+                alert('Failed to revoke key: ' + err.message);
             }
         }
 

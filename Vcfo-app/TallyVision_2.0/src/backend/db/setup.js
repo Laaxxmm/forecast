@@ -63,6 +63,24 @@ function createPlatformSchema(db) {
             PRIMARY KEY (client_id, company_id)
         );
         CREATE INDEX IF NOT EXISTS vcfo_idx_cca_client ON vcfo_client_company_access(client_id);
+
+        /* ── Agent API keys (sync-agent authentication) ─────────────────────
+         * Each desktop sync agent authenticates with a Bearer token. The
+         * plaintext key is shown exactly once at creation; we persist only
+         * the SHA-256 hash so a DB leak doesn't expose usable credentials.
+         * key_prefix (first 8 chars of the plaintext) is kept for humane
+         * display in the admin UI ("key ending in ….abc12"). */
+        CREATE TABLE IF NOT EXISTS vcfo_agent_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key_hash TEXT NOT NULL UNIQUE,
+            key_prefix TEXT NOT NULL,
+            client_slug TEXT NOT NULL,
+            label TEXT DEFAULT '',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_used_at DATETIME,
+            revoked_at DATETIME
+        );
+        CREATE INDEX IF NOT EXISTS vcfo_idx_agent_keys_slug ON vcfo_agent_keys(client_slug);
     `);
 
     // vcfo_upload_categories moved from platform -> per-client in Step 4 fix.

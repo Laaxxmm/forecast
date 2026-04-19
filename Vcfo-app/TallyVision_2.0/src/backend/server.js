@@ -342,6 +342,90 @@ function setSetting(key, value) {
 }
 
 // ============================================================
+//  AGENT API KEYS (desktop sync-agent authentication)
+// ============================================================
+//
+// Plaintext keys: "vcfo_live_" + 40 hex chars (43 chars total).
+// Shown once at creation; only the SHA-256 hash is persisted.
+// The prefix is the first 14 chars, safe to display in the admin UI.
+const crypto = require('crypto');
+
+function _hashAgentKey(plaintext) {
+    return crypto.createHash('sha256').update(plaintext).digest('hex');
+}
+
+function createAgentKey(clientSlug, label) {
+    const slug = String(clientSlug || '').trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(slug)) {
+        throw new Error('Invalid client_slug');
+    }
+    const plaintext = 'vcfo_live_' + crypto.randomBytes(20).toString('hex');
+    const hash = _hashAgentKey(plaintext);
+    const prefix = plaintext.slice(0, 14); // "vcfo_live_xxxx"
+    const info = db.prepare(
+        'INSERT INTO vcfo_agent_keys (key_hash, key_prefix, client_slug, label) VALUES (?, ?, ?, ?)'
+    ).run(hash, prefix, slug, String(label || ''));
+    return { id: info.lastInsertRowid, plaintext, prefix, clientSlug: slug, label: label || '' };
+}
+
+function listAgentKeys() {
+    return db.prepare(
+        `SELECT id, key_prefix, client_slug, label, created_at, last_used_at, revoked_at
+         FROM vcfo_agent_keys ORDER BY created_at DESC`
+    ).all();
+}
+
+function revokeAgentKey(id) {
+    return db.prepare(
+        'UPDATE vcfo_agent_keys SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND revoked_at IS NULL'
+    ).run(id).changes > 0;
+}
+
+/**
+ * Resolve an Authorization: Bearer <key> header to an agent-key row.
+ * Returns null if the header is missing, malformed, unknown, or revoked.
+ */
+function resolveBearerAgentKey(req) {
+    const raw = String(req.headers['authorization'] || '');
+    const m = /^Bearer\s+(\S+)$/i.exec(raw);
+    if (!m) return null;
+    const hash = _hashAgentKey(m[1]);
+    const row = db.prepare(
+        `SELECT id, client_slug, label, revoked_at FROM vcfo_agent_keys
+         WHERE key_hash = ? LIMIT 1`
+    ).get(hash);
+    if (!row || row.revoked_at) return null;
+    // Touch last_used_at (fire-and-forget — don't block the request).
+    try {
+        db.prepare('UPDATE vcfo_agent_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?').run(row.id);
+    } catch (_) { /* ignore */ }
+    return row;
+}
+
+/**
+ * Middleware for /api/ingest/* — authenticates the agent via Bearer token
+ * and rewrites the tenant context to the key's client_slug. Uses a NESTED
+ * withTenant() so the per-tenant DB proxy resolves to the correct slug for
+ * the remainder of this request's async chain.
+ *
+ * Also reruns the "bind active client DB" step inside the new context so
+ * queries against per-client tables (vcfo_vouchers, vcfo_ledgers, ...)
+ * land in the right .db file.
+ */
+function requireAgentKey(req, res, next) {
+    const key = resolveBearerAgentKey(req);
+    if (!key) {
+        return res.status(401).json({ error: 'Invalid or missing agent API key' });
+    }
+    req.agentKey = key;
+    withTenant(key.client_slug, () => {
+        const mgr = getDbManagerForCurrentTenant();
+        setActiveClientDb(mgr.getClientDb());
+        next();
+    });
+}
+
+// ============================================================
 //  DYNAMIC TB ENGINE (Optimized - in-memory lookups)
 // ============================================================
 
@@ -827,6 +911,261 @@ app.get('/api/tally/companies', async (req, res) => {
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
+});
+
+// ===== SYNC-AGENT INGEST =====
+// The VCFO Sync desktop agent POSTs to these endpoints on every sync cycle.
+// All routes are Bearer-token authenticated (see requireAgentKey above) —
+// the key's client_slug determines which tenant DB receives the data.
+
+// Handshake: verifies credentials + reports server-side presence.
+app.post('/api/ingest/ping', requireAgentKey, (req, res) => {
+    const { clientSlug, agentVersion, tally } = req.body || {};
+    console.log(
+        `[ingest/ping] agent=${agentVersion || '?'} slug=${req.agentKey.client_slug}`
+        + ` tally=${tally?.reachable ? (tally.version || 'ok') : 'offline'}`
+        + ` companies=${tally?.companies?.length ?? 0}`,
+    );
+    res.json({
+        ok: true,
+        rowsAccepted: 0,
+        message: `Handshake received from agent ${agentVersion || 'unknown'}`,
+        tenantSlug: req.agentKey.client_slug,
+        serverTime: new Date().toISOString(),
+    });
+});
+
+// ─── Batch ingest ─────────────────────────────────────────────────────────
+// Body:
+//   {
+//     kind: 'companies' | 'ledgers' | 'vouchers' | 'groups' | 'stockSummary',
+//     companyName?: string,          // required for everything except 'companies'
+//     rows: Array<object>            // shape depends on `kind`
+//   }
+//
+// Idempotency: upserts match the existing DataExtractor patterns —
+//   companies    → INSERT OR IGNORE by name
+//   ledgers      → INSERT OR REPLACE by (company_id, name)
+//   vouchers     → INSERT OR IGNORE by (company_id, date, voucher_type,
+//                                       voucher_number, ledger_name)
+//   groups       → INSERT OR REPLACE by (company_id, group_name)
+//   stockSummary → INSERT OR REPLACE by (company_id, period_from, period_to,
+//                                        item_name)
+// So agents can safely re-push the same window; duplicates collapse.
+
+function _resolveCompanyId(companyName) {
+    if (!companyName) return null;
+    const row = db.prepare('SELECT id FROM vcfo_companies WHERE name = ?').get(companyName);
+    if (row) return row.id;
+    // Auto-create on first sight — fy_start_month defaults to 4 (April).
+    const info = db.prepare(
+        `INSERT INTO vcfo_companies (name, fy_start_month, is_active) VALUES (?, 4, 1)`
+    ).run(companyName);
+    return info.lastInsertRowid;
+}
+
+function _ingestCompanies(rows) {
+    const insert = db.prepare(
+        `INSERT INTO vcfo_companies (name, fy_start_month, is_active)
+         VALUES (?, 4, 1)
+         ON CONFLICT(name) DO UPDATE SET is_active = 1`
+    );
+    const tx = db.transaction((arr) => {
+        let n = 0;
+        for (const r of arr) {
+            if (!r?.name) continue;
+            insert.run(String(r.name).trim());
+            n++;
+        }
+        return n;
+    });
+    return tx(rows);
+}
+
+function _ingestLedgers(companyId, rows) {
+    const insert = db.prepare(
+        `INSERT OR REPLACE INTO vcfo_ledgers
+            (company_id, name, group_name, parent_group)
+         VALUES (?, ?, ?, ?)`
+    );
+    const tx = db.transaction((arr) => {
+        let n = 0;
+        for (const r of arr) {
+            if (!r?.name) continue;
+            insert.run(
+                companyId,
+                String(r.name).trim(),
+                r.group ? String(r.group) : null,
+                r.parent ? String(r.parent) : null,
+            );
+            n++;
+        }
+        return n;
+    });
+    return tx(rows);
+}
+
+function _ingestVouchers(companyId, rows) {
+    const insert = db.prepare(
+        `INSERT OR IGNORE INTO vcfo_vouchers
+            (company_id, date, voucher_type, voucher_number, ledger_name,
+             amount, party_name, narration, sync_month)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const tx = db.transaction((arr) => {
+        let n = 0;
+        for (const r of arr) {
+            if (!r?.date || !r?.ledgerName) continue;
+            const syncMonth = String(r.date).slice(0, 7); // YYYY-MM
+            insert.run(
+                companyId,
+                String(r.date),
+                r.voucherType ? String(r.voucherType) : '',
+                r.voucherNumber ? String(r.voucherNumber) : '',
+                String(r.ledgerName),
+                Number(r.amount) || 0,
+                r.partyName ? String(r.partyName) : null,
+                r.narration ? String(r.narration) : null,
+                syncMonth,
+            );
+            n++;
+        }
+        return n;
+    });
+    return tx(rows);
+}
+
+// Chart-of-accounts (Tally Group records). REPLACE lets agents re-sync and
+// update classification changes (e.g. a group moving from BS to PL). Schema
+// enforces bs_pl/dr_cr/affects_gross_profit to the canonical letters — we
+// defensively normalize the payload to avoid CHECK constraint violations.
+function _ingestGroups(companyId, rows) {
+    const insert = db.prepare(
+        `INSERT OR REPLACE INTO vcfo_account_groups
+            (company_id, group_name, parent_group, bs_pl, dr_cr, affects_gross_profit)
+         VALUES (?, ?, ?, ?, ?, ?)`
+    );
+    const norm = (val, allowed) => {
+        if (!val) return null;
+        const s = String(val).trim().toUpperCase();
+        return allowed.includes(s) ? s : null;
+    };
+    const tx = db.transaction((arr) => {
+        let n = 0;
+        for (const r of arr) {
+            // Guard against whitespace-only names — the UNIQUE constraint
+            // would otherwise collapse every blank entry into a single row.
+            const name = r?.name ? String(r.name).trim() : '';
+            if (!name) continue;
+            insert.run(
+                companyId,
+                name,
+                r.parent ? String(r.parent) : null,
+                norm(r.bsPl, ['BS', 'PL']),
+                norm(r.drCr, ['D', 'C']),
+                norm(r.affectsGrossProfit, ['Y', 'N']),
+            );
+            n++;
+        }
+        return n;
+    });
+    return tx(rows);
+}
+
+// Stock summary (per-item qty+value for a window). REPLACE is correct here:
+// a re-sync of the same quarter on a busier period legitimately updates the
+// closing numbers as more vouchers land. UNIQUE on (company_id, period_from,
+// period_to, item_name) keeps the table one-row-per-item-per-window.
+function _ingestStockSummary(companyId, rows) {
+    const insert = db.prepare(
+        `INSERT OR REPLACE INTO vcfo_stock_summary
+            (company_id, period_from, period_to, item_name, stock_group,
+             opening_qty, opening_value, inward_qty, inward_value,
+             outward_qty, outward_value, closing_qty, closing_value)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const num = (v) => (v == null ? 0 : (Number(v) || 0));
+    const tx = db.transaction((arr) => {
+        let n = 0;
+        for (const r of arr) {
+            if (!r?.itemName || !r?.periodFrom || !r?.periodTo) continue;
+            insert.run(
+                companyId,
+                String(r.periodFrom),
+                String(r.periodTo),
+                String(r.itemName).trim(),
+                r.stockGroup ? String(r.stockGroup) : null,
+                num(r.openingQty), num(r.openingValue),
+                num(r.inwardQty),  num(r.inwardValue),
+                num(r.outwardQty), num(r.outwardValue),
+                num(r.closingQty), num(r.closingValue),
+            );
+            n++;
+        }
+        return n;
+    });
+    return tx(rows);
+}
+
+app.post('/api/ingest/batch', requireAgentKey, (req, res) => {
+    const { kind, companyName, rows } = req.body || {};
+    if (!kind || !Array.isArray(rows)) {
+        return res.status(400).json({ error: 'Expected { kind, rows: [...] }' });
+    }
+    try {
+        let accepted = 0;
+        let companyId = null;
+        if (kind === 'companies') {
+            accepted = _ingestCompanies(rows);
+        } else if (kind === 'ledgers' || kind === 'vouchers' || kind === 'groups' || kind === 'stockSummary') {
+            if (!companyName) return res.status(400).json({ error: 'companyName required for ' + kind });
+            companyId = _resolveCompanyId(companyName);
+            if (kind === 'ledgers') accepted = _ingestLedgers(companyId, rows);
+            else if (kind === 'vouchers') accepted = _ingestVouchers(companyId, rows);
+            else if (kind === 'groups') accepted = _ingestGroups(companyId, rows);
+            else accepted = _ingestStockSummary(companyId, rows);
+        } else {
+            return res.status(400).json({ error: `Unknown kind: ${kind}` });
+        }
+        console.log(
+            `[ingest/batch] slug=${req.agentKey.client_slug} kind=${kind}`
+            + `${companyName ? ' company=' + companyName : ''} accepted=${accepted}/${rows.length}`,
+        );
+        res.json({
+            ok: true,
+            kind,
+            rowsReceived: rows.length,
+            rowsAccepted: accepted,
+            companyId,
+            serverTime: new Date().toISOString(),
+        });
+    } catch (err) {
+        console.error('[ingest/batch] error', err);
+        res.status(500).json({ error: err?.message || 'Ingest failed' });
+    }
+});
+
+// ─── Admin: mint / list / revoke agent API keys ───────────────────────────
+// Admin-only (guarded by adminOnly). Plaintext is returned exactly once.
+app.post('/api/admin/agent-keys', adminOnly, (req, res) => {
+    const { clientSlug, label } = req.body || {};
+    try {
+        const key = createAgentKey(clientSlug, label);
+        res.json({ ok: true, ...key });
+    } catch (err) {
+        res.status(400).json({ error: err?.message || 'Failed to create key' });
+    }
+});
+
+app.get('/api/admin/agent-keys', adminOnly, (req, res) => {
+    res.json({ keys: listAgentKeys() });
+});
+
+app.delete('/api/admin/agent-keys/:id', adminOnly, (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+    const revoked = revokeAgentKey(id);
+    res.json({ ok: revoked });
 });
 
 // Enriched companies: Tally list cross-referenced with DB sync status
@@ -6307,5 +6646,15 @@ if (require.main === module) {
     process.on('SIGINT', () => { closeAllTenants(); process.exit(0); });
     process.on('SIGTERM', () => { closeAllTenants(); process.exit(0); });
 }
+
+// Expose internal helpers on the mounted app so the outer Magna_Tracker server
+// can mint/list/revoke agent keys without proxying HTTP through adminOnly.
+// (Express app objects are functions with arbitrary properties — attaching
+// our own `_vcfo` namespace avoids colliding with Express internals.)
+app._vcfo = {
+    createAgentKey,
+    listAgentKeys,
+    revokeAgentKey,
+};
 
 module.exports = app;

@@ -149,6 +149,22 @@ export function initializePlatformSchema(db: DbHelper) {
       sort_order INTEGER DEFAULT 0,
       UNIQUE(client_id, scope, section, element_key)
     );
+
+    -- Sync-agent: map each Tally data file (company) to a (branch, stream)
+    -- pair for a client. Slice 4 — gives the operator full manual control
+    -- over attribution. Nullable FKs allow partial mappings (picked branch
+    -- but not yet stream, etc.); SET NULL on branch/stream delete so the
+    -- row survives and shows an "unmapped" badge in the agent UI.
+    CREATE TABLE IF NOT EXISTS vcfo_company_mapping (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+      tally_company_name TEXT NOT NULL,
+      branch_id INTEGER REFERENCES branches(id) ON DELETE SET NULL,
+      stream_id INTEGER REFERENCES business_streams(id) ON DELETE SET NULL,
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(client_id, tally_company_name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_vcm_client ON vcfo_company_mapping(client_id);
   `);
 
   // Safe migrations for existing DBs

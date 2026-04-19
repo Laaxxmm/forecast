@@ -29,6 +29,7 @@ import dashboardActualsRoutes from './routes/dashboard-actuals.js';
 import syncRoutes from './routes/sync.js';
 import revenueSharingRoutes from './routes/revenue-sharing.js';
 import dbViewerRoutes from './routes/db-viewer.js';
+import { setVcfoBridge } from './services/vcfo-bridge.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -268,6 +269,10 @@ try {
   const vcfoApp = requireCJS('../../Vcfo-app/TallyVision_2.0/src/backend/server.js');
   vcfoSso = requireCJS('../../Vcfo-app/TallyVision_2.0/src/backend/sso.js');
   app.use('/vcfo', vcfoApp);
+  // Pull out the helpers the sub-app attached to its own exported app so
+  // sync-agent auth routes can mint agent-keys without proxying HTTP through
+  // the sub-app's session-based adminOnly middleware.
+  setVcfoBridge(vcfoApp && (vcfoApp as any)._vcfo ? (vcfoApp as any)._vcfo : null);
   console.log('✓ TallyVision sub-app mounted at /vcfo');
 } catch (err: any) {
   console.warn('⚠ TallyVision sub-app not mounted:', err?.message || err);
