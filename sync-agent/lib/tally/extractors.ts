@@ -131,20 +131,44 @@ function cleanString(val: any): string {
     .trim();
 }
 
-// ── TDL templates (minimal subset) ──────────────────────────────────────────
-// Note: we intentionally do NOT emit <SVCURRENTCOMPANY>. Tally Prime rejects
-// that directive when the target company is already loaded ("Could not set
-// SVCurrentCompany to ..."). All queries run against whichever company is
-// currently active in Tally — the agent's caller is responsible for picking
-// the right company name for labelling the output payload.
+/**
+ * XML-escape a value before injecting into TDL. Tally company names routinely
+ * contain colons, parens, and ampersands ("Magnacode Clinic 25-26 : Bangalore",
+ * "XYZ Pharma & Co (2024-2025)"). Without escaping, Tally's XML parser rejects
+ * the envelope outright and the whole sync fails silently.
+ */
+function xmlEscape(val: string): string {
+  return String(val)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
 
-function tdlLedgers(): string {
+// ── TDL templates (minimal subset) ──────────────────────────────────────────
+// Every TDL envelope emits <SVCURRENTCOMPANY>{name}</SVCURRENTCOMPANY> in its
+// STATICVARIABLES block so the query is scoped to the specific Tally company
+// the caller names — not whatever company happens to be in focus in the
+// Tally Prime UI.
+//
+// Earlier versions skipped SVCURRENTCOMPANY with a note that Tally "rejected"
+// the directive. The actual bug was casing/whitespace mismatch between the
+// name we were passing and the name Tally had loaded. Symptom: every company
+// in a multi-company tenant came back with identical TB/PL/BS (whichever
+// company happened to be active). Using the exact name returned by
+// conn.getCompanies() for SVCURRENTCOMPANY — XML-escaped via xmlEscape — and
+// Tally correctly scopes the response to that company. Names that don't match
+// any loaded company still error, and the per-company try/catch in the
+// extractors reports that clearly instead of silently returning wrong data.
+
+function tdlLedgers(companyName: string): string {
   // Mirrors TEMPLATES['list-masters']('Ledger') — just name + parent group.
   return `<?xml version="1.0" encoding="utf-8"?>
 <ENVELOPE>
 <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>TVLedgers</ID></HEADER>
 <BODY><DESC>
-<STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT></STATICVARIABLES>
+<STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><SVCURRENTCOMPANY>${xmlEscape(companyName)}</SVCURRENTCOMPANY></STATICVARIABLES>
 <TDL><TDLMESSAGE>
 <REPORT NAME="TVLedgers"><FORMS>TVLedgersF</FORMS></REPORT>
 <FORM NAME="TVLedgersF"><PARTS>TVLedgersP</PARTS><XMLTAG>DATA</XMLTAG></FORM>
@@ -156,7 +180,7 @@ function tdlLedgers(): string {
 </TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
 }
 
-function tdlDaybook(fromDate: string, toDate: string): string {
+function tdlDaybook(companyName: string, fromDate: string, toDate: string): string {
   // Mirrors TEMPLATES['daybook'] FIX-23 — bare Collection API, voucher-level
   // fields ONLY. We deliberately do NOT request AllLedgerEntries:
   //   * AllLedgerEntries expansion balloons the response (15MB+ for 1 week on
@@ -173,6 +197,7 @@ function tdlDaybook(fromDate: string, toDate: string): string {
 <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>TVDaybook</ID></HEADER>
 <BODY><DESC>
 <STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${xmlEscape(companyName)}</SVCURRENTCOMPANY>
 <SVFROMDATE>${formatTallyDate(fromDate)}</SVFROMDATE>
 <SVTODATE>${formatTallyDate(toDate)}</SVTODATE>
 </STATICVARIABLES>
@@ -215,10 +240,10 @@ export async function extractCompanies(conn: TallyConnector): Promise<CompanyRow
 }
 
 export async function extractLedgers(conn: TallyConnector, companyName: string): Promise<LedgerRow[]> {
-  // companyName is kept for callers that want to label their logs / payload;
-  // the query itself runs against Tally's currently-active company.
+  // companyName is injected into <SVCURRENTCOMPANY> so Tally scopes the
+  // Ledger collection to this company rather than whichever is in focus.
   if (!companyName) throw new Error('companyName required for extractLedgers');
-  const raw = await conn.sendXML(tdlLedgers());
+  const raw = await conn.sendXML(tdlLedgers(companyName));
   const rows = rowsFromReport(raw);
   return rows
     .map((r: any): LedgerRow => ({
@@ -252,7 +277,7 @@ export async function extractVouchers(
   if (!/^\d{4}-\d{2}-\d{2}$/.test(toDate)) throw new Error('toDate must be YYYY-MM-DD');
   if (fromDate > toDate) throw new Error(`fromDate ${fromDate} is after toDate ${toDate}`);
 
-  const raw = await conn.sendXML(tdlDaybook(fromDate, toDate));
+  const raw = await conn.sendXML(tdlDaybook(companyName, fromDate, toDate));
   if (!raw) throw new Error('Empty response from Tally');
   if (raw.includes('Unknown Request')) throw new Error('Tally rejected daybook query');
 
@@ -303,12 +328,12 @@ export async function extractVouchers(
 // rollups use to categorize ledgers; without them the server has to guess
 // from `parent_group` strings, which is lossy.
 
-function tdlGroups(): string {
+function tdlGroups(companyName: string): string {
   return `<?xml version="1.0" encoding="utf-8"?>
 <ENVELOPE>
 <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>TVGroups</ID></HEADER>
 <BODY><DESC>
-<STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT></STATICVARIABLES>
+<STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><SVCURRENTCOMPANY>${xmlEscape(companyName)}</SVCURRENTCOMPANY></STATICVARIABLES>
 <TDL><TDLMESSAGE>
 <REPORT NAME="TVGroups"><FORMS>TVGroupsF</FORMS></REPORT>
 <FORM NAME="TVGroupsF"><PARTS>TVGroupsP</PARTS><XMLTAG>DATA</XMLTAG></FORM>
@@ -325,7 +350,7 @@ function tdlGroups(): string {
 
 export async function extractGroups(conn: TallyConnector, companyName: string): Promise<GroupRow[]> {
   if (!companyName) throw new Error('companyName required for extractGroups');
-  const raw = await conn.sendXML(tdlGroups());
+  const raw = await conn.sendXML(tdlGroups(companyName));
   const rows = rowsFromReport(raw);
   return rows
     .map((r: any): GroupRow => {
@@ -354,13 +379,14 @@ export async function extractGroups(conn: TallyConnector, companyName: string): 
 // $$NumValue formulas that reference the active period. So we don't need
 // a JS-side filter.
 
-function tdlStockSummary(fromDate: string, toDate: string): string {
+function tdlStockSummary(companyName: string, fromDate: string, toDate: string): string {
   return `<?xml version="1.0" encoding="utf-8"?>
 <ENVELOPE>
 <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>TVStockSum</ID></HEADER>
 <BODY><DESC>
 <STATICVARIABLES>
 <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${xmlEscape(companyName)}</SVCURRENTCOMPANY>
 <SVFROMDATE>${formatTallyDate(fromDate)}</SVFROMDATE>
 <SVTODATE>${formatTallyDate(toDate)}</SVTODATE>
 </STATICVARIABLES>
@@ -467,7 +493,7 @@ export async function extractStockSummary(
   for (const { periodFrom, periodTo, queryFrom, queryTo } of chunks) {
     let rows: any[] = [];
     try {
-      const raw = await conn.sendXML(tdlStockSummary(queryFrom, queryTo));
+      const raw = await conn.sendXML(tdlStockSummary(companyName, queryFrom, queryTo));
       rows = rowsFromReport(raw);
     } catch (err: any) {
       // Log and continue to the next quarter. A 0-item or
@@ -521,13 +547,14 @@ export async function extractStockSummary(
 // and swallowed — a fresh company with no ledger entries in a given quarter
 // should not abort the whole pull.
 
-function tdlTrialBalance(fromDate: string, toDate: string): string {
+function tdlTrialBalance(companyName: string, fromDate: string, toDate: string): string {
   return `<?xml version="1.0" encoding="utf-8"?>
 <ENVELOPE>
 <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>TVTB</ID></HEADER>
 <BODY><DESC>
 <STATICVARIABLES>
 <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${xmlEscape(companyName)}</SVCURRENTCOMPANY>
 <SVFROMDATE>${formatTallyDate(fromDate)}</SVFROMDATE>
 <SVTODATE>${formatTallyDate(toDate)}</SVTODATE>
 </STATICVARIABLES>
@@ -568,7 +595,7 @@ export async function extractTrialBalance(
   for (const { periodFrom, periodTo, queryFrom, queryTo } of chunks) {
     let rows: any[] = [];
     try {
-      const raw = await conn.sendXML(tdlTrialBalance(queryFrom, queryTo));
+      const raw = await conn.sendXML(tdlTrialBalance(companyName, queryFrom, queryTo));
       rows = rowsFromReport(raw);
     } catch (err: any) {
       // eslint-disable-next-line no-console

@@ -76,7 +76,7 @@ export class ApiClient {
   private headers(): Record<string, string> {
     const h: Record<string, string> = {
       'Content-Type': 'application/json',
-      'User-Agent': 'vcfo-sync-agent/0.2.0',
+      'User-Agent': 'vcfo-sync-agent/0.3.1',
     };
     if (this.apiKey) h['Authorization'] = `Bearer ${this.apiKey}`;
     return h;
@@ -91,7 +91,7 @@ export class ApiClient {
       const res = await fetch(this.url('/api/ingest/ping'), {
         method: 'POST',
         headers: this.headers(),
-        body: JSON.stringify({ agentVersion: '0.2.0', probe: true }),
+        body: JSON.stringify({ agentVersion: '0.3.1', probe: true }),
       });
       // 401 means reachable but not yet authed, which is still "online".
       return res.ok || res.status === 401;
