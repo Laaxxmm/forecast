@@ -361,6 +361,17 @@ export function initializeSchema(db: DbHelper) {
     );
     CREATE INDEX IF NOT EXISTS idx_vcfo_trial_balance_period
       ON vcfo_trial_balance(company_id, period_from, period_to);
+
+    -- Retrofit unique indices for tenants whose vcfo_* tables were created
+    -- pre-cutover by the retired TallyVision sub-app. CREATE TABLE IF NOT
+    -- EXISTS won't alter an existing table, so any column-level UNIQUE in
+    -- the declarations above is a no-op for those tenants. An explicit
+    -- unique index fills the gap and lets ON CONFLICT(name) in
+    -- routes/ingest.ts resolve against it. Idempotent: if the legacy
+    -- table already has the constraint, CREATE UNIQUE INDEX IF NOT EXISTS
+    -- is a no-op.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_vcfo_companies_name
+      ON vcfo_companies(name);
   `);
 
   // Branch-related migrations (add branch_id to data tables)
