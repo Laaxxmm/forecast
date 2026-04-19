@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { ChevronRight, ChevronDown } from 'lucide-react';
 import api from '../../api/client';
 import { formatRs, getMonthLabel } from '../../pages/ForecastModulePage';
 
@@ -8,12 +9,16 @@ interface BSSection {
   side: 'asset' | 'liability';
   values: Record<string, number>;
   grandTotal: number;
+  children?: BSSection[];
 }
 
 interface BSStatement {
   asOfDate: string;
   view: 'yearly' | 'monthly';
   columns: string[];
+  columnLabels?: Record<string, string>;
+  bifurcated?: boolean;
+  companies?: Array<{ id: number; name: string }>;
   sections: BSSection[];
   totals: {
     totalAssets: Record<string, number>;
@@ -23,33 +28,39 @@ interface BSStatement {
 
 interface Props {
   companyId: number | null;
+  companyIds?: string | null;
   asOf: string;
   view: 'yearly' | 'monthly';
   from?: string;
+  bifurcate?: boolean;
 }
 
-export default function BalanceSheetReport({ companyId, asOf, view, from }: Props) {
+export default function BalanceSheetReport({ companyId, companyIds, asOf, view, from, bifurcate }: Props) {
   const [data, setData] = useState<BSStatement | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    if (!companyId) {
+    if (!companyId && !companyIds) {
       setData(null);
       return;
     }
     setLoading(true);
     setError(null);
-    const params: Record<string, any> = { companyId, asOf, view };
+    const params: Record<string, any> = { asOf, view };
+    if (companyId) params.companyId = companyId;
+    else if (companyIds) params.companyIds = companyIds;
     if (from) params.from = from;
+    if (bifurcate) params.bifurcate = 'true';
     api
       .get('/vcfo/balance-sheet', { params })
       .then(res => setData(res.data))
       .catch(err => setError(err?.response?.data?.error || err?.message || 'Failed to load'))
       .finally(() => setLoading(false));
-  }, [companyId, asOf, view, from]);
+  }, [companyId, companyIds, asOf, view, from, bifurcate]);
 
-  if (!companyId) {
+  if (!companyId && !companyIds) {
     return (
       <div className="bg-dark-800 border border-dark-400/30 rounded-2xl p-8 text-center">
         <p className="text-theme-muted">Select a company to view the Balance Sheet.</p>
@@ -68,10 +79,70 @@ export default function BalanceSheetReport({ companyId, asOf, view, from }: Prop
     );
   }
 
-  const { columns, sections, totals, view: reportView } = data;
+  const { columns, sections, totals, view: reportView, bifurcated, columnLabels } = data;
   const liabilities = sections.filter(s => s.side === 'liability');
   const assets = sections.filter(s => s.side === 'asset');
-  const labelFor = (col: string) => (reportView === 'monthly' ? getMonthLabel(col) : 'Closing');
+  const labelFor = (col: string): string => {
+    if (columnLabels && columnLabels[col]) return columnLabels[col];
+    if (bifurcated) return col === 'total' ? 'Total' : col;
+    return reportView === 'monthly' ? getMonthLabel(col) : 'Closing';
+  };
+  const showTrailingTotal = !bifurcated && reportView === 'monthly';
+
+  const toggle = (key: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const renderRow = (row: BSSection, depth: number): ReactNode => {
+    const hasChildren = !!(row.children && row.children.length > 0);
+    const isOpen = expanded.has(row.key);
+    const paddingLeft = 16 + depth * 20;
+    const isParent = depth === 0;
+
+    return (
+      <Fragment key={row.key}>
+        <tr
+          className={`border-b border-dark-400/20 transition-colors ${
+            hasChildren ? 'cursor-pointer hover:bg-dark-600/40' : 'hover:bg-dark-600/20'
+          }`}
+          onClick={hasChildren ? () => toggle(row.key) : undefined}
+        >
+          <td
+            className={`py-2 sticky left-0 bg-dark-800 ${isParent ? 'font-semibold text-theme-primary' : 'font-normal text-[13px] text-theme-secondary'}`}
+            style={{ paddingLeft, paddingRight: 16 }}
+          >
+            <span className="inline-flex items-center gap-1.5">
+              {hasChildren ? (
+                isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />
+              ) : (
+                <span style={{ width: 14, display: 'inline-block' }} />
+              )}
+              {row.label}
+            </span>
+          </td>
+          {columns.map(c => (
+            <td
+              key={c}
+              className={`px-4 py-2 text-right font-mono ${isParent ? 'text-theme-primary font-semibold' : 'text-theme-secondary text-[13px]'}`}
+            >
+              {formatRs(row.values[c] || 0)}
+            </td>
+          ))}
+          {showTrailingTotal && (
+            <td className={`px-4 py-2 text-right font-mono ${isParent ? 'text-theme-primary font-semibold' : 'text-theme-secondary text-[13px]'}`}>
+              {formatRs(row.grandTotal)}
+            </td>
+          )}
+        </tr>
+        {hasChildren && isOpen && row.children!.map(ch => renderRow(ch, depth + 1))}
+      </Fragment>
+    );
+  };
 
   const renderSide = (title: string, rows: BSSection[], total: Record<string, number>, accent: string) => (
     <div className="bg-dark-800 border border-dark-400/30 rounded-2xl shadow-elev-2 overflow-hidden">
@@ -88,27 +159,13 @@ export default function BalanceSheetReport({ companyId, asOf, view, from }: Prop
                   {labelFor(c)}
                 </th>
               ))}
-              {reportView === 'monthly' && (
+              {showTrailingTotal && (
                 <th className="text-right px-4 py-2.5 border-b border-dark-400/30">Total</th>
               )}
             </tr>
           </thead>
           <tbody>
-            {rows.map(row => (
-              <tr key={row.key} className="border-b border-dark-400/20 hover:bg-dark-600/30 transition-colors">
-                <td className="px-4 py-2 text-theme-primary sticky left-0 bg-dark-800">{row.label}</td>
-                {columns.map(c => (
-                  <td key={c} className="px-4 py-2 text-right text-theme-secondary font-mono">
-                    {formatRs(row.values[c] || 0)}
-                  </td>
-                ))}
-                {reportView === 'monthly' && (
-                  <td className="px-4 py-2 text-right text-theme-primary font-mono font-semibold">
-                    {formatRs(row.grandTotal)}
-                  </td>
-                )}
-              </tr>
-            ))}
+            {rows.map(row => renderRow(row, 0))}
           </tbody>
           <tfoot>
             <tr className="bg-dark-700/80">
@@ -118,7 +175,7 @@ export default function BalanceSheetReport({ companyId, asOf, view, from }: Prop
                   {formatRs(total[c] || 0)}
                 </td>
               ))}
-              {reportView === 'monthly' && <td></td>}
+              {showTrailingTotal && <td></td>}
             </tr>
           </tfoot>
         </table>
@@ -129,7 +186,10 @@ export default function BalanceSheetReport({ companyId, asOf, view, from }: Prop
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <span className="text-xs text-theme-faint">As of {data.asOfDate} · {reportView === 'monthly' ? 'Monthly view' : 'Yearly view'}</span>
+        <span className="text-xs text-theme-faint">
+          As of {data.asOfDate} ·{' '}
+          {bifurcated ? 'By company' : reportView === 'monthly' ? 'Monthly view' : 'Yearly view'}
+        </span>
       </div>
       {renderSide('Liabilities & Equity', liabilities, totals.totalLiabilities, 'text-rose-300')}
       {renderSide('Assets', assets, totals.totalAssets, 'text-emerald-300')}

@@ -20,10 +20,10 @@ import { Router, Request, Response } from 'express';
 import { getPlatformHelper } from '../db/platform-connection.js';
 import { requireAdmin } from '../middleware/auth.js';
 import {
-  buildTrialBalance,
-  buildProfitLoss,
-  buildBalanceSheet,
-  buildCashFlow,
+  buildTrialBalanceMulti,
+  buildProfitLossMulti,
+  buildBalanceSheetMulti,
+  buildCashFlowMulti,
 } from '../services/vcfo-report-builder.js';
 import {
   renderXlsx,
@@ -49,6 +49,50 @@ function requireDate(val: any, name: string): string {
 
 function validView(val: any): 'yearly' | 'monthly' {
   return val === 'monthly' ? 'monthly' : 'yearly';
+}
+
+function validBool(val: any): boolean {
+  if (val === true || val === 1) return true;
+  const s = String(val || '').toLowerCase();
+  return s === '1' || s === 'true' || s === 'yes';
+}
+
+/**
+ * Resolve the set of companies the current report call should cover.
+ *
+ * Priority (first match wins):
+ *   1. Explicit `companyIds` (CSV or repeated) → intersected with accessible set
+ *   2. Explicit `companyId` (legacy single-company) → [that id]
+ *   3. Default → all accessible companies (sidebar-filtered)
+ *
+ * Always intersects with `listAccessibleCompanies` so a user can never read
+ * a company outside their active branch/stream context.
+ */
+async function resolveCompanyRefs(req: Request): Promise<Array<{ id: number; name: string }>> {
+  const accessible = await listAccessibleCompanies(req);
+  const byId = new Map(accessible.map(c => [c.id, { id: c.id, name: c.name }]));
+
+  // 1. explicit companyIds
+  const raw = req.query.companyIds;
+  if (raw !== undefined && raw !== null && raw !== '') {
+    const flat = Array.isArray(raw) ? raw.join(',') : String(raw);
+    if (flat.toLowerCase() === 'all') return [...byId.values()];
+    const ids = flat
+      .split(',')
+      .map(s => parseInt(s.trim(), 10))
+      .filter(n => Number.isFinite(n));
+    return ids.map(id => byId.get(id)).filter((x): x is { id: number; name: string } => !!x);
+  }
+
+  // 2. explicit single companyId
+  if (req.query.companyId !== undefined && req.query.companyId !== '') {
+    const n = parseInt(String(req.query.companyId), 10);
+    if (Number.isFinite(n) && byId.has(n)) return [byId.get(n)!];
+    return [];
+  }
+
+  // 3. default — every company the user can see right now
+  return [...byId.values()];
 }
 
 /**
@@ -212,10 +256,10 @@ router.delete('/data', requireAdmin, async (req, res) => {
 
 router.get('/trial-balance', async (req, res) => {
   try {
-    const companyId = requireInt(req.query.companyId, 'companyId');
+    const companies = await resolveCompanyRefs(req);
     const from = requireDate(req.query.from, 'from');
     const to = requireDate(req.query.to, 'to');
-    const report = buildTrialBalance(req.tenantDb!, companyId, from, to);
+    const report = buildTrialBalanceMulti(req.tenantDb!, companies, from, to);
     res.json(report);
   } catch (err: any) {
     console.error('[vcfo-reports] /trial-balance error', err);
@@ -225,11 +269,12 @@ router.get('/trial-balance', async (req, res) => {
 
 router.get('/profit-loss', async (req, res) => {
   try {
-    const companyId = requireInt(req.query.companyId, 'companyId');
+    const companies = await resolveCompanyRefs(req);
     const from = requireDate(req.query.from, 'from');
     const to = requireDate(req.query.to, 'to');
     const view = validView(req.query.view);
-    const report = buildProfitLoss(req.tenantDb!, companyId, from, to, view);
+    const bifurcate = validBool(req.query.bifurcate);
+    const report = buildProfitLossMulti(req.tenantDb!, companies, from, to, view, bifurcate);
     res.json(report);
   } catch (err: any) {
     console.error('[vcfo-reports] /profit-loss error', err);
@@ -239,11 +284,12 @@ router.get('/profit-loss', async (req, res) => {
 
 router.get('/balance-sheet', async (req, res) => {
   try {
-    const companyId = requireInt(req.query.companyId, 'companyId');
+    const companies = await resolveCompanyRefs(req);
     const asOf = requireDate(req.query.asOf, 'asOf');
     const view = validView(req.query.view);
     const rangeFrom = req.query.from ? requireDate(req.query.from, 'from') : undefined;
-    const report = buildBalanceSheet(req.tenantDb!, companyId, asOf, view, rangeFrom);
+    const bifurcate = validBool(req.query.bifurcate);
+    const report = buildBalanceSheetMulti(req.tenantDb!, companies, asOf, view, rangeFrom, bifurcate);
     res.json(report);
   } catch (err: any) {
     console.error('[vcfo-reports] /balance-sheet error', err);
@@ -253,10 +299,11 @@ router.get('/balance-sheet', async (req, res) => {
 
 router.get('/cash-flow', async (req, res) => {
   try {
-    const companyId = requireInt(req.query.companyId, 'companyId');
+    const companies = await resolveCompanyRefs(req);
     const from = requireDate(req.query.from, 'from');
     const to = requireDate(req.query.to, 'to');
-    const report = buildCashFlow(req.tenantDb!, companyId, from, to);
+    const bifurcate = validBool(req.query.bifurcate);
+    const report = buildCashFlowMulti(req.tenantDb!, companies, from, to, bifurcate);
     res.json(report);
   } catch (err: any) {
     console.error('[vcfo-reports] /cash-flow error', err);
@@ -281,12 +328,9 @@ router.get('/download', async (req, res) => {
       return res.status(400).json({ error: 'format must be xlsx | pdf | docx' });
     }
 
-    const companyId = requireInt(req.query.companyId, 'companyId');
-    const company = req.tenantDb!.get(
-      'SELECT id, name FROM vcfo_companies WHERE id = ?',
-      companyId,
-    );
-    if (!company) return res.status(404).json({ error: 'Company not found' });
+    const companies = await resolveCompanyRefs(req);
+    if (companies.length === 0) return res.status(404).json({ error: 'No companies accessible' });
+    const bifurcate = validBool(req.query.bifurcate);
 
     // Build the requested report
     let built: any;
@@ -294,29 +338,31 @@ router.get('/download', async (req, res) => {
     if (report === 'tb') {
       const from = requireDate(req.query.from, 'from');
       const to = requireDate(req.query.to, 'to');
-      built = buildTrialBalance(req.tenantDb!, companyId, from, to);
+      built = buildTrialBalanceMulti(req.tenantDb!, companies, from, to);
       dateLabel = `${from}_${to}`;
     } else if (report === 'pl') {
       const from = requireDate(req.query.from, 'from');
       const to = requireDate(req.query.to, 'to');
       const view = validView(req.query.view);
-      built = buildProfitLoss(req.tenantDb!, companyId, from, to, view);
+      built = buildProfitLossMulti(req.tenantDb!, companies, from, to, view, bifurcate);
       dateLabel = `${from}_${to}`;
     } else if (report === 'bs') {
       const asOf = requireDate(req.query.asOf, 'asOf');
       const view = validView(req.query.view);
       const rangeFrom = req.query.from ? requireDate(req.query.from, 'from') : undefined;
-      built = buildBalanceSheet(req.tenantDb!, companyId, asOf, view, rangeFrom);
+      built = buildBalanceSheetMulti(req.tenantDb!, companies, asOf, view, rangeFrom, bifurcate);
       dateLabel = `as_of_${asOf}`;
     } else {
       const from = requireDate(req.query.from, 'from');
       const to = requireDate(req.query.to, 'to');
-      built = buildCashFlow(req.tenantDb!, companyId, from, to);
+      built = buildCashFlowMulti(req.tenantDb!, companies, from, to, bifurcate);
       dateLabel = `${from}_${to}`;
     }
 
     const ctx = {
-      companyName: (company as any).name || 'Company',
+      companyName: companies.length === 1
+        ? companies[0].name
+        : `${companies.length}_companies`,
       reportKind: report as 'tb' | 'pl' | 'bs' | 'cf',
     };
 

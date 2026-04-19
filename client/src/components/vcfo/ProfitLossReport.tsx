@@ -16,6 +16,9 @@ interface PLStatement {
   period: { from: string; to: string };
   view: 'yearly' | 'monthly';
   columns: string[];
+  columnLabels?: Record<string, string>;
+  bifurcated?: boolean;
+  companies?: Array<{ id: number; name: string }>;
   sections: PLSection[];
   computed: {
     grossProfit: Record<string, number>;
@@ -34,32 +37,38 @@ interface PLStatement {
 
 interface Props {
   companyId: number | null;
+  companyIds?: string | null;
   from: string;
   to: string;
   view: 'yearly' | 'monthly';
+  bifurcate?: boolean;
 }
 
-export default function ProfitLossReport({ companyId, from, to, view }: Props) {
+export default function ProfitLossReport({ companyId, companyIds, from, to, view, bifurcate }: Props) {
   const [data, setData] = useState<PLStatement | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    if (!companyId) {
+    if (!companyId && !companyIds) {
       setData(null);
       return;
     }
     setLoading(true);
     setError(null);
+    const params: Record<string, any> = { from, to, view };
+    if (companyId) params.companyId = companyId;
+    else if (companyIds) params.companyIds = companyIds;
+    if (bifurcate) params.bifurcate = 'true';
     api
-      .get('/vcfo/profit-loss', { params: { companyId, from, to, view } })
+      .get('/vcfo/profit-loss', { params })
       .then(res => setData(res.data))
       .catch(err => setError(err?.response?.data?.error || err?.message || 'Failed to load'))
       .finally(() => setLoading(false));
-  }, [companyId, from, to, view]);
+  }, [companyId, companyIds, from, to, view, bifurcate]);
 
-  if (!companyId) {
+  if (!companyId && !companyIds) {
     return (
       <div className="bg-dark-800 border border-dark-400/30 rounded-2xl p-8 text-center">
         <p className="text-theme-muted">Select a company to view the Profit &amp; Loss statement.</p>
@@ -78,8 +87,12 @@ export default function ProfitLossReport({ companyId, from, to, view }: Props) {
     );
   }
 
-  const { columns, sections, computed, view: reportView } = data;
-  const labelFor = (col: string) => (reportView === 'monthly' ? getMonthLabel(col) : 'Total');
+  const { columns, sections, computed, view: reportView, bifurcated, columnLabels } = data;
+  const labelFor = (col: string): string => {
+    if (columnLabels && columnLabels[col]) return columnLabels[col];
+    if (bifurcated) return col === 'total' ? 'Total' : col;
+    return reportView === 'monthly' ? getMonthLabel(col) : 'Total';
+  };
 
   const rowTextColor = (isExpense: boolean) =>
     isExpense ? 'text-rose-300' : 'text-emerald-300';
@@ -92,6 +105,10 @@ export default function ProfitLossReport({ companyId, from, to, view }: Props) {
       return next;
     });
   };
+
+  // "Total" trailing column only makes sense for single-period monthly view;
+  // bifurcation already carries its own `total` column from the server.
+  const showTrailingTotal = !bifurcated && reportView === 'monthly';
 
   const renderRow = (section: PLSection, depth: number): ReactNode => {
     const hasChildren = !!(section.children && section.children.length > 0);
@@ -132,7 +149,7 @@ export default function ProfitLossReport({ companyId, from, to, view }: Props) {
               {formatRs(section.values[c] || 0)}
             </td>
           ))}
-          {reportView === 'monthly' && (
+          {showTrailingTotal && (
             <td
               className={`px-4 py-2 text-right font-mono ${
                 isParent ? 'font-semibold' : 'font-normal text-[13px]'
@@ -153,7 +170,8 @@ export default function ProfitLossReport({ companyId, from, to, view }: Props) {
       <div className="px-5 py-3 border-b border-dark-400/30 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-theme-primary">Profit &amp; Loss</h3>
         <span className="text-xs text-theme-faint">
-          {data.period.from} → {data.period.to} · {reportView === 'monthly' ? 'Monthly view' : 'Yearly view'}
+          {data.period.from} → {data.period.to} ·{' '}
+          {bifurcated ? 'By company' : reportView === 'monthly' ? 'Monthly view' : 'Yearly view'}
         </span>
       </div>
       <div className="overflow-x-auto">
@@ -166,7 +184,7 @@ export default function ProfitLossReport({ companyId, from, to, view }: Props) {
                   {labelFor(c)}
                 </th>
               ))}
-              {reportView === 'monthly' && (
+              {showTrailingTotal && (
                 <th className="text-right px-4 py-2.5 border-b border-dark-400/30">Total</th>
               )}
             </tr>
@@ -182,7 +200,7 @@ export default function ProfitLossReport({ companyId, from, to, view }: Props) {
                   {formatRs(computed.grossProfit[c] || 0)}
                 </td>
               ))}
-              {reportView === 'monthly' && (
+              {showTrailingTotal && (
                 <td className="px-4 py-2.5 text-right text-accent-300 font-mono font-semibold">
                   {formatRs(data.grandTotals.grossProfit)}
                 </td>
@@ -197,7 +215,7 @@ export default function ProfitLossReport({ companyId, from, to, view }: Props) {
                   {(computed.grossMargin[c] ?? 0).toFixed(2)}%
                 </td>
               ))}
-              {reportView === 'monthly' && <td></td>}
+              {showTrailingTotal && <td></td>}
             </tr>
           </tbody>
           <tfoot>
@@ -208,7 +226,7 @@ export default function ProfitLossReport({ companyId, from, to, view }: Props) {
                   {formatRs(computed.netProfit[c] || 0)}
                 </td>
               ))}
-              {reportView === 'monthly' && (
+              {showTrailingTotal && (
                 <td className="px-4 py-3 text-right text-accent-300 font-mono font-bold">
                   {formatRs(data.grandTotals.netProfit)}
                 </td>

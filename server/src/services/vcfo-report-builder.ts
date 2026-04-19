@@ -68,6 +68,13 @@ export interface PLStatement {
   period: { from: string; to: string };
   view: 'yearly' | 'monthly';
   columns: string[]; // e.g. ['total'] for yearly, ['2025-04', '2025-05', …] monthly
+  /** Human-friendly column labels. Same keys as `columns`; used by UI so that
+   *  bifurcated views can show company names instead of "co:72". */
+  columnLabels?: Record<string, string>;
+  /** If true, columns represent companies (bifurcation). Otherwise periods. */
+  bifurcated?: boolean;
+  /** Which companies were rolled into this statement. Empty → single-company. */
+  companies?: Array<{ id: number; name: string }>;
   sections: PLSection[];
   computed: {
     grossProfit: Record<string, number>;
@@ -91,12 +98,18 @@ export interface BSSection {
   /** Per-column closing balances. 'total' for yearly / 'YYYY-MM' for monthly. */
   values: Record<string, number>;
   grandTotal: number;
+  /** Optional per-ledger (or per-sub-group) breakdown. The UI expands each
+   *  parent on click to reveal children, same pattern as P&L. */
+  children?: BSSection[];
 }
 
 export interface BSStatement {
   asOfDate: string;
   view: 'yearly' | 'monthly';
   columns: string[];
+  columnLabels?: Record<string, string>;
+  bifurcated?: boolean;
+  companies?: Array<{ id: number; name: string }>;
   sections: BSSection[];
   totals: {
     totalAssets: Record<string, number>;
@@ -107,19 +120,34 @@ export interface BSStatement {
 export interface CFLine {
   label: string;
   amount: number;
+  /** Per-column values when the statement is multi-column (bifurcated). */
+  values?: Record<string, number>;
+  /** Per-ledger contribution breakdown (expandable in the UI). */
+  children?: CFLine[];
 }
 
 export interface CFStatement {
   period: { from: string; to: string };
+  /** Optional column keys when bifurcation is enabled. Single-column mode omits. */
+  columns?: string[];
+  columnLabels?: Record<string, string>;
+  bifurcated?: boolean;
+  companies?: Array<{ id: number; name: string }>;
   operating: CFLine[];
   operatingTotal: number;
+  operatingTotalValues?: Record<string, number>;
   investing: CFLine[];
   investingTotal: number;
+  investingTotalValues?: Record<string, number>;
   financing: CFLine[];
   financingTotal: number;
+  financingTotalValues?: Record<string, number>;
   netChange: number;
+  netChangeValues?: Record<string, number>;
   openingCash: number;
+  openingCashValues?: Record<string, number>;
   closingCash: number;
+  closingCashValues?: Record<string, number>;
 }
 
 // ─── Group classification helpers ───────────────────────────────────────────
@@ -645,6 +673,39 @@ function fyStart(db: DbHelper, companyId: number, asOf: string): string {
   return `${y}-${String(startMonth).padStart(2, '0')}-01`;
 }
 
+/**
+ * Per-ledger closing balances for a set of groups, keyed by ledger name, as of
+ * a particular date. Used to build expandable children under each BS parent.
+ */
+function computeBSClosingByLedger(
+  db: DbHelper,
+  companyId: number,
+  asOfDate: string,
+  groupNames: string[],
+): Map<string, number> {
+  const out = new Map<string, number>();
+  if (!groupNames.length) return out;
+  const ph = groupNames.map(() => '?').join(',');
+
+  const tbMonth = db.get(
+    `SELECT period_to FROM vcfo_trial_balance
+     WHERE company_id = ? AND period_to <= ?
+     ORDER BY period_to DESC LIMIT 1`,
+    companyId, asOfDate,
+  );
+  if (!tbMonth) return out;
+
+  const rows = db.all(
+    `SELECT ledger_name AS ledgerName, SUM(closing_balance) AS total
+     FROM vcfo_trial_balance
+     WHERE company_id = ? AND period_to = ? AND group_name IN (${ph})
+     GROUP BY ledger_name`,
+    [companyId, tbMonth.period_to, ...groupNames],
+  );
+  for (const r of rows) out.set(r.ledgerName, Number(r.total) || 0);
+  return out;
+}
+
 export function buildBalanceSheet(
   db: DbHelper,
   companyId: number,
@@ -677,6 +738,9 @@ export function buildBalanceSheet(
     let grandTotal = 0;
     let nonZero = false;
 
+    // Per-ledger aggregate across all columns — keyed by ledgerName → Record<col, amount>.
+    const perLedger = new Map<string, Record<string, number>>();
+
     for (const col of columns) {
       const closing = computeBSClosing(db, companyId, asOfByCol[col], groups);
       // Convention: assets are debit (negative in TB sign), liabilities credit.
@@ -688,10 +752,43 @@ export function buildBalanceSheet(
 
       if (sec.side === 'asset') totalAssets[col] += amount;
       else totalLiabilities[col] += amount;
+
+      // Build children breakdown per column (same sign flip as parent).
+      const byLedger = computeBSClosingByLedger(db, companyId, asOfByCol[col], groups);
+      for (const [ledger, raw] of byLedger.entries()) {
+        const childAmount = sec.side === 'asset' ? -raw : raw;
+        if (!perLedger.has(ledger)) perLedger.set(ledger, {});
+        perLedger.get(ledger)![col] = (perLedger.get(ledger)![col] || 0) + childAmount;
+      }
     }
 
     if (!nonZero) continue; // skip sections with all-zero columns
-    sections.push({ key: sec.key, label: sec.label, side: sec.side, values, grandTotal });
+
+    // Emit one child per ledger with material closing balance. Dormant
+    // ledgers (all-zero) are dropped so the expanded view stays readable.
+    const children: BSSection[] = [];
+    for (const [ledger, perCol] of perLedger.entries()) {
+      let childTotal = 0;
+      const childValues: Record<string, number> = {};
+      for (const col of columns) {
+        childValues[col] = perCol[col] || 0;
+        childTotal += childValues[col];
+      }
+      if (Math.abs(childTotal) < 0.01) continue;
+      children.push({
+        key: `${sec.key}:${ledger}`,
+        label: ledger,
+        side: sec.side,
+        values: childValues,
+        grandTotal: childTotal,
+      });
+    }
+    children.sort((a, b) => Math.abs(b.grandTotal) - Math.abs(a.grandTotal));
+
+    sections.push({
+      key: sec.key, label: sec.label, side: sec.side, values, grandTotal,
+      children: children.length ? children : undefined,
+    });
   }
 
   // Plug the balancing P&L row (current-year profit accumulates as equity).
@@ -811,4 +908,573 @@ export function buildCashFlow(
     openingCash,
     closingCash,
   };
+}
+
+// ─── Multi-company wrappers (consolidation + bifurcation) ───────────────────
+//
+// These take a list of companyIds and either:
+//   (a) consolidate — sum per-column values across companies (single set of
+//       period/total columns, same as single-company mode). Used when the
+//       sidebar maps to multiple companies (e.g. "All Branches" or a branch
+//       that contains both clinic + pharmacy).
+//   (b) bifurcate — emit one column per company plus a "total" column, so
+//       the user can compare branches side-by-side.
+//
+// Implementation is intentionally loop-and-merge: reuses the single-company
+// builders as-is, then post-processes. Chart-of-accounts group names don't
+// need to match across companies — children are merged by label, non-matches
+// appear as separate rows.
+
+type CompanyRef = { id: number; name: string };
+
+function mergeChildrenPL(children: PLSection[][]): PLSection[] {
+  const byLabel = new Map<string, PLSection>();
+  for (const list of children) {
+    for (const ch of list) {
+      const existing = byLabel.get(ch.label);
+      if (!existing) {
+        byLabel.set(ch.label, {
+          key: ch.key,
+          label: ch.label,
+          isExpense: ch.isExpense,
+          values: { ...ch.values },
+          grandTotal: ch.grandTotal,
+        });
+      } else {
+        for (const [col, v] of Object.entries(ch.values)) {
+          existing.values[col] = (existing.values[col] || 0) + v;
+        }
+        existing.grandTotal += ch.grandTotal;
+      }
+    }
+  }
+  return [...byLabel.values()].sort((a, b) => Math.abs(b.grandTotal) - Math.abs(a.grandTotal));
+}
+
+function mergeChildrenBS(children: BSSection[][]): BSSection[] {
+  const byLabel = new Map<string, BSSection>();
+  for (const list of children) {
+    for (const ch of list) {
+      const existing = byLabel.get(ch.label);
+      if (!existing) {
+        byLabel.set(ch.label, {
+          key: ch.key,
+          label: ch.label,
+          side: ch.side,
+          values: { ...ch.values },
+          grandTotal: ch.grandTotal,
+        });
+      } else {
+        for (const [col, v] of Object.entries(ch.values)) {
+          existing.values[col] = (existing.values[col] || 0) + v;
+        }
+        existing.grandTotal += ch.grandTotal;
+      }
+    }
+  }
+  return [...byLabel.values()].sort((a, b) => Math.abs(b.grandTotal) - Math.abs(a.grandTotal));
+}
+
+export function buildProfitLossMulti(
+  db: DbHelper,
+  companies: CompanyRef[],
+  from: string,
+  to: string,
+  view: 'yearly' | 'monthly',
+  bifurcate: boolean,
+): PLStatement {
+  if (companies.length === 0) {
+    // Empty set — return an empty but valid shape so the UI can render "no data".
+    const emptyCols = view === 'monthly' ? monthsInRange(from, to) : ['total'];
+    const zeros = Object.fromEntries(emptyCols.map(c => [c, 0]));
+    return {
+      period: { from, to }, view, columns: emptyCols, bifurcated: bifurcate,
+      companies: [], sections: [],
+      computed: { grossProfit: zeros, grossMargin: zeros, netProfit: zeros },
+      grandTotals: { revenue: 0, directCosts: 0, indirectIncome: 0, indirectExpenses: 0, grossProfit: 0, netProfit: 0 },
+    };
+  }
+
+  // Build each company's statement with the normal period-based columns — we'll
+  // reshape into bifurcated columns post-hoc if requested.
+  const perCompany = companies.map(c => ({
+    company: c,
+    report: buildProfitLoss(db, c.id, from, to, view),
+  }));
+
+  if (!bifurcate) {
+    // Consolidation: sum period columns across companies.
+    // All reports share the same `columns` array (same period), so we can merge
+    // section-by-section.
+    const first = perCompany[0].report;
+    const columns = first.columns;
+
+    const mergeParentSections = (key: string, label: string, isExpense: boolean): PLSection => {
+      const values: Record<string, number> = Object.fromEntries(columns.map(c => [c, 0]));
+      let grandTotal = 0;
+      const allChildren: PLSection[][] = [];
+      for (const { report } of perCompany) {
+        const sec = report.sections.find(s => s.key === key);
+        if (!sec) continue;
+        for (const col of columns) values[col] += sec.values[col] || 0;
+        grandTotal += sec.grandTotal;
+        if (sec.children?.length) allChildren.push(sec.children);
+      }
+      return {
+        key, label, isExpense, values, grandTotal,
+        children: mergeChildrenPL(allChildren),
+      };
+    };
+
+    const revenue = mergeParentSections('revenue', 'Revenue', false);
+    const directCosts = mergeParentSections('directCosts', 'Direct Costs', true);
+    const indirectIncome = mergeParentSections('indirectIncome', 'Indirect Income', false);
+    const indirectExpenses = mergeParentSections('indirectExpenses', 'Indirect Expenses', true);
+
+    const computed = {
+      grossProfit: {} as Record<string, number>,
+      grossMargin: {} as Record<string, number>,
+      netProfit: {} as Record<string, number>,
+    };
+    let gpGrand = 0, npGrand = 0;
+    for (const col of columns) {
+      let gp = 0, np = 0;
+      for (const { report } of perCompany) {
+        gp += report.computed.grossProfit[col] || 0;
+        np += report.computed.netProfit[col] || 0;
+      }
+      computed.grossProfit[col] = gp;
+      computed.netProfit[col] = np;
+      const rev = revenue.values[col] || 0;
+      computed.grossMargin[col] = rev !== 0 ? Math.round((gp / rev) * 10000) / 100 : 0;
+      gpGrand += gp;
+      npGrand += np;
+    }
+
+    return {
+      period: { from, to }, view, columns,
+      bifurcated: false,
+      companies,
+      sections: [revenue, directCosts, indirectIncome, indirectExpenses],
+      computed,
+      grandTotals: {
+        revenue: revenue.grandTotal,
+        directCosts: directCosts.grandTotal,
+        indirectIncome: indirectIncome.grandTotal,
+        indirectExpenses: indirectExpenses.grandTotal,
+        grossProfit: gpGrand,
+        netProfit: npGrand,
+      },
+    };
+  }
+
+  // Bifurcation: columns become one per company, plus a final 'total' column.
+  const compKey = (c: CompanyRef) => `co:${c.id}`;
+  const columns = companies.map(compKey).concat('total');
+  const columnLabels: Record<string, string> = {};
+  for (const c of companies) columnLabels[compKey(c)] = c.name;
+  columnLabels.total = 'Total';
+
+  // For each top-level section, one column per company = that company's
+  // grandTotal for that section. Children get the same treatment (by label).
+  const buildBifurcatedSection = (key: string, label: string, isExpense: boolean): PLSection => {
+    const values: Record<string, number> = Object.fromEntries(columns.map(c => [c, 0]));
+    let grandTotal = 0;
+    const childrenAcc = new Map<string, { label: string; isExpense: boolean; values: Record<string, number>; grandTotal: number }>();
+
+    for (const { company, report } of perCompany) {
+      const sec = report.sections.find(s => s.key === key);
+      if (!sec) continue;
+      const total = sec.grandTotal;
+      values[compKey(company)] = total;
+      values.total += total;
+      grandTotal += total;
+
+      for (const ch of sec.children || []) {
+        if (!childrenAcc.has(ch.label)) {
+          childrenAcc.set(ch.label, {
+            label: ch.label, isExpense: ch.isExpense,
+            values: Object.fromEntries(columns.map(c => [c, 0])),
+            grandTotal: 0,
+          });
+        }
+        const acc = childrenAcc.get(ch.label)!;
+        acc.values[compKey(company)] = ch.grandTotal;
+        acc.values.total += ch.grandTotal;
+        acc.grandTotal += ch.grandTotal;
+      }
+    }
+
+    const children: PLSection[] = [...childrenAcc.entries()].map(([name, v]) => ({
+      key: `${key}:${name}`, label: v.label, isExpense: v.isExpense,
+      values: v.values, grandTotal: v.grandTotal,
+    }));
+    children.sort((a, b) => Math.abs(b.grandTotal) - Math.abs(a.grandTotal));
+
+    return { key, label, isExpense, values, grandTotal, children };
+  };
+
+  const revenue = buildBifurcatedSection('revenue', 'Revenue', false);
+  const directCosts = buildBifurcatedSection('directCosts', 'Direct Costs', true);
+  const indirectIncome = buildBifurcatedSection('indirectIncome', 'Indirect Income', false);
+  const indirectExpenses = buildBifurcatedSection('indirectExpenses', 'Indirect Expenses', true);
+
+  const computed = {
+    grossProfit: {} as Record<string, number>,
+    grossMargin: {} as Record<string, number>,
+    netProfit: {} as Record<string, number>,
+  };
+  for (const col of columns) computed.grossProfit[col] = 0;
+  for (const col of columns) computed.grossMargin[col] = 0;
+  for (const col of columns) computed.netProfit[col] = 0;
+
+  let gpGrand = 0, npGrand = 0;
+  for (const { company, report } of perCompany) {
+    const gp = report.grandTotals.grossProfit;
+    const np = report.grandTotals.netProfit;
+    computed.grossProfit[compKey(company)] = gp;
+    computed.netProfit[compKey(company)] = np;
+    computed.grossProfit.total += gp;
+    computed.netProfit.total += np;
+    gpGrand += gp;
+    npGrand += np;
+    const rev = report.grandTotals.revenue;
+    computed.grossMargin[compKey(company)] = rev !== 0 ? Math.round((gp / rev) * 10000) / 100 : 0;
+  }
+  const revTotal = revenue.values.total || 0;
+  computed.grossMargin.total = revTotal !== 0 ? Math.round((computed.grossProfit.total / revTotal) * 10000) / 100 : 0;
+
+  return {
+    period: { from, to }, view: 'yearly', // bifurcated always yearly per-company
+    columns, columnLabels, bifurcated: true,
+    companies,
+    sections: [revenue, directCosts, indirectIncome, indirectExpenses],
+    computed,
+    grandTotals: {
+      revenue: revenue.grandTotal,
+      directCosts: directCosts.grandTotal,
+      indirectIncome: indirectIncome.grandTotal,
+      indirectExpenses: indirectExpenses.grandTotal,
+      grossProfit: gpGrand,
+      netProfit: npGrand,
+    },
+  };
+}
+
+export function buildBalanceSheetMulti(
+  db: DbHelper,
+  companies: CompanyRef[],
+  asOf: string,
+  view: 'yearly' | 'monthly',
+  rangeFrom: string | undefined,
+  bifurcate: boolean,
+): BSStatement {
+  if (companies.length === 0) {
+    const columns = view === 'monthly' ? monthsInRange(rangeFrom || asOf, asOf) : ['total'];
+    const zeros = Object.fromEntries(columns.map(c => [c, 0]));
+    return {
+      asOfDate: asOf, view, columns, bifurcated: bifurcate, companies: [],
+      sections: [], totals: { totalAssets: zeros, totalLiabilities: zeros },
+    };
+  }
+
+  const perCompany = companies.map(c => ({
+    company: c,
+    report: buildBalanceSheet(db, c.id, asOf, view, rangeFrom),
+  }));
+
+  if (!bifurcate) {
+    const first = perCompany[0].report;
+    const columns = first.columns;
+    const totalAssets: Record<string, number> = Object.fromEntries(columns.map(c => [c, 0]));
+    const totalLiabilities: Record<string, number> = Object.fromEntries(columns.map(c => [c, 0]));
+
+    const byKey = new Map<string, BSSection>();
+    const childrenByKey = new Map<string, BSSection[][]>();
+
+    for (const { report } of perCompany) {
+      for (const sec of report.sections) {
+        const existing = byKey.get(sec.key);
+        if (!existing) {
+          byKey.set(sec.key, {
+            key: sec.key, label: sec.label, side: sec.side,
+            values: { ...sec.values }, grandTotal: sec.grandTotal,
+          });
+        } else {
+          for (const col of columns) existing.values[col] = (existing.values[col] || 0) + (sec.values[col] || 0);
+          existing.grandTotal += sec.grandTotal;
+        }
+        if (sec.children?.length) {
+          if (!childrenByKey.has(sec.key)) childrenByKey.set(sec.key, []);
+          childrenByKey.get(sec.key)!.push(sec.children);
+        }
+      }
+      for (const col of columns) {
+        totalAssets[col] += report.totals.totalAssets[col] || 0;
+        totalLiabilities[col] += report.totals.totalLiabilities[col] || 0;
+      }
+    }
+
+    const sections: BSSection[] = [];
+    for (const [key, sec] of byKey.entries()) {
+      const merged = mergeChildrenBS(childrenByKey.get(key) || []);
+      sections.push({ ...sec, children: merged.length ? merged : undefined });
+    }
+    // Preserve a sensible order: same as first company's.
+    const orderKeys = perCompany[0].report.sections.map(s => s.key);
+    sections.sort((a, b) => {
+      const ai = orderKeys.indexOf(a.key);
+      const bi = orderKeys.indexOf(b.key);
+      return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+    });
+
+    return {
+      asOfDate: asOf, view, columns, bifurcated: false, companies,
+      sections,
+      totals: { totalAssets, totalLiabilities },
+    };
+  }
+
+  // Bifurcate — one column per company + total.
+  const compKey = (c: CompanyRef) => `co:${c.id}`;
+  const columns = companies.map(compKey).concat('total');
+  const columnLabels: Record<string, string> = {};
+  for (const c of companies) columnLabels[compKey(c)] = c.name;
+  columnLabels.total = 'Total';
+
+  const totalAssets: Record<string, number> = Object.fromEntries(columns.map(c => [c, 0]));
+  const totalLiabilities: Record<string, number> = Object.fromEntries(columns.map(c => [c, 0]));
+
+  const byKey = new Map<string, BSSection>();
+  const childrenAcc = new Map<string, Map<string, BSSection>>();
+
+  for (const { company, report } of perCompany) {
+    for (const sec of report.sections) {
+      if (!byKey.has(sec.key)) {
+        byKey.set(sec.key, {
+          key: sec.key, label: sec.label, side: sec.side,
+          values: Object.fromEntries(columns.map(c => [c, 0])),
+          grandTotal: 0,
+        });
+      }
+      const acc = byKey.get(sec.key)!;
+      acc.values[compKey(company)] = sec.grandTotal;
+      acc.values.total += sec.grandTotal;
+      acc.grandTotal += sec.grandTotal;
+
+      if (sec.children?.length) {
+        if (!childrenAcc.has(sec.key)) childrenAcc.set(sec.key, new Map());
+        const kids = childrenAcc.get(sec.key)!;
+        for (const ch of sec.children) {
+          if (!kids.has(ch.label)) {
+            kids.set(ch.label, {
+              key: `${sec.key}:${ch.label}`, label: ch.label, side: sec.side,
+              values: Object.fromEntries(columns.map(c => [c, 0])),
+              grandTotal: 0,
+            });
+          }
+          const childAcc = kids.get(ch.label)!;
+          childAcc.values[compKey(company)] = ch.grandTotal;
+          childAcc.values.total += ch.grandTotal;
+          childAcc.grandTotal += ch.grandTotal;
+        }
+      }
+    }
+    totalAssets[compKey(company)] = Object.values(report.totals.totalAssets).reduce((s, v) => s + v, 0);
+    totalLiabilities[compKey(company)] = Object.values(report.totals.totalLiabilities).reduce((s, v) => s + v, 0);
+    totalAssets.total += totalAssets[compKey(company)];
+    totalLiabilities.total += totalLiabilities[compKey(company)];
+  }
+
+  const sections: BSSection[] = [];
+  for (const [key, sec] of byKey.entries()) {
+    const children = [...(childrenAcc.get(key)?.values() || [])];
+    children.sort((a, b) => Math.abs(b.grandTotal) - Math.abs(a.grandTotal));
+    sections.push({ ...sec, children: children.length ? children : undefined });
+  }
+  const orderKeys = perCompany[0].report.sections.map(s => s.key);
+  sections.sort((a, b) => {
+    const ai = orderKeys.indexOf(a.key);
+    const bi = orderKeys.indexOf(b.key);
+    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+  });
+
+  return {
+    asOfDate: asOf, view: 'yearly', columns, columnLabels, bifurcated: true,
+    companies,
+    sections,
+    totals: { totalAssets, totalLiabilities },
+  };
+}
+
+export function buildCashFlowMulti(
+  db: DbHelper,
+  companies: CompanyRef[],
+  from: string,
+  to: string,
+  bifurcate: boolean,
+): CFStatement {
+  if (companies.length === 0) {
+    return {
+      period: { from, to },
+      operating: [], operatingTotal: 0,
+      investing: [], investingTotal: 0,
+      financing: [], financingTotal: 0,
+      netChange: 0, openingCash: 0, closingCash: 0,
+      bifurcated: bifurcate, companies: [],
+    };
+  }
+
+  const perCompany = companies.map(c => ({
+    company: c,
+    report: buildCashFlow(db, c.id, from, to),
+  }));
+
+  if (!bifurcate) {
+    const mergeLines = (getLines: (r: CFStatement) => CFLine[]): CFLine[] => {
+      const byLabel = new Map<string, CFLine>();
+      for (const { report } of perCompany) {
+        for (const line of getLines(report)) {
+          const existing = byLabel.get(line.label);
+          if (!existing) byLabel.set(line.label, { label: line.label, amount: line.amount });
+          else existing.amount += line.amount;
+        }
+      }
+      return [...byLabel.values()];
+    };
+    const operating = mergeLines(r => r.operating);
+    const investing = mergeLines(r => r.investing);
+    const financing = mergeLines(r => r.financing);
+    const sum = (arr: CFLine[]): number => arr.reduce((s, r) => s + r.amount, 0);
+    const operatingTotal = sum(operating);
+    const investingTotal = sum(investing);
+    const financingTotal = sum(financing);
+
+    return {
+      period: { from, to },
+      operating, operatingTotal,
+      investing, investingTotal,
+      financing, financingTotal,
+      netChange: operatingTotal + investingTotal + financingTotal,
+      openingCash: perCompany.reduce((s, p) => s + p.report.openingCash, 0),
+      closingCash: perCompany.reduce((s, p) => s + p.report.closingCash, 0),
+      bifurcated: false, companies,
+    };
+  }
+
+  // Bifurcate — each line has a values map with per-company breakdown.
+  const compKey = (c: CompanyRef) => `co:${c.id}`;
+  const columns = companies.map(compKey).concat('total');
+  const columnLabels: Record<string, string> = {};
+  for (const c of companies) columnLabels[compKey(c)] = c.name;
+  columnLabels.total = 'Total';
+
+  const mergeLinesBifurcated = (getLines: (r: CFStatement) => CFLine[]): CFLine[] => {
+    const byLabel = new Map<string, CFLine>();
+    for (const { company, report } of perCompany) {
+      for (const line of getLines(report)) {
+        if (!byLabel.has(line.label)) {
+          byLabel.set(line.label, {
+            label: line.label, amount: 0,
+            values: Object.fromEntries(columns.map(c => [c, 0])),
+          });
+        }
+        const acc = byLabel.get(line.label)!;
+        acc.values![compKey(company)] = line.amount;
+        acc.values!.total += line.amount;
+        acc.amount += line.amount;
+      }
+    }
+    return [...byLabel.values()];
+  };
+
+  const operating = mergeLinesBifurcated(r => r.operating);
+  const investing = mergeLinesBifurcated(r => r.investing);
+  const financing = mergeLinesBifurcated(r => r.financing);
+  const perColSum = (arr: CFLine[]) => {
+    const out: Record<string, number> = Object.fromEntries(columns.map(c => [c, 0]));
+    for (const line of arr) {
+      for (const col of columns) out[col] += (line.values?.[col] || 0);
+    }
+    return out;
+  };
+  const operatingTotalValues = perColSum(operating);
+  const investingTotalValues = perColSum(investing);
+  const financingTotalValues = perColSum(financing);
+  const netChangeValues: Record<string, number> = Object.fromEntries(columns.map(c => [c, 0]));
+  const openingCashValues: Record<string, number> = Object.fromEntries(columns.map(c => [c, 0]));
+  const closingCashValues: Record<string, number> = Object.fromEntries(columns.map(c => [c, 0]));
+  for (const { company, report } of perCompany) {
+    const key = compKey(company);
+    netChangeValues[key] = report.netChange;
+    netChangeValues.total += report.netChange;
+    openingCashValues[key] = report.openingCash;
+    openingCashValues.total += report.openingCash;
+    closingCashValues[key] = report.closingCash;
+    closingCashValues.total += report.closingCash;
+  }
+
+  return {
+    period: { from, to },
+    columns, columnLabels, bifurcated: true, companies,
+    operating,
+    operatingTotal: Object.values(operatingTotalValues).reduce((s, v) => s + v, 0) - (operatingTotalValues.total || 0),
+    operatingTotalValues,
+    investing,
+    investingTotal: Object.values(investingTotalValues).reduce((s, v) => s + v, 0) - (investingTotalValues.total || 0),
+    investingTotalValues,
+    financing,
+    financingTotal: Object.values(financingTotalValues).reduce((s, v) => s + v, 0) - (financingTotalValues.total || 0),
+    financingTotalValues,
+    netChange: netChangeValues.total || 0,
+    netChangeValues,
+    openingCash: openingCashValues.total || 0,
+    openingCashValues,
+    closingCash: closingCashValues.total || 0,
+    closingCashValues,
+  };
+}
+
+export function buildTrialBalanceMulti(
+  db: DbHelper,
+  companies: CompanyRef[],
+  from: string,
+  to: string,
+): TrialBalanceReport {
+  if (companies.length === 0) {
+    return { period: { from, to }, rows: [], totals: { opening: 0, debit: 0, credit: 0, closing: 0 } };
+  }
+  if (companies.length === 1) {
+    return buildTrialBalance(db, companies[0].id, from, to);
+  }
+  const perCompany = companies.map(c => buildTrialBalance(db, c.id, from, to));
+  const byKey = new Map<string, TrialBalanceRow>();
+  for (const report of perCompany) {
+    for (const r of report.rows) {
+      const key = `${r.groupName || ''}::${r.ledgerName}`;
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, { ...r });
+      } else {
+        existing.opening += r.opening;
+        existing.debit += r.debit;
+        existing.credit += r.credit;
+        existing.closing += r.closing;
+      }
+    }
+  }
+  const rows = [...byKey.values()].sort((a, b) => {
+    const g = (a.groupName || '').localeCompare(b.groupName || '');
+    return g !== 0 ? g : a.ledgerName.localeCompare(b.ledgerName);
+  });
+  const totals = rows.reduce(
+    (acc, r) => ({
+      opening: acc.opening + r.opening,
+      debit: acc.debit + r.debit,
+      credit: acc.credit + r.credit,
+      closing: acc.closing + r.closing,
+    }),
+    { opening: 0, debit: 0, credit: 0, closing: 0 },
+  );
+  return { period: { from, to }, rows, totals };
 }

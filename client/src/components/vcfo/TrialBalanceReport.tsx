@@ -19,30 +19,34 @@ interface TrialBalanceReport {
 
 interface Props {
   companyId: number | null;
+  companyIds?: string | null;
   from: string;
   to: string;
 }
 
-export default function TrialBalanceReport({ companyId, from, to }: Props) {
+export default function TrialBalanceReport({ companyId, companyIds, from, to }: Props) {
   const [data, setData] = useState<TrialBalanceReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!companyId) {
+    if (!companyId && !companyIds) {
       setData(null);
       return;
     }
     setLoading(true);
     setError(null);
+    const params: Record<string, any> = { from, to };
+    if (companyId) params.companyId = companyId;
+    else if (companyIds) params.companyIds = companyIds;
     api
-      .get('/vcfo/trial-balance', { params: { companyId, from, to } })
+      .get('/vcfo/trial-balance', { params })
       .then(res => setData(res.data))
       .catch(err => setError(err?.response?.data?.error || err?.message || 'Failed to load'))
       .finally(() => setLoading(false));
-  }, [companyId, from, to]);
+  }, [companyId, companyIds, from, to]);
 
-  if (!companyId) {
+  if (!companyId && !companyIds) {
     return (
       <div className="bg-dark-800 border border-dark-400/30 rounded-2xl p-8 text-center">
         <p className="text-theme-muted">Select a company to view the Trial Balance.</p>

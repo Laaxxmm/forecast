@@ -3,19 +3,29 @@
 //
 // Layout mirrors ForecastModulePage:
 //   - Sticky top nav with 4 tab pills (Trial Balance / P&L / Balance Sheet / Cash Flow)
-//   - Toolbar with FY selector, view mode (monthly/yearly), company picker, download menu
+//   - Toolbar with period picker (FY / Q1-Q4 / MTD / YTD / Custom), view mode
+//     (monthly/yearly), company picker (with "All companies" consolidation),
+//     bifurcate toggle, and download menu
 //   - Each sub-tab is its own component that fetches `/api/vcfo/<report>`
 //
 // Branch/stream sidebar context is honoured automatically by the axios client
 // (see `api/client.ts` — X-Branch-Id / X-Stream-Id headers) and enforced
 // server-side via `listAccessibleCompanies` in routes/vcfo-reports.ts.
+//
+// Multi-company behaviour:
+//   - `selectedCompanyId = null` → consolidation over every accessible company
+//     (server receives `companyIds=all`)
+//   - `selectedCompanyId = N` → single-company report (legacy `companyId=N`)
+//   - `bifurcate = true` (only meaningful when scope has >1 companies)
+//     → server emits one column per company + a `total` column
 
 import { useEffect, useMemo, useState } from 'react';
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import api from '../api/client';
-import { FileSpreadsheet, TrendingUp, Scale, Banknote, ChevronLeft, ChevronRight, Calendar, Trash2 } from 'lucide-react';
+import { FileSpreadsheet, TrendingUp, Scale, Banknote, Columns, Trash2 } from 'lucide-react';
 import VcfoCompanyPicker, { VcfoCompany } from '../components/vcfo/VcfoCompanyPicker';
 import VcfoDownloadMenu from '../components/vcfo/VcfoDownloadMenu';
+import VcfoPeriodPicker, { PeriodValue } from '../components/vcfo/VcfoPeriodPicker';
 import TrialBalanceReport from '../components/vcfo/TrialBalanceReport';
 import ProfitLossReport from '../components/vcfo/ProfitLossReport';
 import BalanceSheetReport from '../components/vcfo/BalanceSheetReport';
@@ -43,11 +53,14 @@ function detectActiveReportKey(): ReportKey {
 export default function VcfoModulePage() {
   const [fys, setFYs] = useState<FY[]>([]);
   const [selectedFY, setSelectedFY] = useState<FY | null>(null);
+  const [period, setPeriod] = useState<PeriodValue | null>(null);
   const [viewMode, setViewMode] = useState<'monthly' | 'yearly'>('yearly');
   const [companies, setCompanies] = useState<VcfoCompany[]>([]);
   const [companiesLoading, setCompaniesLoading] = useState(false);
   const [companiesError, setCompaniesError] = useState<string | null>(null);
+  // null = consolidation across every accessible company.
   const [selectedCompanyId, setSelectedCompanyId] = useState<number | null>(null);
+  const [bifurcate, setBifurcate] = useState(false);
   const [activeReportKey, setActiveReportKey] = useState<ReportKey>(detectActiveReportKey());
   const [resetOpen, setResetOpen] = useState(false);
   const [resetConfirmText, setResetConfirmText] = useState('');
@@ -66,8 +79,6 @@ export default function VcfoModulePage() {
       console.log('[vcfo] reset result', res.data);
       setResetOpen(false);
       setResetConfirmText('');
-      // Hard reload so React state, cached companies, and the report views
-      // all rehydrate from the now-empty DB.
       window.location.reload();
     } catch (err: any) {
       setResetError(err?.response?.data?.error || err?.message || 'Reset failed');
@@ -80,8 +91,6 @@ export default function VcfoModulePage() {
   useEffect(() => {
     const update = () => setActiveReportKey(detectActiveReportKey());
     window.addEventListener('popstate', update);
-    // React-router programmatic navigations don't fire popstate, so also
-    // listen for clicks on NavLinks via a tiny interval — the cost is trivial.
     const interval = window.setInterval(update, 500);
     return () => {
       window.removeEventListener('popstate', update);
@@ -99,11 +108,22 @@ export default function VcfoModulePage() {
     });
   }, []);
 
-  // Load companies. The server now returns only companies that have actually
-  // received data from the sync-agent (seed/ghost rows are filtered out) and
-  // orders them by most-recent sync first, so auto-picking `data[0]` lands
-  // the user on the company they most recently worked with — no dropdown
-  // interaction required before the report renders.
+  // Once an FY is picked, seed the period to "FY" preset spanning its range.
+  useEffect(() => {
+    if (!selectedFY) return;
+    setPeriod(p => {
+      // Preserve any custom range the user has already set — only seed on first
+      // load or when the current period sits outside the new FY.
+      if (p && p.preset !== 'fy') return p;
+      return { preset: 'fy', from: selectedFY.start_date, to: selectedFY.end_date };
+    });
+  }, [selectedFY]);
+
+  // Load companies. The server returns only companies mapped to the active
+  // branch/stream context (filtered in `listAccessibleCompanies`). On first
+  // load we default to null = "All companies" consolidation so the user
+  // immediately sees whole-tenant numbers; they can narrow to one company
+  // via the dropdown.
   useEffect(() => {
     setCompaniesLoading(true);
     setCompaniesError(null);
@@ -112,12 +132,12 @@ export default function VcfoModulePage() {
       .then(res => {
         const list: VcfoCompany[] = res.data || [];
         setCompanies(list);
+        // Keep the current selection if it's still valid; otherwise fall back
+        // to null (= All companies) so we show a consolidated view by default.
         if (list.length === 0) {
           setSelectedCompanyId(null);
-        } else if (selectedCompanyId == null || !list.find(c => c.id === selectedCompanyId)) {
-          // First load OR current selection is no longer in the visible set
-          // (e.g. branch just switched) — auto-pick the most recently synced.
-          setSelectedCompanyId(list[0].id);
+        } else if (selectedCompanyId != null && !list.find(c => c.id === selectedCompanyId)) {
+          setSelectedCompanyId(null);
         }
       })
       .catch(err => {
@@ -131,21 +151,40 @@ export default function VcfoModulePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Derive date range from selected FY (April → March).
   const { fromDate, toDate } = useMemo(() => {
-    if (!selectedFY) return { fromDate: '', toDate: '' };
-    return { fromDate: selectedFY.start_date, toDate: selectedFY.end_date };
-  }, [selectedFY]);
+    if (period) return { fromDate: period.from, toDate: period.to };
+    if (selectedFY) return { fromDate: selectedFY.start_date, toDate: selectedFY.end_date };
+    return { fromDate: '', toDate: '' };
+  }, [period, selectedFY]);
 
-  const currentYear = selectedFY ? parseInt(selectedFY.start_date.slice(0, 4)) : new Date().getFullYear();
+  // When selection collapses to a single company, bifurcation is meaningless.
+  const scopeCompanyCount = selectedCompanyId == null ? companies.length : 1;
+  const canBifurcate = scopeCompanyCount > 1;
+  useEffect(() => {
+    if (!canBifurcate && bifurcate) setBifurcate(false);
+  }, [canBifurcate, bifurcate]);
+
+  // Compose the companyIds / companyId params the report components receive.
+  const reportScope = useMemo(() => {
+    if (selectedCompanyId != null) {
+      return { companyId: selectedCompanyId, companyIds: null as string | null };
+    }
+    return { companyId: null, companyIds: 'all' };
+  }, [selectedCompanyId]);
 
   const buildDownloadParams = (format: 'xlsx' | 'pdf' | 'docx'): string | null => {
-    if (!selectedCompanyId || !fromDate || !toDate) return null;
+    if (!fromDate || !toDate) return null;
+    if (companies.length === 0) return null;
     const params = new URLSearchParams({
       report: activeReportKey,
       format,
-      companyId: String(selectedCompanyId),
     });
+    if (selectedCompanyId != null) {
+      params.set('companyId', String(selectedCompanyId));
+    } else {
+      params.set('companyIds', 'all');
+    }
+    if (bifurcate && canBifurcate) params.set('bifurcate', 'true');
     if (activeReportKey === 'bs') {
       params.set('asOf', toDate);
       params.set('from', fromDate);
@@ -162,10 +201,10 @@ export default function VcfoModulePage() {
   };
 
   const selectedCompany = companies.find(c => c.id === selectedCompanyId) || null;
-  const downloadDisabled = !selectedCompanyId || !selectedFY;
+  const downloadDisabled = !selectedFY || companies.length === 0;
   const filenameHint = selectedCompany
     ? `${selectedCompany.name.replace(/[^a-z0-9]+/gi, '_')}_${activeReportKey}`
-    : undefined;
+    : `consolidated_${activeReportKey}`;
 
   return (
     <div className="vcfo-module animate-fade-in">
@@ -223,7 +262,10 @@ export default function VcfoModulePage() {
               value={selectedFY?.id || ''}
               onChange={e => {
                 const fy = fys.find(f => f.id === Number(e.target.value));
-                if (fy) setSelectedFY(fy);
+                if (fy) {
+                  setSelectedFY(fy);
+                  setPeriod({ preset: 'fy', from: fy.start_date, to: fy.end_date });
+                }
               }}
               className="input text-xs md:text-sm py-1 md:py-1.5 w-28 md:w-36"
             >
@@ -239,7 +281,7 @@ export default function VcfoModulePage() {
 
       {/* Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-2 py-3 border-b border-dark-400/30 -mx-4 px-4 md:-mx-8 md:px-8 bg-dark-800/50">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {(activeReportKey === 'pl' || activeReportKey === 'bs') && (
             <div className="flex bg-dark-700 border border-dark-400/50 rounded-xl overflow-hidden">
               <button
@@ -256,36 +298,35 @@ export default function VcfoModulePage() {
               </button>
             </div>
           )}
-          <div className="flex items-center gap-1 ml-3">
+          {selectedFY && period && (
+            <VcfoPeriodPicker
+              fyStart={selectedFY.start_date}
+              fyEnd={selectedFY.end_date}
+              value={period}
+              onChange={setPeriod}
+            />
+          )}
+          {canBifurcate && (
             <button
-              onClick={() => {
-                const idx = fys.findIndex(f => f.id === selectedFY?.id);
-                if (idx > 0) setSelectedFY(fys[idx - 1]);
-              }}
-              disabled={!selectedFY || fys.findIndex(f => f.id === selectedFY.id) <= 0}
-              className="p-1.5 hover:bg-dark-600 rounded-lg text-theme-faint transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-              title="Previous fiscal year"
+              onClick={() => setBifurcate(b => !b)}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                bifurcate
+                  ? 'bg-accent-500/15 text-accent-300 border-accent-500/30'
+                  : 'bg-dark-700 text-theme-secondary border-dark-400/50 hover:bg-dark-600'
+              }`}
+              title="Show one column per company"
             >
-              <ChevronLeft size={14} />
+              <Columns size={13} />
+              Bifurcate
             </button>
-            <div className="flex items-center gap-1 px-2 text-sm text-theme-muted">
-              <Calendar size={14} />
-              <span className="font-medium">{currentYear}-{String(currentYear + 1).slice(-2)}</span>
-            </div>
-            <button
-              onClick={() => {
-                const idx = fys.findIndex(f => f.id === selectedFY?.id);
-                if (idx >= 0 && idx < fys.length - 1) setSelectedFY(fys[idx + 1]);
-              }}
-              disabled={!selectedFY || fys.findIndex(f => f.id === selectedFY.id) >= fys.length - 1}
-              className="p-1.5 hover:bg-dark-600 rounded-lg text-theme-faint transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-              title="Next fiscal year"
-            >
-              <ChevronRight size={14} />
-            </button>
-          </div>
-          {selectedCompany && companies.length > 1 && (
-            <span className="text-xs font-medium text-accent-400 bg-accent-500/10 px-2.5 py-1 rounded-lg ml-3">
+          )}
+          {selectedCompanyId == null && companies.length > 1 && (
+            <span className="text-xs font-medium text-accent-400 bg-accent-500/10 px-2.5 py-1 rounded-lg">
+              Consolidated · {companies.length} {companies.length === 1 ? 'company' : 'companies'}
+            </span>
+          )}
+          {selectedCompany && (
+            <span className="text-xs font-medium text-accent-400 bg-accent-500/10 px-2.5 py-1 rounded-lg">
               {selectedCompany.name}
             </span>
           )}
@@ -316,16 +357,25 @@ export default function VcfoModulePage() {
             <Route index element={<Navigate to="trial-balance" replace />} />
             <Route
               path="trial-balance"
-              element={<TrialBalanceReport companyId={selectedCompanyId} from={fromDate} to={toDate} />}
+              element={
+                <TrialBalanceReport
+                  companyId={reportScope.companyId}
+                  companyIds={reportScope.companyIds}
+                  from={fromDate}
+                  to={toDate}
+                />
+              }
             />
             <Route
               path="profit-loss"
               element={
                 <ProfitLossReport
-                  companyId={selectedCompanyId}
+                  companyId={reportScope.companyId}
+                  companyIds={reportScope.companyIds}
                   from={fromDate}
                   to={toDate}
                   view={viewMode}
+                  bifurcate={bifurcate && canBifurcate}
                 />
               }
             />
@@ -333,16 +383,26 @@ export default function VcfoModulePage() {
               path="balance-sheet"
               element={
                 <BalanceSheetReport
-                  companyId={selectedCompanyId}
+                  companyId={reportScope.companyId}
+                  companyIds={reportScope.companyIds}
                   asOf={toDate}
                   view={viewMode}
                   from={fromDate}
+                  bifurcate={bifurcate && canBifurcate}
                 />
               }
             />
             <Route
               path="cash-flow"
-              element={<CashFlowReport companyId={selectedCompanyId} from={fromDate} to={toDate} />}
+              element={
+                <CashFlowReport
+                  companyId={reportScope.companyId}
+                  companyIds={reportScope.companyIds}
+                  from={fromDate}
+                  to={toDate}
+                  bifurcate={bifurcate && canBifurcate}
+                />
+              }
             />
           </Routes>
         )}
