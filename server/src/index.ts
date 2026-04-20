@@ -30,6 +30,7 @@ import revenueSharingRoutes from './routes/revenue-sharing.js';
 import dbViewerRoutes from './routes/db-viewer.js';
 import ingestRoutes from './routes/ingest.js';
 import vcfoReportsRoutes from './routes/vcfo-reports.js';
+import vcfoComplianceRoutes from './routes/vcfo-compliances.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -243,6 +244,7 @@ app.use('/api/budgets', ...forecastOps, budgetRoutes);
 app.use('/api/forecasts', ...forecastOps, forecastRoutes);
 app.use('/api/dashboard', ...forecastOps, dashboardRoutes);
 app.use('/api/forecast-module', ...forecastOps, forecastModuleRoutes);
+app.use('/api/vcfo/compliances', ...forecastOps, vcfoComplianceRoutes);
 app.use('/api/vcfo', ...forecastOps, vcfoReportsRoutes);
 app.use('/api/dashboard-actuals', ...forecastOps, dashboardActualsRoutes);
 app.use('/api/sync', ...forecastOps, requireAdmin, syncRoutes);

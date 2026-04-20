@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, TrendingUp, Upload, Settings, LogOut, BarChart3, Building2, ArrowLeftRight,
   MapPin, ChevronDown, Sun, Moon, ArrowRight, Activity, PieChart,
-  Pin, PinOff, X, Table,
+  Pin, PinOff, X, Table, CalendarCheck,
 } from 'lucide-react';
 import api from '../../api/client';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -18,8 +18,12 @@ const forecastLinks = [
 ];
 
 // VCFO module navigation
+//   Table View holds the 4 reports under /vcfo, /vcfo/trial-balance, etc.
+//   matchPrefix keeps it highlighted across sub-routes; matchExclude prevents
+//   the prefix from bleeding into sibling routes like /vcfo/compliances.
 const vcfoLinks = [
-  { to: '/vcfo', icon: Table, label: 'Table View', clientAdminOnly: false, requiresModule: '' },
+  { to: '/vcfo', icon: Table, label: 'Table View', clientAdminOnly: false, requiresModule: '', matchPrefix: '/vcfo', matchExclude: ['/vcfo/compliances'] },
+  { to: '/vcfo/compliances', icon: CalendarCheck, label: 'Compliances', clientAdminOnly: false, requiresModule: '' },
 ];
 
 // Utility links — bottom section above logout
@@ -40,6 +44,7 @@ interface SidebarProps {
 
 export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedChange, isMobile, mobileOpen, onMobileClose }: SidebarProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { theme, toggleTheme } = useTheme();
   const userType = localStorage.getItem('user_type');
   const userRole = localStorage.getItem('user_role');
@@ -206,33 +211,45 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
 
   const w = expanded ? 'w-56' : 'w-16';
 
-  const renderLink = ({ to, icon: Icon, label }: { to: string; icon: any; label: string }) => (
-    <NavLink
-      key={to}
-      to={to}
-      end={to === '/actuals'}
-      title={!expanded ? label : undefined}
-      className={({ isActive }) =>
-        `group relative flex items-center gap-3 px-3 py-2.5 text-[13px] font-medium rounded-xl transition-all duration-150 ${
-          expanded ? '' : 'justify-center'
-        } ${
-          isActive
-            ? 'text-accent-500 bg-gradient-to-r from-accent-500/15 to-accent-500/5'
-            : 'text-theme-muted hover:bg-dark-600/70 hover:text-theme-primary'
-        }`
-      }
-    >
-      {({ isActive }) => (
-        <>
-          {isActive && (
-            <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-accent-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
-          )}
-          <Icon size={17} className={`flex-shrink-0 transition-transform duration-150 ${isActive ? 'scale-105' : 'group-hover:scale-105'}`} />
-          {expanded && <span className="truncate">{label}</span>}
-        </>
-      )}
-    </NavLink>
-  );
+  const renderLink = (link: { to: string; icon: any; label: string; matchPrefix?: string; matchExclude?: string[] }) => {
+    const { to, icon: Icon, label, matchPrefix, matchExclude } = link;
+    const path = location.pathname;
+    const customActive = matchPrefix
+      ? (path === matchPrefix || path.startsWith(matchPrefix + '/'))
+        && !(matchExclude || []).some(ex => path === ex || path.startsWith(ex + '/'))
+      : undefined;
+    return (
+      <NavLink
+        key={to}
+        to={to}
+        end={to === '/actuals'}
+        title={!expanded ? label : undefined}
+        className={({ isActive }) => {
+          const active = customActive !== undefined ? customActive : isActive;
+          return `group relative flex items-center gap-3 px-3 py-2.5 text-[13px] font-medium rounded-xl transition-all duration-150 ${
+            expanded ? '' : 'justify-center'
+          } ${
+            active
+              ? 'text-accent-500 bg-gradient-to-r from-accent-500/15 to-accent-500/5'
+              : 'text-theme-muted hover:bg-dark-600/70 hover:text-theme-primary'
+          }`;
+        }}
+      >
+        {({ isActive }) => {
+          const active = customActive !== undefined ? customActive : isActive;
+          return (
+            <>
+              {active && (
+                <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-accent-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+              )}
+              <Icon size={17} className={`flex-shrink-0 transition-transform duration-150 ${active ? 'scale-105' : 'group-hover:scale-105'}`} />
+              {expanded && <span className="truncate">{label}</span>}
+            </>
+          );
+        }}
+      </NavLink>
+    );
+  };
 
   return (
     <aside

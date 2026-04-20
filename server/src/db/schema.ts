@@ -410,6 +410,44 @@ export function initializeSchema(db: DbHelper) {
     CREATE INDEX IF NOT EXISTS idx_fyob_company_fystart
       ON vcfo_fy_opening_balances(company_id, fy_start);
 
+    -- Curated master list of compliances. Seeded on tenant DB init (see
+    -- seedComplianceCatalog). state = NULL means "applies everywhere";
+    -- otherwise two-letter code (KA, MH, etc.) restricts to that state.
+    CREATE TABLE IF NOT EXISTS vcfo_compliance_catalog (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      key TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL,       -- GST | TDS | Labour | Licence | IT | Other
+      frequency TEXT NOT NULL,      -- monthly | quarterly | half-yearly | annual
+      default_due_day INTEGER,      -- e.g. 20 for GSTR-3B; for annual, day of default_due_month
+      default_due_month INTEGER,    -- 1-12 (annual/half-yearly); NULL for monthly/quarterly
+      state TEXT,                   -- NULL = all states
+      description TEXT
+    );
+
+    -- Per-branch compliance instances. History-preserving: one row per period.
+    -- branch_id references platform-DB branches(id) (no FK — cross-DB).
+    CREATE TABLE IF NOT EXISTS vcfo_compliances (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      branch_id INTEGER NOT NULL,
+      catalog_id INTEGER REFERENCES vcfo_compliance_catalog(id) ON DELETE SET NULL,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL,
+      frequency TEXT NOT NULL,
+      due_date TEXT NOT NULL,        -- YYYY-MM-DD
+      period_label TEXT NOT NULL,    -- e.g. "Apr 2026", "Q1 FY26-27", "FY 25-26"
+      status TEXT NOT NULL DEFAULT 'pending',  -- pending | filed | overdue
+      amount REAL,
+      assignee TEXT,
+      notes TEXT,
+      filed_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_vcfo_compliances_branch_due
+      ON vcfo_compliances(branch_id, due_date);
+    CREATE INDEX IF NOT EXISTS idx_vcfo_compliances_status
+      ON vcfo_compliances(status, due_date);
+
     -- Retrofit unique indices for tenants whose vcfo_* tables were created
     -- pre-cutover by the retired TallyVision sub-app. CREATE TABLE IF NOT
     -- EXISTS won't alter an existing table, so any column-level UNIQUE in
@@ -705,5 +743,55 @@ export function initializeSchema(db: DbHelper) {
   ];
   for (const idx of perfIndexes) {
     try { db.exec(idx); } catch { /* index may already exist */ }
+  }
+
+  seedComplianceCatalog(db);
+}
+
+// Curated compliance catalog. Idempotent via INSERT OR IGNORE on the
+// UNIQUE key. state=null applies to every branch; two-letter code restricts
+// to branches in that state. default_due_day/month drive the first instance's
+// due_date when a user adds from catalog (the UI still lets them override).
+const COMPLIANCE_CATALOG: Array<{
+  key: string;
+  name: string;
+  category: string;
+  frequency: string;
+  default_due_day: number | null;
+  default_due_month: number | null;
+  state: string | null;
+  description: string;
+}> = [
+  { key: 'gstr1_monthly',      name: 'GSTR-1 (monthly)',            category: 'GST',     frequency: 'monthly',   default_due_day: 11, default_due_month: null, state: null, description: 'Monthly outward supplies return' },
+  { key: 'gstr3b_monthly',     name: 'GSTR-3B (monthly)',           category: 'GST',     frequency: 'monthly',   default_due_day: 20, default_due_month: null, state: null, description: 'Monthly summary return & tax payment' },
+  { key: 'gstr1_iff_quarterly',name: 'GSTR-1 / IFF (quarterly)',    category: 'GST',     frequency: 'quarterly', default_due_day: 13, default_due_month: null, state: null, description: 'Quarterly outward supplies (QRMP scheme)' },
+  { key: 'gstr3b_quarterly',   name: 'GSTR-3B (quarterly)',         category: 'GST',     frequency: 'quarterly', default_due_day: 22, default_due_month: null, state: null, description: 'Quarterly summary return (QRMP)' },
+  { key: 'gstr9_annual',       name: 'GSTR-9 (annual)',             category: 'GST',     frequency: 'annual',    default_due_day: 31, default_due_month: 12,   state: null, description: 'Annual GST return' },
+  { key: 'tds_payment',        name: 'TDS Payment (monthly)',       category: 'TDS',     frequency: 'monthly',   default_due_day: 7,  default_due_month: null, state: null, description: 'Monthly TDS deposit to government' },
+  { key: 'tds_return',         name: 'TDS Return (quarterly)',      category: 'TDS',     frequency: 'quarterly', default_due_day: 31, default_due_month: null, state: null, description: 'Quarterly TDS statement (Form 24Q/26Q)' },
+  { key: 'advance_tax',        name: 'Advance Tax (quarterly)',     category: 'IT',      frequency: 'quarterly', default_due_day: 15, default_due_month: null, state: null, description: 'Quarterly advance income tax instalment' },
+  { key: 'itr_annual',         name: 'Income Tax Return (annual)',  category: 'IT',      frequency: 'annual',    default_due_day: 31, default_due_month: 10,   state: null, description: 'Annual income tax return' },
+  { key: 'pf_monthly',         name: 'PF Payment & ECR (monthly)',  category: 'Labour',  frequency: 'monthly',   default_due_day: 15, default_due_month: null, state: null, description: 'Monthly provident fund contribution & ECR filing' },
+  { key: 'esi_monthly',        name: 'ESI Payment (monthly)',       category: 'Labour',  frequency: 'monthly',   default_due_day: 15, default_due_month: null, state: null, description: 'Monthly Employees State Insurance contribution' },
+  { key: 'pt_monthly',         name: 'Professional Tax (monthly)',  category: 'Labour',  frequency: 'monthly',   default_due_day: 20, default_due_month: null, state: null, description: 'Monthly professional tax deposit (varies by state)' },
+  { key: 'shop_est_renewal',   name: 'Shop & Establishment Renewal',category: 'Licence', frequency: 'annual',    default_due_day: 31, default_due_month: 12,   state: null, description: 'Annual S&E licence renewal (varies by state)' },
+  { key: 'drug_licence_renewal',name: 'Drug Licence Renewal',       category: 'Licence', frequency: 'annual',    default_due_day: 31, default_due_month: 3,    state: null, description: 'Retail/wholesale drug licence — periodicity varies by state' },
+  { key: 'clinical_est_renewal',name: 'Clinical Est. Act Renewal',  category: 'Licence', frequency: 'annual',    default_due_day: 31, default_due_month: 3,    state: null, description: 'Clinical Establishments Act registration renewal' },
+  { key: 'pt_annual_ka',       name: 'Professional Tax — Annual Return (KA)', category: 'Labour', frequency: 'annual', default_due_day: 30, default_due_month: 4, state: 'KA', description: 'Karnataka annual PT return (employers)' },
+  { key: 'labour_welfare_hy',  name: 'Labour Welfare Fund (half-yearly)', category: 'Labour', frequency: 'half-yearly', default_due_day: 31, default_due_month: 1, state: null, description: 'Half-yearly LWF deposit (varies by state)' },
+];
+
+function seedComplianceCatalog(db: DbHelper) {
+  try {
+    for (const c of COMPLIANCE_CATALOG) {
+      db.run(
+        `INSERT OR IGNORE INTO vcfo_compliance_catalog
+         (key, name, category, frequency, default_due_day, default_due_month, state, description)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [c.key, c.name, c.category, c.frequency, c.default_due_day, c.default_due_month, c.state, c.description],
+      );
+    }
+  } catch {
+    /* table missing on very first init before CREATE ran — should never happen */
   }
 }
