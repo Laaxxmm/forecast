@@ -458,8 +458,12 @@ export function initializeSchema(db: DbHelper) {
       ON vcfo_compliances(branch_id, due_date);
     CREATE INDEX IF NOT EXISTS idx_vcfo_compliances_status
       ON vcfo_compliances(status, due_date);
-    CREATE INDEX IF NOT EXISTS idx_vcfo_compliances_scope
-      ON vcfo_compliances(scope_type, state, stream_id);
+    -- NOTE: idx_vcfo_compliances_scope is created AFTER the ALTER TABLE
+    -- migrations below, because legacy tenant DBs don't yet have the
+    -- scope_type / state / stream_id columns at this point — and SQLite
+    -- aborts the entire db.exec() batch on the first failing statement,
+    -- which would leave this tenant's schema half-migrated and the
+    -- server crashing on the first /api/vcfo/compliances query.
 
     -- Per-tenant registration of high-level compliance services
     -- (GST / TDS / PF / ESI / PT / IT / licences …). Drives the Settings page
@@ -545,6 +549,22 @@ export function initializeSchema(db: DbHelper) {
   ];
   for (const sql of branchMigrations) {
     try { db.exec(sql); } catch { /* column already exists */ }
+  }
+
+  // ── Post-ALTER indexes ────────────────────────────────────────────────────
+  // Indexes that reference columns added by the branchMigrations loop above
+  // must be created AFTER those ALTERs run. Otherwise legacy tenant DBs (whose
+  // vcfo_compliances predates the scope_type/state/stream_id columns) hit
+  // "no such column: scope_type" during the big CREATE TABLE batch and abort
+  // the entire schema initialisation, which then crashes the first request
+  // that queries those columns.
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_vcfo_compliances_scope
+        ON vcfo_compliances(scope_type, state, stream_id);
+    `);
+  } catch (e) {
+    console.error('Failed to create idx_vcfo_compliances_scope:', e);
   }
 
   // ── vcfo_companies.last_full_sync_at backfill ─────────────────────────────
