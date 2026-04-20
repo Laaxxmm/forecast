@@ -114,7 +114,7 @@ export default function App() {
           <Route path="/revenue-sharing" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><RevenueSharingPage /></ModuleRoute></ClientRoute>} />
           <Route path="/import" element={<ClientRoute><ClientAdminRoute><ModuleRoute moduleKey="forecast_ops"><ImportPage /></ModuleRoute></ClientAdminRoute></ClientRoute>} />
           <Route path="/stream/:streamId" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><StreamDetailPage /></ModuleRoute></ClientRoute>} />
-          <Route path="/vcfo/*" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><VcfoModulePage /></ModuleRoute></ClientRoute>} />
+          <Route path="/vcfo/*" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><VcfoModulePage /></ModuleRoute></ClientRoute>} />
           <Route path="/settings" element={<ClientRoute><ClientAdminRoute><SettingsPage /></ClientAdminRoute></ClientRoute>} />
           <Route path="/admin/*" element={<SuperAdminRoute><AdminPage /></SuperAdminRoute>} />
           <Route path="/" element={<DefaultRedirect />} />
