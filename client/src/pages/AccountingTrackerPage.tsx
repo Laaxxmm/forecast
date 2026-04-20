@@ -452,7 +452,7 @@ export default function AccountingTrackerPage() {
   return (
     <div className="min-h-full w-full">
       {/* Header ───────────────────────────────────────────────────────────── */}
-      <div className="sticky top-0 z-20 bg-theme-bg/95 backdrop-blur border-b border-dark-400/30">
+      <div className="sticky top-0 z-20 bg-dark-900/95 backdrop-blur border-b border-dark-400/30">
         <div className="px-4 md:px-6 py-3 flex items-center gap-3 flex-wrap">
           <ClipboardList className="text-accent-400" size={18} />
           <h1 className="text-sm md:text-base font-semibold text-theme-heading">Accounting Tracker</h1>
@@ -722,8 +722,8 @@ function TaskDrawer(props: {
   return (
     <>
       <div className="fixed inset-0 z-40 bg-black/50" onClick={props.onClose} />
-      <aside className="fixed right-0 top-0 bottom-0 z-50 w-full md:w-[640px] bg-theme-bg border-l border-dark-400/40 shadow-2xl overflow-y-auto">
-        <div className="sticky top-0 z-10 flex items-center gap-3 px-4 py-3 bg-theme-bg/95 backdrop-blur border-b border-dark-400/30">
+      <aside className="fixed right-0 top-0 bottom-0 z-50 w-full md:w-[640px] bg-dark-900 border-l border-dark-400/40 shadow-2xl overflow-y-auto">
+        <div className="sticky top-0 z-10 flex items-center gap-3 px-4 py-3 bg-dark-900/95 backdrop-blur border-b border-dark-400/30">
           <ClipboardList size={16} className="text-accent-400" />
           <span className="text-sm font-semibold text-theme-heading flex-1 truncate">
             {task?.title || 'Loading…'}
