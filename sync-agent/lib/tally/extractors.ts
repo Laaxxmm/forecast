@@ -710,19 +710,22 @@ function weekChunks(fromDate: string, toDate: string): { periodFrom: string; per
 }
 
 function tdlVoucherLedgerEntries(companyName: string, fromDate: string, toDate: string): string {
-  // COLLECTION TYPE="Voucher" with WALK over AllLedgerEntries — each LINE
-  // emits one row per ledger entry inside each voucher. Voucher-level fields
-  // (date, type, number, narration) are carried across the walk via TDL
-  // VARIABLE bindings (CurVchDate etc.), a pattern borrowed from the legacy
-  // TallyVision_2.0 cost-allocations template.
+  // Bare Collection API (same as tdlDaybook) but with AllLedgerEntries /
+  // LedgerEntries included in NATIVEMETHOD so Tally emits each voucher's full
+  // double-entry posting as nested <ALLLEDGERENTRIES.LIST> / <LEDGERENTRIES.LIST>
+  // children. We parse those client-side in parseVLERows.
   //
-  // F05 / F06: sign-split. `$Amount` on LedgerEntries is negative for debits
-  // and positive for credits. `$$IsDebit:$Amount` returns true when the amount
-  // is negative; negating the debit branch yields a positive magnitude and
-  // zeros-out the credit column for that side, and vice versa.
+  // A custom Report/Form with WALK=AllLedgerEntries does NOT work here — Tally
+  // Prime collapses the walked context and returns empty walked fields (one
+  // row per voucher). The bare Collection + NATIVEMETHOD path is the proven
+  // legacy pattern (see TallyVision_2.0 data-extractor.fetchVoucherCollection).
+  //
+  // Size risk: AllLedgerEntries expansion balloons the payload (~15MB/week
+  // observed on large companies). extractVoucherLedgerEntries chunks monthly
+  // with a weekly-fallback on timeout to keep each POST bounded.
   return `<?xml version="1.0" encoding="utf-8"?>
 <ENVELOPE>
-<HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>TVVLE</ID></HEADER>
+<HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>TVVLE</ID></HEADER>
 <BODY><DESC>
 <STATICVARIABLES>
 <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
@@ -731,46 +734,79 @@ function tdlVoucherLedgerEntries(companyName: string, fromDate: string, toDate: 
 <SVTODATE>${formatTallyDate(toDate)}</SVTODATE>
 </STATICVARIABLES>
 <TDL><TDLMESSAGE>
-<REPORT NAME="TVVLE"><FORMS>TVVLEF</FORMS></REPORT>
-<FORM NAME="TVVLEF"><PARTS>TVVLEP</PARTS><XMLTAG>DATA</XMLTAG></FORM>
-<PART NAME="TVVLEP"><LINES>L1</LINES><REPEAT>L1:C1</REPEAT><SCROLLED>Vertical</SCROLLED></PART>
-<LINE NAME="L1"><FIELDS>F01,F02,F03,F04,F05,F06,F07,F08</FIELDS><XMLTAG>ROW</XMLTAG></LINE>
-<FIELD NAME="F01"><SET>$Date</SET><XMLTAG>F01</XMLTAG></FIELD>
-<FIELD NAME="F02"><SET>$VoucherTypeName</SET><XMLTAG>F02</XMLTAG></FIELD>
-<FIELD NAME="F03"><SET>$VoucherNumber</SET><XMLTAG>F03</XMLTAG></FIELD>
-<FIELD NAME="F04"><SET>$LedgerEntries.LedgerName</SET><XMLTAG>F04</XMLTAG></FIELD>
-<FIELD NAME="F05"><SET>if $$IsDebit:$LedgerEntries.Amount then -$$NumValue:$LedgerEntries.Amount else 0</SET><XMLTAG>F05</XMLTAG></FIELD>
-<FIELD NAME="F06"><SET>if $$IsDebit:$LedgerEntries.Amount then 0 else $$NumValue:$LedgerEntries.Amount</SET><XMLTAG>F06</XMLTAG></FIELD>
-<FIELD NAME="F07"><SET>if $LedgerEntries.IsPartyLedger then "Y" else "N"</SET><XMLTAG>F07</XMLTAG></FIELD>
-<FIELD NAME="F08"><SET>$Narration</SET><XMLTAG>F08</XMLTAG></FIELD>
-<COLLECTION NAME="C1"><TYPE>Voucher</TYPE><WALK>LedgerEntries</WALK></COLLECTION>
+<COLLECTION NAME="TVVLE"><TYPE>Voucher</TYPE>
+<NATIVEMETHOD>Date,VoucherTypeName,VoucherNumber,PartyLedgerName,Narration</NATIVEMETHOD>
+<NATIVEMETHOD>AllLedgerEntries</NATIVEMETHOD>
+<NATIVEMETHOD>LedgerEntries</NATIVEMETHOD>
+</COLLECTION>
 </TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
 }
 
-/** Parse one chunk of voucher-ledger-entry rows. Shared between the monthly
- *  path and the weekly-fallback path so both apply the same filters. */
+const vleParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  parseTagValue: false,
+  isArray: (tagName: string) =>
+    tagName === 'VOUCHER' || tagName === 'ALLLEDGERENTRIES.LIST' || tagName === 'LEDGERENTRIES.LIST',
+});
+
+/** Parse one chunk of voucher-ledger-entry rows. Walks the nested
+ *  ALLLEDGERENTRIES.LIST / LEDGERENTRIES.LIST arrays inside each VOUCHER. */
 function parseVLERows(raw: string, fromDate: string, toDate: string): VoucherLedgerEntryRow[] {
-  const rows = rowsFromReport(raw);
+  if (!raw) throw new Error('Empty response from Tally');
+  if (raw.includes('<EXCEPTION>')) {
+    const m = raw.match(/<EXCEPTION>(.*?)<\/EXCEPTION>/);
+    throw new Error(m ? m[1] : 'Tally exception');
+  }
+  if (raw.includes('Unknown Request')) throw new Error('Tally rejected voucherLedgerEntries query');
+
+  const parsed: any = vleParser.parse(raw);
+  const vouchers: any[] =
+    parsed?.ENVELOPE?.VOUCHER
+    ?? parsed?.ENVELOPE?.BODY?.DATA?.COLLECTION?.VOUCHER
+    ?? parsed?.ENVELOPE?.BODY?.DATA?.VOUCHER
+    ?? [];
+  const list = Array.isArray(vouchers) ? vouchers : (vouchers ? [vouchers] : []);
+
   const out: VoucherLedgerEntryRow[] = [];
-  for (const r of rows) {
-    const voucherDate = parseTallyDate(r.F01);
+  for (const v of list) {
+    const voucherDate = parseTallyDate(txt(v.DATE));
     if (!voucherDate) continue;
     if (voucherDate < fromDate || voucherDate > toDate) continue;
-    const ledgerName = cleanString(r.F04);
-    if (!ledgerName) continue;
-    const debit = Math.max(0, parseAmount(r.F05));
-    const credit = Math.max(0, parseAmount(r.F06));
-    if (debit === 0 && credit === 0) continue; // skip zero-amount walk artifacts
-    out.push({
-      voucherDate,
-      voucherType: cleanString(r.F02),
-      voucherNumber: cleanString(r.F03),
-      ledgerName,
-      debit,
-      credit,
-      isPartyLedger: cleanString(r.F07).toUpperCase() === 'Y',
-      narration: cleanString(r.F08) || undefined,
-    });
+    const voucherType = cleanString(txt(v.VOUCHERTYPENAME));
+    const voucherNumber = cleanString(txt(v.VOUCHERNUMBER));
+    const narration = cleanString(txt(v.NARRATION)) || undefined;
+
+    // ALLLEDGERENTRIES.LIST is Tally's complete posting list — it's the
+    // superset. LEDGERENTRIES.LIST is a subset that omits inventory-coupled
+    // lines (the Sales / Purchase ledger in an invoice voucher hides behind
+    // ALLINVENTORYENTRIES). Use AllLedger when present; fall back to LE only
+    // for any edge case where AllLedger is empty.
+    const entries: any[] =
+      (v['ALLLEDGERENTRIES.LIST'] && v['ALLLEDGERENTRIES.LIST'].length > 0)
+        ? v['ALLLEDGERENTRIES.LIST']
+        : (v['LEDGERENTRIES.LIST'] ?? []);
+    for (const e of entries) {
+      const ledgerName = cleanString(txt(e.LEDGERNAME));
+      if (!ledgerName) continue;
+      // $Amount on a LedgerEntry is signed: negative for debits, positive for
+      // credits. Split into non-negative debit/credit magnitudes.
+      const signed = parseAmount(e.AMOUNT);
+      if (signed === 0) continue;
+      const debit = signed < 0 ? -signed : 0;
+      const credit = signed > 0 ? signed : 0;
+      const isPartyLedger = cleanString(txt(e.ISPARTYLEDGER)).toUpperCase().startsWith('Y');
+      out.push({
+        voucherDate,
+        voucherType,
+        voucherNumber,
+        ledgerName,
+        debit,
+        credit,
+        isPartyLedger,
+        narration,
+      });
+    }
   }
   return out;
 }
