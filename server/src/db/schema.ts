@@ -512,6 +512,108 @@ export function initializeSchema(db: DbHelper) {
     -- is a no-op.
     CREATE UNIQUE INDEX IF NOT EXISTS idx_vcfo_companies_name
       ON vcfo_companies(name);
+
+    -- ── VCFO Accounting Tracker ────────────────────────────────────────────
+    -- Month/quarter/year-end close checklist with an accountant → reviewer
+    -- approval workflow and a per-task file module for workings and docs.
+    -- Four tables:
+    --   vcfo_accounting_task_catalog   — curated master list (seeded per tenant)
+    --   vcfo_accounting_tasks          — per-period instances (the workable rows)
+    --   vcfo_accounting_task_files     — attachments under DATA_DIR/uploads
+    --   vcfo_accounting_task_events    — immutable audit log of state changes
+    --
+    -- Status lifecycle: pending → in_progress → submitted → approved | rejected
+    -- (plus a "cancelled" escape hatch). "overdue" is DERIVED at read time
+    -- (due_date < today AND status NOT IN ('approved','cancelled')), never
+    -- stored — preserves idempotency as the clock advances.
+    CREATE TABLE IF NOT EXISTS vcfo_accounting_task_catalog (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      key TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL,           -- bank | receivables | payables | payroll
+                                         --   | tax | fa | inventory | ledger
+                                         --   | reporting | governance
+      frequency TEXT NOT NULL,           -- monthly | quarterly | half-yearly | annual
+      default_due_day INTEGER,
+      default_due_month INTEGER,         -- 1–12 for annual/half-yearly
+      default_assignee_role TEXT,        -- accountant | senior_accountant | cfo
+      description TEXT,
+      checklist TEXT,                    -- newline-separated sub-steps (string v1)
+      is_active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_vcfo_acct_catalog_cat
+      ON vcfo_accounting_task_catalog(category, frequency);
+
+    CREATE TABLE IF NOT EXISTS vcfo_accounting_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      catalog_id INTEGER REFERENCES vcfo_accounting_task_catalog(id) ON DELETE SET NULL,
+      branch_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      category TEXT NOT NULL,
+      frequency TEXT NOT NULL,
+      period_label TEXT NOT NULL,        -- 'Apr 2026' | 'Q1 FY26-27' | 'FY 25-26'
+      period_start TEXT NOT NULL,        -- YYYY-MM-DD
+      period_end TEXT NOT NULL,          -- YYYY-MM-DD
+      due_date TEXT NOT NULL,            -- YYYY-MM-DD
+      assignee_user_id INTEGER,          -- client_users.id (soft FK; no cascade)
+      reviewer_user_id INTEGER,          -- client_users.id (soft FK; no cascade)
+      status TEXT NOT NULL DEFAULT 'pending',
+      priority TEXT DEFAULT 'normal',    -- low | normal | high | critical
+      notes TEXT,
+      submission_note TEXT,
+      rejection_reason TEXT,
+      submitted_at TEXT,
+      approved_at TEXT,
+      rejected_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_vcfo_acct_tasks_branch_due
+      ON vcfo_accounting_tasks(branch_id, due_date);
+    CREATE INDEX IF NOT EXISTS idx_vcfo_acct_tasks_status
+      ON vcfo_accounting_tasks(status, due_date);
+    CREATE INDEX IF NOT EXISTS idx_vcfo_acct_tasks_assignee
+      ON vcfo_accounting_tasks(assignee_user_id, status);
+    -- Partial unique index: prevents double-generating catalog tasks for the
+    -- same (branch, catalog, period); lets free-form ad-hoc tasks
+    -- (catalog_id IS NULL) coexist without bumping the uniqueness wall.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_vcfo_acct_tasks_unique
+      ON vcfo_accounting_tasks(branch_id, catalog_id, period_label)
+      WHERE catalog_id IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS vcfo_accounting_task_files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL REFERENCES vcfo_accounting_tasks(id) ON DELETE CASCADE,
+      uploaded_by_user_id INTEGER,       -- client_users.id (soft FK; no cascade)
+      original_name TEXT NOT NULL,
+      stored_name TEXT NOT NULL,
+      storage_path TEXT NOT NULL,        -- relative to DATA_DIR
+      size_bytes INTEGER NOT NULL,
+      mime_type TEXT,
+      uploaded_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_vcfo_acct_files_task
+      ON vcfo_accounting_task_files(task_id);
+
+    -- Immutable audit log. Every status-changing endpoint writes a row in
+    -- the SAME transaction as the UPDATE so a crashed event insert rolls
+    -- back the status change. This log is the CFO's audit trail.
+    CREATE TABLE IF NOT EXISTS vcfo_accounting_task_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL REFERENCES vcfo_accounting_tasks(id) ON DELETE CASCADE,
+      actor_user_id INTEGER,             -- client_users.id or NULL (system)
+      event_type TEXT NOT NULL,          -- created | claimed | submitted | approved
+                                          --   | rejected | reopened | cancelled
+                                          --   | reassigned | file_added | file_removed
+                                          --   | status_changed | note_updated
+      from_status TEXT,
+      to_status TEXT,
+      note TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_vcfo_acct_events_task
+      ON vcfo_accounting_task_events(task_id, created_at);
   `);
 
   // Branch-related migrations (add branch_id to data tables)
@@ -823,6 +925,7 @@ export function initializeSchema(db: DbHelper) {
   }
 
   seedComplianceCatalog(db);
+  seedAccountingTaskCatalog(db);
 }
 
 // Curated compliance catalog. Idempotent via INSERT OR IGNORE on the
@@ -885,5 +988,116 @@ function seedComplianceCatalog(db: DbHelper) {
     }
   } catch {
     /* table missing on very first init before CREATE ran — should never happen */
+  }
+}
+
+// ── VCFO Accounting Tracker — catalogue of CFO-grade month-end tasks ─────────
+//
+// ~50 curated tasks that an in-house accountant typically runs as part of the
+// Indian month/quarter/year-end close. Categories loosely follow the CFO's
+// close-checklist structure: Bank & Treasury, Receivables, Payables, Payroll,
+// Tax (GST/TDS/Income/MCA), Fixed Assets, Inventory, Ledger Scrutiny,
+// Reporting & Governance.
+//
+// Frequency × default_due_day (+ default_due_month for periodic returns) is
+// what the /generate endpoint uses to materialise a real task row per branch
+// for a given period. `is_active` gives the tenant a soft toggle to hide a
+// task from their catalogue without a destructive delete.
+const ACCOUNTING_TASK_CATALOG: Array<{
+  key: string;
+  name: string;
+  category: string;
+  frequency: 'monthly' | 'quarterly' | 'half-yearly' | 'annual';
+  default_due_day: number | null;
+  default_due_month: number | null;
+  default_assignee_role: string;
+  description: string;
+  checklist: string | null;
+  sort_order: number;
+}> = [
+  // ── Bank & Treasury ──────────────────────────────────────────────────────
+  { key: 'bank_recon_current',          name: 'Bank Reconciliation — Current Account',       category: 'bank', frequency: 'monthly', default_due_day: 7,  default_due_month: null, default_assignee_role: 'accountant',        description: 'Match bank statement vs. book balance; investigate unreconciled items',          checklist: 'Download statement\nImport to Tally/ERP\nMatch each entry\nList unreconciled items\nEscalate >15 day floats', sort_order: 101 },
+  { key: 'bank_recon_od_cc',            name: 'Bank Reconciliation — OD/CC Account',         category: 'bank', frequency: 'monthly', default_due_day: 7,  default_due_month: null, default_assignee_role: 'accountant',        description: 'Reconcile overdraft / cash-credit bank account; verify interest accrual',         checklist: null, sort_order: 102 },
+  { key: 'petty_cash_count',            name: 'Petty Cash Physical Count',                   category: 'bank', frequency: 'monthly', default_due_day: 5,  default_due_month: null, default_assignee_role: 'accountant',        description: 'Physically count petty cash; reconcile to book; file signed count sheet',         checklist: null, sort_order: 103 },
+  { key: 'cash_in_hand_certify',        name: 'Cash in Hand Certification',                  category: 'bank', frequency: 'monthly', default_due_day: 5,  default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Sign-off on closing cash-in-hand across branches',                               checklist: null, sort_order: 104 },
+  { key: 'fd_interest_accrual',         name: 'Fixed Deposit Interest Accrual',              category: 'bank', frequency: 'monthly', default_due_day: 7,  default_due_month: null, default_assignee_role: 'accountant',        description: 'Pass interest accrual JV for all live FDs; verify Form 15G/H where applicable',  checklist: null, sort_order: 105 },
+  // ── Receivables ──────────────────────────────────────────────────────────
+  { key: 'ar_aging_review',             name: 'AR Aging Review',                             category: 'receivables', frequency: 'monthly', default_due_day: 10, default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Review debtors aging buckets; escalate > 90 day balances',                       checklist: null, sort_order: 201 },
+  { key: 'debtors_ledger_scrutiny',     name: 'Debtors Ledger Scrutiny',                     category: 'receivables', frequency: 'monthly', default_due_day: 10, default_due_month: null, default_assignee_role: 'accountant',        description: 'Walk every debtor ledger; chase unusual movements, debit notes, write-offs',     checklist: null, sort_order: 202 },
+  { key: 'bad_debt_provision',          name: 'Bad Debt / ECL Provision',                    category: 'receivables', frequency: 'quarterly', default_due_day: 15, default_due_month: null, default_assignee_role: 'cfo',           description: 'Ind-AS 109 ECL / provisioning on doubtful debtors',                              checklist: null, sort_order: 203 },
+  { key: 'credit_note_reconciliation',  name: 'Credit Note Reconciliation',                  category: 'receivables', frequency: 'monthly', default_due_day: 10, default_due_month: null, default_assignee_role: 'accountant',        description: 'Verify every credit note against original invoice; ensure GST effect recorded', checklist: null, sort_order: 204 },
+  { key: 'customer_advance_reconciliation', name: 'Customer Advances Reconciliation',       category: 'receivables', frequency: 'monthly', default_due_day: 10, default_due_month: null, default_assignee_role: 'accountant',        description: 'Match customer advances vs. subsequent invoicing; identify stale advances',      checklist: null, sort_order: 205 },
+  // ── Payables ─────────────────────────────────────────────────────────────
+  { key: 'ap_aging_review',             name: 'AP Aging Review',                             category: 'payables', frequency: 'monthly', default_due_day: 10, default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Review creditors aging; plan payment run; flag overdues',                       checklist: null, sort_order: 301 },
+  { key: 'creditors_ledger_scrutiny',   name: 'Creditors Ledger Scrutiny',                   category: 'payables', frequency: 'monthly', default_due_day: 10, default_due_month: null, default_assignee_role: 'accountant',        description: 'Walk every creditor ledger; verify debit balances, duplicate bookings',         checklist: null, sort_order: 302 },
+  { key: 'vendor_advance_reconciliation', name: 'Vendor Advances Reconciliation',            category: 'payables', frequency: 'monthly', default_due_day: 10, default_due_month: null, default_assignee_role: 'accountant',        description: 'Match vendor advances with subsequent bills; identify stale advances',          checklist: null, sort_order: 303 },
+  { key: 'msme_due_identification',     name: 'MSME Due Identification (45-day rule)',       category: 'payables', frequency: 'monthly', default_due_day: 7,  default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Identify MSME creditors crossing 45 days; Section 43B(h) IT Act compliance',    checklist: null, sort_order: 304 },
+  { key: 'expense_provision_entries',   name: 'Month-End Expense Provisions',                category: 'payables', frequency: 'monthly', default_due_day: 5,  default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Book provisions for rent, utilities, professional fees, audit fees',             checklist: null, sort_order: 305 },
+  // ── Payroll ──────────────────────────────────────────────────────────────
+  { key: 'payroll_jv_post',             name: 'Payroll JV Posting',                          category: 'payroll', frequency: 'monthly', default_due_day: 5,  default_due_month: null, default_assignee_role: 'accountant',        description: 'Book gross salary, deductions, net payable, PF/ESI/PT contributions',           checklist: null, sort_order: 401 },
+  { key: 'pf_esi_pt_challan_post',      name: 'PF / ESI / PT Challan Posting',               category: 'payroll', frequency: 'monthly', default_due_day: 15, default_due_month: null, default_assignee_role: 'accountant',        description: 'Record monthly statutory challans; reconcile vs. payroll register',             checklist: null, sort_order: 402 },
+  { key: 'gratuity_provision',          name: 'Gratuity Provision (Ind-AS 19)',              category: 'payroll', frequency: 'annual', default_due_day: 31, default_due_month: 3, default_assignee_role: 'cfo',                   description: 'Actuarial gratuity liability booked as per Ind-AS 19',                          checklist: null, sort_order: 403 },
+  { key: 'leave_encashment_provision',  name: 'Leave Encashment Provision',                  category: 'payroll', frequency: 'annual', default_due_day: 31, default_due_month: 3, default_assignee_role: 'cfo',                   description: 'Year-end leave encashment liability; actuarial where material',                 checklist: null, sort_order: 404 },
+  { key: 'fnf_settlement_reconciliation', name: 'Full & Final Settlement Reconciliation',     category: 'payroll', frequency: 'monthly', default_due_day: 7,  default_due_month: null, default_assignee_role: 'accountant',        description: 'Verify F&F payouts, gratuity, leave, notice recovery for exits',                checklist: null, sort_order: 405 },
+  // ── Tax — GST ────────────────────────────────────────────────────────────
+  { key: 'gstr1_data_review',           name: 'GSTR-1 Data Review',                          category: 'tax', frequency: 'monthly', default_due_day: 9,  default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Review outward supplies data before GSTR-1 filing',                              checklist: null, sort_order: 501 },
+  { key: 'gstr2b_2a_itc_match',         name: 'GSTR-2B / 2A ITC Match',                      category: 'tax', frequency: 'monthly', default_due_day: 15, default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Match purchase register to 2B; identify mismatches; chase vendors',              checklist: 'Download 2B JSON\nImport to recon tool\nCategorise matched / mismatch / missing\nChase vendor for missing invoices', sort_order: 502 },
+  { key: 'rcm_liability_identify',      name: 'RCM Liability Identification',                category: 'tax', frequency: 'monthly', default_due_day: 18, default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Identify reverse charge transactions and book RCM liability',                    checklist: null, sort_order: 503 },
+  { key: 'gst_itc_reversal_rule42_43',  name: 'ITC Reversal — Rule 42/43',                   category: 'tax', frequency: 'monthly', default_due_day: 18, default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Compute proportionate ITC reversal for exempt/non-business use',                 checklist: null, sort_order: 504 },
+  { key: 'gstr3b_liability_workings',   name: 'GSTR-3B Liability Workings',                  category: 'tax', frequency: 'monthly', default_due_day: 18, default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Prepare GSTR-3B workings — output tax, ITC, cash vs. credit ledger',             checklist: null, sort_order: 505 },
+  // ── Tax — TDS/TCS ────────────────────────────────────────────────────────
+  { key: 'tds_deduction_review',        name: 'TDS Deduction Review',                        category: 'tax', frequency: 'monthly', default_due_day: 5,  default_due_month: null, default_assignee_role: 'accountant',        description: 'Verify correct TDS section, rate, PAN-based higher-rate application',            checklist: null, sort_order: 601 },
+  { key: 'tcs_collection_review',       name: 'TCS Collection Review',                       category: 'tax', frequency: 'monthly', default_due_day: 5,  default_due_month: null, default_assignee_role: 'accountant',        description: 'Verify TCS collection under 206C(1H) and related sections',                      checklist: null, sort_order: 602 },
+  { key: 'tds_challan_reconciliation',  name: 'TDS Challan Reconciliation',                  category: 'tax', frequency: 'monthly', default_due_day: 10, default_due_month: null, default_assignee_role: 'accountant',        description: 'Match TDS deposits vs. challans; verify BSR + challan numbers',                 checklist: null, sort_order: 603 },
+  { key: 'form_26as_reconciliation',    name: 'Form 26AS Reconciliation',                    category: 'tax', frequency: 'quarterly', default_due_day: 20, default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Match our TDS receipts vs. Form 26AS; follow up deductor mismatches',             checklist: null, sort_order: 604 },
+  { key: 'tds_tcs_return_workings',     name: 'TDS / TCS Return Workings (24Q/26Q/27EQ)',    category: 'tax', frequency: 'quarterly', default_due_day: 20, default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Prepare quarterly TDS/TCS e-TDS return workings',                                checklist: null, sort_order: 605 },
+  // ── Tax — Income / MCA ──────────────────────────────────────────────────
+  { key: 'advance_tax_workings',        name: 'Advance Tax Workings',                        category: 'tax', frequency: 'quarterly', default_due_day: 12, default_due_month: null, default_assignee_role: 'cfo',               description: 'Quarterly advance income tax liability computation',                             checklist: null, sort_order: 701 },
+  { key: 'itr_workings_annual',         name: 'ITR Workings (annual)',                       category: 'tax', frequency: 'annual', default_due_day: 30, default_due_month: 9, default_assignee_role: 'cfo',                       description: 'Prepare annual ITR computation; coordinate with tax consultant',                  checklist: null, sort_order: 702 },
+  { key: 'tax_audit_3cd_prep',          name: 'Tax Audit 3CD Preparation',                   category: 'tax', frequency: 'annual', default_due_day: 30, default_due_month: 9, default_assignee_role: 'cfo',                       description: 'Prepare 3CD schedules; coordinate with tax auditor',                             checklist: null, sort_order: 703 },
+  { key: 'mca_aoc4_workings',           name: 'MCA AOC-4 Workings',                          category: 'tax', frequency: 'annual', default_due_day: 30, default_due_month: 10, default_assignee_role: 'cfo',                      description: 'Prepare AOC-4 financial statement filing workings',                              checklist: null, sort_order: 704 },
+  { key: 'mca_mgt7_workings',           name: 'MCA MGT-7 Workings',                          category: 'tax', frequency: 'annual', default_due_day: 28, default_due_month: 11, default_assignee_role: 'cfo',                      description: 'Prepare MGT-7 annual return workings; verify shareholding',                      checklist: null, sort_order: 705 },
+  // ── Fixed Assets ────────────────────────────────────────────────────────
+  { key: 'fa_additions_capitalisation', name: 'Fixed Asset Additions & Capitalisation',       category: 'fa', frequency: 'monthly', default_due_day: 5,  default_due_month: null, default_assignee_role: 'accountant',        description: 'Capitalise new assets; record vendor invoices, freight, install costs',          checklist: null, sort_order: 801 },
+  { key: 'fa_depreciation_run',         name: 'Depreciation Run (Ind-AS / Cos Act)',         category: 'fa', frequency: 'monthly', default_due_day: 5,  default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Run monthly depreciation per Cos Act Sch II / Ind-AS; book JV',                 checklist: null, sort_order: 802 },
+  { key: 'fa_disposal_profit_loss',     name: 'Fixed Asset Disposal — P/L Booking',          category: 'fa', frequency: 'monthly', default_due_day: 5,  default_due_month: null, default_assignee_role: 'accountant',        description: 'Retire disposed assets; book profit/loss on sale/scrap',                         checklist: null, sort_order: 803 },
+  { key: 'fa_physical_verification',    name: 'Fixed Asset Physical Verification',           category: 'fa', frequency: 'annual', default_due_day: 31, default_due_month: 3, default_assignee_role: 'senior_accountant',         description: 'Annual physical verification of all fixed assets vs. FAR',                      checklist: null, sort_order: 804 },
+  { key: 'cwip_review',                 name: 'CWIP Review & Capitalisation',                category: 'fa', frequency: 'monthly', default_due_day: 5,  default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Review CWIP balances; capitalise ready-to-use assets',                          checklist: null, sort_order: 805 },
+  // ── Inventory ────────────────────────────────────────────────────────────
+  { key: 'stock_valuation_review',      name: 'Stock Valuation Review',                      category: 'inventory', frequency: 'monthly', default_due_day: 7,  default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Verify stock valuation method (FIFO/WAC); lower of cost / NRV per Ind-AS 2',    checklist: null, sort_order: 901 },
+  { key: 'slow_moving_obsolete_provision', name: 'Slow-Moving / Obsolete Stock Provision',   category: 'inventory', frequency: 'quarterly', default_due_day: 15, default_due_month: null, default_assignee_role: 'cfo',           description: 'Provision against slow-moving / obsolete / expired inventory',                  checklist: null, sort_order: 902 },
+  { key: 'stock_physical_verification', name: 'Stock Physical Verification',                 category: 'inventory', frequency: 'quarterly', default_due_day: 15, default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Quarterly physical stock-take; reconcile vs. book',                             checklist: null, sort_order: 903 },
+  { key: 'stock_audit_variance_book',   name: 'Stock Audit Variance Booking',                category: 'inventory', frequency: 'quarterly', default_due_day: 20, default_due_month: null, default_assignee_role: 'accountant',       description: 'Book variances identified in stock audit; investigate > threshold',              checklist: null, sort_order: 904 },
+  // ── Ledger scrutiny ──────────────────────────────────────────────────────
+  { key: 'gl_scrutiny_suspense',        name: 'GL Scrutiny — Suspense Accounts',             category: 'ledger', frequency: 'monthly', default_due_day: 10, default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Walk every suspense/unclassified account; clear or reclassify',                 checklist: null, sort_order: 1001 },
+  { key: 'gl_scrutiny_bank_charges',    name: 'GL Scrutiny — Bank Charges & Interest',       category: 'ledger', frequency: 'monthly', default_due_day: 10, default_due_month: null, default_assignee_role: 'accountant',        description: 'Review bank charges, forex fluctuation, interest expense',                      checklist: null, sort_order: 1002 },
+  { key: 'gl_scrutiny_round_off',       name: 'GL Scrutiny — Round-Off & Misc',              category: 'ledger', frequency: 'monthly', default_due_day: 10, default_due_month: null, default_assignee_role: 'accountant',        description: 'Scrutinise round-off, misc income/expense; reclassify if material',              checklist: null, sort_order: 1003 },
+  { key: 'intercompany_reconciliation', name: 'Intercompany Reconciliation',                 category: 'ledger', frequency: 'monthly', default_due_day: 10, default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Reconcile intercompany balances across group entities; clear differences',      checklist: null, sort_order: 1004 },
+  { key: 'related_party_txn_register',  name: 'Related Party Transactions Register',         category: 'ledger', frequency: 'quarterly', default_due_day: 15, default_due_month: null, default_assignee_role: 'cfo',            description: 'Update RPT register per Cos Act Sec 188 / Ind-AS 24',                           checklist: null, sort_order: 1005 },
+  // ── Reporting & Governance ──────────────────────────────────────────────
+  { key: 'trial_balance_review',        name: 'Trial Balance Review',                        category: 'reporting', frequency: 'monthly', default_due_day: 10, default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Review finalised TB; tie-out to sub-ledgers',                                    checklist: null, sort_order: 1101 },
+  { key: 'pl_balance_sheet_finalise',   name: 'P&L / Balance Sheet Finalisation',            category: 'reporting', frequency: 'monthly', default_due_day: 12, default_due_month: null, default_assignee_role: 'cfo',           description: 'Finalise monthly P&L and BS after all close entries',                            checklist: null, sort_order: 1102 },
+  { key: 'mis_pack_prep',               name: 'MIS Pack Preparation',                        category: 'reporting', frequency: 'monthly', default_due_day: 15, default_due_month: null, default_assignee_role: 'cfo',           description: 'Prepare management MIS — P&L, BS, cash flow, KPI dashboard',                     checklist: null, sort_order: 1103 },
+  { key: 'cash_flow_statement',         name: 'Cash Flow Statement (Ind-AS 7)',              category: 'reporting', frequency: 'monthly', default_due_day: 15, default_due_month: null, default_assignee_role: 'senior_accountant', description: 'Prepare monthly cash flow statement — operating, investing, financing',         checklist: null, sort_order: 1104 },
+  { key: 'budget_vs_actuals_variance',  name: 'Budget vs Actuals Variance Analysis',         category: 'reporting', frequency: 'monthly', default_due_day: 15, default_due_month: null, default_assignee_role: 'cfo',           description: 'Variance analysis vs. budget; narrative on > threshold swings',                  checklist: null, sort_order: 1105 },
+  { key: 'board_pack_prep',             name: 'Board Pack Preparation',                      category: 'governance', frequency: 'quarterly', default_due_day: 20, default_due_month: null, default_assignee_role: 'cfo',        description: 'Prepare board meeting financial pack — KPIs, compliance, key risks',             checklist: null, sort_order: 1201 },
+  { key: 'statutory_audit_pbc',         name: 'Statutory Audit PBC Preparation',             category: 'governance', frequency: 'annual', default_due_day: 30, default_due_month: 6, default_assignee_role: 'cfo',               description: 'Prepare audit-required schedules (PBC list) for statutory auditors',             checklist: null, sort_order: 1202 },
+  { key: 'internal_control_review',     name: 'Internal Financial Controls Review',          category: 'governance', frequency: 'quarterly', default_due_day: 20, default_due_month: null, default_assignee_role: 'cfo',        description: 'IFC testing — walk key controls; document exceptions per Cos Act Sec 143(3)',  checklist: null, sort_order: 1203 },
+];
+
+function seedAccountingTaskCatalog(db: DbHelper) {
+  try {
+    for (const t of ACCOUNTING_TASK_CATALOG) {
+      db.run(
+        `INSERT OR IGNORE INTO vcfo_accounting_task_catalog
+         (key, name, category, frequency, default_due_day, default_due_month, default_assignee_role, description, checklist, is_active, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+        [t.key, t.name, t.category, t.frequency, t.default_due_day, t.default_due_month, t.default_assignee_role, t.description, t.checklist, t.sort_order],
+      );
+    }
+  } catch (e) {
+    // Table missing on very first init before CREATE ran — should never happen
+    // because this is called from the tail of initializeSchema().
+    console.error('[seedAccountingTaskCatalog] failed:', (e as Error).message);
   }
 }

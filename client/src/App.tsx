@@ -11,6 +11,7 @@ import ForecastModulePage from './pages/ForecastModulePage';
 import VcfoModulePage from './pages/VcfoModulePage';
 import CompliancesPage from './pages/CompliancesPage';
 import ComplianceSettingsPage from './pages/ComplianceSettingsPage';
+import AccountingTrackerPage from './pages/AccountingTrackerPage';
 import ImportPage from './pages/ImportPage';
 import StreamDetailPage from './pages/StreamDetailPage';
 import SettingsPage from './pages/SettingsPage';
@@ -118,6 +119,7 @@ export default function App() {
           <Route path="/stream/:streamId" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><StreamDetailPage /></ModuleRoute></ClientRoute>} />
           <Route path="/vcfo/compliances/settings" element={<ClientRoute><ClientAdminRoute><ModuleRoute moduleKey="vcfo_portal"><ComplianceSettingsPage /></ModuleRoute></ClientAdminRoute></ClientRoute>} />
           <Route path="/vcfo/compliances" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><CompliancesPage /></ModuleRoute></ClientRoute>} />
+          <Route path="/vcfo/accounting-tasks" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><AccountingTrackerPage /></ModuleRoute></ClientRoute>} />
           <Route path="/vcfo/*" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><VcfoModulePage /></ModuleRoute></ClientRoute>} />
           <Route path="/settings" element={<ClientRoute><ClientAdminRoute><SettingsPage /></ClientAdminRoute></ClientRoute>} />
           <Route path="/admin/*" element={<SuperAdminRoute><AdminPage /></SuperAdminRoute>} />

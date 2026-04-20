@@ -56,3 +56,40 @@ export const logoUpload = multer({
 
 export function getLogosDir(): string { return logosDir; }
 export function getClientLogosDir(): string { return clientLogosDir; }
+
+// ─── VCFO accounting-task files ──────────────────────────────────────────────
+// Tenant-namespaced disk layout:
+//   {DATA_DIR}/uploads/vcfo_accounting/<tenant-slug>/<timestamp-rand>.<ext>
+// The namespace prevents a buggy task-id lookup from leaking files across
+// tenants — the directory simply won't contain the other tenant's files.
+const taskFilesDir = path.join(dataDir, 'uploads', 'vcfo_accounting');
+if (!fs.existsSync(taskFilesDir)) fs.mkdirSync(taskFilesDir, { recursive: true });
+
+const taskFileStorage = multer.diskStorage({
+  destination: (req, _file, cb) => {
+    const slug = (req as any).tenantSlug || '_unknown';
+    const tenantDir = path.join(taskFilesDir, slug);
+    if (!fs.existsSync(tenantDir)) fs.mkdirSync(tenantDir, { recursive: true });
+    cb(null, tenantDir);
+  },
+  filename: (_req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    cb(null, uniqueSuffix + path.extname(file.originalname).toLowerCase());
+  },
+});
+
+export const taskFileUpload = multer({
+  storage: taskFileStorage,
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const allowed = ['.xlsx', '.xls', '.csv', '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.docx', '.doc'];
+    if (allowed.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`File type ${ext} not allowed. Allowed: ${allowed.join(', ')}`));
+    }
+  },
+  limits: { fileSize: 25 * 1024 * 1024 },  // 25 MB
+});
+
+export function getTaskFilesDir(): string { return taskFilesDir; }

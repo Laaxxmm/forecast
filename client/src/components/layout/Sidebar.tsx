@@ -3,7 +3,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, TrendingUp, Upload, Settings, LogOut, BarChart3, Building2, ArrowLeftRight,
   MapPin, ChevronDown, Sun, Moon, ArrowRight, Activity, PieChart,
-  Pin, PinOff, X, Table, CalendarCheck,
+  Pin, PinOff, X, Table, CalendarCheck, ClipboardList,
 } from 'lucide-react';
 import api from '../../api/client';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -22,8 +22,9 @@ const forecastLinks = [
 //   matchPrefix keeps it highlighted across sub-routes; matchExclude prevents
 //   the prefix from bleeding into sibling routes like /vcfo/compliances.
 const vcfoLinks = [
-  { to: '/vcfo', icon: Table, label: 'Table View', clientAdminOnly: false, requiresModule: '', matchPrefix: '/vcfo', matchExclude: ['/vcfo/compliances'] },
+  { to: '/vcfo', icon: Table, label: 'Table View', clientAdminOnly: false, requiresModule: '', matchPrefix: '/vcfo', matchExclude: ['/vcfo/compliances', '/vcfo/accounting-tasks'] },
   { to: '/vcfo/compliances', icon: CalendarCheck, label: 'Compliances', clientAdminOnly: false, requiresModule: '' },
+  { to: '/vcfo/accounting-tasks', icon: ClipboardList, label: 'Accounting Tracker', clientAdminOnly: false, requiresModule: '' },
 ];
 
 // Utility links — bottom section above logout

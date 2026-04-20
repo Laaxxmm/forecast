@@ -32,6 +32,7 @@ import ingestRoutes from './routes/ingest.js';
 import vcfoReportsRoutes from './routes/vcfo-reports.js';
 import vcfoComplianceRoutes from './routes/vcfo-compliances.js';
 import vcfoComplianceServicesRoutes from './routes/vcfo-compliance-services.js';
+import vcfoAccountingTasksRoutes from './routes/vcfo-accounting-tasks.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -238,6 +239,7 @@ app.use('/api/admin', requireAuth, requireSuperAdmin, adminRoutes);
 
 // ─── Client-scoped routes (require auth + tenant + branch + module) ────────
 const forecastOps = [requireAuth, resolveTenant, resolveBranch, requireModule('forecast_ops')];
+const vcfoOps = [requireAuth, resolveTenant, resolveBranch, requireModule('vcfo_portal')];
 app.use('/api/settings', requireAuth, resolveTenant, resolveBranch, settingsRoutes);
 app.use('/api/import', ...forecastOps, requireAdmin, importRoutes);
 app.use('/api/actuals', ...forecastOps, actualsRoutes);
@@ -245,6 +247,9 @@ app.use('/api/budgets', ...forecastOps, budgetRoutes);
 app.use('/api/forecasts', ...forecastOps, forecastRoutes);
 app.use('/api/dashboard', ...forecastOps, dashboardRoutes);
 app.use('/api/forecast-module', ...forecastOps, forecastModuleRoutes);
+// IMPORTANT: /api/vcfo/accounting-tasks must mount BEFORE the /api/vcfo catch-all
+// below — otherwise Express matches the catch-all first and the new routes 404.
+app.use('/api/vcfo/accounting-tasks', ...vcfoOps, vcfoAccountingTasksRoutes);
 app.use('/api/vcfo/compliance-services', ...forecastOps, vcfoComplianceServicesRoutes);
 app.use('/api/vcfo/compliances', ...forecastOps, vcfoComplianceRoutes);
 app.use('/api/vcfo', ...forecastOps, vcfoReportsRoutes);
