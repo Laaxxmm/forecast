@@ -422,21 +422,32 @@ export function initializeSchema(db: DbHelper) {
       default_due_day INTEGER,      -- e.g. 20 for GSTR-3B; for annual, day of default_due_month
       default_due_month INTEGER,    -- 1-12 (annual/half-yearly); NULL for monthly/quarterly
       state TEXT,                   -- NULL = all states
+      default_scope TEXT DEFAULT 'branch',  -- state | branch | stream (suggested applicability)
       description TEXT
     );
 
-    -- Per-branch compliance instances. History-preserving: one row per period.
-    -- branch_id references platform-DB branches(id) (no FK — cross-DB).
+    -- Compliance instances. History-preserving: one row per period.
+    -- Applicability is captured by scope_type:
+    --   state  — one filing per state (e.g. GSTR-1 for Karnataka); the
+    --            state column is populated from the chosen branch at create.
+    --   branch — one filing per branch (e.g. Drug Licence renewal at BTM).
+    --   stream — one filing per (branch, stream) pair (e.g. pharmacy-only
+    --            licence at BTM); stream_id is populated.
+    -- branch_id is always set (even for state scope we store a representative
+    -- branch) so ownership checks against the client's branches stay trivial.
     CREATE TABLE IF NOT EXISTS vcfo_compliances (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       branch_id INTEGER NOT NULL,
+      scope_type TEXT NOT NULL DEFAULT 'branch',  -- state | branch | stream
+      state TEXT,                    -- populated when scope_type='state'
+      stream_id INTEGER,             -- populated when scope_type='stream'
       catalog_id INTEGER REFERENCES vcfo_compliance_catalog(id) ON DELETE SET NULL,
       name TEXT NOT NULL,
       category TEXT NOT NULL,
       frequency TEXT NOT NULL,
       due_date TEXT NOT NULL,        -- YYYY-MM-DD
       period_label TEXT NOT NULL,    -- e.g. "Apr 2026", "Q1 FY26-27", "FY 25-26"
-      status TEXT NOT NULL DEFAULT 'pending',  -- pending | filed | overdue
+      status TEXT NOT NULL DEFAULT 'pending',  -- pending | filed | overdue | cancelled (soft-cancel when service disabled)
       amount REAL,
       assignee TEXT,
       notes TEXT,
@@ -447,6 +458,45 @@ export function initializeSchema(db: DbHelper) {
       ON vcfo_compliances(branch_id, due_date);
     CREATE INDEX IF NOT EXISTS idx_vcfo_compliances_status
       ON vcfo_compliances(status, due_date);
+    CREATE INDEX IF NOT EXISTS idx_vcfo_compliances_scope
+      ON vcfo_compliances(scope_type, state, stream_id);
+
+    -- Per-tenant registration of high-level compliance services
+    -- (GST / TDS / PF / ESI / PT / IT / licences …). Drives the Settings page
+    -- that looks like a service-matrix: each row says "is this service live
+    -- for this scope, and what's the registration/filing config". When a row
+    -- flips enabled=1 the server spawns tracker rows in vcfo_compliances from
+    -- the catalog entries linked to this service (see serviceCatalogKeys in
+    -- routes/vcfo-compliance-services.ts). Disabling soft-cancels pending
+    -- tracker rows (status='cancelled') so history survives.
+    --
+    -- Identity is (service_key, scope_type, state, branch_id) — e.g.
+    --   ('gst',  'state',  'KA', <representative branch>)  ← GST in Karnataka
+    --   ('pf',   'branch', NULL, 12)                       ← PF at branch 12
+    CREATE TABLE IF NOT EXISTS vcfo_compliance_services (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      service_key TEXT NOT NULL,       -- gst | mca | tds | pt | pf | esi | it | advance_tax | s_e | drug | clinical | lwf | manual
+      scope_type TEXT NOT NULL,        -- state | branch
+      state TEXT,                      -- populated when scope_type='state'
+      branch_id INTEGER NOT NULL,      -- representative branch (always set)
+      enabled INTEGER NOT NULL DEFAULT 0,
+      registration_no TEXT,            -- GSTIN, TAN, PF code, licence number, etc.
+      registration_date TEXT,          -- YYYY-MM-DD
+      reg_type TEXT,                   -- e.g. 'Regular', 'Composition' (GST-specific; free-form)
+      status_label TEXT,               -- 'Active', 'Cancelled', etc.
+      preference TEXT,                 -- GST: 'monthly' | 'quarterly'
+      assignee TEXT,
+      reviewer TEXT,
+      frequency_override TEXT,         -- override the catalog-default frequency
+      start_day INTEGER,
+      end_day INTEGER,
+      amount REAL,
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_vcfo_compliance_services_key
+      ON vcfo_compliance_services(service_key, scope_type, COALESCE(state,''), branch_id);
 
     -- Retrofit unique indices for tenants whose vcfo_* tables were created
     -- pre-cutover by the retired TallyVision sub-app. CREATE TABLE IF NOT
@@ -485,6 +535,13 @@ export function initializeSchema(db: DbHelper) {
     'ALTER TABLE vcfo_companies ADD COLUMN is_active INTEGER DEFAULT 1',
     'ALTER TABLE vcfo_companies ADD COLUMN last_full_sync_at TEXT',
     "ALTER TABLE vcfo_companies ADD COLUMN created_at TEXT DEFAULT (datetime('now'))",
+    // Compliance applicability — tenants created under the initial
+    // compliance schema won't have these columns. Idempotent ALTERs bring
+    // them up to the current shape.
+    "ALTER TABLE vcfo_compliances ADD COLUMN scope_type TEXT NOT NULL DEFAULT 'branch'",
+    'ALTER TABLE vcfo_compliances ADD COLUMN state TEXT',
+    'ALTER TABLE vcfo_compliances ADD COLUMN stream_id INTEGER',
+    "ALTER TABLE vcfo_compliance_catalog ADD COLUMN default_scope TEXT DEFAULT 'branch'",
   ];
   for (const sql of branchMigrations) {
     try { db.exec(sql); } catch { /* column already exists */ }
@@ -752,6 +809,12 @@ export function initializeSchema(db: DbHelper) {
 // UNIQUE key. state=null applies to every branch; two-letter code restricts
 // to branches in that state. default_due_day/month drive the first instance's
 // due_date when a user adds from catalog (the UI still lets them override).
+// Curated compliance catalog. `default_scope` suggests the natural
+// applicability:
+//   state  — one filing covers the whole state (GSTIN, TAN, PT, etc.)
+//   branch — per-establishment licences and labour filings
+//   stream — stream-specific licences (rare; mostly useful for user overrides)
+// Users can override in the Add modal.
 const COMPLIANCE_CATALOG: Array<{
   key: string;
   name: string;
@@ -760,25 +823,28 @@ const COMPLIANCE_CATALOG: Array<{
   default_due_day: number | null;
   default_due_month: number | null;
   state: string | null;
+  default_scope: 'state' | 'branch' | 'stream';
   description: string;
 }> = [
-  { key: 'gstr1_monthly',      name: 'GSTR-1 (monthly)',            category: 'GST',     frequency: 'monthly',   default_due_day: 11, default_due_month: null, state: null, description: 'Monthly outward supplies return' },
-  { key: 'gstr3b_monthly',     name: 'GSTR-3B (monthly)',           category: 'GST',     frequency: 'monthly',   default_due_day: 20, default_due_month: null, state: null, description: 'Monthly summary return & tax payment' },
-  { key: 'gstr1_iff_quarterly',name: 'GSTR-1 / IFF (quarterly)',    category: 'GST',     frequency: 'quarterly', default_due_day: 13, default_due_month: null, state: null, description: 'Quarterly outward supplies (QRMP scheme)' },
-  { key: 'gstr3b_quarterly',   name: 'GSTR-3B (quarterly)',         category: 'GST',     frequency: 'quarterly', default_due_day: 22, default_due_month: null, state: null, description: 'Quarterly summary return (QRMP)' },
-  { key: 'gstr9_annual',       name: 'GSTR-9 (annual)',             category: 'GST',     frequency: 'annual',    default_due_day: 31, default_due_month: 12,   state: null, description: 'Annual GST return' },
-  { key: 'tds_payment',        name: 'TDS Payment (monthly)',       category: 'TDS',     frequency: 'monthly',   default_due_day: 7,  default_due_month: null, state: null, description: 'Monthly TDS deposit to government' },
-  { key: 'tds_return',         name: 'TDS Return (quarterly)',      category: 'TDS',     frequency: 'quarterly', default_due_day: 31, default_due_month: null, state: null, description: 'Quarterly TDS statement (Form 24Q/26Q)' },
-  { key: 'advance_tax',        name: 'Advance Tax (quarterly)',     category: 'IT',      frequency: 'quarterly', default_due_day: 15, default_due_month: null, state: null, description: 'Quarterly advance income tax instalment' },
-  { key: 'itr_annual',         name: 'Income Tax Return (annual)',  category: 'IT',      frequency: 'annual',    default_due_day: 31, default_due_month: 10,   state: null, description: 'Annual income tax return' },
-  { key: 'pf_monthly',         name: 'PF Payment & ECR (monthly)',  category: 'Labour',  frequency: 'monthly',   default_due_day: 15, default_due_month: null, state: null, description: 'Monthly provident fund contribution & ECR filing' },
-  { key: 'esi_monthly',        name: 'ESI Payment (monthly)',       category: 'Labour',  frequency: 'monthly',   default_due_day: 15, default_due_month: null, state: null, description: 'Monthly Employees State Insurance contribution' },
-  { key: 'pt_monthly',         name: 'Professional Tax (monthly)',  category: 'Labour',  frequency: 'monthly',   default_due_day: 20, default_due_month: null, state: null, description: 'Monthly professional tax deposit (varies by state)' },
-  { key: 'shop_est_renewal',   name: 'Shop & Establishment Renewal',category: 'Licence', frequency: 'annual',    default_due_day: 31, default_due_month: 12,   state: null, description: 'Annual S&E licence renewal (varies by state)' },
-  { key: 'drug_licence_renewal',name: 'Drug Licence Renewal',       category: 'Licence', frequency: 'annual',    default_due_day: 31, default_due_month: 3,    state: null, description: 'Retail/wholesale drug licence — periodicity varies by state' },
-  { key: 'clinical_est_renewal',name: 'Clinical Est. Act Renewal',  category: 'Licence', frequency: 'annual',    default_due_day: 31, default_due_month: 3,    state: null, description: 'Clinical Establishments Act registration renewal' },
-  { key: 'pt_annual_ka',       name: 'Professional Tax — Annual Return (KA)', category: 'Labour', frequency: 'annual', default_due_day: 30, default_due_month: 4, state: 'KA', description: 'Karnataka annual PT return (employers)' },
-  { key: 'labour_welfare_hy',  name: 'Labour Welfare Fund (half-yearly)', category: 'Labour', frequency: 'half-yearly', default_due_day: 31, default_due_month: 1, state: null, description: 'Half-yearly LWF deposit (varies by state)' },
+  { key: 'gstr1_monthly',      name: 'GSTR-1 (monthly)',            category: 'GST',     frequency: 'monthly',   default_due_day: 11, default_due_month: null, state: null, default_scope: 'state',  description: 'Monthly outward supplies return — one per state GSTIN' },
+  { key: 'gstr3b_monthly',     name: 'GSTR-3B (monthly)',           category: 'GST',     frequency: 'monthly',   default_due_day: 20, default_due_month: null, state: null, default_scope: 'state',  description: 'Monthly summary return & tax payment — one per state GSTIN' },
+  { key: 'gstr1_iff_quarterly',name: 'GSTR-1 / IFF (quarterly)',    category: 'GST',     frequency: 'quarterly', default_due_day: 13, default_due_month: null, state: null, default_scope: 'state',  description: 'Quarterly outward supplies (QRMP) — one per state GSTIN' },
+  { key: 'gstr3b_quarterly',   name: 'GSTR-3B (quarterly)',         category: 'GST',     frequency: 'quarterly', default_due_day: 22, default_due_month: null, state: null, default_scope: 'state',  description: 'Quarterly summary return (QRMP) — one per state GSTIN' },
+  { key: 'gstr9_annual',       name: 'GSTR-9 (annual)',             category: 'GST',     frequency: 'annual',    default_due_day: 31, default_due_month: 12,   state: null, default_scope: 'state',  description: 'Annual GST return — one per state GSTIN' },
+  { key: 'tds_payment',        name: 'TDS Payment (monthly)',       category: 'TDS',     frequency: 'monthly',   default_due_day: 7,  default_due_month: null, state: null, default_scope: 'state',  description: 'Monthly TDS deposit — one per state TAN' },
+  { key: 'tds_return',         name: 'TDS Return (quarterly)',      category: 'TDS',     frequency: 'quarterly', default_due_day: 31, default_due_month: null, state: null, default_scope: 'state',  description: 'Quarterly TDS statement (Form 24Q/26Q) — one per state TAN' },
+  { key: 'advance_tax',        name: 'Advance Tax (quarterly)',     category: 'IT',      frequency: 'quarterly', default_due_day: 15, default_due_month: null, state: null, default_scope: 'state',  description: 'Quarterly advance income tax instalment' },
+  { key: 'itr_annual',         name: 'Income Tax Return (annual)',  category: 'IT',      frequency: 'annual',    default_due_day: 31, default_due_month: 10,   state: null, default_scope: 'state',  description: 'Annual income tax return' },
+  { key: 'pf_monthly',         name: 'PF Payment & ECR (monthly)',  category: 'Labour',  frequency: 'monthly',   default_due_day: 15, default_due_month: null, state: null, default_scope: 'branch', description: 'Monthly provident fund contribution & ECR filing — per establishment code' },
+  { key: 'esi_monthly',        name: 'ESI Payment (monthly)',       category: 'Labour',  frequency: 'monthly',   default_due_day: 15, default_due_month: null, state: null, default_scope: 'branch', description: 'Monthly Employees State Insurance contribution — per establishment' },
+  { key: 'pt_monthly',         name: 'Professional Tax (monthly)',  category: 'Labour',  frequency: 'monthly',   default_due_day: 20, default_due_month: null, state: null, default_scope: 'state',  description: 'Monthly professional tax deposit — state registration level' },
+  { key: 'shop_est_renewal',   name: 'Shop & Establishment Renewal',category: 'Licence', frequency: 'annual',    default_due_day: 31, default_due_month: 12,   state: null, default_scope: 'branch', description: 'Annual S&E licence renewal — per establishment' },
+  { key: 'drug_licence_renewal',name: 'Drug Licence Renewal',       category: 'Licence', frequency: 'annual',    default_due_day: 31, default_due_month: 3,    state: null, default_scope: 'branch', description: 'Retail/wholesale drug licence — per outlet' },
+  { key: 'clinical_est_renewal',name: 'Clinical Est. Act Renewal',  category: 'Licence', frequency: 'annual',    default_due_day: 31, default_due_month: 3,    state: null, default_scope: 'branch', description: 'Clinical Establishments Act registration renewal — per clinic' },
+  { key: 'pt_annual_ka',       name: 'Professional Tax — Annual Return (KA)', category: 'Labour', frequency: 'annual', default_due_day: 30, default_due_month: 4, state: 'KA', default_scope: 'state',  description: 'Karnataka annual PT return — one per employer' },
+  { key: 'labour_welfare_hy',  name: 'Labour Welfare Fund (half-yearly)', category: 'Labour', frequency: 'half-yearly', default_due_day: 31, default_due_month: 1, state: null, default_scope: 'branch', description: 'Half-yearly LWF deposit — per establishment (varies by state)' },
+  { key: 'mca_mgt7_annual',    name: 'MCA MGT-7 (Annual Return)',   category: 'MCA',     frequency: 'annual',    default_due_day: 29, default_due_month: 11,   state: null, default_scope: 'state',  description: 'Annual return — due 60 days from AGM (default Nov 29)' },
+  { key: 'mca_aoc4_annual',    name: 'MCA AOC-4 (Financial Statements)', category: 'MCA', frequency: 'annual',   default_due_day: 30, default_due_month: 10,   state: null, default_scope: 'state',  description: 'Financials filing — due 30 days from AGM (default Oct 30)' },
 ];
 
 function seedComplianceCatalog(db: DbHelper) {
@@ -786,9 +852,15 @@ function seedComplianceCatalog(db: DbHelper) {
     for (const c of COMPLIANCE_CATALOG) {
       db.run(
         `INSERT OR IGNORE INTO vcfo_compliance_catalog
-         (key, name, category, frequency, default_due_day, default_due_month, state, description)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [c.key, c.name, c.category, c.frequency, c.default_due_day, c.default_due_month, c.state, c.description],
+         (key, name, category, frequency, default_due_day, default_due_month, state, default_scope, description)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [c.key, c.name, c.category, c.frequency, c.default_due_day, c.default_due_month, c.state, c.default_scope, c.description],
+      );
+      // Backfill default_scope on rows seeded before the column existed.
+      db.run(
+        `UPDATE vcfo_compliance_catalog SET default_scope = ?
+         WHERE key = ? AND (default_scope IS NULL OR default_scope = '' OR default_scope = 'branch')`,
+        [c.default_scope, c.key],
       );
     }
   } catch {

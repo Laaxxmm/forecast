@@ -1,25 +1,39 @@
-// VCFO Compliances page — List + Calendar over /api/vcfo/compliances.
+// VCFO Compliances page.
 //
-// Branch-scoped: the branch dropdown picks one of the client's branches (or
-// "all"). Each branch has its own state, so the "Add from catalog" picker
-// filters the catalog by the selected branch's state.
+// Branch / stream filtering is driven entirely by the sidebar — the axios
+// client already attaches X-Branch-Id / X-Stream-Id headers, and the server's
+// resolveBranch middleware populates req.branchId / req.streamId which the
+// compliance router uses to scope results.
+//
+// Applicability model (see server/src/routes/vcfo-compliances.ts for details):
+//   - state  — one filing per state GSTIN/TAN/PT registration
+//   - branch — one filing per establishment (licences, PF, ESI)
+//   - stream — per (branch, stream) combination
 //
 // Filing a compliance preserves history — the row stays as `filed`, and the
-// server inserts a new `pending` row for the next period.
+// server inserts a fresh `pending` row for the next period.
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  CalendarCheck, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight,
-  Clock, List as ListIcon, Plus, Trash2, X,
+  Building2, CalendarCheck, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight,
+  Clock, Globe2, List as ListIcon, Plus, Settings, Trash2, X, Layers,
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import api from '../api/client';
 
 interface Branch {
   id: number;
   name: string;
-  code?: string;
+  code?: string | null;
   city?: string | null;
   state?: string | null;
+}
+
+interface Stream {
+  stream_id: number;
+  name: string;
+  slug?: string | null;
+  icon?: string | null;
 }
 
 interface CatalogEntry {
@@ -31,12 +45,16 @@ interface CatalogEntry {
   default_due_day: number | null;
   default_due_month: number | null;
   state: string | null;
+  default_scope: 'state' | 'branch' | 'stream';
   description: string | null;
 }
 
 interface Compliance {
   id: number;
   branch_id: number;
+  scope_type: 'state' | 'branch' | 'stream';
+  state: string | null;
+  stream_id: number | null;
   catalog_id: number | null;
   name: string;
   category: string;
@@ -109,9 +127,30 @@ function fmtDate(iso: string): string {
   return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+function ScopeChip({ c, branchName, streamName }: { c: Compliance; branchName?: string; streamName?: string }) {
+  if (c.scope_type === 'state') {
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium border rounded bg-blue-500/10 text-blue-300 border-blue-500/20" title="State-wide filing">
+        <Globe2 size={10} /> {c.state || 'State'}
+      </span>
+    );
+  }
+  if (c.scope_type === 'stream') {
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium border rounded bg-purple-500/10 text-purple-300 border-purple-500/20" title="Stream-specific filing">
+        <Layers size={10} /> {streamName || 'Stream'}{branchName ? ` · ${branchName}` : ''}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium border rounded bg-zinc-500/10 text-zinc-300 border-zinc-500/20" title="Per-branch filing">
+      <Building2 size={10} /> {branchName || 'Branch'}
+    </span>
+  );
+}
+
 export default function CompliancesPage() {
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [selectedBranchId, setSelectedBranchId] = useState<number | 'all'>('all');
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [items, setItems] = useState<Compliance[]>([]);
   const [loading, setLoading] = useState(true);
@@ -124,43 +163,55 @@ export default function CompliancesPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [calMonth, setCalMonth] = useState(() => {
     const d = new Date();
-    return { year: d.getFullYear(), month: d.getMonth() }; // 0-based
+    return { year: d.getFullYear(), month: d.getMonth() };
   });
 
   const userRole = typeof window !== 'undefined' ? localStorage.getItem('user_role') : null;
   const userType = typeof window !== 'undefined' ? localStorage.getItem('user_type') : null;
   const canEdit = userRole === 'admin' || userType === 'super_admin';
 
-  // Load branches
+  // Current sidebar context (already applied to every API call by the axios
+  // client via X-Branch-Id / X-Stream-Id — we mirror it here only for display
+  // labels and default scope suggestions in the Add modal).
+  const sidebarBranchId = (() => {
+    const raw = typeof window !== 'undefined' ? localStorage.getItem('branch_id') : null;
+    const n = raw ? parseInt(raw, 10) : NaN;
+    return Number.isNaN(n) ? null : n;
+  })();
+  const sidebarStreamId = (() => {
+    const raw = typeof window !== 'undefined' ? localStorage.getItem('stream_id') : null;
+    const n = raw ? parseInt(raw, 10) : NaN;
+    return Number.isNaN(n) ? null : n;
+  })();
+  const sidebarBranch = sidebarBranchId != null ? branches.find(b => b.id === sidebarBranchId) || null : null;
+
   useEffect(() => {
     api.get('/vcfo/compliances/branches')
       .then(r => setBranches(r.data || []))
       .catch(() => setBranches([]));
   }, []);
 
-  // Load catalog (filtered by selected branch's state if a branch is picked)
+  // Catalog is filtered by the currently scoped state (if any).
   useEffect(() => {
-    const branch = branches.find(b => b.id === selectedBranchId);
-    const q = branch?.state ? `?state=${encodeURIComponent(branch.state)}` : '';
+    const q = sidebarBranch?.state ? `?state=${encodeURIComponent(sidebarBranch.state)}` : '';
     api.get(`/vcfo/compliances/catalog${q}`)
       .then(r => setCatalog(r.data || []))
       .catch(() => setCatalog([]));
-  }, [branches, selectedBranchId]);
+  }, [sidebarBranch?.state]);
 
-  // Load items (branch filter applied server-side)
   const reload = () => {
     setLoading(true);
     setError(null);
-    const params = new URLSearchParams();
-    if (selectedBranchId !== 'all') params.set('branchId', String(selectedBranchId));
-    api.get(`/vcfo/compliances?${params.toString()}`)
+    api.get(`/vcfo/compliances`)
       .then(r => { setItems(r.data || []); setLoading(false); })
       .catch(err => {
         setError(err?.response?.data?.error || err?.message || 'Failed to load');
         setLoading(false);
       });
   };
-  useEffect(reload, [selectedBranchId]);
+  // Axios adds X-Branch-Id / X-Stream-Id automatically, so we just reload
+  // whenever the sidebar branch or stream changes.
+  useEffect(reload, [sidebarBranchId, sidebarStreamId]);
 
   const filtered = useMemo(() => {
     return items.filter(c => {
@@ -193,7 +244,6 @@ export default function CompliancesPage() {
     return m;
   }, [branches]);
 
-  // Actions
   const markFiled = async (c: Compliance) => {
     if (!canEdit) return;
     if (!confirm(`Mark "${c.name}" — ${c.period_label} as filed? A new pending row will be created for the next period.`)) return;
@@ -216,28 +266,25 @@ export default function CompliancesPage() {
     }
   };
 
+  const contextLabel = (() => {
+    if (!sidebarBranchId) return 'All branches';
+    const b = sidebarBranch;
+    if (!b) return 'Selected branch';
+    return `${b.name}${b.state ? ` · ${b.state}` : ''}`;
+  })();
+
   return (
     <div className="compliances-page animate-fade-in">
-      {/* Header strip */}
       <div className="bg-dark-800 border-b border-dark-400/30 -mx-4 -mt-4 px-4 md:-mx-8 md:-mt-8 md:px-8 py-3 mb-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <CalendarCheck size={18} className="text-accent-400" />
             <h1 className="text-sm md:text-base font-semibold text-theme-heading">Compliances</h1>
+            <span className="text-[11px] text-theme-faint ml-1 px-2 py-0.5 bg-dark-700 rounded-lg">
+              {contextLabel}
+            </span>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <select
-              value={selectedBranchId}
-              onChange={e => setSelectedBranchId(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-              className="input text-xs py-1.5"
-            >
-              <option value="all">All branches</option>
-              {branches.map(b => (
-                <option key={b.id} value={b.id}>
-                  {b.name}{b.state ? ` · ${b.state}` : ''}
-                </option>
-              ))}
-            </select>
             <select
               value={freqFilter}
               onChange={e => setFreqFilter(e.target.value as any)}
@@ -276,6 +323,16 @@ export default function CompliancesPage() {
               </button>
             </div>
             {canEdit && (
+              <Link
+                to="/vcfo/compliances/settings"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-dark-700 text-theme-secondary border border-dark-400/50 hover:bg-dark-600 rounded-xl transition-colors"
+                title="Manage registered services (GST, TDS, PF, …) and their auto-generated trackers"
+              >
+                <Settings size={13} />
+                Settings
+              </Link>
+            )}
+            {canEdit && (
               <button
                 onClick={() => setAddOpen(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-accent-500/15 text-accent-300 border border-accent-500/30 hover:bg-accent-500/25 rounded-xl transition-colors"
@@ -288,7 +345,6 @@ export default function CompliancesPage() {
         </div>
       </div>
 
-      {/* Summary strip */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <SummaryCard label="Pending" value={summary.pending} color="zinc" icon={<Clock size={14} />} />
         <SummaryCard label="Due soon (≤7d)" value={summary.dueSoon} color="amber" icon={<Clock size={14} />} />
@@ -324,7 +380,7 @@ export default function CompliancesPage() {
       {addOpen && (
         <AddModal
           branches={branches}
-          defaultBranchId={selectedBranchId !== 'all' ? selectedBranchId : (branches[0]?.id ?? null)}
+          defaultBranchId={sidebarBranchId ?? (branches[0]?.id ?? null)}
           catalog={catalog}
           onClose={() => setAddOpen(false)}
           onCreated={() => { setAddOpen(false); reload(); }}
@@ -381,7 +437,7 @@ function ListView({
             <tr>
               <th className="text-left px-4 py-2.5 font-semibold">Name</th>
               <th className="text-left px-4 py-2.5 font-semibold">Category</th>
-              <th className="text-left px-4 py-2.5 font-semibold">Branch</th>
+              <th className="text-left px-4 py-2.5 font-semibold">Applicability</th>
               <th className="text-left px-4 py-2.5 font-semibold">Frequency</th>
               <th className="text-left px-4 py-2.5 font-semibold">Period</th>
               <th className="text-left px-4 py-2.5 font-semibold">Due date</th>
@@ -401,15 +457,8 @@ function ListView({
                       {c.category}
                     </span>
                   </td>
-                  <td className="px-4 py-2.5 text-theme-secondary">
-                    {branch ? (
-                      <>
-                        <span>{branch.name}</span>
-                        {branch.state && <span className="text-theme-faint ml-1">· {branch.state}</span>}
-                      </>
-                    ) : (
-                      <span className="text-theme-faint">—</span>
-                    )}
+                  <td className="px-4 py-2.5">
+                    <ScopeChip c={c} branchName={branch?.name} />
                   </td>
                   <td className="px-4 py-2.5 text-theme-secondary">{FREQ_LABEL[c.frequency]}</td>
                   <td className="px-4 py-2.5 text-theme-secondary">{c.period_label}</td>
@@ -464,11 +513,10 @@ function CalendarView({
   onMonthChange: (m: { year: number; month: number }) => void;
 }) {
   const firstOfMonth = new Date(month.year, month.month, 1);
-  const startOffset = (firstOfMonth.getDay() + 6) % 7; // Mon-start
+  const startOffset = (firstOfMonth.getDay() + 6) % 7;
   const daysInMonth = new Date(month.year, month.month + 1, 0).getDate();
   const monthLabel = firstOfMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 
-  // Bucket items by day-of-month within this month.
   const buckets = new Map<number, Compliance[]>();
   for (const c of items) {
     const [y, m, d] = c.due_date.split('-').map(n => parseInt(n, 10));
@@ -538,10 +586,14 @@ function CalendarView({
                     {dayItems.slice(0, 3).map(c => {
                       const eff = effectiveStatus(c);
                       const branch = branchById.get(c.branch_id);
+                      const scopeLabel =
+                        c.scope_type === 'state'  ? (c.state ? `${c.state}` : 'State')
+                      : c.scope_type === 'stream' ? 'Stream'
+                      :                             (branch?.name || 'Branch');
                       return (
                         <div
                           key={c.id}
-                          title={`${c.name}${branch ? ` · ${branch.name}` : ''} — ${c.period_label} (${eff})`}
+                          title={`${c.name} — ${c.period_label} (${eff}) · ${scopeLabel}`}
                           className={`flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium border rounded truncate ${statusChip(eff)}`}
                         >
                           <span className={`w-1 h-1 rounded-full flex-shrink-0 ${statusDotClass(eff)}`} />
@@ -576,8 +628,11 @@ function AddModal({
   onClose: () => void;
   onCreated: () => void;
 }) {
-  const [branchId, setBranchId] = useState<number | null>(defaultBranchId);
   const [catalogId, setCatalogId] = useState<number | null>(catalog[0]?.id ?? null);
+  const [scopeType, setScopeType] = useState<'state' | 'branch' | 'stream'>('branch');
+  const [branchId, setBranchId] = useState<number | null>(defaultBranchId);
+  const [streamId, setStreamId] = useState<number | null>(null);
+  const [branchStreams, setBranchStreams] = useState<Stream[]>([]);
   const [dueDate, setDueDate] = useState<string>('');
   const [periodLabel, setPeriodLabel] = useState<string>('');
   const [assignee, setAssignee] = useState('');
@@ -586,16 +641,59 @@ function AddModal({
   const [error, setError] = useState<string | null>(null);
 
   const selected = catalog.find(c => c.id === catalogId) || null;
-  const canSubmit = branchId != null && catalogId != null && !submitting;
+
+  // When the catalog entry changes, suggest its default_scope.
+  useEffect(() => {
+    if (selected) setScopeType(selected.default_scope || 'branch');
+  }, [selected]);
+
+  // Whenever the branch changes, refresh the stream list for stream-scope.
+  useEffect(() => {
+    if (!branchId) { setBranchStreams([]); setStreamId(null); return; }
+    api.get(`/vcfo/compliances/streams?branchId=${branchId}`)
+      .then(r => {
+        setBranchStreams(r.data || []);
+        setStreamId(prev => (r.data || []).some((s: Stream) => s.stream_id === prev) ? prev : null);
+      })
+      .catch(() => { setBranchStreams([]); setStreamId(null); });
+  }, [branchId]);
+
+  // States derived from the client's branches — used when scope = state.
+  const availableStates = useMemo(() => {
+    const set = new Set<string>();
+    for (const b of branches) {
+      if (b.state) set.add(b.state.toUpperCase());
+    }
+    return Array.from(set).sort();
+  }, [branches]);
+
+  const selectedBranch = branchId != null ? branches.find(b => b.id === branchId) : null;
+  const [state, setState] = useState<string>(selectedBranch?.state?.toUpperCase() || availableStates[0] || '');
+
+  useEffect(() => {
+    if (scopeType === 'state' && selectedBranch?.state) {
+      setState(selectedBranch.state.toUpperCase());
+    }
+  }, [scopeType, selectedBranch?.state]);
+
+  const canSubmit = (() => {
+    if (!catalogId || !branchId || submitting) return false;
+    if (scopeType === 'state' && !state) return false;
+    if (scopeType === 'stream' && !streamId) return false;
+    return true;
+  })();
 
   const submit = async () => {
     if (!canSubmit) return;
     setSubmitting(true);
     setError(null);
     try {
+      const scope: any = { type: scopeType, branchId };
+      if (scopeType === 'state') scope.state = state;
+      if (scopeType === 'stream') scope.streamId = streamId;
       await api.post('/vcfo/compliances', {
-        branchId,
         catalogId,
+        scope,
         dueDate: dueDate || undefined,
         periodLabel: periodLabel || undefined,
         assignee: assignee || undefined,
@@ -608,6 +706,12 @@ function AddModal({
     }
   };
 
+  const scopeHintText = (() => {
+    if (scopeType === 'state') return 'One filing covers every branch in this state (e.g. a single GSTR-1 for Karnataka).';
+    if (scopeType === 'branch') return 'Filed separately for each branch (e.g. Drug Licence renewal per outlet).';
+    return 'Filed for a specific stream at a branch (e.g. pharmacy-only licence).';
+  })();
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div className="bg-dark-800 border border-dark-400/40 rounded-2xl shadow-2xl max-w-lg w-[92%] p-6 max-h-[90vh] overflow-y-auto">
@@ -615,7 +719,7 @@ function AddModal({
           <div>
             <h3 className="text-base font-semibold text-theme-heading">Add compliance</h3>
             <p className="text-xs text-theme-faint mt-0.5">
-              Pick from catalog — we auto-fill frequency and due date based on the branch state.
+              Pick a compliance from the catalog, then choose how it applies.
             </p>
           </div>
           <button
@@ -627,22 +731,6 @@ function AddModal({
         </div>
 
         <div className="space-y-3">
-          <div>
-            <label className="block text-xs text-theme-secondary mb-1">Branch</label>
-            <select
-              value={branchId ?? ''}
-              onChange={e => setBranchId(e.target.value ? Number(e.target.value) : null)}
-              className="input text-sm w-full"
-            >
-              <option value="" disabled>Select a branch…</option>
-              {branches.map(b => (
-                <option key={b.id} value={b.id}>
-                  {b.name}{b.state ? ` · ${b.state}` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-
           <div>
             <label className="block text-xs text-theme-secondary mb-1">Compliance</label>
             <select
@@ -661,6 +749,117 @@ function AddModal({
               <p className="text-[11px] text-theme-faint mt-1">{selected.description}</p>
             )}
           </div>
+
+          {/* Applicability picker */}
+          <div>
+            <label className="block text-xs text-theme-secondary mb-1.5">Applicability</label>
+            <div className="grid grid-cols-3 gap-2">
+              {(['state', 'branch', 'stream'] as const).map(t => {
+                const active = scopeType === t;
+                const Icon = t === 'state' ? Globe2 : t === 'branch' ? Building2 : Layers;
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setScopeType(t)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-xl border transition-colors ${
+                      active
+                        ? 'bg-accent-500/15 text-accent-300 border-accent-500/40'
+                        : 'bg-dark-700 text-theme-secondary border-dark-400/50 hover:bg-dark-600'
+                    }`}
+                  >
+                    <Icon size={13} />
+                    <span className="capitalize">{t}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[11px] text-theme-faint mt-1.5">{scopeHintText}</p>
+          </div>
+
+          {/* Scope-specific fields */}
+          {scopeType === 'state' && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-theme-secondary mb-1">State</label>
+                <select
+                  value={state}
+                  onChange={e => setState(e.target.value)}
+                  className="input text-sm w-full"
+                >
+                  <option value="" disabled>Select a state…</option>
+                  {availableStates.map(s => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-theme-secondary mb-1">Anchor branch</label>
+                <select
+                  value={branchId ?? ''}
+                  onChange={e => setBranchId(e.target.value ? Number(e.target.value) : null)}
+                  className="input text-sm w-full"
+                >
+                  <option value="" disabled>Select a branch in this state…</option>
+                  {branches.filter(b => !state || b.state?.toUpperCase() === state).map(b => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
+          {scopeType === 'branch' && (
+            <div>
+              <label className="block text-xs text-theme-secondary mb-1">Branch</label>
+              <select
+                value={branchId ?? ''}
+                onChange={e => setBranchId(e.target.value ? Number(e.target.value) : null)}
+                className="input text-sm w-full"
+              >
+                <option value="" disabled>Select a branch…</option>
+                {branches.map(b => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}{b.state ? ` · ${b.state}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {scopeType === 'stream' && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-theme-secondary mb-1">Branch</label>
+                <select
+                  value={branchId ?? ''}
+                  onChange={e => setBranchId(e.target.value ? Number(e.target.value) : null)}
+                  className="input text-sm w-full"
+                >
+                  <option value="" disabled>Select a branch…</option>
+                  {branches.map(b => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-theme-secondary mb-1">Stream</label>
+                <select
+                  value={streamId ?? ''}
+                  onChange={e => setStreamId(e.target.value ? Number(e.target.value) : null)}
+                  className="input text-sm w-full"
+                  disabled={branchStreams.length === 0}
+                >
+                  <option value="" disabled>
+                    {branchStreams.length === 0 ? 'No streams for this branch' : 'Select a stream…'}
+                  </option>
+                  {branchStreams.map(s => (
+                    <option key={s.stream_id} value={s.stream_id}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -729,4 +928,3 @@ function AddModal({
     </div>
   );
 }
-
