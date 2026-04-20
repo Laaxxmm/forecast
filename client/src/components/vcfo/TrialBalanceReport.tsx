@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { ChevronRight, ChevronDown } from 'lucide-react';
 import api from '../../api/client';
 import { formatRs } from '../../pages/ForecastModulePage';
 
@@ -11,9 +12,20 @@ interface TrialBalanceRow {
   closing: number;
 }
 
+interface TrialBalanceGroup {
+  key: string;
+  groupName: string;
+  opening: number;
+  debit: number;
+  credit: number;
+  closing: number;
+  children: TrialBalanceRow[];
+}
+
 interface TrialBalanceReport {
   period: { from: string; to: string };
   rows: TrialBalanceRow[];
+  groups?: TrialBalanceGroup[];
   totals: { opening: number; debit: number; credit: number; closing: number };
 }
 
@@ -28,14 +40,13 @@ export default function TrialBalanceReport({ companyId, companyIds, from, to }: 
   const [data, setData] = useState<TrialBalanceReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!companyId && !companyIds) {
       setData(null);
       return;
     }
-    // Wait for the parent's FY/period state to resolve — firing with empty
-    // dates produces a 400 "from must be YYYY-MM-DD" that lingers on screen.
     if (!from || !to) return;
     setLoading(true);
     setError(null);
@@ -68,6 +79,66 @@ export default function TrialBalanceReport({ companyId, companyIds, from, to }: 
     );
   }
 
+  const toggle = (key: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  // Server-side groups are preferred; fall back to client-side grouping for
+  // older server responses that didn't populate `groups` yet.
+  const groups: TrialBalanceGroup[] =
+    data.groups && data.groups.length > 0
+      ? data.groups
+      : foldRowsClientSide(data.rows);
+
+  const renderGroup = (g: TrialBalanceGroup): ReactNode => {
+    const isOpen = expanded.has(g.key);
+    const hasChildren = g.children.length > 0;
+    return (
+      <Fragment key={g.key}>
+        <tr
+          className={`border-b border-dark-400/20 transition-colors ${
+            hasChildren ? 'cursor-pointer hover:bg-dark-600/40' : 'hover:bg-dark-600/20'
+          }`}
+          onClick={hasChildren ? () => toggle(g.key) : undefined}
+        >
+          <td className="py-2 pr-4 font-semibold text-theme-primary" style={{ paddingLeft: 16 }}>
+            <span className="inline-flex items-center gap-1.5">
+              {hasChildren ? (
+                isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />
+              ) : (
+                <span style={{ width: 14, display: 'inline-block' }} />
+              )}
+              {g.groupName}
+            </span>
+          </td>
+          <td className="px-4 py-2 text-right font-mono font-semibold text-theme-primary">{formatRs(g.opening)}</td>
+          <td className="px-4 py-2 text-right font-mono font-semibold text-theme-primary">{formatRs(g.debit)}</td>
+          <td className="px-4 py-2 text-right font-mono font-semibold text-theme-primary">{formatRs(g.credit)}</td>
+          <td className="px-4 py-2 text-right font-mono font-semibold text-theme-primary">{formatRs(g.closing)}</td>
+        </tr>
+        {hasChildren && isOpen && g.children.map((r, i) => (
+          <tr
+            key={`${g.key}:${r.ledgerName}-${i}`}
+            className="border-b border-dark-400/20 hover:bg-dark-600/20"
+          >
+            <td className="py-2 pr-4 text-[13px] text-theme-secondary" style={{ paddingLeft: 36 }}>
+              {r.ledgerName}
+            </td>
+            <td className="px-4 py-2 text-right text-theme-secondary font-mono text-[13px]">{formatRs(r.opening)}</td>
+            <td className="px-4 py-2 text-right text-theme-secondary font-mono text-[13px]">{formatRs(r.debit)}</td>
+            <td className="px-4 py-2 text-right text-theme-secondary font-mono text-[13px]">{formatRs(r.credit)}</td>
+            <td className="px-4 py-2 text-right text-theme-secondary font-mono text-[13px]">{formatRs(r.closing)}</td>
+          </tr>
+        ))}
+      </Fragment>
+    );
+  };
+
   return (
     <div className="bg-dark-800 border border-dark-400/30 rounded-2xl shadow-elev-2 overflow-hidden">
       <div className="px-5 py-3 border-b border-dark-400/30 flex items-center justify-between">
@@ -80,33 +151,17 @@ export default function TrialBalanceReport({ companyId, companyIds, from, to }: 
         <table className="w-full border-collapse text-sm">
           <thead className="bg-dark-700">
             <tr className="text-xs font-semibold text-theme-muted uppercase tracking-wide">
-              <th className="text-left px-4 py-2.5 border-b border-dark-400/30">Ledger</th>
-              <th className="text-left px-4 py-2.5 border-b border-dark-400/30">Group</th>
+              <th className="text-left px-4 py-2.5 border-b border-dark-400/30">Group / Ledger</th>
               <th className="text-right px-4 py-2.5 border-b border-dark-400/30">Opening</th>
               <th className="text-right px-4 py-2.5 border-b border-dark-400/30">Debit</th>
               <th className="text-right px-4 py-2.5 border-b border-dark-400/30">Credit</th>
               <th className="text-right px-4 py-2.5 border-b border-dark-400/30">Closing</th>
             </tr>
           </thead>
-          <tbody>
-            {data.rows.map((r, i) => (
-              <tr
-                key={`${r.ledgerName}-${i}`}
-                className="border-b border-dark-400/20 hover:bg-dark-600/30 transition-colors"
-              >
-                <td className="px-4 py-2 text-theme-primary">{r.ledgerName}</td>
-                <td className="px-4 py-2 text-theme-faint">{r.groupName || '-'}</td>
-                <td className="px-4 py-2 text-right text-theme-secondary font-mono">{formatRs(r.opening)}</td>
-                <td className="px-4 py-2 text-right text-theme-secondary font-mono">{formatRs(r.debit)}</td>
-                <td className="px-4 py-2 text-right text-theme-secondary font-mono">{formatRs(r.credit)}</td>
-                <td className="px-4 py-2 text-right text-theme-primary font-mono font-medium">{formatRs(r.closing)}</td>
-              </tr>
-            ))}
-          </tbody>
+          <tbody>{groups.map(renderGroup)}</tbody>
           <tfoot>
             <tr className="bg-dark-700/80 font-semibold">
               <td className="px-4 py-2.5 text-theme-primary">Total</td>
-              <td></td>
               <td className="px-4 py-2.5 text-right text-theme-primary font-mono">{formatRs(data.totals.opening)}</td>
               <td className="px-4 py-2.5 text-right text-theme-primary font-mono">{formatRs(data.totals.debit)}</td>
               <td className="px-4 py-2.5 text-right text-theme-primary font-mono">{formatRs(data.totals.credit)}</td>
@@ -117,4 +172,25 @@ export default function TrialBalanceReport({ companyId, companyIds, from, to }: 
       </div>
     </div>
   );
+}
+
+function foldRowsClientSide(rows: TrialBalanceRow[]): TrialBalanceGroup[] {
+  const byGroup = new Map<string, TrialBalanceGroup>();
+  for (const r of rows) {
+    const name = r.groupName || 'Ungrouped';
+    let g = byGroup.get(name);
+    if (!g) {
+      g = { key: `grp:${name}`, groupName: name, opening: 0, debit: 0, credit: 0, closing: 0, children: [] };
+      byGroup.set(name, g);
+    }
+    g.opening += r.opening;
+    g.debit += r.debit;
+    g.credit += r.credit;
+    g.closing += r.closing;
+    g.children.push(r);
+  }
+  const out = [...byGroup.values()];
+  for (const g of out) g.children.sort((a, b) => a.ledgerName.localeCompare(b.ledgerName));
+  out.sort((a, b) => a.groupName.localeCompare(b.groupName));
+  return out;
 }

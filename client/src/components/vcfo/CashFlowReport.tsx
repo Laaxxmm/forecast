@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { ChevronRight, ChevronDown } from 'lucide-react';
 import api from '../../api/client';
 import { formatRs } from '../../pages/ForecastModulePage';
 
@@ -6,6 +7,7 @@ interface CFLine {
   label: string;
   amount: number;
   values?: Record<string, number>;
+  children?: CFLine[];
 }
 
 interface CFStatement {
@@ -43,6 +45,7 @@ export default function CashFlowReport({ companyId, companyIds, from, to, bifurc
   const [data, setData] = useState<CFStatement | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!companyId && !companyIds) {
@@ -82,13 +85,74 @@ export default function CashFlowReport({ companyId, companyIds, from, to, bifurc
     );
   }
 
+  const toggle = (key: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
   const columns = data.columns && data.bifurcated ? data.columns : null;
   const labelFor = (col: string): string => data.columnLabels?.[col] || (col === 'total' ? 'Total' : col);
 
   // Bifurcated layout — table with one column per company + total.
   if (columns) {
+    const renderLine = (sectionKey: string, line: CFLine, idx: number, depth: number): ReactNode => {
+      const hasChildren = !!(line.children && line.children.length > 0);
+      const rowKey = `${sectionKey}:${line.label}-${idx}`;
+      const isOpen = expanded.has(rowKey);
+      const paddingLeft = 16 + depth * 20;
+      const isParent = depth === 0;
+
+      return (
+        <Fragment key={rowKey}>
+          <tr
+            className={`border-b border-dark-400/20 transition-colors ${
+              hasChildren ? 'cursor-pointer hover:bg-dark-600/40' : 'hover:bg-dark-600/20'
+            }`}
+            onClick={hasChildren ? () => toggle(rowKey) : undefined}
+          >
+            <td
+              className={`py-2 sticky left-0 bg-dark-800 ${
+                isParent ? 'text-theme-secondary' : 'text-[13px] text-theme-faint'
+              }`}
+              style={{ paddingLeft, paddingRight: 16 }}
+            >
+              <span className="inline-flex items-center gap-1.5">
+                {hasChildren ? (
+                  isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />
+                ) : (
+                  <span style={{ width: 14, display: 'inline-block' }} />
+                )}
+                {line.label}
+              </span>
+            </td>
+            {columns.map(c => {
+              const v = line.values?.[c] ?? (c === 'total' ? line.amount : 0);
+              return (
+                <td
+                  key={c}
+                  className={`px-4 py-2 text-right font-mono ${
+                    isParent ? '' : 'text-[13px]'
+                  } ${v >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}
+                >
+                  {formatRs(v)}
+                </td>
+              );
+            })}
+          </tr>
+          {hasChildren && isOpen && line.children!.map((child, ci) =>
+            renderLine(rowKey, child, ci, depth + 1),
+          )}
+        </Fragment>
+      );
+    };
+
     const renderSection = (
       title: string,
+      sectionKey: string,
       lines: CFLine[],
       totalValues: Record<string, number> | undefined,
       accent: string,
@@ -117,22 +181,7 @@ export default function CashFlowReport({ companyId, companyIds, from, to, bifurc
                   </td>
                 </tr>
               ) : (
-                lines.map((line, i) => (
-                  <tr key={`${line.label}-${i}`} className="border-b border-dark-400/20 hover:bg-dark-600/20">
-                    <td className="px-4 py-2 text-theme-secondary sticky left-0 bg-dark-800">{line.label}</td>
-                    {columns.map(c => {
-                      const v = line.values?.[c] ?? (c === 'total' ? line.amount : 0);
-                      return (
-                        <td
-                          key={c}
-                          className={`px-4 py-2 text-right font-mono ${v >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}
-                        >
-                          {formatRs(v)}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))
+                lines.map((line, i) => renderLine(sectionKey, line, i, 0))
               )}
             </tbody>
             <tfoot>
@@ -158,9 +207,9 @@ export default function CashFlowReport({ companyId, companyIds, from, to, bifurc
           </span>
         </div>
 
-        {renderSection('Operating Activities', data.operating, data.operatingTotalValues, 'text-emerald-300')}
-        {renderSection('Investing Activities', data.investing, data.investingTotalValues, 'text-sky-300')}
-        {renderSection('Financing Activities', data.financing, data.financingTotalValues, 'text-violet-300')}
+        {renderSection('Operating Activities', 'op', data.operating, data.operatingTotalValues, 'text-emerald-300')}
+        {renderSection('Investing Activities', 'inv', data.investing, data.investingTotalValues, 'text-sky-300')}
+        {renderSection('Financing Activities', 'fin', data.financing, data.financingTotalValues, 'text-violet-300')}
 
         <div className="bg-dark-800 border border-accent-500/30 rounded-2xl shadow-elev-2 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-400/30">
@@ -214,8 +263,51 @@ export default function CashFlowReport({ companyId, companyIds, from, to, bifurc
     );
   }
 
-  // Single-column (consolidated or single-company) layout — original form.
-  const renderSection = (title: string, lines: CFLine[], total: number, accent: string) => (
+  // Single-column (consolidated or single-company) layout.
+  const renderLineSingle = (sectionKey: string, line: CFLine, idx: number, depth: number): ReactNode => {
+    const hasChildren = !!(line.children && line.children.length > 0);
+    const rowKey = `${sectionKey}:${line.label}-${idx}`;
+    const isOpen = expanded.has(rowKey);
+    const paddingLeft = 16 + depth * 20;
+    const isParent = depth === 0;
+
+    return (
+      <Fragment key={rowKey}>
+        <tr
+          className={`border-b border-dark-400/20 transition-colors ${
+            hasChildren ? 'cursor-pointer hover:bg-dark-600/40' : 'hover:bg-dark-600/30'
+          }`}
+          onClick={hasChildren ? () => toggle(rowKey) : undefined}
+        >
+          <td
+            className={`py-2 pr-4 ${isParent ? 'text-theme-secondary' : 'text-[13px] text-theme-faint'}`}
+            style={{ paddingLeft }}
+          >
+            <span className="inline-flex items-center gap-1.5">
+              {hasChildren ? (
+                isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />
+              ) : (
+                <span style={{ width: 14, display: 'inline-block' }} />
+              )}
+              {line.label}
+            </span>
+          </td>
+          <td
+            className={`px-4 py-2 text-right font-mono ${isParent ? '' : 'text-[13px]'} ${
+              line.amount >= 0 ? 'text-emerald-300' : 'text-rose-300'
+            }`}
+          >
+            {formatRs(line.amount)}
+          </td>
+        </tr>
+        {hasChildren && isOpen && line.children!.map((child, ci) =>
+          renderLineSingle(rowKey, child, ci, depth + 1),
+        )}
+      </Fragment>
+    );
+  };
+
+  const renderSection = (title: string, sectionKey: string, lines: CFLine[], total: number, accent: string) => (
     <div className="bg-dark-800 border border-dark-400/30 rounded-2xl shadow-elev-2 overflow-hidden">
       <div className="px-5 py-3 border-b border-dark-400/30 flex items-center justify-between">
         <h3 className={`text-sm font-semibold ${accent}`}>{title}</h3>
@@ -230,17 +322,7 @@ export default function CashFlowReport({ companyId, companyIds, from, to, bifurc
               </td>
             </tr>
           ) : (
-            lines.map((line, i) => (
-              <tr
-                key={`${line.label}-${i}`}
-                className="border-b border-dark-400/20 hover:bg-dark-600/30 transition-colors"
-              >
-                <td className="px-4 py-2 text-theme-secondary">{line.label}</td>
-                <td className={`px-4 py-2 text-right font-mono ${line.amount >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
-                  {formatRs(line.amount)}
-                </td>
-              </tr>
-            ))
+            lines.map((line, i) => renderLineSingle(sectionKey, line, i, 0))
           )}
         </tbody>
       </table>
@@ -255,9 +337,9 @@ export default function CashFlowReport({ companyId, companyIds, from, to, bifurc
         </span>
       </div>
 
-      {renderSection('Operating Activities', data.operating, data.operatingTotal, 'text-emerald-300')}
-      {renderSection('Investing Activities', data.investing, data.investingTotal, 'text-sky-300')}
-      {renderSection('Financing Activities', data.financing, data.financingTotal, 'text-violet-300')}
+      {renderSection('Operating Activities', 'op', data.operating, data.operatingTotal, 'text-emerald-300')}
+      {renderSection('Investing Activities', 'inv', data.investing, data.investingTotal, 'text-sky-300')}
+      {renderSection('Financing Activities', 'fin', data.financing, data.financingTotal, 'text-violet-300')}
 
       <div className="bg-dark-800 border border-accent-500/30 rounded-2xl shadow-elev-2 overflow-hidden">
         <div className="px-5 py-3 border-b border-dark-400/30">

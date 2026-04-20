@@ -52,9 +52,22 @@ export interface TrialBalanceRow {
   closing: number;
 }
 
+export interface TrialBalanceGroup {
+  key: string;
+  groupName: string;
+  opening: number;
+  debit: number;
+  credit: number;
+  closing: number;
+  children: TrialBalanceRow[];
+}
+
 export interface TrialBalanceReport {
   period: { from: string; to: string };
+  /** Flat ledger rows — kept for backward compat with exporters (xlsx/pdf/docx). */
   rows: TrialBalanceRow[];
+  /** Grouped hierarchical view consumed by the UI expand/collapse feature. */
+  groups: TrialBalanceGroup[];
   totals: { opening: number; debit: number; credit: number; closing: number };
 }
 
@@ -297,7 +310,40 @@ export function buildTrialBalance(
     { opening: 0, debit: 0, credit: 0, closing: 0 },
   );
 
-  return { period: { from, to }, rows: cleanRows, totals };
+  return { period: { from, to }, rows: cleanRows, groups: groupTBRows(cleanRows), totals };
+}
+
+/**
+ * Fold flat TB rows into parent-group buckets so the UI can render each group
+ * as a collapsible parent with its constituent ledgers underneath. Ledgers
+ * whose group is unknown get a synthetic "Ungrouped" parent.
+ */
+function groupTBRows(rows: TrialBalanceRow[]): TrialBalanceGroup[] {
+  const byGroup = new Map<string, TrialBalanceGroup>();
+  for (const r of rows) {
+    const gName = r.groupName || 'Ungrouped';
+    let g = byGroup.get(gName);
+    if (!g) {
+      g = {
+        key: `grp:${gName}`,
+        groupName: gName,
+        opening: 0, debit: 0, credit: 0, closing: 0,
+        children: [],
+      };
+      byGroup.set(gName, g);
+    }
+    g.opening += r.opening;
+    g.debit   += r.debit;
+    g.credit  += r.credit;
+    g.closing += r.closing;
+    g.children.push(r);
+  }
+  const groups = [...byGroup.values()];
+  for (const g of groups) {
+    g.children.sort((a, b) => a.ledgerName.localeCompare(b.ledgerName));
+  }
+  groups.sort((a, b) => a.groupName.localeCompare(b.groupName));
+  return groups;
 }
 
 /**
@@ -806,12 +852,49 @@ export function buildCashFlow(
   const closingStockBal = -computeBSClosing(db, companyId, to, stockGroups);
   const openingStockBal = -computeBSClosing(db, companyId, openingDate, stockGroups);
 
+  // ── Per-ledger children for each WC line ────────────────────────────────
+  // Convention mirrors the parent amount: a DROP in an asset (debtors/stock)
+  // is a cash inflow — so we use (opening - closing). For liabilities
+  // (creditors/loans), a RISE is a cash inflow — so (closing - opening).
+  // `sign` flips the raw BS closing into display-positive before the delta.
+  const ledgerDelta = (
+    groupNames: string[],
+    sign: 1 | -1,
+    direction: 'drop-is-inflow' | 'rise-is-inflow',
+  ): CFLine[] => {
+    const closingByL = computeBSClosingByLedger(db, companyId, to, groupNames);
+    const openingByL = computeBSClosingByLedger(db, companyId, openingDate, groupNames);
+    const names = new Set<string>([...closingByL.keys(), ...openingByL.keys()]);
+    const out: CFLine[] = [];
+    for (const name of names) {
+      const op = (openingByL.get(name) || 0) * sign;
+      const cl = (closingByL.get(name) || 0) * sign;
+      const delta = direction === 'drop-is-inflow' ? (op - cl) : (cl - op);
+      if (Math.abs(delta) < 0.01) continue;
+      out.push({ label: name, amount: delta });
+    }
+    out.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+    return out;
+  };
+
   const operating: CFLine[] = [
     { label: 'Net Profit', amount: pl.netProfit },
     { label: 'Add: Depreciation (non-cash)', amount: 0 }, // placeholder — full depreciation detection deferred
-    { label: '(Inc)/Dec in Sundry Debtors', amount: openingDebtors - closingDebtors },
-    { label: 'Inc/(Dec) in Sundry Creditors', amount: closingCreditors - openingCreditors },
-    { label: '(Inc)/Dec in Stock', amount: openingStockBal - closingStockBal },
+    {
+      label: '(Inc)/Dec in Sundry Debtors',
+      amount: openingDebtors - closingDebtors,
+      children: ledgerDelta(sdGroups, -1, 'drop-is-inflow'),
+    },
+    {
+      label: 'Inc/(Dec) in Sundry Creditors',
+      amount: closingCreditors - openingCreditors,
+      children: ledgerDelta(scGroups, +1, 'rise-is-inflow'),
+    },
+    {
+      label: '(Inc)/Dec in Stock',
+      amount: openingStockBal - closingStockBal,
+      children: ledgerDelta(stockGroups, -1, 'drop-is-inflow'),
+    },
   ];
   const operatingTotal = operating.reduce((s, r) => s + r.amount, 0);
 
@@ -824,8 +907,16 @@ export function buildCashFlow(
   const openingInv = -computeBSClosing(db, companyId, openingDate, invGroups);
 
   const investing: CFLine[] = [
-    { label: '(Purchase)/Sale of Fixed Assets', amount: openingFA - closingFA },
-    { label: '(Purchase)/Sale of Investments',  amount: openingInv - closingInv },
+    {
+      label: '(Purchase)/Sale of Fixed Assets',
+      amount: openingFA - closingFA,
+      children: ledgerDelta(faGroups, -1, 'drop-is-inflow'),
+    },
+    {
+      label: '(Purchase)/Sale of Investments',
+      amount: openingInv - closingInv,
+      children: ledgerDelta(invGroups, -1, 'drop-is-inflow'),
+    },
   ];
   const investingTotal = investing.reduce((s, r) => s + r.amount, 0);
 
@@ -841,9 +932,21 @@ export function buildCashFlow(
   const openingCap = computeBSClosing(db, companyId, openingDate, capGroups);
 
   const financing: CFLine[] = [
-    { label: 'Inc/(Dec) in Secured Loans',   amount: closingSL - openingSL },
-    { label: 'Inc/(Dec) in Unsecured Loans', amount: closingUL - openingUL },
-    { label: 'Inc/(Dec) in Capital',         amount: closingCap - openingCap },
+    {
+      label: 'Inc/(Dec) in Secured Loans',
+      amount: closingSL - openingSL,
+      children: ledgerDelta(slGroups, +1, 'rise-is-inflow'),
+    },
+    {
+      label: 'Inc/(Dec) in Unsecured Loans',
+      amount: closingUL - openingUL,
+      children: ledgerDelta(ulGroups, +1, 'rise-is-inflow'),
+    },
+    {
+      label: 'Inc/(Dec) in Capital',
+      amount: closingCap - openingCap,
+      children: ledgerDelta(capGroups, +1, 'rise-is-inflow'),
+    },
   ];
   const financingTotal = financing.reduce((s, r) => s + r.amount, 0);
 
@@ -1283,12 +1386,30 @@ export function buildCashFlowMulti(
   if (!bifurcate) {
     const mergeLines = (getLines: (r: CFStatement) => CFLine[]): CFLine[] => {
       const byLabel = new Map<string, CFLine>();
+      const kidsByParent = new Map<string, Map<string, number>>();
       for (const { report } of perCompany) {
         for (const line of getLines(report)) {
           const existing = byLabel.get(line.label);
           if (!existing) byLabel.set(line.label, { label: line.label, amount: line.amount });
           else existing.amount += line.amount;
+
+          if (line.children?.length) {
+            if (!kidsByParent.has(line.label)) kidsByParent.set(line.label, new Map());
+            const bucket = kidsByParent.get(line.label)!;
+            for (const ch of line.children) {
+              bucket.set(ch.label, (bucket.get(ch.label) || 0) + ch.amount);
+            }
+          }
         }
+      }
+      for (const [label, bucket] of kidsByParent.entries()) {
+        const parent = byLabel.get(label);
+        if (!parent) continue;
+        const kids = [...bucket.entries()]
+          .filter(([, v]) => Math.abs(v) >= 0.01)
+          .map(([l, v]) => ({ label: l, amount: v }));
+        kids.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+        if (kids.length) parent.children = kids;
       }
       return [...byLabel.values()];
     };
@@ -1321,6 +1442,8 @@ export function buildCashFlowMulti(
 
   const mergeLinesBifurcated = (getLines: (r: CFStatement) => CFLine[]): CFLine[] => {
     const byLabel = new Map<string, CFLine>();
+    // Per-parent → per-child → per-column-key aggregator
+    const kidsByParent = new Map<string, Map<string, Record<string, number>>>();
     for (const { company, report } of perCompany) {
       for (const line of getLines(report)) {
         if (!byLabel.has(line.label)) {
@@ -1333,7 +1456,29 @@ export function buildCashFlowMulti(
         acc.values![compKey(company)] = line.amount;
         acc.values!.total += line.amount;
         acc.amount += line.amount;
+
+        if (line.children?.length) {
+          if (!kidsByParent.has(line.label)) kidsByParent.set(line.label, new Map());
+          const bucket = kidsByParent.get(line.label)!;
+          for (const ch of line.children) {
+            if (!bucket.has(ch.label)) bucket.set(ch.label, Object.fromEntries(columns.map(c => [c, 0])));
+            const row = bucket.get(ch.label)!;
+            row[compKey(company)] = ch.amount;
+            row.total += ch.amount;
+          }
+        }
       }
+    }
+    for (const [label, bucket] of kidsByParent.entries()) {
+      const parent = byLabel.get(label);
+      if (!parent) continue;
+      const kids: CFLine[] = [];
+      for (const [childLabel, values] of bucket.entries()) {
+        if (Math.abs(values.total || 0) < 0.01) continue;
+        kids.push({ label: childLabel, amount: values.total || 0, values });
+      }
+      kids.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+      if (kids.length) parent.children = kids;
     }
     return [...byLabel.values()];
   };
@@ -1392,7 +1537,7 @@ export function buildTrialBalanceMulti(
   to: string,
 ): TrialBalanceReport {
   if (companies.length === 0) {
-    return { period: { from, to }, rows: [], totals: { opening: 0, debit: 0, credit: 0, closing: 0 } };
+    return { period: { from, to }, rows: [], groups: [], totals: { opening: 0, debit: 0, credit: 0, closing: 0 } };
   }
   if (companies.length === 1) {
     return buildTrialBalance(db, companies[0].id, from, to);
@@ -1426,5 +1571,5 @@ export function buildTrialBalanceMulti(
     }),
     { opening: 0, debit: 0, credit: 0, closing: 0 },
   );
-  return { period: { from, to }, rows, totals };
+  return { period: { from, to }, rows, groups: groupTBRows(rows), totals };
 }
