@@ -49,6 +49,7 @@ export default function CashFlowReport({ companyId, companyIds, from, to, bifurc
       setData(null);
       return;
     }
+    if (!from || !to) return;
     setLoading(true);
     setError(null);
     const params: Record<string, any> = { from, to };

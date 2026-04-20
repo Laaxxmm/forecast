@@ -34,6 +34,9 @@ export default function TrialBalanceReport({ companyId, companyIds, from, to }: 
       setData(null);
       return;
     }
+    // Wait for the parent's FY/period state to resolve — firing with empty
+    // dates produces a 400 "from must be YYYY-MM-DD" that lingers on screen.
+    if (!from || !to) return;
     setLoading(true);
     setError(null);
     const params: Record<string, any> = { from, to };

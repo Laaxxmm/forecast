@@ -55,6 +55,7 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
       setData(null);
       return;
     }
+    if (!from || !to) return;
     setLoading(true);
     setError(null);
     const params: Record<string, any> = { from, to, view };

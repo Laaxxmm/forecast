@@ -46,6 +46,7 @@ export default function BalanceSheetReport({ companyId, companyIds, asOf, view, 
       setData(null);
       return;
     }
+    if (!asOf) return;
     setLoading(true);
     setError(null);
     const params: Record<string, any> = { asOf, view };
