@@ -68,9 +68,26 @@ function validBool(val: any): boolean {
  * Always intersects with `listAccessibleCompanies` so a user can never read
  * a company outside their active branch/stream context.
  */
-async function resolveCompanyRefs(req: Request): Promise<Array<{ id: number; name: string }>> {
+type CompanyRef = {
+  id: number;
+  name: string;
+  branchName?: string | null;
+  streamName?: string | null;
+};
+
+async function resolveCompanyRefs(req: Request): Promise<CompanyRef[]> {
   const accessible = await listAccessibleCompanies(req);
-  const byId = new Map(accessible.map(c => [c.id, { id: c.id, name: c.name }]));
+  const byId = new Map<number, CompanyRef>(
+    accessible.map(c => [
+      c.id,
+      {
+        id: c.id,
+        name: c.name,
+        branchName: c.branchName,
+        streamName: c.streamName,
+      },
+    ]),
+  );
 
   // 1. explicit companyIds
   const raw = req.query.companyIds;
@@ -81,7 +98,7 @@ async function resolveCompanyRefs(req: Request): Promise<Array<{ id: number; nam
       .split(',')
       .map(s => parseInt(s.trim(), 10))
       .filter(n => Number.isFinite(n));
-    return ids.map(id => byId.get(id)).filter((x): x is { id: number; name: string } => !!x);
+    return ids.map(id => byId.get(id)).filter((x): x is CompanyRef => !!x);
   }
 
   // 2. explicit single companyId
@@ -106,6 +123,8 @@ async function listAccessibleCompanies(req: Request): Promise<Array<{
   entity_type: string;
   branchId: number | null;
   streamId: number | null;
+  branchName: string | null;
+  streamName: string | null;
   lastSyncedAt: string | null;
 }>> {
   const db = req.tenantDb!;
@@ -144,16 +163,35 @@ async function listAccessibleCompanies(req: Request): Promise<Array<{
   ) as Array<{ tally_company_name: string; branch_id: number | null; stream_id: number | null }>;
   const byName = new Map(mappings.map(m => [m.tally_company_name.toLowerCase(), m]));
 
+  // Hydrate human-readable branch + stream names from platform.db. We do a
+  // separate pair of lookups (not a JOIN on the mapping query) so unmapped
+  // companies still resolve to `null` labels without blowing up the query.
+  const branches = platformDb.all(
+    `SELECT id, name FROM branches WHERE client_id = ?`,
+    req.clientId,
+  ) as Array<{ id: number; name: string }>;
+  const branchNameById = new Map<number, string>(branches.map(b => [b.id, b.name]));
+
+  const streams = platformDb.all(
+    `SELECT id, name FROM business_streams WHERE client_id = ?`,
+    req.clientId,
+  ) as Array<{ id: number; name: string }>;
+  const streamNameById = new Map<number, string>(streams.map(s => [s.id, s.name]));
+
   const filtered = companies
     .map(c => {
       const m = byName.get(c.name.toLowerCase());
+      const branchId = m?.branch_id ?? null;
+      const streamId = m?.stream_id ?? null;
       return {
         id: c.id,
         name: c.name,
         location: c.location || '',
         entity_type: c.entity_type || '',
-        branchId: m?.branch_id ?? null,
-        streamId: m?.stream_id ?? null,
+        branchId,
+        streamId,
+        branchName: branchId != null ? branchNameById.get(branchId) ?? null : null,
+        streamName: streamId != null ? streamNameById.get(streamId) ?? null : null,
         lastSyncedAt: c.last_full_sync_at || null,
       };
     })

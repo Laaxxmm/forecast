@@ -978,7 +978,33 @@ export function buildCashFlow(
 // need to match across companies — children are merged by label, non-matches
 // appear as separate rows.
 
-type CompanyRef = { id: number; name: string };
+type CompanyRef = {
+  id: number;
+  name: string;
+  branchName?: string | null;
+  streamName?: string | null;
+};
+
+/**
+ * Preferred display label for a bifurcate column.
+ *
+ * Shape:
+ *   - Both branch & stream known  → "Bangalore · Clinic"
+ *   - Only branch known           → "Bangalore"
+ *   - Only stream known           → "Clinic"
+ *   - Neither known               → Tally company name (fallback)
+ *
+ * Keeps the UI tied to the app's human taxonomy (branches/streams) rather than
+ * the raw Tally company names from the sync-agent feed.
+ */
+function companyColumnLabel(c: CompanyRef): string {
+  const b = (c.branchName || '').trim();
+  const s = (c.streamName || '').trim();
+  if (b && s) return `${b} · ${s}`;
+  if (b) return b;
+  if (s) return s;
+  return c.name;
+}
 
 function mergeChildrenPL(children: PLSection[][]): PLSection[] {
   const byLabel = new Map<string, PLSection>();
@@ -1125,7 +1151,7 @@ export function buildProfitLossMulti(
   const compKey = (c: CompanyRef) => `co:${c.id}`;
   const columns = companies.map(compKey).concat('total');
   const columnLabels: Record<string, string> = {};
-  for (const c of companies) columnLabels[compKey(c)] = c.name;
+  for (const c of companies) columnLabels[compKey(c)] = companyColumnLabel(c);
   columnLabels.total = 'Total';
 
   // For each top-level section, one column per company = that company's
@@ -1292,7 +1318,7 @@ export function buildBalanceSheetMulti(
   const compKey = (c: CompanyRef) => `co:${c.id}`;
   const columns = companies.map(compKey).concat('total');
   const columnLabels: Record<string, string> = {};
-  for (const c of companies) columnLabels[compKey(c)] = c.name;
+  for (const c of companies) columnLabels[compKey(c)] = companyColumnLabel(c);
   columnLabels.total = 'Total';
 
   const totalAssets: Record<string, number> = Object.fromEntries(columns.map(c => [c, 0]));
@@ -1437,7 +1463,7 @@ export function buildCashFlowMulti(
   const compKey = (c: CompanyRef) => `co:${c.id}`;
   const columns = companies.map(compKey).concat('total');
   const columnLabels: Record<string, string> = {};
-  for (const c of companies) columnLabels[compKey(c)] = c.name;
+  for (const c of companies) columnLabels[compKey(c)] = companyColumnLabel(c);
   columnLabels.total = 'Total';
 
   const mergeLinesBifurcated = (getLines: (r: CFStatement) => CFLine[]): CFLine[] => {
