@@ -1,11 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import {
   Building2, Users, UserPlus, Plus, Power, ArrowLeft,
   Eye, EyeOff, CheckCircle, Plug, Shield, Trash2, Copy, KeyRound, BarChart3,
   MapPin, GitBranch, Layers, Search, Activity, Globe, ChevronRight, ChevronDown,
-  ChevronUp, LayoutDashboard, Edit2, Calendar, Stethoscope, Upload, Server, BookOpen,
+  LayoutDashboard, Edit2, Calendar, Stethoscope, Upload, Server, BookOpen,
   ImagePlus,
 } from 'lucide-react';
 
@@ -31,13 +30,37 @@ interface Integration {
 type Tab = 'clients' | 'team';
 type ClientDetailTab = 'users' | 'modules' | 'integrations' | 'streams' | 'dashboard_cards' | 'branches' | 'assigned_team';
 
+/* ─── Tone helpers ───────────────────────────────────────── */
+
+type Tone = { fg: string; soft: string; border: string };
+const tone = (hex: string): Tone => ({
+  fg: hex,
+  soft: `color-mix(in srgb, ${hex} 12%, transparent)`,
+  border: `color-mix(in srgb, ${hex} 30%, transparent)`,
+});
+const TONES: Record<string, Tone> = {
+  accent: tone('#10b981'),
+  blue: tone('#3b82f6'),
+  purple: tone('#8b5cf6'),
+  amber: tone('#f59e0b'),
+  teal: tone('#14b8a6'),
+  orange: tone('#f97316'),
+  danger: tone('#ef4444'),
+};
+
+const STREAM_DOT: Record<string, string> = {
+  blue: '#3b82f6',
+  purple: '#8b5cf6',
+  amber: '#f59e0b',
+  accent: '#10b981',
+};
+
 /* ─── Main Page ──────────────────────────────────────────── */
 
 export default function AdminPage() {
   const [tab, setTab] = useState<Tab>('clients');
   const isOwner = localStorage.getItem('is_owner') === '1';
 
-  // Build tab list — only owner sees Team tab
   const tabs = [
     { key: 'clients' as Tab, label: 'Clients', icon: Building2 },
     ...(isOwner ? [{ key: 'team' as Tab, label: 'Team', icon: Shield }] : []),
@@ -48,12 +71,18 @@ export default function AdminPage() {
       {/* Header */}
       <div className="mb-8">
         <div className="flex items-center gap-3 mb-1">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center shadow-lg shadow-accent-500/20">
+          <div
+            className="w-10 h-10 rounded-2xl flex items-center justify-center shadow-lg"
+            style={{
+              background: 'linear-gradient(135deg, var(--mt-accent), var(--mt-accent-strong))',
+              boxShadow: '0 10px 25px -12px color-mix(in srgb, #10b981 50%, transparent)',
+            }}
+          >
             <Shield size={20} className="text-white" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-theme-heading">Admin Panel</h1>
-            <p className="text-theme-faint text-sm">Manage clients, users, and platform settings</p>
+            <h1 className="mt-heading text-2xl">Admin Panel</h1>
+            <p className="text-sm" style={{ color: 'var(--mt-text-faint)' }}>Manage clients, users, and platform settings</p>
           </div>
         </div>
       </div>
@@ -62,17 +91,13 @@ export default function AdminPage() {
       {isOwner && <PlatformLogoSection />}
 
       {/* Tabs */}
-      <div className="border-b border-dark-400/30 mb-6">
+      <div className="mb-6" style={{ borderBottom: '1px solid var(--mt-border)' }}>
         <div className="flex gap-0">
           {tabs.map(t => (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
-              className={`flex items-center gap-2 px-5 py-3.5 text-sm font-medium border-b-2 transition-all ${
-                tab === t.key
-                  ? 'border-accent-500 text-accent-400'
-                  : 'border-transparent text-theme-faint hover:text-theme-secondary'
-              }`}
+              className={`mt-tab ${tab === t.key ? 'mt-tab--active' : ''}`}
             >
               <t.icon size={16} />
               {t.label}
@@ -122,39 +147,108 @@ function PlatformLogoSection() {
   };
 
   return (
-    <div className="bg-dark-700/60 rounded-2xl border border-dark-400/20 p-5 mb-6">
+    <div className="mt-card p-5 mb-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-2xl bg-dark-600 flex items-center justify-center border border-dark-400/30 overflow-hidden">
+          <div
+            className="w-14 h-14 rounded-2xl flex items-center justify-center overflow-hidden"
+            style={{ background: 'var(--mt-bg-muted)', border: '1px solid var(--mt-border)' }}
+          >
             {logoUrl ? (
               <img src={logoUrl} alt="Platform logo" className="w-full h-full object-contain p-1" />
             ) : (
-              <BarChart3 size={24} className="text-accent-400" />
+              <BarChart3 size={24} style={{ color: 'var(--mt-accent-text)' }} />
             )}
           </div>
           <div>
-            <h3 className="text-sm font-semibold text-theme-heading">Platform Logo</h3>
-            <p className="text-xs text-theme-faint mt-0.5">Shown on login page and sidebar</p>
+            <h3 className="mt-heading text-sm">Platform Logo</h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--mt-text-faint)' }}>Shown on login page and sidebar</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium text-accent-400 hover:bg-accent-500/10 border border-accent-500/20 cursor-pointer transition-all">
+          <label
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium cursor-pointer transition-all"
+            style={{
+              color: 'var(--mt-accent-text)',
+              border: '1px solid var(--mt-accent-border)',
+              background: 'transparent',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'var(--mt-accent-soft)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+          >
             <ImagePlus size={14} />
             {uploading ? 'Uploading...' : 'Upload'}
             <input type="file" accept="image/*" className="hidden" onChange={handleUpload} disabled={uploading} />
           </label>
-          {logoUrl && (
-            <button
-              onClick={handleRemove}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium text-red-400 hover:bg-red-500/10 border border-red-500/20 transition-all"
-            >
-              <Trash2 size={14} />
-              Remove
-            </button>
-          )}
+          {logoUrl && <DangerGhostButton icon={Trash2} label="Remove" onClick={handleRemove} />}
         </div>
       </div>
     </div>
+  );
+}
+
+/* ─── Small shared UI helpers ───────────────────────────── */
+
+function DangerGhostButton({ icon: Icon, label, onClick }: { icon: any; label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition-all"
+      style={{
+        color: 'var(--mt-danger-text)',
+        border: '1px solid var(--mt-danger-border)',
+        background: 'transparent',
+      }}
+      onMouseEnter={e => (e.currentTarget.style.background = 'var(--mt-danger-soft)')}
+      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+    >
+      <Icon size={14} />
+      {label}
+    </button>
+  );
+}
+
+function StatusPill({ active, size = 'sm' }: { active: boolean; size?: 'sm' | 'md' }) {
+  const padding = size === 'md' ? 'px-3 py-1.5' : 'px-2.5 py-1';
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 text-[11px] font-medium rounded-full ${padding}`}
+      style={{
+        color: active ? 'var(--mt-success-text)' : 'var(--mt-danger-text)',
+        background: active ? 'var(--mt-success-soft)' : 'var(--mt-danger-soft)',
+      }}
+    >
+      <span
+        className="w-1.5 h-1.5 rounded-full"
+        style={{ background: active ? 'var(--mt-success-text)' : 'var(--mt-danger-text)' }}
+      />
+      {active ? 'Active' : 'Inactive'}
+    </span>
+  );
+}
+
+function GhostToggle({ enabled, onClick, disabled, tone: toneKey = 'accent' }: {
+  enabled: boolean; onClick: () => void; disabled?: boolean; tone?: 'accent' | 'amber';
+}) {
+  const t = toneKey === 'amber' ? TONES.amber : TONES.accent;
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="relative rounded-full transition-all"
+      style={{
+        width: 44,
+        height: 24,
+        background: enabled ? t.fg : 'var(--mt-bg-muted)',
+        border: '1px solid ' + (enabled ? t.border : 'var(--mt-border)'),
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      <span
+        className="absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm transition-all"
+        style={{ left: enabled ? 24 : 4 }}
+      />
+    </button>
   );
 }
 
@@ -187,40 +281,35 @@ function ClientsPanel() {
     c.slug.toLowerCase().includes(search.toLowerCase())
   );
 
+  const stats: Array<{ label: string; value: string | number; sub: string; tone: Tone; icon: any }> = [
+    { label: 'Total Clients', value: clients.length, sub: `${activeCount} active`, tone: TONES.accent, icon: Building2 },
+    { label: 'Total Users', value: totalUsers, sub: 'Across all clients', tone: TONES.blue, icon: Users },
+    { label: 'Status', value: 'Live', sub: 'Platform operational', tone: TONES.accent, icon: Activity },
+  ];
+
   return (
     <div>
       {/* Stats Row */}
       <div className="grid grid-cols-3 gap-4 mb-6">
-        <div className="bg-dark-700/60 rounded-2xl p-5 border border-dark-400/20">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-medium text-theme-faint uppercase tracking-wider">Total Clients</span>
-            <div className="w-8 h-8 rounded-xl bg-accent-500/10 flex items-center justify-center">
-              <Building2 size={15} className="text-accent-400" />
+        {stats.map(s => (
+          <div key={s.label} className="mt-card p-5">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-medium uppercase tracking-wider" style={{ color: 'var(--mt-text-faint)' }}>
+                {s.label}
+              </span>
+              <div
+                className="w-8 h-8 rounded-xl flex items-center justify-center"
+                style={{ background: s.tone.soft, border: `1px solid ${s.tone.border}` }}
+              >
+                <s.icon size={15} style={{ color: s.tone.fg }} />
+              </div>
             </div>
-          </div>
-          <div className="text-3xl font-bold text-theme-heading">{clients.length}</div>
-          <p className="text-xs text-theme-faint mt-1">{activeCount} active</p>
-        </div>
-        <div className="bg-dark-700/60 rounded-2xl p-5 border border-dark-400/20">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-medium text-theme-faint uppercase tracking-wider">Total Users</span>
-            <div className="w-8 h-8 rounded-xl bg-blue-500/10 flex items-center justify-center">
-              <Users size={15} className="text-blue-400" />
+            <div className="text-3xl font-bold mt-num" style={{ color: s.tone.fg === TONES.accent.fg && s.label === 'Status' ? s.tone.fg : 'var(--mt-text)' }}>
+              {s.value}
             </div>
+            <p className="text-xs mt-1" style={{ color: 'var(--mt-text-faint)' }}>{s.sub}</p>
           </div>
-          <div className="text-3xl font-bold text-theme-heading">{totalUsers}</div>
-          <p className="text-xs text-theme-faint mt-1">Across all clients</p>
-        </div>
-        <div className="bg-dark-700/60 rounded-2xl p-5 border border-dark-400/20">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-medium text-theme-faint uppercase tracking-wider">Status</span>
-            <div className="w-8 h-8 rounded-xl bg-emerald-500/10 flex items-center justify-center">
-              <Activity size={15} className="text-emerald-400" />
-            </div>
-          </div>
-          <div className="text-3xl font-bold text-emerald-400">Live</div>
-          <p className="text-xs text-theme-faint mt-1">Platform operational</p>
-        </div>
+        ))}
       </div>
 
       {/* Create Client */}
@@ -234,17 +323,17 @@ function ClientsPanel() {
       {/* Toolbar */}
       <div className="flex items-center justify-between mb-4">
         <div className="relative flex-1 max-w-xs">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-faint" />
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--mt-text-faint)' }} />
           <input
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search clients..."
-            className="input pl-9 text-sm py-2"
+            className="mt-input pl-9 text-sm"
           />
         </div>
         {isOwner && (
-          <button onClick={() => setShowCreate(true)} className="btn-primary flex items-center gap-2 text-sm">
+          <button onClick={() => setShowCreate(true)} className="mt-btn-gradient flex items-center gap-2 text-sm">
             <Plus size={15} /> New Client
           </button>
         )}
@@ -252,81 +341,124 @@ function ClientsPanel() {
 
       {/* Client List */}
       {loading ? (
-        <div className="text-center py-16">
-          <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
-        </div>
+        <LoadingSpinner />
       ) : filtered.length === 0 ? (
-        <div className="text-center py-16 bg-dark-700/30 rounded-2xl border border-dark-400/20">
-          <Building2 size={32} className="text-theme-faint mx-auto mb-3" />
-          <p className="text-theme-muted text-sm font-medium">{search ? 'No matching clients' : 'No clients yet'}</p>
-          <p className="text-theme-faint text-xs mt-1">{search ? 'Try a different search term' : 'Create your first client to get started'}</p>
-        </div>
+        <EmptyState
+          icon={Building2}
+          title={search ? 'No matching clients' : 'No clients yet'}
+          subtitle={search ? 'Try a different search term' : 'Create your first client to get started'}
+        />
       ) : (
-        <div className="bg-dark-700/40 rounded-2xl border border-dark-400/20 overflow-hidden">
+        <div className="mt-card overflow-hidden p-0">
           <table className="w-full">
             <thead>
-              <tr className="border-b border-dark-400/30">
-                <th className="text-left py-3 px-5 text-xs font-semibold text-theme-faint uppercase tracking-wider">Client</th>
-                <th className="text-left py-3 px-5 text-xs font-semibold text-theme-faint uppercase tracking-wider">Users</th>
-                <th className="text-left py-3 px-5 text-xs font-semibold text-theme-faint uppercase tracking-wider">Integrations</th>
-                <th className="text-left py-3 px-5 text-xs font-semibold text-theme-faint uppercase tracking-wider">Status</th>
+              <tr style={{ borderBottom: '1px solid var(--mt-border)' }}>
+                {['Client', 'Users', 'Integrations', 'Status'].map(h => (
+                  <th
+                    key={h}
+                    className="text-left py-3 px-5 text-xs font-semibold uppercase tracking-wider"
+                    style={{ color: 'var(--mt-text-faint)' }}
+                  >
+                    {h}
+                  </th>
+                ))}
                 <th className="w-10" />
               </tr>
             </thead>
             <tbody>
-              {filtered.map(client => (
-                <tr
+              {filtered.map((client, idx) => (
+                <ClientRow
                   key={client.id}
+                  client={client}
+                  isLast={idx === filtered.length - 1}
                   onClick={() => setSelectedSlug(client.slug)}
-                  className="border-b border-dark-400/15 hover:bg-dark-600/50 cursor-pointer transition-colors group"
-                >
-                  <td className="py-3.5 px-5">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-accent-500/10 flex items-center justify-center flex-shrink-0">
-                        <Building2 size={16} className="text-accent-400" />
-                      </div>
-                      <div>
-                        <div className="text-sm font-semibold text-theme-heading">{client.name}</div>
-                        <div className="text-[11px] text-theme-faint font-mono">{client.slug}</div>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="py-3.5 px-5">
-                    <span className="text-sm text-theme-secondary">{client.user_count}</span>
-                  </td>
-                  <td className="py-3.5 px-5">
-                    {client.integrations ? (
-                      <div className="flex gap-1.5 flex-wrap">
-                        {client.integrations.split(',').map(i => (
-                          <span key={i} className="text-[10px] bg-dark-500 text-theme-muted px-2 py-0.5 rounded-full">{i.trim()}</span>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="text-xs text-theme-faint">None</span>
-                    )}
-                  </td>
-                  <td className="py-3.5 px-5">
-                    {client.is_active ? (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                        Active
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-red-400 bg-red-500/10 px-2.5 py-1 rounded-full">
-                        <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
-                        Inactive
-                      </span>
-                    )}
-                  </td>
-                  <td className="py-3.5 px-2">
-                    <ChevronRight size={16} className="text-theme-faint group-hover:text-accent-400 transition-colors" />
-                  </td>
-                </tr>
+                />
               ))}
             </tbody>
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+function ClientRow({ client, isLast, onClick }: { client: Client; isLast: boolean; onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <tr
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="cursor-pointer transition-colors"
+      style={{
+        borderBottom: isLast ? 'none' : '1px solid var(--mt-border)',
+        background: hover ? 'var(--mt-bg-muted)' : 'transparent',
+      }}
+    >
+      <td className="py-3.5 px-5">
+        <div className="flex items-center gap-3">
+          <div
+            className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+            style={{ background: TONES.accent.soft, border: `1px solid ${TONES.accent.border}` }}
+          >
+            <Building2 size={16} style={{ color: TONES.accent.fg }} />
+          </div>
+          <div>
+            <div className="text-sm font-semibold" style={{ color: 'var(--mt-text)' }}>{client.name}</div>
+            <div className="text-[11px] font-mono" style={{ color: 'var(--mt-text-faint)' }}>{client.slug}</div>
+          </div>
+        </div>
+      </td>
+      <td className="py-3.5 px-5">
+        <span className="text-sm mt-num" style={{ color: 'var(--mt-text-secondary)' }}>{client.user_count}</span>
+      </td>
+      <td className="py-3.5 px-5">
+        {client.integrations ? (
+          <div className="flex gap-1.5 flex-wrap">
+            {client.integrations.split(',').map(i => (
+              <span
+                key={i}
+                className="text-[10px] px-2 py-0.5 rounded-full"
+                style={{ background: 'var(--mt-bg-muted)', color: 'var(--mt-text-muted)', border: '1px solid var(--mt-border)' }}
+              >
+                {i.trim()}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <span className="text-xs" style={{ color: 'var(--mt-text-faint)' }}>None</span>
+        )}
+      </td>
+      <td className="py-3.5 px-5">
+        <StatusPill active={!!client.is_active} />
+      </td>
+      <td className="py-3.5 px-2">
+        <ChevronRight size={16} style={{ color: hover ? TONES.accent.fg : 'var(--mt-text-faint)' }} />
+      </td>
+    </tr>
+  );
+}
+
+function LoadingSpinner() {
+  return (
+    <div className="text-center py-16">
+      <div
+        className="w-6 h-6 rounded-full animate-spin mx-auto"
+        style={{
+          border: '2px solid var(--mt-accent-soft)',
+          borderTopColor: 'var(--mt-accent)',
+        }}
+      />
+    </div>
+  );
+}
+
+function EmptyState({ icon: Icon, title, subtitle }: { icon: any; title: string; subtitle?: string }) {
+  return (
+    <div className="mt-card text-center py-16">
+      <Icon size={32} className="mx-auto mb-3" style={{ color: 'var(--mt-text-faint)' }} />
+      <p className="text-sm font-medium" style={{ color: 'var(--mt-text-muted)' }}>{title}</p>
+      {subtitle && <p className="text-xs mt-1" style={{ color: 'var(--mt-text-faint)' }}>{subtitle}</p>}
     </div>
   );
 }
@@ -382,96 +514,116 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
 
   if (result) {
     return (
-      <div className="bg-dark-700/60 rounded-2xl border border-accent-500/30 p-6 mb-6">
+      <div
+        className="rounded-2xl p-6 mb-6"
+        style={{ background: 'var(--mt-bg-raised)', border: `1px solid ${TONES.accent.border}` }}
+      >
         <div className="flex items-center gap-3 mb-5">
-          <div className="w-10 h-10 rounded-2xl bg-accent-500/15 flex items-center justify-center">
-            <CheckCircle size={20} className="text-accent-400" />
+          <div
+            className="w-10 h-10 rounded-2xl flex items-center justify-center"
+            style={{ background: TONES.accent.soft }}
+          >
+            <CheckCircle size={20} style={{ color: TONES.accent.fg }} />
           </div>
           <div>
-            <h3 className="font-semibold text-accent-300 text-base">Client Created</h3>
-            <p className="text-sm text-theme-faint">{result.name}</p>
+            <h3 className="mt-heading text-base" style={{ color: TONES.accent.fg }}>Client Created</h3>
+            <p className="text-sm" style={{ color: 'var(--mt-text-faint)' }}>{result.name}</p>
           </div>
         </div>
-        <div className="bg-dark-800 rounded-xl p-4 mb-5 border border-dark-400/20">
-          <p className="text-xs font-medium text-theme-faint uppercase tracking-wider mb-2">Default Login Credentials</p>
-          <p className="text-theme-heading font-mono text-sm">Username: <span className="text-accent-400">admin</span></p>
-          <p className="text-theme-heading font-mono text-sm">Password: <span className="text-accent-400">admin123</span></p>
-          <p className="text-xs text-amber-400 mt-3 flex items-center gap-1">Change this password immediately after first login</p>
+        <div
+          className="rounded-xl p-4 mb-5"
+          style={{ background: 'var(--mt-bg-app)', border: '1px solid var(--mt-border)' }}
+        >
+          <p className="text-xs font-medium uppercase tracking-wider mb-2" style={{ color: 'var(--mt-text-faint)' }}>
+            Default Login Credentials
+          </p>
+          <p className="font-mono text-sm" style={{ color: 'var(--mt-text)' }}>
+            Username: <span style={{ color: 'var(--mt-accent-text)' }}>admin</span>
+          </p>
+          <p className="font-mono text-sm" style={{ color: 'var(--mt-text)' }}>
+            Password: <span style={{ color: 'var(--mt-accent-text)' }}>admin123</span>
+          </p>
+          <p className="text-xs mt-3 flex items-center gap-1" style={{ color: TONES.amber.fg }}>
+            Change this password immediately after first login
+          </p>
         </div>
-        <button onClick={onCreated} className="btn-primary text-sm">Done</button>
+        <button onClick={onCreated} className="mt-btn-gradient text-sm">Done</button>
       </div>
     );
   }
 
   return (
-    <div className="bg-dark-700/60 rounded-2xl border border-dark-400/20 p-6 mb-6">
-      <h3 className="font-semibold text-theme-heading text-base mb-5">Create New Client</h3>
+    <div className="mt-card p-6 mb-6">
+      <h3 className="mt-heading text-base mb-5">Create New Client</h3>
       <div className="grid grid-cols-2 gap-4 mb-5">
         <div>
-          <label className="block text-xs font-medium text-theme-muted mb-1.5">Client Name</label>
+          <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--mt-text-muted)' }}>Client Name</label>
           <input type="text" value={name} onChange={e => autoSlug(e.target.value)}
-            placeholder="e.g. Acme Corp" className="input" />
+            placeholder="e.g. Acme Corp" className="mt-input" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-theme-muted mb-1.5">Slug (URL identifier)</label>
+          <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--mt-text-muted)' }}>Slug (URL identifier)</label>
           <input type="text" value={slug} onChange={e => setSlug(e.target.value)}
-            placeholder="e.g. apollo-healthcare" className="input font-mono" />
+            placeholder="e.g. apollo-healthcare" className="mt-input font-mono" />
         </div>
         <div className="col-span-2">
-          <label className="block text-xs font-medium text-theme-muted mb-2">Industry</label>
+          <label className="block text-xs font-medium mb-2" style={{ color: 'var(--mt-text-muted)' }}>Industry</label>
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
-            {industries.map((ind: any) => (
-              <button
-                key={ind.key}
-                type="button"
-                onClick={() => setIndustry(ind.key)}
-                className={`text-left px-3 py-2.5 rounded-xl border transition-all ${
-                  industry === ind.key
-                    ? 'border-accent-500 bg-accent-500/10 text-accent-400'
-                    : 'border-dark-400/30 bg-dark-600/50 text-theme-muted hover:border-dark-300'
-                }`}
-              >
-                <div className="text-sm font-medium">{ind.label}</div>
-                <div className="text-[10px] text-theme-faint mt-0.5">{ind.description}</div>
-              </button>
-            ))}
+            {industries.map((ind: any) => {
+              const active = industry === ind.key;
+              return (
+                <button
+                  key={ind.key}
+                  type="button"
+                  onClick={() => setIndustry(ind.key)}
+                  className="text-left px-3 py-2.5 rounded-xl transition-all"
+                  style={{
+                    border: '1px solid ' + (active ? TONES.accent.border : 'var(--mt-border)'),
+                    background: active ? TONES.accent.soft : 'var(--mt-bg-muted)',
+                    color: active ? TONES.accent.fg : 'var(--mt-text-muted)',
+                  }}
+                >
+                  <div className="text-sm font-medium">{ind.label}</div>
+                  <div className="text-[10px] mt-0.5" style={{ color: 'var(--mt-text-faint)' }}>{ind.description}</div>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
 
-      {/* Team Member Assignment — Dropdown */}
+      {/* Team Member Assignment */}
       {teamMembers.filter(m => !m.is_owner).length > 0 && (
         <div className="mb-5">
-          <label className="block text-xs font-medium text-theme-muted mb-1.5">Assign Team Members</label>
+          <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--mt-text-muted)' }}>Assign Team Members</label>
           <div className="relative">
             <button
               type="button"
               onClick={() => setShowMemberDropdown(!showMemberDropdown)}
-              className="w-full flex items-center justify-between input text-sm cursor-pointer"
+              className="mt-input w-full flex items-center justify-between text-sm cursor-pointer"
             >
-              <span className={selectedMembers.size > 0 ? 'text-theme-heading' : 'text-theme-faint'}>
+              <span style={{ color: selectedMembers.size > 0 ? 'var(--mt-text)' : 'var(--mt-text-faint)' }}>
                 {selectedMembers.size > 0
                   ? teamMembers.filter(m => selectedMembers.has(m.id)).map(m => m.display_name).join(', ')
                   : 'Select team members...'}
               </span>
-              <ChevronRight size={14} className={`text-theme-faint transition-transform ${showMemberDropdown ? 'rotate-90' : ''}`} />
+              <ChevronRight
+                size={14}
+                className={`transition-transform ${showMemberDropdown ? 'rotate-90' : ''}`}
+                style={{ color: 'var(--mt-text-faint)' }}
+              />
             </button>
             {showMemberDropdown && (
-              <div className="absolute left-0 right-0 top-full mt-1 bg-dark-700 border border-dark-400/30 rounded-xl shadow-xl z-50 max-h-48 overflow-y-auto">
+              <div
+                className="absolute left-0 right-0 top-full mt-1 rounded-xl shadow-xl z-50 max-h-48 overflow-y-auto"
+                style={{
+                  background: 'var(--mt-bg-raised)',
+                  border: '1px solid var(--mt-border)',
+                  boxShadow: '0 10px 25px rgba(0,0,0,0.3)',
+                }}
+              >
                 {teamMembers.filter(m => !m.is_owner && m.is_active).map(member => (
-                  <label
-                    key={member.id}
-                    className="flex items-center gap-3 px-3.5 py-2.5 cursor-pointer hover:bg-dark-600/70 transition-colors"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedMembers.has(member.id)}
-                      onChange={() => toggleMember(member.id)}
-                      className="w-3.5 h-3.5 rounded border-dark-300 text-accent-500 focus:ring-accent-500 bg-dark-800"
-                    />
-                    <span className="text-sm font-medium text-theme-heading">{member.display_name}</span>
-                    <span className="text-[11px] font-mono text-theme-faint">@{member.username}</span>
-                  </label>
+                  <MemberRow key={member.id} member={member} selected={selectedMembers.has(member.id)} onToggle={() => toggleMember(member.id)} />
                 ))}
               </div>
             )}
@@ -480,15 +632,42 @@ function CreateClientForm({ onCreated, onCancel }: { onCreated: () => void; onCa
       )}
 
       {error && (
-        <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-2.5 rounded-xl mb-4 text-sm">{error}</div>
+        <div
+          className="px-4 py-2.5 rounded-xl mb-4 text-sm"
+          style={{ background: 'var(--mt-danger-soft)', border: '1px solid var(--mt-danger-border)', color: 'var(--mt-danger-text)' }}
+        >
+          {error}
+        </div>
       )}
       <div className="flex gap-3">
-        <button onClick={create} disabled={saving || !name || !slug} className="btn-primary text-sm">
+        <button onClick={create} disabled={saving || !name || !slug} className="mt-btn-gradient text-sm">
           {saving ? 'Creating...' : 'Create Client'}
         </button>
-        <button onClick={onCancel} className="btn-secondary text-sm">Cancel</button>
+        <button onClick={onCancel} className="mt-btn-soft text-sm">Cancel</button>
       </div>
     </div>
+  );
+}
+
+function MemberRow({ member, selected, onToggle }: { member: TeamMember; selected: boolean; onToggle: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <label
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="flex items-center gap-3 px-3.5 py-2.5 cursor-pointer transition-colors"
+      style={{ background: hover ? 'var(--mt-bg-muted)' : 'transparent' }}
+    >
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={onToggle}
+        className="w-3.5 h-3.5 rounded"
+        style={{ accentColor: 'var(--mt-accent)' }}
+      />
+      <span className="text-sm font-medium" style={{ color: 'var(--mt-text)' }}>{member.display_name}</span>
+      <span className="text-[11px] font-mono" style={{ color: 'var(--mt-text-faint)' }}>@{member.username}</span>
+    </label>
   );
 }
 
@@ -535,7 +714,6 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
 
   useEffect(() => { loadDetail(); }, [loadDetail]);
 
-  // Check for client logo
   useEffect(() => {
     const checkLogo = async () => {
       for (const ext of ['png', 'jpg', 'jpeg', 'svg', 'webp']) {
@@ -589,11 +767,7 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
     }
   };
 
-  if (loading) return (
-    <div className="text-center py-16">
-      <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
-    </div>
-  );
+  if (loading) return <LoadingSpinner />;
 
   const isOwnerUser = localStorage.getItem('is_owner') === '1';
   const detailTabs = [
@@ -609,36 +783,41 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
   return (
     <div>
       {/* Back button */}
-      <button onClick={onBack} className="flex items-center gap-2 text-sm text-theme-muted hover:text-accent-400 mb-5 transition-colors">
-        <ArrowLeft size={15} /> Back to clients
-      </button>
+      <BackLink onClick={onBack} />
 
       {/* Client Header */}
-      <div className="bg-dark-700/60 rounded-2xl border border-dark-400/20 p-6 mb-6">
+      <div className="mt-card p-6 mb-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="relative group">
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-accent-500/20 to-accent-600/10 flex items-center justify-center border border-accent-500/20 overflow-hidden">
+              <div
+                className="w-14 h-14 rounded-2xl flex items-center justify-center overflow-hidden"
+                style={{
+                  background: `linear-gradient(135deg, ${TONES.accent.soft}, color-mix(in srgb, #10b981 5%, transparent))`,
+                  border: `1px solid ${TONES.accent.border}`,
+                }}
+              >
                 {clientLogoUrl ? (
                   <img src={clientLogoUrl} alt={client.name} className="w-full h-full object-contain p-1" />
                 ) : (
-                  <Building2 size={24} className="text-accent-400" />
+                  <Building2 size={24} style={{ color: TONES.accent.fg }} />
                 )}
               </div>
-              <label className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-2xl opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity">
+              <label className="absolute inset-0 flex items-center justify-center rounded-2xl opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity" style={{ background: 'rgba(0,0,0,0.5)' }}>
                 <ImagePlus size={16} className="text-white" />
                 <input type="file" accept="image/*" className="hidden" onChange={handleClientLogoUpload} disabled={logoUploading} />
               </label>
             </div>
             <div>
-              <h2 className="text-xl font-bold text-theme-heading">{client.name}</h2>
+              <h2 className="mt-heading text-xl">{client.name}</h2>
               <div className="flex items-center gap-3 mt-1">
-                <span className="text-sm text-theme-faint font-mono">{client.slug}</span>
-                <span className="text-dark-300">·</span>
+                <span className="text-sm font-mono" style={{ color: 'var(--mt-text-faint)' }}>{client.slug}</span>
+                <span style={{ color: 'var(--mt-text-faint)' }}>·</span>
                 <select
                   value={client.industry || 'custom'}
                   onChange={e => changeIndustry(e.target.value)}
-                  className="text-sm bg-transparent text-theme-secondary border-none cursor-pointer hover:text-accent-400 transition-colors p-0"
+                  className="text-sm bg-transparent border-none cursor-pointer transition-colors p-0"
+                  style={{ color: 'var(--mt-text-secondary)' }}
                 >
                   {industries.map((ind: any) => (
                     <option key={ind.key} value={ind.key}>{ind.label}</option>
@@ -648,30 +827,12 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            {client.is_active ? (
-              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-full">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                Active
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-red-400 bg-red-500/10 px-3 py-1.5 rounded-full">
-                <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
-                Inactive
-              </span>
-            )}
-            <button
-              onClick={toggleActive}
-              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-medium transition-all ${
-                client.is_active
-                  ? 'text-red-400 hover:bg-red-500/10 border border-red-500/20'
-                  : 'text-accent-400 hover:bg-accent-500/10 border border-accent-500/20'
-              }`}
-            >
-              <Power size={14} />
-              {client.is_active ? 'Deactivate' : 'Activate'}
-            </button>
+            <StatusPill active={!!client.is_active} size="md" />
+            <ToggleActiveButton active={!!client.is_active} onClick={toggleActive} />
             {isOwnerUser && (
-              <button
+              <DangerGhostButton
+                icon={Trash2}
+                label="Delete"
                 onClick={async () => {
                   if (!confirm(`DELETE "${client.name}"?\n\nThis will permanently remove the client, all users, and all data. This cannot be undone.`)) return;
                   if (!confirm(`Are you absolutely sure? Type the client slug to confirm.\n\nThis deletes: ${slug}`)) return;
@@ -682,35 +843,33 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
                     alert(err.response?.data?.error || 'Failed to delete');
                   }
                 }}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-medium text-red-400 hover:bg-red-500/10 border border-red-500/20 transition-all"
-              >
-                <Trash2 size={14} />
-                Delete
-              </button>
+              />
             )}
           </div>
         </div>
       </div>
 
       {/* Detail Tabs */}
-      <div className="border-b border-dark-400/30 mb-6">
-        <div className="flex gap-0">
+      <div className="mb-6" style={{ borderBottom: '1px solid var(--mt-border)' }}>
+        <div className="flex gap-0 flex-wrap">
           {detailTabs.map(t => (
             <button
               key={t.key}
               onClick={() => setActiveTab(t.key)}
-              className={`flex items-center gap-2 px-4 py-3 text-[13px] font-medium border-b-2 transition-all ${
-                activeTab === t.key
-                  ? 'border-accent-500 text-accent-400'
-                  : 'border-transparent text-theme-faint hover:text-theme-secondary'
-              }`}
+              className={`mt-tab ${activeTab === t.key ? 'mt-tab--active' : ''}`}
             >
               <t.icon size={14} />
               {t.label}
               {t.count !== undefined && (
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                  activeTab === t.key ? 'bg-accent-500/15 text-accent-400' : 'bg-dark-500 text-theme-faint'
-                }`}>{t.count}</span>
+                <span
+                  className="text-[10px] px-1.5 py-0.5 rounded-full"
+                  style={{
+                    background: activeTab === t.key ? TONES.accent.soft : 'var(--mt-bg-muted)',
+                    color: activeTab === t.key ? TONES.accent.fg : 'var(--mt-text-faint)',
+                  }}
+                >
+                  {t.count}
+                </span>
               )}
             </button>
           ))}
@@ -737,24 +896,84 @@ function ClientDetail({ slug, onBack }: { slug: string; onBack: () => void }) {
 
       {/* Password Reset Result Modal */}
       {resetResult && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setResetResult(null)}>
-          <div className="bg-dark-700 rounded-2xl p-6 max-w-sm w-full mx-4 border border-dark-400/30 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center gap-2 mb-3">
-              <CheckCircle size={18} className="text-emerald-400" />
-              <h3 className="font-semibold text-theme-heading">Password Reset</h3>
-            </div>
-            <p className="text-sm text-theme-muted mb-3">New credentials for <span className="text-accent-400 font-medium">@{resetResult.username}</span></p>
-            <div className="bg-dark-800 rounded-xl p-3 font-mono text-sm text-theme-heading mb-4 flex items-center justify-between border border-dark-400/20">
-              <span>{resetResult.password}</span>
-              <button onClick={() => navigator.clipboard.writeText(resetResult.password)} className="text-theme-muted hover:text-accent-400 transition-colors" title="Copy">
-                <Copy size={14} />
-              </button>
-            </div>
-            <p className="text-xs text-amber-400 mb-4">Save this password — it won't be shown again</p>
-            <button onClick={() => setResetResult(null)} className="btn-primary text-sm w-full">Done</button>
-          </div>
-        </div>
+        <PasswordResultModal result={resetResult} onClose={() => setResetResult(null)} />
       )}
+    </div>
+  );
+}
+
+function BackLink({ onClick }: { onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="flex items-center gap-2 text-sm mb-5 transition-colors"
+      style={{ color: hover ? 'var(--mt-accent-text)' : 'var(--mt-text-muted)' }}
+    >
+      <ArrowLeft size={15} /> Back to clients
+    </button>
+  );
+}
+
+function ToggleActiveButton({ active, onClick }: { active: boolean; onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  const base = active ? TONES.danger : TONES.accent;
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-medium transition-all"
+      style={{
+        color: base.fg,
+        border: `1px solid ${base.border}`,
+        background: hover ? base.soft : 'transparent',
+      }}
+    >
+      <Power size={14} />
+      {active ? 'Deactivate' : 'Activate'}
+    </button>
+  );
+}
+
+function PasswordResultModal({ result, onClose }: { result: { username: string; password: string }; onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 flex items-center justify-center z-50"
+      style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}
+      onClick={onClose}
+    >
+      <div
+        className="rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl"
+        style={{ background: 'var(--mt-bg-raised)', border: '1px solid var(--mt-border)' }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 mb-3">
+          <CheckCircle size={18} style={{ color: TONES.accent.fg }} />
+          <h3 className="mt-heading">Password Reset</h3>
+        </div>
+        <p className="text-sm mb-3" style={{ color: 'var(--mt-text-muted)' }}>
+          New credentials for <span className="font-medium" style={{ color: 'var(--mt-accent-text)' }}>@{result.username}</span>
+        </p>
+        <div
+          className="rounded-xl p-3 font-mono text-sm mb-4 flex items-center justify-between"
+          style={{ background: 'var(--mt-bg-app)', border: '1px solid var(--mt-border)', color: 'var(--mt-text)' }}
+        >
+          <span>{result.password}</span>
+          <button
+            onClick={() => navigator.clipboard.writeText(result.password)}
+            className="transition-colors"
+            style={{ color: 'var(--mt-text-muted)' }}
+            title="Copy"
+          >
+            <Copy size={14} />
+          </button>
+        </div>
+        <p className="text-xs mb-4" style={{ color: TONES.amber.fg }}>Save this password — it won't be shown again</p>
+        <button onClick={onClose} className="mt-btn-gradient text-sm w-full">Done</button>
+      </div>
     </div>
   );
 }
@@ -776,8 +995,8 @@ function UsersSection({ slug, users, onReload, resetPassword }: {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <p className="text-sm text-theme-faint">Manage user accounts for this client</p>
-        <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2 text-sm">
+        <p className="text-sm" style={{ color: 'var(--mt-text-faint)' }}>Manage user accounts for this client</p>
+        <button onClick={() => setShowAdd(true)} className="mt-btn-gradient flex items-center gap-2 text-sm">
           <UserPlus size={14} /> Add User
         </button>
       </div>
@@ -787,65 +1006,23 @@ function UsersSection({ slug, users, onReload, resetPassword }: {
       )}
 
       {users.length === 0 ? (
-        <div className="text-center py-12 bg-dark-700/30 rounded-2xl border border-dark-400/20">
-          <Users size={28} className="text-theme-faint mx-auto mb-2" />
-          <p className="text-theme-muted text-sm">No users yet</p>
-        </div>
+        <EmptyState icon={Users} title="No users yet" />
       ) : (
-        <div className="bg-dark-700/40 rounded-2xl border border-dark-400/20 overflow-hidden">
+        <div className="mt-card p-0 overflow-hidden">
           {users.map((user, i) => (
-            <div key={user.id} className={`flex items-center justify-between px-5 py-3.5 ${i < users.length - 1 ? 'border-b border-dark-400/15' : ''}`}>
-              <div className="flex items-center gap-3">
-                <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold ${
-                  user.role === 'admin' ? 'bg-amber-500/10 text-amber-400' : 'bg-dark-500 text-theme-muted'
-                }`}>
-                  {user.display_name.charAt(0).toUpperCase()}
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-theme-heading">{user.display_name}</span>
-                    <span className="text-[11px] font-mono text-theme-faint">@{user.username}</span>
-                  </div>
-                  <span className={`text-[10px] font-semibold uppercase tracking-wider ${user.role === 'admin' ? 'text-amber-400' : 'text-theme-faint'}`}>
-                    {user.role}
-                  </span>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setAccessUser(user)}
-                  className="text-xs px-2.5 py-1.5 rounded-lg text-accent-400 hover:text-accent-300 bg-accent-500/10 hover:bg-accent-500/15 transition-all flex items-center gap-1"
-                >
-                  <MapPin size={11} /> Access
-                </button>
-                <button
-                  onClick={() => resetPassword(user.id, user.username)}
-                  className="text-xs px-2.5 py-1.5 rounded-lg text-theme-muted hover:text-theme-secondary bg-dark-600 hover:bg-dark-500 transition-all flex items-center gap-1"
-                >
-                  <KeyRound size={11} /> Reset PW
-                </button>
-                <button
-                  onClick={() => toggleUserActive(user.id, user.is_active)}
-                  className={`text-xs px-2.5 py-1.5 rounded-lg font-medium transition-all ${
-                    user.is_active
-                      ? 'text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20'
-                      : 'text-red-400 bg-red-500/10 hover:bg-red-500/20'
-                  }`}
-                >
-                  {user.is_active ? 'Active' : 'Disabled'}
-                </button>
-                <button
-                  onClick={async () => {
-                    if (!confirm(`Delete user "${user.display_name}" (@${user.username})? This cannot be undone.`)) return;
-                    await api.delete(`/admin/clients/${slug}/users/${user.id}`);
-                    onReload();
-                  }}
-                  className="text-xs p-1.5 rounded-lg text-theme-faint hover:text-red-400 hover:bg-red-500/10 transition-all"
-                >
-                  <Trash2 size={13} />
-                </button>
-              </div>
-            </div>
+            <UserRow
+              key={user.id}
+              user={user}
+              isLast={i === users.length - 1}
+              onManageAccess={() => setAccessUser(user)}
+              onResetPassword={() => resetPassword(user.id, user.username)}
+              onToggleActive={() => toggleUserActive(user.id, user.is_active)}
+              onDelete={async () => {
+                if (!confirm(`Delete user "${user.display_name}" (@${user.username})? This cannot be undone.`)) return;
+                await api.delete(`/admin/clients/${slug}/users/${user.id}`);
+                onReload();
+              }}
+            />
           ))}
         </div>
       )}
@@ -862,12 +1039,137 @@ function UsersSection({ slug, users, onReload, resetPassword }: {
   );
 }
 
+function UserRow({ user, isLast, onManageAccess, onResetPassword, onToggleActive, onDelete }: {
+  user: ClientUser;
+  isLast: boolean;
+  onManageAccess: () => void;
+  onResetPassword: () => void;
+  onToggleActive: () => void;
+  onDelete: () => void;
+}) {
+  const isAdmin = user.role === 'admin';
+  const roleTone = isAdmin ? TONES.amber : TONES.accent;
+  return (
+    <div
+      className="flex items-center justify-between px-5 py-3.5"
+      style={{ borderBottom: isLast ? 'none' : '1px solid var(--mt-border)' }}
+    >
+      <div className="flex items-center gap-3">
+        <div
+          className="w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold"
+          style={{
+            background: isAdmin ? TONES.amber.soft : 'var(--mt-bg-muted)',
+            color: isAdmin ? TONES.amber.fg : 'var(--mt-text-muted)',
+            border: '1px solid ' + (isAdmin ? TONES.amber.border : 'var(--mt-border)'),
+          }}
+        >
+          {user.display_name.charAt(0).toUpperCase()}
+        </div>
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium" style={{ color: 'var(--mt-text)' }}>{user.display_name}</span>
+            <span className="text-[11px] font-mono" style={{ color: 'var(--mt-text-faint)' }}>@{user.username}</span>
+          </div>
+          <span
+            className="text-[10px] font-semibold uppercase tracking-wider"
+            style={{ color: isAdmin ? roleTone.fg : 'var(--mt-text-faint)' }}
+          >
+            {user.role}
+          </span>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <ToneButton icon={MapPin} label="Access" tone={TONES.accent} onClick={onManageAccess} />
+        <MutedButton icon={KeyRound} label="Reset PW" onClick={onResetPassword} />
+        <StatusToggleButton active={!!user.is_active} onClick={onToggleActive} />
+        <IconHoverButton icon={Trash2} tone={TONES.danger} onClick={onDelete} />
+      </div>
+    </div>
+  );
+}
+
+function ToneButton({ icon: Icon, label, tone, onClick }: { icon: any; label: string; tone: Tone; onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="text-xs px-2.5 py-1.5 rounded-lg transition-all flex items-center gap-1"
+      style={{
+        color: tone.fg,
+        background: hover ? tone.soft : 'transparent',
+        border: `1px solid ${tone.border}`,
+      }}
+    >
+      <Icon size={11} /> {label}
+    </button>
+  );
+}
+
+function MutedButton({ icon: Icon, label, onClick }: { icon: any; label: string; onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="text-xs px-2.5 py-1.5 rounded-lg transition-all flex items-center gap-1"
+      style={{
+        color: hover ? 'var(--mt-text)' : 'var(--mt-text-muted)',
+        background: hover ? 'var(--mt-bg-muted)' : 'var(--mt-bg-raised)',
+        border: '1px solid var(--mt-border)',
+      }}
+    >
+      <Icon size={11} /> {label}
+    </button>
+  );
+}
+
+function StatusToggleButton({ active, onClick }: { active: boolean; onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  const t = active ? TONES.accent : TONES.danger;
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="text-xs px-2.5 py-1.5 rounded-lg font-medium transition-all"
+      style={{
+        color: t.fg,
+        background: hover ? `color-mix(in srgb, ${t.fg} 20%, transparent)` : t.soft,
+        border: `1px solid ${t.border}`,
+      }}
+    >
+      {active ? 'Active' : 'Disabled'}
+    </button>
+  );
+}
+
+function IconHoverButton({ icon: Icon, tone, onClick }: { icon: any; tone: Tone; onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="text-xs p-1.5 rounded-lg transition-all"
+      style={{
+        color: hover ? tone.fg : 'var(--mt-text-faint)',
+        background: hover ? tone.soft : 'transparent',
+      }}
+    >
+      <Icon size={13} />
+    </button>
+  );
+}
+
 /* ─── User Access Modal ─────────────────────────────────── */
 
 function UserAccessModal({ slug, user, onClose }: { slug: string; user: ClientUser; onClose: () => void }) {
   const [branches, setBranches] = useState<any[]>([]);
   const [streams, setStreams] = useState<any[]>([]);
-  const [access, setAccess] = useState<Set<string>>(new Set()); // "branchId-streamId"
+  const [access, setAccess] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -926,7 +1228,6 @@ function UserAccessModal({ slug, user, onClose }: { slug: string; user: ClientUs
     }
   };
 
-  // Group branches by state
   const stateGroups = new Map<string, any[]>();
   for (const b of branches) {
     const st = b.state || '';
@@ -935,57 +1236,54 @@ function UserAccessModal({ slug, user, onClose }: { slug: string; user: ClientUs
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-dark-700 rounded-2xl p-6 max-w-lg w-full mx-4 border border-dark-400/30 shadow-2xl max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
-        <h3 className="font-semibold text-theme-heading mb-1">Branch & Stream Access</h3>
-        <p className="text-sm text-theme-faint mb-4">
-          Configure access for <span className="text-accent-400 font-medium">{user.display_name}</span>
+    <div
+      className="fixed inset-0 flex items-center justify-center z-50"
+      style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}
+      onClick={onClose}
+    >
+      <div
+        className="rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl max-h-[80vh] flex flex-col"
+        style={{ background: 'var(--mt-bg-raised)', border: '1px solid var(--mt-border)' }}
+        onClick={e => e.stopPropagation()}
+      >
+        <h3 className="mt-heading mb-1">Branch & Stream Access</h3>
+        <p className="text-sm mb-4" style={{ color: 'var(--mt-text-faint)' }}>
+          Configure access for <span className="font-medium" style={{ color: 'var(--mt-accent-text)' }}>{user.display_name}</span>
         </p>
 
         {loading ? (
-          <div className="text-center py-8">
-            <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
-          </div>
+          <LoadingSpinner />
         ) : streams.length === 0 ? (
-          <p className="text-sm text-theme-faint py-4">No streams configured. Add streams to the client first.</p>
+          <p className="text-sm py-4" style={{ color: 'var(--mt-text-faint)' }}>
+            No streams configured. Add streams to the client first.
+          </p>
         ) : (
           <div className="flex-1 overflow-y-auto mb-4">
             {/* Header row */}
             <div className="flex items-center gap-2 mb-2 px-1">
-              <div className="w-28 text-[10px] font-semibold text-theme-faint uppercase">Branch</div>
+              <div className="w-28 text-[10px] font-semibold uppercase" style={{ color: 'var(--mt-text-faint)' }}>Branch</div>
               {streams.map((s: any) => (
-                <div key={s.id} className="flex-1 text-center text-[10px] font-semibold text-theme-faint uppercase truncate">{s.name}</div>
+                <div key={s.id} className="flex-1 text-center text-[10px] font-semibold uppercase truncate" style={{ color: 'var(--mt-text-faint)' }}>{s.name}</div>
               ))}
             </div>
-            {/* Branch rows grouped by state */}
             {Array.from(stateGroups.entries()).map(([stateName, stateBranches]) => (
               <div key={stateName || '__none'}>
                 {stateName && (
-                  <div className="text-[10px] font-bold text-theme-faint uppercase tracking-wider px-1 pt-2 pb-1">{stateName}</div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider px-1 pt-2 pb-1" style={{ color: 'var(--mt-text-faint)' }}>{stateName}</div>
                 )}
                 {stateBranches.map((branch: any) => {
                   const branchKeys = streams.map((s: any) => `${branch.id}-${s.id}`);
                   const allChecked = branchKeys.every(k => access.has(k));
                   return (
-                    <div key={branch.id} className="flex items-center gap-2 py-1.5 px-1 rounded-lg hover:bg-dark-600/50">
-                      <button
-                        onClick={() => toggleBranch(branch.id)}
-                        className={`w-28 text-left text-xs font-medium truncate ${allChecked ? 'text-accent-400' : 'text-theme-secondary'}`}
-                        title="Toggle all streams"
-                      >
-                        {branch.name}
-                      </button>
-                      {streams.map((stream: any) => (
-                        <div key={stream.id} className="flex-1 flex justify-center">
-                          <input
-                            type="checkbox"
-                            checked={access.has(`${branch.id}-${stream.id}`)}
-                            onChange={() => toggleAccess(branch.id, stream.id)}
-                            className="w-4 h-4 rounded border-dark-300 text-accent-500 focus:ring-accent-500 bg-dark-800"
-                          />
-                        </div>
-                      ))}
-                    </div>
+                    <AccessBranchRow
+                      key={branch.id}
+                      branch={branch}
+                      streams={streams}
+                      access={access}
+                      allChecked={allChecked}
+                      onToggleBranch={() => toggleBranch(branch.id)}
+                      onToggleCell={(streamId) => toggleAccess(branch.id, streamId)}
+                    />
                   );
                 })}
               </div>
@@ -993,16 +1291,51 @@ function UserAccessModal({ slug, user, onClose }: { slug: string; user: ClientUs
           </div>
         )}
 
-        <div className="flex items-center justify-between pt-3 border-t border-dark-400/30">
-          <span className="text-xs text-theme-faint">{access.size} permissions</span>
+        <div className="flex items-center justify-between pt-3" style={{ borderTop: '1px solid var(--mt-border)' }}>
+          <span className="text-xs" style={{ color: 'var(--mt-text-faint)' }}>{access.size} permissions</span>
           <div className="flex gap-2">
-            <button onClick={onClose} className="btn-secondary text-sm">Cancel</button>
-            <button onClick={save} disabled={saving} className="btn-primary text-sm">
+            <button onClick={onClose} className="mt-btn-soft text-sm">Cancel</button>
+            <button onClick={save} disabled={saving} className="mt-btn-gradient text-sm">
               {saving ? 'Saving...' : 'Save'}
             </button>
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function AccessBranchRow({ branch, streams, access, allChecked, onToggleBranch, onToggleCell }: {
+  branch: any; streams: any[]; access: Set<string>;
+  allChecked: boolean; onToggleBranch: () => void; onToggleCell: (streamId: number) => void;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="flex items-center gap-2 py-1.5 px-1 rounded-lg"
+      style={{ background: hover ? 'var(--mt-bg-muted)' : 'transparent' }}
+    >
+      <button
+        onClick={onToggleBranch}
+        className="w-28 text-left text-xs font-medium truncate"
+        style={{ color: allChecked ? 'var(--mt-accent-text)' : 'var(--mt-text-secondary)' }}
+        title="Toggle all streams"
+      >
+        {branch.name}
+      </button>
+      {streams.map((stream: any) => (
+        <div key={stream.id} className="flex-1 flex justify-center">
+          <input
+            type="checkbox"
+            checked={access.has(`${branch.id}-${stream.id}`)}
+            onChange={() => onToggleCell(stream.id)}
+            className="w-4 h-4 rounded"
+            style={{ accentColor: 'var(--mt-accent)' }}
+          />
+        </div>
+      ))}
     </div>
   );
 }
@@ -1023,31 +1356,32 @@ function ModulesSection({ slug, modules, onReload }: {
 
   return (
     <div>
-      <p className="text-sm text-theme-faint mb-4">Enable or disable modules for this client</p>
+      <p className="text-sm mb-4" style={{ color: 'var(--mt-text-faint)' }}>Enable or disable modules for this client</p>
       <div className="grid grid-cols-2 gap-3">
         {allModules.map(mod => {
           const m = modules.find(x => x.module_key === mod.key);
           const enabled = !!m?.is_enabled;
           return (
-            <div key={mod.key} className={`rounded-2xl p-5 border transition-all ${
-              enabled
-                ? 'bg-accent-500/5 border-accent-500/20'
-                : 'bg-dark-700/40 border-dark-400/20'
-            }`}>
+            <div
+              key={mod.key}
+              className="rounded-2xl p-5 transition-all"
+              style={{
+                background: enabled ? TONES.accent.soft : 'var(--mt-bg-raised)',
+                border: `1px solid ${enabled ? TONES.accent.border : 'var(--mt-border)'}`,
+              }}
+            >
               <div className="flex items-center justify-between mb-3">
                 <span className="text-2xl">{mod.icon}</span>
-                <button
+                <GhostToggle
+                  enabled={enabled}
                   onClick={async () => {
                     await api.put(`/admin/clients/${slug}/modules/${mod.key}`, { is_enabled: !enabled });
                     onReload();
                   }}
-                  className={`relative w-11 h-6 rounded-full transition-all ${enabled ? 'bg-accent-500' : 'bg-dark-400'}`}
-                >
-                  <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-sm ${enabled ? 'left-[24px]' : 'left-1'}`} />
-                </button>
+                />
               </div>
-              <h4 className={`text-sm font-semibold ${enabled ? 'text-theme-heading' : 'text-theme-muted'}`}>{mod.name}</h4>
-              <p className="text-xs text-theme-faint mt-1">{mod.desc}</p>
+              <h4 className="text-sm font-semibold" style={{ color: enabled ? 'var(--mt-text)' : 'var(--mt-text-muted)' }}>{mod.name}</h4>
+              <p className="text-xs mt-1" style={{ color: 'var(--mt-text-faint)' }}>{mod.desc}</p>
             </div>
           );
         })}
@@ -1078,25 +1412,33 @@ function IntegrationsSection({ slug, integrations, onReload }: {
   const renderItem = (int: Integration) => {
     const Icon = SETTING_ICONS[int.key] || Globe;
     return (
-      <div key={int.key} className="flex items-center justify-between px-5 py-4 rounded-2xl bg-dark-700/40 border border-dark-400/20">
+      <div
+        key={int.key}
+        className="flex items-center justify-between px-5 py-4 rounded-2xl"
+        style={{ background: 'var(--mt-bg-raised)', border: '1px solid var(--mt-border)' }}
+      >
         <div className="flex items-center gap-3">
-          <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${int.enabled ? 'bg-accent-500/10' : 'bg-dark-500'}`}>
-            <Icon size={16} className={int.enabled ? 'text-accent-400' : 'text-theme-faint'} />
+          <div
+            className="w-9 h-9 rounded-xl flex items-center justify-center"
+            style={{
+              background: int.enabled ? TONES.accent.soft : 'var(--mt-bg-muted)',
+              border: '1px solid ' + (int.enabled ? TONES.accent.border : 'var(--mt-border)'),
+            }}
+          >
+            <Icon size={16} style={{ color: int.enabled ? TONES.accent.fg : 'var(--mt-text-faint)' }} />
           </div>
           <div>
-            <span className="text-sm font-medium text-theme-heading">{int.name}</span>
-            <p className="text-xs text-theme-faint">{int.description}</p>
+            <span className="text-sm font-medium" style={{ color: 'var(--mt-text)' }}>{int.name}</span>
+            <p className="text-xs" style={{ color: 'var(--mt-text-faint)' }}>{int.description}</p>
           </div>
         </div>
-        <button
+        <GhostToggle
+          enabled={int.enabled}
           onClick={async () => {
             await api.put(`/admin/clients/${slug}/integrations/${int.key}`, { is_enabled: !int.enabled });
             onReload();
           }}
-          className={`relative w-11 h-6 rounded-full transition-all ${int.enabled ? 'bg-accent-500' : 'bg-dark-400'}`}
-        >
-          <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-sm ${int.enabled ? 'left-[24px]' : 'left-1'}`} />
-        </button>
+        />
       </div>
     );
   };
@@ -1105,11 +1447,11 @@ function IntegrationsSection({ slug, integrations, onReload }: {
     <div>
       {coreItems.length > 0 && (
         <>
-          <p className="text-xs font-medium text-theme-faint uppercase tracking-wide mb-3">Settings</p>
+          <p className="text-xs font-medium uppercase tracking-wide mb-3" style={{ color: 'var(--mt-text-faint)' }}>Settings</p>
           <div className="space-y-2 mb-6">{coreItems.map(renderItem)}</div>
         </>
       )}
-      <p className="text-xs font-medium text-theme-faint uppercase tracking-wide mb-3">Integrations</p>
+      <p className="text-xs font-medium uppercase tracking-wide mb-3" style={{ color: 'var(--mt-text-faint)' }}>Integrations</p>
       <div className="space-y-2">{integrationItems.map(renderItem)}</div>
     </div>
   );
@@ -1127,21 +1469,21 @@ function StreamsSection({ slug, streams, onReload }: {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <p className="text-sm text-theme-faint">Revenue streams drive the dashboard KPI cards</p>
-        <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2 text-sm">
+        <p className="text-sm" style={{ color: 'var(--mt-text-faint)' }}>Revenue streams drive the dashboard KPI cards</p>
+        <button onClick={() => setShowAdd(true)} className="mt-btn-gradient flex items-center gap-2 text-sm">
           <Plus size={14} /> Add Stream
         </button>
       </div>
 
       {showAdd && (
-        <div className="bg-dark-700/60 rounded-2xl p-5 mb-4 border border-dark-400/20">
-          <h4 className="text-sm font-semibold text-theme-heading mb-3">New Revenue Stream</h4>
+        <div className="mt-card p-5 mb-4">
+          <h4 className="mt-heading text-sm mb-3">New Revenue Stream</h4>
           <div className="flex gap-3 mb-3">
             <div className="flex-1">
               <input type="text" value={name} onChange={e => setName(e.target.value)}
-                placeholder="e.g. Consulting, Dine-in" className="input text-sm" />
+                placeholder="e.g. Consulting, Dine-in" className="mt-input text-sm" />
             </div>
-            <select value={color} onChange={e => setColor(e.target.value)} className="input text-sm w-28">
+            <select value={color} onChange={e => setColor(e.target.value)} className="mt-input text-sm w-28">
               <option value="accent">Green</option>
               <option value="blue">Blue</option>
               <option value="purple">Purple</option>
@@ -1156,40 +1498,39 @@ function StreamsSection({ slug, streams, onReload }: {
                 setName(''); setShowAdd(false); onReload();
               }}
               disabled={!name}
-              className="btn-primary text-xs"
+              className="mt-btn-gradient text-xs"
             >Add</button>
-            <button onClick={() => setShowAdd(false)} className="btn-secondary text-xs">Cancel</button>
+            <button onClick={() => setShowAdd(false)} className="mt-btn-soft text-xs">Cancel</button>
           </div>
         </div>
       )}
 
       {streams.length === 0 ? (
-        <div className="text-center py-12 bg-dark-700/30 rounded-2xl border border-dark-400/20">
-          <BarChart3 size={28} className="text-theme-faint mx-auto mb-2" />
-          <p className="text-theme-muted text-sm">No revenue streams configured</p>
-        </div>
+        <EmptyState icon={BarChart3} title="No revenue streams configured" />
       ) : (
-        <div className="bg-dark-700/40 rounded-2xl border border-dark-400/20 overflow-hidden">
+        <div className="mt-card p-0 overflow-hidden">
           {streams.map((stream: any, i: number) => (
-            <div key={stream.id} className={`flex items-center justify-between px-5 py-3.5 ${i < streams.length - 1 ? 'border-b border-dark-400/15' : ''}`}>
+            <div
+              key={stream.id}
+              className="flex items-center justify-between px-5 py-3.5"
+              style={{ borderBottom: i < streams.length - 1 ? '1px solid var(--mt-border)' : 'none' }}
+            >
               <div className="flex items-center gap-3">
-                <div className={`w-3 h-3 rounded-full ${
-                  stream.color === 'blue' ? 'bg-blue-400' :
-                  stream.color === 'purple' ? 'bg-purple-400' :
-                  stream.color === 'amber' ? 'bg-amber-400' : 'bg-accent-400'
-                }`} />
-                <span className="text-sm font-medium text-theme-heading">{stream.name}</span>
+                <div
+                  className="w-3 h-3 rounded-full"
+                  style={{ background: STREAM_DOT[stream.color] || STREAM_DOT.accent }}
+                />
+                <span className="text-sm font-medium" style={{ color: 'var(--mt-text)' }}>{stream.name}</span>
               </div>
-              <button
+              <IconHoverButton
+                icon={Trash2}
+                tone={TONES.danger}
                 onClick={async () => {
                   if (!confirm(`Delete stream "${stream.name}"?`)) return;
                   await api.delete(`/admin/clients/${slug}/streams/${stream.id}`);
                   onReload();
                 }}
-                className="text-theme-faint hover:text-red-400 p-1.5 hover:bg-red-500/10 rounded-lg transition-all"
-              >
-                <Trash2 size={14} />
-              </button>
+              />
             </div>
           ))}
         </div>
@@ -1198,7 +1539,7 @@ function StreamsSection({ slug, streams, onReload }: {
   );
 }
 
-/* ─── Dashboard Config Section (Tabbed: Total + per-stream) ── */
+/* ─── Dashboard Config Section ───────────────────────────── */
 
 function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[] }) {
   const [loading, setLoading] = useState(true);
@@ -1273,13 +1614,24 @@ function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[
     setCollapsed(prev => ({ ...prev, [section]: !prev[section] }));
   };
 
-  if (loading) return <div className="text-center py-8 text-theme-faint text-sm">Loading configuration...</div>;
+  if (loading) return (
+    <div className="text-center py-8 text-sm" style={{ color: 'var(--mt-text-faint)' }}>Loading configuration...</div>
+  );
 
   const currentScope = scopes[activeScope] || { cards: [], charts: [], tables: [] };
 
-  const SOURCE_LABELS: Record<string, { label: string; color: string }> = {
-    healthplix: { label: 'Healthplix', color: 'bg-teal-500/10 text-teal-400' },
-    oneglance: { label: 'OneGlance', color: 'bg-orange-500/10 text-orange-400' },
+  const SOURCE_TONES: Record<string, Tone> = {
+    healthplix: TONES.teal,
+    oneglance: TONES.orange,
+  };
+  const SOURCE_LABELS: Record<string, string> = {
+    healthplix: 'Healthplix',
+    oneglance: 'OneGlance',
+  };
+  const BADGE_TONES: Record<string, Tone> = {
+    System: TONES.accent,
+    Auto: TONES.blue,
+    Custom: TONES.purple,
   };
 
   const renderToggleItem = (item: any, type: 'card' | 'chart', badge?: string) => {
@@ -1290,40 +1642,52 @@ function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[
     const isVisible = !!item.is_visible;
     const label = (isCard && !isVisCard) ? item.title : item.element_label;
     const description = item.description || '';
-    const source = item.source ? SOURCE_LABELS[item.source] : null;
+    const sourceTone = item.source ? SOURCE_TONES[item.source] : null;
+    const sourceLabel = item.source ? SOURCE_LABELS[item.source] : null;
+    const badgeTone = badge ? BADGE_TONES[badge] : null;
 
     return (
-      <div key={`${item._source || type}-${item.id}`} className="flex items-center justify-between px-4 py-3 border-b border-dark-400/10 last:border-0">
+      <div
+        key={`${item._source || type}-${item.id}`}
+        className="flex items-center justify-between px-4 py-3"
+        style={{ borderBottom: '1px solid var(--mt-border)' }}
+      >
         <div className="flex items-center gap-3 min-w-0 flex-1">
           <button
             onClick={() => (isCard && !isVisCard) ? toggleCard(item) : isCard ? toggleCard(item) : toggleChart(item)}
             disabled={isSaving}
-            className={`p-1.5 rounded-lg transition-all shrink-0 ${
-              isVisible
-                ? 'text-accent-400 bg-accent-500/10 hover:bg-accent-500/20'
-                : 'text-theme-faint bg-dark-500 hover:bg-dark-400'
-            } ${isSaving ? 'opacity-50' : ''}`}
+            className="p-1.5 rounded-lg transition-all shrink-0"
+            style={{
+              color: isVisible ? TONES.accent.fg : 'var(--mt-text-faint)',
+              background: isVisible ? TONES.accent.soft : 'var(--mt-bg-muted)',
+              border: '1px solid ' + (isVisible ? TONES.accent.border : 'var(--mt-border)'),
+              opacity: isSaving ? 0.5 : 1,
+            }}
           >
             {isVisible ? <Eye size={14} /> : <EyeOff size={14} />}
           </button>
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm font-medium text-theme-heading">{label}</span>
-              {badge && (
-                <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
-                  badge === 'System' ? 'bg-accent-500/10 text-accent-400' :
-                  badge === 'Auto' ? 'bg-blue-500/10 text-blue-400' :
-                  'bg-purple-500/10 text-purple-400'
-                }`}>{badge}</span>
+              <span className="text-sm font-medium" style={{ color: 'var(--mt-text)' }}>{label}</span>
+              {badge && badgeTone && (
+                <span
+                  className="text-[10px] font-medium px-2 py-0.5 rounded-full"
+                  style={{ background: badgeTone.soft, color: badgeTone.fg, border: `1px solid ${badgeTone.border}` }}
+                >
+                  {badge}
+                </span>
               )}
-              {source && (
-                <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${source.color}`}>
-                  {source.label}
+              {sourceTone && sourceLabel && (
+                <span
+                  className="text-[10px] font-medium px-2 py-0.5 rounded-full"
+                  style={{ background: sourceTone.soft, color: sourceTone.fg, border: `1px solid ${sourceTone.border}` }}
+                >
+                  {sourceLabel}
                 </span>
               )}
             </div>
             {description && (
-              <p className="text-[11px] text-theme-faint mt-0.5 leading-relaxed">{description}</p>
+              <p className="text-[11px] mt-0.5 leading-relaxed" style={{ color: 'var(--mt-text-faint)' }}>{description}</p>
             )}
           </div>
         </div>
@@ -1337,22 +1701,23 @@ function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[
       <div className="mb-4">
         <button
           onClick={() => toggleSection(`${activeScope}-${sectionKey}`)}
-          className="flex items-center gap-2 w-full text-left px-1 py-2 text-sm font-semibold text-theme-heading hover:text-accent-400 transition-colors"
+          className="flex items-center gap-2 w-full text-left px-1 py-2 text-sm font-semibold transition-colors"
+          style={{ color: 'var(--mt-text)' }}
         >
           {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
           {title}
-          <span className="text-[10px] text-theme-faint font-normal ml-1">
+          <span className="text-[10px] font-normal ml-1" style={{ color: 'var(--mt-text-faint)' }}>
             ({items.filter(i => i.is_visible).length}/{items.length} visible)
           </span>
         </button>
         {!isCollapsed && (
           items.length > 0 ? (
-            <div className="bg-dark-700/40 rounded-xl border border-dark-400/20 overflow-hidden">
+            <div className="mt-card p-0 overflow-hidden">
               {items.map(item => renderToggleItem(item, type, getBadge?.(item)))}
             </div>
           ) : (
-            <div className="bg-dark-700/30 rounded-xl border border-dark-400/20 px-4 py-6 text-center">
-              <p className="text-xs text-theme-faint">No {title.toLowerCase()} configured</p>
+            <div className="mt-card px-4 py-6 text-center">
+              <p className="text-xs" style={{ color: 'var(--mt-text-faint)' }}>No {title.toLowerCase()} configured</p>
             </div>
           )
         )}
@@ -1362,30 +1727,39 @@ function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[
 
   return (
     <div>
-      <p className="text-sm text-theme-faint mb-4">Configure which elements appear on the Actuals dashboard</p>
+      <p className="text-sm mb-4" style={{ color: 'var(--mt-text-faint)' }}>Configure which elements appear on the Actuals dashboard</p>
 
       {/* Scope sub-tabs */}
-      <div className="flex gap-1 mb-5 bg-dark-700/40 rounded-xl p-1 border border-dark-400/20">
-        {scopeTabs.map(tab => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveScope(tab.key)}
-            className={`px-4 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${
-              activeScope === tab.key
-                ? 'bg-accent-500/15 text-accent-400 shadow-sm'
-                : 'text-theme-faint hover:text-theme-secondary hover:bg-dark-500/50'
-            }`}
-          >
-            {tab.label}
-            {tab.source && (
-              <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${
-                tab.source === 'healthplix' ? 'bg-teal-500/15 text-teal-400' : 'bg-orange-500/15 text-orange-400'
-              }`}>
-                {tab.source === 'healthplix' ? 'Healthplix' : 'OneGlance'}
-              </span>
-            )}
-          </button>
-        ))}
+      <div
+        className="flex gap-1 mb-5 rounded-xl p-1"
+        style={{ background: 'var(--mt-bg-raised)', border: '1px solid var(--mt-border)' }}
+      >
+        {scopeTabs.map(tab => {
+          const active = activeScope === tab.key;
+          const sourceTone = tab.source ? SOURCE_TONES[tab.source] : null;
+          return (
+            <button
+              key={tab.key}
+              onClick={() => setActiveScope(tab.key)}
+              className="px-4 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5"
+              style={{
+                background: active ? TONES.accent.soft : 'transparent',
+                color: active ? TONES.accent.fg : 'var(--mt-text-faint)',
+                border: '1px solid ' + (active ? TONES.accent.border : 'transparent'),
+              }}
+            >
+              {tab.label}
+              {tab.source && sourceTone && (
+                <span
+                  className="text-[9px] px-1.5 py-0.5 rounded-full"
+                  style={{ background: sourceTone.soft, color: sourceTone.fg }}
+                >
+                  {SOURCE_LABELS[tab.source]}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Sections */}
@@ -1457,7 +1831,6 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
 
   const nonAdminUsers = users.filter(u => u.role !== 'admin' && u.is_active);
 
-  // Load access data for all active branches
   const loadAccess = useCallback(() => {
     const activeBranches = branches.filter(b => b.is_active);
     if (!client?.is_multi_branch || activeBranches.length === 0) return;
@@ -1496,7 +1869,6 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
   const handleStreamUserToggle = async (branchId: number, streamId: number, userId: number) => {
     const current = branchAccess[branchId];
     if (!current) return;
-    // Build updated stream_users from current state
     const updatedStreams = current.streams.map(s => {
       if (s.id !== streamId) return { stream_id: s.id, user_ids: s.user_ids };
       const newIds = s.user_ids.includes(userId)
@@ -1504,7 +1876,6 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
         : [...s.user_ids, userId];
       return { stream_id: s.id, user_ids: newIds };
     });
-    // Optimistic update
     const optimisticStreams = current.streams.map(s => {
       if (s.id !== streamId) return s;
       const newIds = s.user_ids.includes(userId)
@@ -1523,7 +1894,6 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
       });
     } catch (err: any) {
       alert(err.response?.data?.error || 'Failed to update');
-      // Revert on error
       const res = await api.get(`/admin/clients/${slug}/branches/${branchId}/users`);
       setBranchAccess(prev => ({ ...prev, [branchId]: { is_restricted: res.data.is_restricted, user_ids: res.data.user_ids, streams: res.data.streams || [] } }));
     }
@@ -1533,13 +1903,14 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <p className="text-sm text-theme-faint">
+        <p className="text-sm" style={{ color: 'var(--mt-text-faint)' }}>
           {client?.is_multi_branch
             ? 'Multi-branch enabled — data is separated by branch'
             : 'Single-branch mode — enable multi-branch to manage locations'}
         </p>
         {!client?.is_multi_branch ? (
-          <button
+          <MultiBranchEnableButton
+            enabling={enabling}
             onClick={async () => {
               const branchName = prompt('Default branch name (e.g. "Head Office"):');
               if (!branchName) return;
@@ -1554,36 +1925,32 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
               } catch (err: any) { alert(err.response?.data?.error || 'Failed'); }
               setEnabling(false);
             }}
-            disabled={enabling}
-            className="flex items-center gap-1.5 text-sm text-amber-400 font-medium border border-amber-500/20 px-3.5 py-2 rounded-xl hover:bg-amber-500/10 transition-all"
-          >
-            <MapPin size={14} /> {enabling ? 'Enabling...' : 'Enable Multi-Branch'}
-          </button>
+          />
         ) : (
-          <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2 text-sm">
+          <button onClick={() => setShowAdd(true)} className="mt-btn-gradient flex items-center gap-2 text-sm">
             <Plus size={14} /> Add Branch
           </button>
         )}
       </div>
 
       {showAdd && (
-        <div className="bg-dark-700/60 rounded-2xl p-5 mb-4 border border-dark-400/20">
-          <h4 className="text-sm font-semibold text-theme-heading mb-3">New Branch</h4>
+        <div className="mt-card p-5 mb-4">
+          <h4 className="mt-heading text-sm mb-3">New Branch</h4>
           <div className="grid grid-cols-3 gap-3 mb-3">
             <div>
-              <label className="block text-xs font-medium text-theme-muted mb-1">Branch Name</label>
-              <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Koramangala Clinic" className="input text-sm" />
+              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>Branch Name</label>
+              <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Koramangala Clinic" className="mt-input text-sm" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-theme-muted mb-1">State</label>
-              <select value={state} onChange={e => { setState(e.target.value); setCity(''); }} className="input text-sm">
+              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>State</label>
+              <select value={state} onChange={e => { setState(e.target.value); setCity(''); }} className="mt-input text-sm">
                 <option value="">Select state</option>
                 {Object.keys(INDIAN_STATES_CITIES).map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-theme-muted mb-1">City</label>
-              <select value={city} onChange={e => setCity(e.target.value)} className="input text-sm" disabled={!state}>
+              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>City</label>
+              <select value={city} onChange={e => setCity(e.target.value)} className="mt-input text-sm" disabled={!state}>
                 <option value="">Select city</option>
                 {(INDIAN_STATES_CITIES[state] || []).map(c => <option key={c} value={c}>{c}</option>)}
               </select>
@@ -1600,22 +1967,20 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
                 setShowAdd(false); onReload();
               }}
               disabled={!name}
-              className="btn-primary text-xs"
+              className="mt-btn-gradient text-xs"
             >Add Branch</button>
-            <button onClick={() => setShowAdd(false)} className="btn-secondary text-xs">Cancel</button>
+            <button onClick={() => setShowAdd(false)} className="mt-btn-soft text-xs">Cancel</button>
           </div>
         </div>
       )}
 
       {branches.length === 0 ? (
-        <div className="text-center py-12 bg-dark-700/30 rounded-2xl border border-dark-400/20">
-          <GitBranch size={28} className="text-theme-faint mx-auto mb-2" />
-          <p className="text-theme-muted text-sm">
-            {client?.is_multi_branch ? 'No branches configured' : 'Enable multi-branch to add locations'}
-          </p>
-        </div>
+        <EmptyState
+          icon={GitBranch}
+          title={client?.is_multi_branch ? 'No branches configured' : 'Enable multi-branch to add locations'}
+        />
       ) : (
-        <div className="bg-dark-700/40 rounded-2xl border border-dark-400/20 overflow-hidden">
+        <div className="mt-card p-0 overflow-hidden">
           {branches.map((branch: any, i: number) => {
             const access = branchAccess[branch.id];
             const isRestricted = access?.is_restricted ?? false;
@@ -1624,20 +1989,26 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
             const isExpanded = expandedBranch === branch.id;
 
             return (
-              <div key={branch.id} className={`${i < branches.length - 1 ? 'border-b border-dark-400/15' : ''}`}>
+              <div
+                key={branch.id}
+                style={{ borderBottom: i < branches.length - 1 ? '1px solid var(--mt-border)' : 'none' }}
+              >
                 <div className="flex items-center justify-between px-5 py-3.5">
                   <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-accent-500/10">
-                      <MapPin size={15} className="text-accent-400" />
+                    <div
+                      className="w-9 h-9 rounded-xl flex items-center justify-center"
+                      style={{ background: TONES.accent.soft, border: `1px solid ${TONES.accent.border}` }}
+                    >
+                      <MapPin size={15} style={{ color: TONES.accent.fg }} />
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-theme-heading">{branch.name}</span>
-                        <span className="text-[10px] font-mono text-theme-faint">{branch.code}</span>
+                        <span className="text-sm font-medium" style={{ color: 'var(--mt-text)' }}>{branch.name}</span>
+                        <span className="text-[10px] font-mono" style={{ color: 'var(--mt-text-faint)' }}>{branch.code}</span>
                       </div>
-                      <div className="flex items-center gap-2 text-[11px] text-theme-faint">
+                      <div className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--mt-text-faint)' }}>
                         {branch.state && <span>{branch.state}</span>}
-                        {branch.state && branch.city && <span className="text-dark-300">·</span>}
+                        {branch.state && branch.city && <span>·</span>}
                         {branch.city && <span>{branch.city}</span>}
                       </div>
                     </div>
@@ -1645,65 +2016,69 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
                   <div className="flex items-center gap-3">
                     {client?.is_multi_branch && (
                       <div className="flex items-center gap-2">
-                        <span className="text-[11px] text-theme-faint">Restrict Access</span>
-                        <button
-                          onClick={() => handleToggleRestrict(branch.id)}
+                        <span className="text-[11px]" style={{ color: 'var(--mt-text-faint)' }}>Restrict Access</span>
+                        <GhostToggle
+                          enabled={isRestricted}
                           disabled={isSaving}
-                          className={`relative w-10 h-5.5 rounded-full transition-all ${isRestricted ? 'bg-amber-500' : 'bg-dark-400'} ${isSaving ? 'opacity-50' : ''}`}
-                          style={{ width: 40, height: 22 }}
-                        >
-                          <span className={`absolute top-[3px] w-4 h-4 rounded-full bg-white transition-all shadow-sm ${isRestricted ? 'left-[21px]' : 'left-[3px]'}`} />
-                        </button>
+                          onClick={() => handleToggleRestrict(branch.id)}
+                          tone="amber"
+                        />
                       </div>
                     )}
                     {isRestricted && (
                       <button
                         onClick={() => setExpandedBranch(isExpanded ? null : branch.id)}
-                        className="flex items-center gap-1 text-[11px] px-2.5 py-1.5 rounded-lg bg-amber-500/10 text-amber-400 hover:bg-amber-500/15 transition-all"
+                        className="flex items-center gap-1 text-[11px] px-2.5 py-1.5 rounded-lg transition-all"
+                        style={{
+                          background: TONES.amber.soft,
+                          color: TONES.amber.fg,
+                          border: `1px solid ${TONES.amber.border}`,
+                        }}
                       >
                         <Users size={11} />
                         <span>{assignedIds.length} user{assignedIds.length !== 1 ? 's' : ''}</span>
                         {isExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                       </button>
                     )}
-                    <button
+                    <IconHoverButton
+                      icon={Edit2}
+                      tone={TONES.blue}
                       onClick={() => setEditingBranch({ ...branch })}
-                      className="text-theme-faint hover:text-blue-400 p-1.5 hover:bg-blue-500/10 rounded-lg transition-all"
-                    >
-                      <Edit2 size={14} />
-                    </button>
-                    <button
+                    />
+                    <IconHoverButton
+                      icon={Trash2}
+                      tone={TONES.danger}
                       onClick={async () => {
                         if (!confirm(`Permanently delete branch "${branch.name}"? This cannot be undone.`)) return;
                         await api.delete(`/admin/clients/${slug}/branches/${branch.id}`);
                         onReload();
                       }}
-                      className="text-theme-faint hover:text-red-400 p-1.5 hover:bg-red-500/10 rounded-lg transition-all"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    />
                   </div>
                 </div>
 
                 {/* Edit branch inline form */}
                 {editingBranch?.id === branch.id && (
                   <div className="px-5 pb-4 pt-0">
-                    <div className="bg-dark-600/40 rounded-xl border border-dark-400/20 p-4">
+                    <div
+                      className="rounded-xl p-4"
+                      style={{ background: 'var(--mt-bg-muted)', border: '1px solid var(--mt-border)' }}
+                    >
                       <div className="grid grid-cols-3 gap-3 mb-3">
                         <div>
-                          <label className="block text-xs font-medium text-theme-muted mb-1">Branch Name</label>
-                          <input type="text" value={editingBranch.name} onChange={e => setEditingBranch({ ...editingBranch, name: e.target.value })} className="input text-sm" />
+                          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>Branch Name</label>
+                          <input type="text" value={editingBranch.name} onChange={e => setEditingBranch({ ...editingBranch, name: e.target.value })} className="mt-input text-sm" />
                         </div>
                         <div>
-                          <label className="block text-xs font-medium text-theme-muted mb-1">State</label>
-                          <select value={editingBranch.state || ''} onChange={e => setEditingBranch({ ...editingBranch, state: e.target.value, city: '' })} className="input text-sm">
+                          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>State</label>
+                          <select value={editingBranch.state || ''} onChange={e => setEditingBranch({ ...editingBranch, state: e.target.value, city: '' })} className="mt-input text-sm">
                             <option value="">Select state</option>
                             {Object.keys(INDIAN_STATES_CITIES).map(s => <option key={s} value={s}>{s}</option>)}
                           </select>
                         </div>
                         <div>
-                          <label className="block text-xs font-medium text-theme-muted mb-1">City</label>
-                          <select value={editingBranch.city || ''} onChange={e => setEditingBranch({ ...editingBranch, city: e.target.value })} className="input text-sm" disabled={!editingBranch.state}>
+                          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>City</label>
+                          <select value={editingBranch.city || ''} onChange={e => setEditingBranch({ ...editingBranch, city: e.target.value })} className="mt-input text-sm" disabled={!editingBranch.state}>
                             <option value="">Select city</option>
                             {(INDIAN_STATES_CITIES[editingBranch.state] || []).map((c: string) => <option key={c} value={c}>{c}</option>)}
                           </select>
@@ -1719,9 +2094,9 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
                             setEditingBranch(null); onReload();
                           }}
                           disabled={!editingBranch.name}
-                          className="btn-primary text-xs"
+                          className="mt-btn-gradient text-xs"
                         >Save</button>
-                        <button onClick={() => setEditingBranch(null)} className="btn-secondary text-xs">Cancel</button>
+                        <button onClick={() => setEditingBranch(null)} className="mt-btn-soft text-xs">Cancel</button>
                       </div>
                     </div>
                   </div>
@@ -1731,45 +2106,48 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
                 {isExpanded && isRestricted && branch.is_active && (
                   <div className="px-5 pb-4 pt-0">
                     <div className="ml-12">
-                      <p className="text-[11px] text-theme-faint mb-3">
-                        Assign users to each revenue stream <span className="text-theme-muted">(admins always have full access)</span>
+                      <p className="text-[11px] mb-3" style={{ color: 'var(--mt-text-faint)' }}>
+                        Assign users to each revenue stream <span style={{ color: 'var(--mt-text-muted)' }}>(admins always have full access)</span>
                       </p>
                       {(access?.streams ?? []).length === 0 ? (
-                        <div className="bg-dark-600/40 rounded-xl border border-dark-400/20 p-3">
-                          <p className="text-[11px] text-amber-400/80">No revenue streams configured for this branch. Add streams in the Revenue Streams tab first.</p>
+                        <div
+                          className="rounded-xl p-3"
+                          style={{ background: TONES.amber.soft, border: `1px solid ${TONES.amber.border}` }}
+                        >
+                          <p className="text-[11px]" style={{ color: TONES.amber.fg }}>
+                            No revenue streams configured for this branch. Add streams in the Revenue Streams tab first.
+                          </p>
                         </div>
                       ) : (
                         <div className="space-y-2.5">
                           {(access?.streams ?? []).map(stream => (
-                            <div key={stream.id} className="bg-dark-600/40 rounded-xl border border-dark-400/20 overflow-hidden">
-                              <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-dark-400/15">
+                            <div
+                              key={stream.id}
+                              className="rounded-xl overflow-hidden"
+                              style={{ background: 'var(--mt-bg-muted)', border: '1px solid var(--mt-border)' }}
+                            >
+                              <div
+                                className="flex items-center justify-between px-3.5 py-2.5"
+                                style={{ borderBottom: '1px solid var(--mt-border)' }}
+                              >
                                 <div className="flex items-center gap-2">
-                                  <Layers size={13} className="text-accent-400" />
-                                  <span className="text-xs font-semibold text-theme-heading">{stream.name}</span>
+                                  <Layers size={13} style={{ color: TONES.accent.fg }} />
+                                  <span className="text-xs font-semibold" style={{ color: 'var(--mt-text)' }}>{stream.name}</span>
                                 </div>
-                                <span className="text-[10px] text-theme-faint">{stream.user_ids.length} of {nonAdminUsers.length} users</span>
+                                <span className="text-[10px]" style={{ color: 'var(--mt-text-faint)' }}>
+                                  {stream.user_ids.length} of {nonAdminUsers.length} users
+                                </span>
                               </div>
                               <div className="p-2.5 space-y-0.5 max-h-40 overflow-y-auto">
-                                {nonAdminUsers.map(user => {
-                                  const isAssigned = stream.user_ids.includes(user.id);
-                                  return (
-                                    <label
-                                      key={user.id}
-                                      className={`flex items-center gap-2.5 px-3 py-1.5 rounded-lg cursor-pointer transition-all ${
-                                        isAssigned ? 'bg-accent-500/10' : 'hover:bg-dark-500/50'
-                                      } ${isSaving ? 'opacity-50 pointer-events-none' : ''}`}
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        checked={isAssigned}
-                                        onChange={() => handleStreamUserToggle(branch.id, stream.id, user.id)}
-                                        className="w-3.5 h-3.5 rounded border-dark-300 text-accent-500 focus:ring-accent-500/30"
-                                      />
-                                      <span className="text-sm text-theme-secondary">{user.display_name}</span>
-                                      <span className="text-[10px] text-theme-faint">@{user.username}</span>
-                                    </label>
-                                  );
-                                })}
+                                {nonAdminUsers.map(user => (
+                                  <StreamUserRow
+                                    key={user.id}
+                                    user={user}
+                                    assigned={stream.user_ids.includes(user.id)}
+                                    saving={isSaving}
+                                    onToggle={() => handleStreamUserToggle(branch.id, stream.id, user.id)}
+                                  />
+                                ))}
                               </div>
                             </div>
                           ))}
@@ -1784,6 +2162,56 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
         </div>
       )}
     </div>
+  );
+}
+
+function MultiBranchEnableButton({ enabling, onClick }: { enabling: boolean; onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      disabled={enabling}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="flex items-center gap-1.5 text-sm font-medium px-3.5 py-2 rounded-xl transition-all"
+      style={{
+        color: TONES.amber.fg,
+        border: `1px solid ${TONES.amber.border}`,
+        background: hover ? TONES.amber.soft : 'transparent',
+      }}
+    >
+      <MapPin size={14} /> {enabling ? 'Enabling...' : 'Enable Multi-Branch'}
+    </button>
+  );
+}
+
+function StreamUserRow({ user, assigned, saving, onToggle }: {
+  user: ClientUser; assigned: boolean; saving: boolean; onToggle: () => void;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <label
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg cursor-pointer transition-all"
+      style={{
+        background: assigned
+          ? TONES.accent.soft
+          : hover ? 'var(--mt-bg-raised)' : 'transparent',
+        opacity: saving ? 0.5 : 1,
+        pointerEvents: saving ? 'none' : 'auto',
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={assigned}
+        onChange={onToggle}
+        className="w-3.5 h-3.5 rounded"
+        style={{ accentColor: 'var(--mt-accent)' }}
+      />
+      <span className="text-sm" style={{ color: 'var(--mt-text-secondary)' }}>{user.display_name}</span>
+      <span className="text-[10px]" style={{ color: 'var(--mt-text-faint)' }}>@{user.username}</span>
+    </label>
   );
 }
 
@@ -1832,89 +2260,85 @@ function TeamAssignmentSection({ slug }: { slug: string }) {
     setSaving(false);
   };
 
-  if (loading) return (
-    <div className="text-center py-16">
-      <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
-    </div>
-  );
+  if (loading) return <LoadingSpinner />;
 
   const nonOwnerTeam = allTeam.filter(m => !m.is_owner && m.is_active);
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <p className="text-sm text-theme-faint">Team members assigned to manage this client</p>
+        <p className="text-sm" style={{ color: 'var(--mt-text-faint)' }}>Team members assigned to manage this client</p>
         {!editing && (
-          <button onClick={() => setEditing(true)} className="btn-primary flex items-center gap-2 text-sm">
+          <button onClick={() => setEditing(true)} className="mt-btn-gradient flex items-center gap-2 text-sm">
             <Users size={14} /> Edit Assignments
           </button>
         )}
       </div>
 
       {editing ? (
-        <div className="bg-dark-700/60 rounded-2xl border border-dark-400/20 p-5 mb-4">
-          <h4 className="text-sm font-semibold text-theme-heading mb-3">Select Team Members</h4>
+        <div className="mt-card p-5 mb-4">
+          <h4 className="mt-heading text-sm mb-3">Select Team Members</h4>
           {nonOwnerTeam.length === 0 ? (
-            <p className="text-sm text-theme-faint py-4">No team members available. Add team members in the Team tab first.</p>
+            <p className="text-sm py-4" style={{ color: 'var(--mt-text-faint)' }}>
+              No team members available. Add team members in the Team tab first.
+            </p>
           ) : (
             <div className="space-y-1.5 mb-4">
               {nonOwnerTeam.map(member => (
-                <label
+                <SelectableMemberRow
                   key={member.id}
-                  className={`flex items-center gap-3 px-4 py-3 rounded-xl cursor-pointer transition-all ${
-                    selectedIds.has(member.id)
-                      ? 'bg-accent-500/10 border border-accent-500/20'
-                      : 'bg-dark-600/50 border border-transparent hover:bg-dark-600'
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(member.id)}
-                    onChange={() => toggleMember(member.id)}
-                    className="w-4 h-4 rounded border-dark-300 text-accent-500 focus:ring-accent-500 bg-dark-800"
-                  />
-                  <div>
-                    <span className="text-sm font-medium text-theme-heading">{member.display_name}</span>
-                    <span className="text-[11px] font-mono text-theme-faint ml-2">@{member.username}</span>
-                  </div>
-                </label>
+                  member={member}
+                  selected={selectedIds.has(member.id)}
+                  onToggle={() => toggleMember(member.id)}
+                />
               ))}
             </div>
           )}
-          <div className="flex items-center justify-between pt-3 border-t border-dark-400/30">
-            <span className="text-xs text-theme-faint">{selectedIds.size} selected</span>
+          <div className="flex items-center justify-between pt-3" style={{ borderTop: '1px solid var(--mt-border)' }}>
+            <span className="text-xs" style={{ color: 'var(--mt-text-faint)' }}>{selectedIds.size} selected</span>
             <div className="flex gap-2">
-              <button onClick={() => { setEditing(false); setSelectedIds(new Set(assigned.map((m: any) => m.id))); }} className="btn-secondary text-xs">Cancel</button>
-              <button onClick={save} disabled={saving} className="btn-primary text-xs">
+              <button onClick={() => { setEditing(false); setSelectedIds(new Set(assigned.map((m: any) => m.id))); }} className="mt-btn-soft text-xs">Cancel</button>
+              <button onClick={save} disabled={saving} className="mt-btn-gradient text-xs">
                 {saving ? 'Saving...' : 'Save'}
               </button>
             </div>
           </div>
         </div>
       ) : assigned.length === 0 ? (
-        <div className="text-center py-12 bg-dark-700/30 rounded-2xl border border-dark-400/20">
-          <Shield size={28} className="text-theme-faint mx-auto mb-2" />
-          <p className="text-theme-muted text-sm">No team members assigned</p>
-          <p className="text-theme-faint text-xs mt-1">Click "Edit Assignments" to assign team members</p>
-        </div>
+        <EmptyState
+          icon={Shield}
+          title="No team members assigned"
+          subtitle={'Click "Edit Assignments" to assign team members'}
+        />
       ) : (
-        <div className="bg-dark-700/40 rounded-2xl border border-dark-400/20 overflow-hidden">
+        <div className="mt-card p-0 overflow-hidden">
           {assigned.map((member: any, i: number) => (
-            <div key={member.id} className={`flex items-center justify-between px-5 py-3.5 ${i < assigned.length - 1 ? 'border-b border-dark-400/15' : ''}`}>
+            <div
+              key={member.id}
+              className="flex items-center justify-between px-5 py-3.5"
+              style={{ borderBottom: i < assigned.length - 1 ? '1px solid var(--mt-border)' : 'none' }}
+            >
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-purple-500/10 flex items-center justify-center">
-                  <Shield size={15} className="text-purple-400" />
+                <div
+                  className="w-9 h-9 rounded-xl flex items-center justify-center"
+                  style={{ background: TONES.purple.soft, border: `1px solid ${TONES.purple.border}` }}
+                >
+                  <Shield size={15} style={{ color: TONES.purple.fg }} />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-theme-heading">{member.display_name}</span>
-                    <span className="text-[11px] font-mono text-theme-faint">@{member.username}</span>
+                    <span className="text-sm font-medium" style={{ color: 'var(--mt-text)' }}>{member.display_name}</span>
+                    <span className="text-[11px] font-mono" style={{ color: 'var(--mt-text-faint)' }}>@{member.username}</span>
                   </div>
                 </div>
               </div>
-              <span className={`text-[10px] font-medium px-2.5 py-1 rounded-full ${
-                member.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
-              }`}>
+              <span
+                className="text-[10px] font-medium px-2.5 py-1 rounded-full"
+                style={{
+                  background: member.is_active ? TONES.accent.soft : TONES.danger.soft,
+                  color: member.is_active ? TONES.accent.fg : TONES.danger.fg,
+                }}
+              >
                 {member.is_active ? 'Active' : 'Disabled'}
               </span>
             </div>
@@ -1925,7 +2349,38 @@ function TeamAssignmentSection({ slug }: { slug: string }) {
   );
 }
 
-/* ─── Reset Password Modal (shared) ────────────────────── */
+function SelectableMemberRow({ member, selected, onToggle }: {
+  member: TeamMember; selected: boolean; onToggle: () => void;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <label
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="flex items-center gap-3 px-4 py-3 rounded-xl cursor-pointer transition-all"
+      style={{
+        background: selected
+          ? TONES.accent.soft
+          : hover ? 'var(--mt-bg-muted)' : 'var(--mt-bg-raised)',
+        border: '1px solid ' + (selected ? TONES.accent.border : 'var(--mt-border)'),
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={onToggle}
+        className="w-4 h-4 rounded"
+        style={{ accentColor: 'var(--mt-accent)' }}
+      />
+      <div>
+        <span className="text-sm font-medium" style={{ color: 'var(--mt-text)' }}>{member.display_name}</span>
+        <span className="text-[11px] font-mono ml-2" style={{ color: 'var(--mt-text-faint)' }}>@{member.username}</span>
+      </div>
+    </label>
+  );
+}
+
+/* ─── Reset Password Modal ──────────────────────────────── */
 
 function ResetPasswordModal({ username, onConfirm, onCancel }: {
   username: string;
@@ -1950,26 +2405,28 @@ function ResetPasswordModal({ username, onConfirm, onCancel }: {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={onCancel}>
-      <div className="bg-dark-700 rounded-2xl p-6 max-w-sm w-full mx-4 border border-dark-400/30 shadow-2xl" onClick={e => e.stopPropagation()}>
-        <h3 className="font-semibold text-theme-heading mb-2">Reset Password</h3>
-        <p className="text-sm text-theme-muted mb-4">
-          Reset password for <span className="text-accent-400 font-medium">@{username}</span>?
+    <div
+      className="fixed inset-0 flex items-center justify-center z-50"
+      style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}
+      onClick={onCancel}
+    >
+      <div
+        className="rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl"
+        style={{ background: 'var(--mt-bg-raised)', border: '1px solid var(--mt-border)' }}
+        onClick={e => e.stopPropagation()}
+      >
+        <h3 className="mt-heading mb-2">Reset Password</h3>
+        <p className="text-sm mb-4" style={{ color: 'var(--mt-text-muted)' }}>
+          Reset password for <span className="font-medium" style={{ color: 'var(--mt-accent-text)' }}>@{username}</span>?
         </p>
 
         <div className="space-y-2 mb-4">
-          <label className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all ${
-            mode === 'auto' ? 'bg-accent-500/10 border border-accent-500/20' : 'bg-dark-600/50 border border-transparent hover:bg-dark-600'
-          }`}>
-            <input type="radio" checked={mode === 'auto'} onChange={() => setMode('auto')} className="w-3.5 h-3.5 text-accent-500" />
-            <span className="text-sm text-theme-heading">Generate random password</span>
-          </label>
-          <label className={`flex items-start gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all ${
-            mode === 'custom' ? 'bg-accent-500/10 border border-accent-500/20' : 'bg-dark-600/50 border border-transparent hover:bg-dark-600'
-          }`}>
-            <input type="radio" checked={mode === 'custom'} onChange={() => setMode('custom')} className="w-3.5 h-3.5 mt-0.5 text-accent-500" />
+          <RadioRow selected={mode === 'auto'} onClick={() => setMode('auto')}>
+            <span className="text-sm" style={{ color: 'var(--mt-text)' }}>Generate random password</span>
+          </RadioRow>
+          <RadioRow selected={mode === 'custom'} onClick={() => setMode('custom')}>
             <div className="flex-1">
-              <span className="text-sm text-theme-heading">Set custom password</span>
+              <span className="text-sm" style={{ color: 'var(--mt-text)' }}>Set custom password</span>
               {mode === 'custom' && (
                 <div className="mt-2">
                   <div className="relative">
@@ -1978,32 +2435,63 @@ function ResetPasswordModal({ username, onConfirm, onCancel }: {
                       value={customPw}
                       onChange={e => { setCustomPw(e.target.value); setError(''); }}
                       placeholder="Min 8 chars, letter + number"
-                      className="input text-sm w-full pr-9"
+                      className="mt-input text-sm w-full pr-9"
                       autoFocus
                     />
-                    <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-theme-faint hover:text-theme-secondary">
+                    <button
+                      type="button"
+                      onClick={() => setShowPw(!showPw)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 transition-colors"
+                      style={{ color: 'var(--mt-text-faint)' }}
+                    >
                       {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
                     </button>
                   </div>
-                  {error && <p className="text-red-400 text-xs mt-1">{error}</p>}
+                  {error && <p className="text-xs mt-1" style={{ color: TONES.danger.fg }}>{error}</p>}
                 </div>
               )}
             </div>
-          </label>
+          </RadioRow>
         </div>
 
         <div className="flex gap-2">
-          <button onClick={onCancel} className="btn-secondary text-sm flex-1">Cancel</button>
+          <button onClick={onCancel} className="mt-btn-soft text-sm flex-1">Cancel</button>
           <button
             onClick={handleConfirm}
             disabled={mode === 'custom' && !customPw}
-            className="btn-primary text-sm flex-1"
+            className="mt-btn-gradient text-sm flex-1"
           >
             Reset Password
           </button>
         </div>
       </div>
     </div>
+  );
+}
+
+function RadioRow({ selected, onClick, children }: { selected: boolean; onClick: () => void; children: React.ReactNode }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <label
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="flex items-start gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all"
+      style={{
+        background: selected
+          ? TONES.accent.soft
+          : hover ? 'var(--mt-bg-muted)' : 'var(--mt-bg-raised)',
+        border: '1px solid ' + (selected ? TONES.accent.border : 'var(--mt-border)'),
+      }}
+    >
+      <input
+        type="radio"
+        checked={selected}
+        onChange={onClick}
+        className="w-3.5 h-3.5 mt-0.5"
+        style={{ accentColor: 'var(--mt-accent)' }}
+      />
+      {children}
+    </label>
   );
 }
 
@@ -2030,60 +2518,82 @@ function AddUserForm({ slug, onAdded, onCancel }: { slug: string; onAdded: () =>
 
   if (created) {
     return (
-      <div className="bg-dark-700/60 rounded-2xl p-5 mb-4 border border-accent-500/30">
+      <div
+        className="rounded-2xl p-5 mb-4"
+        style={{ background: 'var(--mt-bg-raised)', border: `1px solid ${TONES.accent.border}` }}
+      >
         <div className="flex items-center gap-3 mb-3">
-          <CheckCircle size={18} className="text-accent-400" />
-          <h4 className="text-sm font-semibold text-accent-300">User Created</h4>
+          <CheckCircle size={18} style={{ color: TONES.accent.fg }} />
+          <h4 className="text-sm font-semibold" style={{ color: TONES.accent.fg }}>User Created</h4>
         </div>
-        <div className="bg-dark-800 rounded-xl p-3 mb-3 border border-dark-400/20">
-          <p className="text-theme-heading font-mono text-sm">Username: <span className="text-accent-400">@{created.username}</span></p>
+        <div
+          className="rounded-xl p-3 mb-3"
+          style={{ background: 'var(--mt-bg-app)', border: '1px solid var(--mt-border)' }}
+        >
+          <p className="font-mono text-sm" style={{ color: 'var(--mt-text)' }}>
+            Username: <span style={{ color: TONES.accent.fg }}>@{created.username}</span>
+          </p>
           <div className="flex items-center justify-between mt-1">
-            <p className="text-theme-heading font-mono text-sm">Password: <span className="text-accent-400">{created.password}</span></p>
-            <button onClick={() => navigator.clipboard.writeText(created.password)} className="text-theme-muted hover:text-accent-400"><Copy size={14} /></button>
+            <p className="font-mono text-sm" style={{ color: 'var(--mt-text)' }}>
+              Password: <span style={{ color: TONES.accent.fg }}>{created.password}</span>
+            </p>
+            <button
+              onClick={() => navigator.clipboard.writeText(created.password)}
+              style={{ color: 'var(--mt-text-muted)' }}
+            >
+              <Copy size={14} />
+            </button>
           </div>
-          <p className="text-theme-heading font-mono text-sm mt-1">Role: <span className={created.role === 'admin' ? 'text-amber-400' : 'text-theme-muted'}>{created.role}</span></p>
+          <p className="font-mono text-sm mt-1" style={{ color: 'var(--mt-text)' }}>
+            Role: <span style={{ color: created.role === 'admin' ? TONES.amber.fg : 'var(--mt-text-muted)' }}>{created.role}</span>
+          </p>
         </div>
-        <p className="text-xs text-amber-400 mb-3">Save these credentials — the password won't be shown again</p>
-        <button onClick={onAdded} className="btn-primary text-xs">Done</button>
+        <p className="text-xs mb-3" style={{ color: TONES.amber.fg }}>Save these credentials — the password won't be shown again</p>
+        <button onClick={onAdded} className="mt-btn-gradient text-xs">Done</button>
       </div>
     );
   }
 
   return (
-    <div className="bg-dark-700/60 rounded-2xl p-5 mb-4 border border-dark-400/20">
-      <h4 className="text-sm font-semibold text-theme-heading mb-3">Add New User</h4>
+    <div className="mt-card p-5 mb-4">
+      <h4 className="mt-heading text-sm mb-3">Add New User</h4>
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div>
-          <label className="block text-xs font-medium text-theme-muted mb-1">Display Name</label>
-          <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="John Doe" className="input text-sm" />
+          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>Display Name</label>
+          <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="John Doe" className="mt-input text-sm" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-theme-muted mb-1">Username</label>
-          <input type="text" value={username} onChange={e => setUsername(e.target.value)} placeholder="john" className="input text-sm font-mono" />
+          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>Username</label>
+          <input type="text" value={username} onChange={e => setUsername(e.target.value)} placeholder="john" className="mt-input text-sm font-mono" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-theme-muted mb-1">Password</label>
+          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>Password</label>
           <div className="relative">
-            <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Min 8 chars, letter + number" className="input text-sm pr-9" />
-            <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-theme-faint hover:text-theme-secondary">
+            <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Min 8 chars, letter + number" className="mt-input text-sm pr-9" />
+            <button
+              type="button"
+              onClick={() => setShowPw(!showPw)}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2"
+              style={{ color: 'var(--mt-text-faint)' }}
+            >
               {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
           </div>
         </div>
         <div>
-          <label className="block text-xs font-medium text-theme-muted mb-1">Role</label>
-          <select value={role} onChange={e => setRole(e.target.value as 'user' | 'admin')} className="input text-sm">
+          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>Role</label>
+          <select value={role} onChange={e => setRole(e.target.value as 'user' | 'admin')} className="mt-input text-sm">
             <option value="user">User</option>
             <option value="admin">Admin</option>
           </select>
         </div>
       </div>
-      {error && <p className="text-red-400 text-xs mb-2">{error}</p>}
+      {error && <p className="text-xs mb-2" style={{ color: TONES.danger.fg }}>{error}</p>}
       <div className="flex gap-2">
-        <button onClick={save} disabled={saving || !username || !password || !displayName} className="btn-primary text-xs">
+        <button onClick={save} disabled={saving || !username || !password || !displayName} className="mt-btn-gradient text-xs">
           {saving ? 'Adding...' : 'Add User'}
         </button>
-        <button onClick={onCancel} className="btn-secondary text-xs">Cancel</button>
+        <button onClick={onCancel} className="mt-btn-soft text-xs">Cancel</button>
       </div>
     </div>
   );
@@ -2125,8 +2635,8 @@ function TeamPanel() {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <p className="text-sm text-theme-faint">Manage your team and assign clients to each member</p>
-        <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2 text-sm">
+        <p className="text-sm" style={{ color: 'var(--mt-text-faint)' }}>Manage your team and assign clients to each member</p>
+        <button onClick={() => setShowAdd(true)} className="mt-btn-gradient flex items-center gap-2 text-sm">
           <UserPlus size={14} /> Add Member
         </button>
       </div>
@@ -2136,34 +2646,40 @@ function TeamPanel() {
       )}
 
       {loading ? (
-        <div className="text-center py-16">
-          <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
-        </div>
+        <LoadingSpinner />
       ) : team.length === 0 ? (
-        <div className="text-center py-16 bg-dark-700/30 rounded-2xl border border-dark-400/20">
-          <Shield size={32} className="text-theme-faint mx-auto mb-2" />
-          <p className="text-theme-muted text-sm">No team members</p>
-        </div>
+        <EmptyState icon={Shield} title="No team members" />
       ) : (
-        <div className="bg-dark-700/40 rounded-2xl border border-dark-400/20 overflow-hidden">
+        <div className="mt-card p-0 overflow-hidden">
           {team.map((member, i) => (
-            <div key={member.id} className={`flex items-center justify-between px-5 py-4 ${i < team.length - 1 ? 'border-b border-dark-400/15' : ''}`}>
+            <div
+              key={member.id}
+              className="flex items-center justify-between px-5 py-4"
+              style={{ borderBottom: i < team.length - 1 ? '1px solid var(--mt-border)' : 'none' }}
+            >
               <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                  member.is_owner ? 'bg-amber-500/10' : 'bg-purple-500/10'
-                }`}>
-                  <Shield size={17} className={member.is_owner ? 'text-amber-400' : 'text-purple-400'} />
+                <div
+                  className="w-10 h-10 rounded-xl flex items-center justify-center"
+                  style={{
+                    background: member.is_owner ? TONES.amber.soft : TONES.purple.soft,
+                    border: `1px solid ${member.is_owner ? TONES.amber.border : TONES.purple.border}`,
+                  }}
+                >
+                  <Shield size={17} style={{ color: member.is_owner ? TONES.amber.fg : TONES.purple.fg }} />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-theme-heading">{member.display_name}</span>
-                    <span className="text-[11px] font-mono text-theme-faint">@{member.username}</span>
+                    <span className="text-sm font-semibold" style={{ color: 'var(--mt-text)' }}>{member.display_name}</span>
+                    <span className="text-[11px] font-mono" style={{ color: 'var(--mt-text-faint)' }}>@{member.username}</span>
                     {member.is_owner ? (
-                      <span className="text-[10px] font-semibold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full uppercase tracking-wider">Owner</span>
+                      <span
+                        className="text-[10px] font-semibold px-2 py-0.5 rounded-full uppercase tracking-wider"
+                        style={{ background: TONES.amber.soft, color: TONES.amber.fg, border: `1px solid ${TONES.amber.border}` }}
+                      >Owner</span>
                     ) : null}
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-[11px] text-theme-faint">
+                    <span className="text-[11px]" style={{ color: 'var(--mt-text-faint)' }}>
                       {member.is_owner
                         ? 'All clients'
                         : `${member.assigned_client_count} client${member.assigned_client_count !== 1 ? 's' : ''} assigned`
@@ -2174,33 +2690,17 @@ function TeamPanel() {
               </div>
               <div className="flex items-center gap-2">
                 {!member.is_owner && (
-                  <button
-                    onClick={() => setAssignMember(member)}
-                    className="text-xs px-2.5 py-1.5 rounded-lg text-accent-400 hover:text-accent-300 bg-accent-500/10 hover:bg-accent-500/15 transition-all flex items-center gap-1"
-                  >
-                    <Building2 size={11} /> Assign Clients
-                  </button>
+                  <ToneButton icon={Building2} label="Assign Clients" tone={TONES.accent} onClick={() => setAssignMember(member)} />
                 )}
-                <button
-                  onClick={() => setResetConfirm({ id: member.id, username: member.username })}
-                  className="text-xs px-2.5 py-1.5 rounded-lg text-theme-muted hover:text-theme-secondary bg-dark-600 hover:bg-dark-500 transition-all flex items-center gap-1"
-                >
-                  <KeyRound size={11} /> Reset PW
-                </button>
+                <MutedButton icon={KeyRound} label="Reset PW" onClick={() => setResetConfirm({ id: member.id, username: member.username })} />
                 {!member.is_owner && (
-                  <button
-                    onClick={() => toggleMemberActive(member.id, member.is_active)}
-                    className={`text-xs px-2.5 py-1.5 rounded-lg font-medium transition-all ${
-                      member.is_active
-                        ? 'text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20'
-                        : 'text-red-400 bg-red-500/10 hover:bg-red-500/20'
-                    }`}
-                  >
-                    {member.is_active ? 'Active' : 'Disabled'}
-                  </button>
+                  <StatusToggleButton active={!!member.is_active} onClick={() => toggleMemberActive(member.id, member.is_active)} />
                 )}
                 {member.is_owner && (
-                  <span className="text-[11px] font-medium px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400">
+                  <span
+                    className="text-[11px] font-medium px-2.5 py-1 rounded-full"
+                    style={{ background: TONES.accent.soft, color: TONES.accent.fg }}
+                  >
                     Active
                   </span>
                 )}
@@ -2229,21 +2729,7 @@ function TeamPanel() {
 
       {/* Password Reset Result Modal */}
       {resetResult && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setResetResult(null)}>
-          <div className="bg-dark-700 rounded-2xl p-6 max-w-sm w-full mx-4 border border-dark-400/30 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center gap-2 mb-3">
-              <CheckCircle size={18} className="text-emerald-400" />
-              <h3 className="font-semibold text-theme-heading">Password Reset</h3>
-            </div>
-            <p className="text-sm text-theme-muted mb-3">New credentials for <span className="text-accent-400 font-medium">@{resetResult.username}</span></p>
-            <div className="bg-dark-800 rounded-xl p-3 font-mono text-sm text-theme-heading mb-4 flex items-center justify-between border border-dark-400/20">
-              <span>{resetResult.password}</span>
-              <button onClick={() => navigator.clipboard.writeText(resetResult.password)} className="text-theme-muted hover:text-accent-400"><Copy size={14} /></button>
-            </div>
-            <p className="text-xs text-amber-400 mb-4">Save this password — it won't be shown again</p>
-            <button onClick={() => setResetResult(null)} className="btn-primary text-sm w-full">Done</button>
-          </div>
-        </div>
+        <PasswordResultModal result={resetResult} onClose={() => setResetResult(null)} />
       )}
     </div>
   );
@@ -2289,58 +2775,80 @@ function AssignClientsModal({ member, onClose }: { member: TeamMember; onClose: 
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-dark-700 rounded-2xl p-6 max-w-md w-full mx-4 border border-dark-400/30 shadow-2xl max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
-        <h3 className="font-semibold text-theme-heading mb-1">Assign Clients</h3>
-        <p className="text-sm text-theme-faint mb-4">
-          Select which clients <span className="text-accent-400 font-medium">{member.display_name}</span> can access
+    <div
+      className="fixed inset-0 flex items-center justify-center z-50"
+      style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}
+      onClick={onClose}
+    >
+      <div
+        className="rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl max-h-[80vh] flex flex-col"
+        style={{ background: 'var(--mt-bg-raised)', border: '1px solid var(--mt-border)' }}
+        onClick={e => e.stopPropagation()}
+      >
+        <h3 className="mt-heading mb-1">Assign Clients</h3>
+        <p className="text-sm mb-4" style={{ color: 'var(--mt-text-faint)' }}>
+          Select which clients <span className="font-medium" style={{ color: 'var(--mt-accent-text)' }}>{member.display_name}</span> can access
         </p>
 
         {loading ? (
-          <div className="text-center py-8">
-            <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
-          </div>
+          <LoadingSpinner />
         ) : (
           <div className="flex-1 overflow-y-auto space-y-1 mb-4 pr-1">
             {allClients.filter(c => c.is_active).map(client => (
-              <label
+              <ClientCheckRow
                 key={client.id}
-                className={`flex items-center gap-3 px-4 py-3 rounded-xl cursor-pointer transition-all ${
-                  assignedIds.has(client.id)
-                    ? 'bg-accent-500/10 border border-accent-500/20'
-                    : 'bg-dark-600/50 border border-transparent hover:bg-dark-600'
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={assignedIds.has(client.id)}
-                  onChange={() => toggle(client.id)}
-                  className="w-4 h-4 rounded border-dark-300 text-accent-500 focus:ring-accent-500 bg-dark-800"
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-theme-heading">{client.name}</div>
-                  <div className="text-[11px] text-theme-faint font-mono">{client.slug}</div>
-                </div>
-                <span className="text-[10px] text-theme-faint">{client.user_count} users</span>
-              </label>
+                client={client}
+                selected={assignedIds.has(client.id)}
+                onToggle={() => toggle(client.id)}
+              />
             ))}
             {allClients.filter(c => c.is_active).length === 0 && (
-              <p className="text-center text-theme-faint text-sm py-4">No active clients</p>
+              <p className="text-center text-sm py-4" style={{ color: 'var(--mt-text-faint)' }}>No active clients</p>
             )}
           </div>
         )}
 
-        <div className="flex items-center justify-between pt-3 border-t border-dark-400/30">
-          <span className="text-xs text-theme-faint">{assignedIds.size} selected</span>
+        <div className="flex items-center justify-between pt-3" style={{ borderTop: '1px solid var(--mt-border)' }}>
+          <span className="text-xs" style={{ color: 'var(--mt-text-faint)' }}>{assignedIds.size} selected</span>
           <div className="flex gap-2">
-            <button onClick={onClose} className="btn-secondary text-sm">Cancel</button>
-            <button onClick={save} disabled={saving} className="btn-primary text-sm">
+            <button onClick={onClose} className="mt-btn-soft text-sm">Cancel</button>
+            <button onClick={save} disabled={saving} className="mt-btn-gradient text-sm">
               {saving ? 'Saving...' : 'Save'}
             </button>
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function ClientCheckRow({ client, selected, onToggle }: { client: Client; selected: boolean; onToggle: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <label
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="flex items-center gap-3 px-4 py-3 rounded-xl cursor-pointer transition-all"
+      style={{
+        background: selected
+          ? TONES.accent.soft
+          : hover ? 'var(--mt-bg-muted)' : 'var(--mt-bg-raised)',
+        border: '1px solid ' + (selected ? TONES.accent.border : 'var(--mt-border)'),
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={onToggle}
+        className="w-4 h-4 rounded"
+        style={{ accentColor: 'var(--mt-accent)' }}
+      />
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium" style={{ color: 'var(--mt-text)' }}>{client.name}</div>
+        <div className="text-[11px] font-mono" style={{ color: 'var(--mt-text-faint)' }}>{client.slug}</div>
+      </div>
+      <span className="text-[10px]" style={{ color: 'var(--mt-text-faint)' }}>{client.user_count} users</span>
+    </label>
   );
 }
 
@@ -2366,53 +2874,73 @@ function AddTeamMemberForm({ onAdded, onCancel }: { onAdded: () => void; onCance
 
   if (created) {
     return (
-      <div className="bg-dark-700/60 rounded-2xl p-5 mb-4 border border-accent-500/30">
+      <div
+        className="rounded-2xl p-5 mb-4"
+        style={{ background: 'var(--mt-bg-raised)', border: `1px solid ${TONES.accent.border}` }}
+      >
         <div className="flex items-center gap-3 mb-3">
-          <CheckCircle size={18} className="text-accent-400" />
-          <h4 className="text-sm font-semibold text-accent-300">Team Member Created</h4>
+          <CheckCircle size={18} style={{ color: TONES.accent.fg }} />
+          <h4 className="text-sm font-semibold" style={{ color: TONES.accent.fg }}>Team Member Created</h4>
         </div>
-        <div className="bg-dark-800 rounded-xl p-3 mb-3 border border-dark-400/20">
-          <p className="text-theme-heading font-mono text-sm">Username: <span className="text-accent-400">@{created.username}</span></p>
+        <div
+          className="rounded-xl p-3 mb-3"
+          style={{ background: 'var(--mt-bg-app)', border: '1px solid var(--mt-border)' }}
+        >
+          <p className="font-mono text-sm" style={{ color: 'var(--mt-text)' }}>
+            Username: <span style={{ color: TONES.accent.fg }}>@{created.username}</span>
+          </p>
           <div className="flex items-center justify-between mt-1">
-            <p className="text-theme-heading font-mono text-sm">Password: <span className="text-accent-400">{created.password}</span></p>
-            <button onClick={() => navigator.clipboard.writeText(created.password)} className="text-theme-muted hover:text-accent-400"><Copy size={14} /></button>
+            <p className="font-mono text-sm" style={{ color: 'var(--mt-text)' }}>
+              Password: <span style={{ color: TONES.accent.fg }}>{created.password}</span>
+            </p>
+            <button
+              onClick={() => navigator.clipboard.writeText(created.password)}
+              style={{ color: 'var(--mt-text-muted)' }}
+            >
+              <Copy size={14} />
+            </button>
           </div>
         </div>
-        <p className="text-xs text-amber-400 mb-3">Save these credentials — the password won't be shown again</p>
-        <button onClick={onAdded} className="btn-primary text-xs">Done</button>
+        <p className="text-xs mb-3" style={{ color: TONES.amber.fg }}>Save these credentials — the password won't be shown again</p>
+        <button onClick={onAdded} className="mt-btn-gradient text-xs">Done</button>
       </div>
     );
   }
 
   return (
-    <div className="bg-dark-700/60 rounded-2xl p-5 mb-4 border border-dark-400/20">
-      <h4 className="text-sm font-semibold text-theme-heading mb-3">Add Team Member</h4>
-      <p className="text-xs text-theme-faint mb-3">New team members need client assignments to access client data</p>
+    <div className="mt-card p-5 mb-4">
+      <h4 className="mt-heading text-sm mb-3">Add Team Member</h4>
+      <p className="text-xs mb-3" style={{ color: 'var(--mt-text-faint)' }}>New team members need client assignments to access client data</p>
       <div className="grid grid-cols-3 gap-3 mb-3">
         <div>
-          <label className="block text-xs font-medium text-theme-muted mb-1">Display Name</label>
-          <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="Jane Smith" className="input text-sm" />
+          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>Display Name</label>
+          <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="Jane Smith" className="mt-input text-sm" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-theme-muted mb-1">Username</label>
-          <input type="text" value={username} onChange={e => setUsername(e.target.value)} placeholder="jane" className="input text-sm font-mono" />
+          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>Username</label>
+          <input type="text" value={username} onChange={e => setUsername(e.target.value)} placeholder="jane" className="mt-input text-sm font-mono" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-theme-muted mb-1">Password</label>
+          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>Password</label>
           <div className="relative">
-            <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Strong password" className="input text-sm pr-9" />
-            <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-theme-faint hover:text-theme-secondary">
+            <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Strong password" className="mt-input text-sm pr-9" />
+            <button
+              type="button"
+              onClick={() => setShowPw(!showPw)}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2"
+              style={{ color: 'var(--mt-text-faint)' }}
+            >
               {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
           </div>
         </div>
       </div>
-      {error && <p className="text-red-400 text-xs mb-2">{error}</p>}
+      {error && <p className="text-xs mb-2" style={{ color: TONES.danger.fg }}>{error}</p>}
       <div className="flex gap-2">
-        <button onClick={save} disabled={saving || !username || !password || !displayName} className="btn-primary text-xs">
+        <button onClick={save} disabled={saving || !username || !password || !displayName} className="mt-btn-gradient text-xs">
           {saving ? 'Adding...' : 'Add Member'}
         </button>
-        <button onClick={onCancel} className="btn-secondary text-xs">Cancel</button>
+        <button onClick={onCancel} className="mt-btn-soft text-xs">Cancel</button>
       </div>
     </div>
   );

@@ -27,7 +27,10 @@ export default function StreamDetailPage() {
 
   if (loading) return (
     <div className="flex items-center justify-center py-20">
-      <div className="w-8 h-8 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto" />
+      <div
+        className="w-8 h-8 border-2 rounded-full animate-spin mx-auto"
+        style={{ borderColor: 'var(--mt-accent-soft)', borderTopColor: 'var(--mt-accent)' }}
+      />
     </div>
   );
 
@@ -47,61 +50,70 @@ export default function StreamDetailPage() {
 
   const grossProfit = (totals.total_revenue || 0) - (totals.total_costs || 0);
 
+  const kpiTones = {
+    accent: { fg: '#10b981', soft: 'color-mix(in srgb, #10b981 12%, transparent)', border: 'color-mix(in srgb, #10b981 30%, transparent)' },
+    blue:   { fg: '#3b82f6', soft: 'color-mix(in srgb, #3b82f6 12%, transparent)', border: 'color-mix(in srgb, #3b82f6 30%, transparent)' },
+    emerald:{ fg: '#059669', soft: 'color-mix(in srgb, #059669 12%, transparent)', border: 'color-mix(in srgb, #059669 30%, transparent)' },
+  };
+
+  const renderKpi = (tone: { fg: string; soft: string; border: string }, Icon: any, label: string, value: string) => (
+    <div className="mt-kpi" style={{ border: `1px solid ${tone.border}` }}>
+      <div className="flex items-center gap-3 mb-3">
+        <div
+          className="w-10 h-10 rounded-xl flex items-center justify-center"
+          style={{ background: tone.soft, boxShadow: `inset 0 0 0 1px ${tone.border}` }}
+        >
+          <Icon size={18} style={{ color: tone.fg }} />
+        </div>
+      </div>
+      <p className="mt-kpi__label">{label}</p>
+      <p className="mt-kpi__value mt-num">{value}</p>
+    </div>
+  );
+
   return (
     <div className="animate-fade-in">
-      <button onClick={() => navigate('/actuals')} className="flex items-center gap-2 text-sm text-theme-muted hover:text-accent-400 mb-5 transition-colors">
+      <button
+        onClick={() => navigate('/actuals')}
+        className="flex items-center gap-2 text-sm mb-5 transition-colors"
+        style={{ color: 'var(--mt-text-muted)' }}
+        onMouseEnter={e => { e.currentTarget.style.color = 'var(--mt-accent-text)'; }}
+        onMouseLeave={e => { e.currentTarget.style.color = 'var(--mt-text-muted)'; }}
+      >
         <ArrowLeft size={15} /> Back to Dashboard
       </button>
 
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-theme-heading">{streamName} Details</h1>
-        <p className="text-theme-faint mt-1 text-sm">Revenue and cost breakdown</p>
+        <h1 className="mt-heading text-2xl">{streamName} Details</h1>
+        <p className="mt-1 text-sm" style={{ color: 'var(--mt-text-faint)' }}>Revenue and cost breakdown</p>
       </div>
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8">
-        <div className="card border border-accent-500/20">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="p-2.5 rounded-xl bg-accent-500/10"><IndianRupee size={20} className="text-accent-400" /></div>
-          </div>
-          <p className="text-xs text-theme-faint font-medium uppercase">Total Revenue</p>
-          <p className="text-2xl font-bold text-theme-heading mt-1">{formatINR(totals.total_revenue || 0)}</p>
-        </div>
-        <div className="card border border-blue-500/20">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="p-2.5 rounded-xl bg-blue-500/10"><BarChart3 size={20} className="text-blue-400" /></div>
-          </div>
-          <p className="text-xs text-theme-faint font-medium uppercase">Direct Costs</p>
-          <p className="text-2xl font-bold text-theme-heading mt-1">{formatINR(totals.total_costs || 0)}</p>
-        </div>
-        <div className="card border border-emerald-500/20">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="p-2.5 rounded-xl bg-emerald-500/10"><TrendingUp size={20} className="text-emerald-400" /></div>
-          </div>
-          <p className="text-xs text-theme-faint font-medium uppercase">Gross Profit</p>
-          <p className="text-2xl font-bold text-theme-heading mt-1">{formatINR(grossProfit)}</p>
-        </div>
+        {renderKpi(kpiTones.accent, IndianRupee, 'Total Revenue', formatINR(totals.total_revenue || 0))}
+        {renderKpi(kpiTones.blue, BarChart3, 'Direct Costs', formatINR(totals.total_costs || 0))}
+        {renderKpi(kpiTones.emerald, TrendingUp, 'Gross Profit', formatINR(grossProfit))}
       </div>
 
       {/* Monthly Chart */}
-      <div className="card">
-        <h3 className="text-sm font-semibold text-theme-heading mb-1">Monthly Revenue</h3>
-        <p className="text-xs text-theme-faint mb-6">{streamName} revenue over time</p>
+      <div className="mt-card p-5">
+        <h3 className="mt-heading text-sm mb-1">Monthly Revenue</h3>
+        <p className="text-xs mb-6" style={{ color: 'var(--mt-text-faint)' }}>{streamName} revenue over time</p>
         {chartData.length > 0 ? (
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" vertical={false} />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-              <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--mt-border)" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--mt-text-faint)' }} axisLine={false} tickLine={false} />
+              <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 11, fill: 'var(--mt-text-faint)' }} axisLine={false} tickLine={false} />
               <Tooltip
                 formatter={(v: number) => formatINR(v)}
-                contentStyle={{ backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '12px' }}
+                contentStyle={{ backgroundColor: 'var(--mt-bg-raised)', border: '1px solid var(--mt-border)', borderRadius: '12px' }}
               />
               <Bar dataKey="total" name="Revenue" fill="#10b981" radius={[6, 6, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <div className="flex items-center justify-center h-[300px] text-theme-faint">
+          <div className="flex items-center justify-center h-[300px]" style={{ color: 'var(--mt-text-faint)' }}>
             <div className="text-center">
               <Activity size={32} className="mx-auto mb-2" />
               <p className="text-sm">No data imported yet</p>

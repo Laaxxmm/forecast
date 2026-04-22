@@ -23,53 +23,58 @@ const BAR_COLORS = ['#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#10b981'];
 function KPICard({ title, value, subtitle, icon: Icon, trend, color = 'accent', onClick }: {
   title: string; value: string; subtitle?: string; icon: any; trend?: number; color?: string; onClick?: () => void;
 }) {
-  const colorMap: Record<string, { gradient: string; iconColor: string; ring: string }> = {
+  const iconTone: Record<string, { bg: string; fg: string; ring: string }> = {
     accent: {
-      gradient: 'from-accent-500/20 to-accent-500/5',
-      iconColor: 'text-accent-500 dark:text-accent-400',
-      ring: 'ring-accent-500/15',
+      bg: 'color-mix(in srgb, #10b981 14%, transparent)',
+      fg: '#10b981',
+      ring: 'color-mix(in srgb, #10b981 30%, transparent)',
     },
     blue: {
-      gradient: 'from-blue-500/20 to-blue-500/5',
-      iconColor: 'text-blue-600 dark:text-blue-400',
-      ring: 'ring-blue-500/15',
+      bg: 'color-mix(in srgb, #3b82f6 14%, transparent)',
+      fg: '#3b82f6',
+      ring: 'color-mix(in srgb, #3b82f6 30%, transparent)',
     },
     purple: {
-      gradient: 'from-purple-500/20 to-purple-500/5',
-      iconColor: 'text-purple-600 dark:text-purple-400',
-      ring: 'ring-purple-500/15',
+      bg: 'color-mix(in srgb, #8b5cf6 14%, transparent)',
+      fg: '#8b5cf6',
+      ring: 'color-mix(in srgb, #8b5cf6 30%, transparent)',
     },
     amber: {
-      gradient: 'from-amber-500/20 to-amber-500/5',
-      iconColor: 'text-amber-600 dark:text-amber-400',
-      ring: 'ring-amber-500/15',
+      bg: 'color-mix(in srgb, #f59e0b 14%, transparent)',
+      fg: '#f59e0b',
+      ring: 'color-mix(in srgb, #f59e0b 30%, transparent)',
     },
   };
-  const c = colorMap[color] || colorMap.accent;
+  const tone = iconTone[color] || iconTone.accent;
+  const trendPositive = trend !== undefined && trend >= 0;
 
   return (
     <div
-      className={`card-elevated group ${onClick ? 'cursor-pointer' : ''}`}
+      className={`mt-kpi group ${onClick ? 'cursor-pointer' : ''}`}
       onClick={onClick}
     >
-      <div className="flex items-start justify-between mb-4">
-        <div className={`p-2.5 rounded-xl bg-gradient-to-br ${c.gradient} ring-1 ${c.ring} transition-transform duration-200 group-hover:scale-105`}>
-          <Icon size={20} className={c.iconColor} />
+      <div className="flex items-start justify-between mb-3">
+        <div
+          className="w-10 h-10 rounded-xl flex items-center justify-center transition-transform duration-200 group-hover:scale-[1.04]"
+          style={{
+            background: tone.bg,
+            boxShadow: `inset 0 0 0 1px ${tone.ring}`,
+          }}
+        >
+          <Icon size={18} style={{ color: tone.fg }} />
         </div>
         {trend !== undefined && (
-          <div className={`flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-lg ring-1 ${
-            trend >= 0
-              ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 ring-emerald-500/20'
-              : 'text-red-600 dark:text-red-400 bg-red-500/10 ring-red-500/20'
-          }`}>
-            {trend >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-            {trend >= 0 ? '+' : ''}{trend.toFixed(1)}%
-          </div>
+          <span
+            className={`mt-pill ${trendPositive ? 'mt-pill--success' : 'mt-pill--danger'}`}
+          >
+            {trendPositive ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+            {trendPositive ? '+' : ''}{trend.toFixed(1)}%
+          </span>
         )}
       </div>
-      <p className="text-[11px] text-theme-faint font-semibold uppercase tracking-[0.08em]">{title}</p>
-      <p className="text-2xl font-bold text-theme-heading mt-1.5 tracking-tight">{value}</p>
-      {subtitle && <p className="text-xs text-theme-faint mt-2">{subtitle}</p>}
+      <p className="mt-kpi__label">{title}</p>
+      <p className="mt-kpi__value">{value}</p>
+      {subtitle && <p className="mt-kpi__sub">{subtitle}</p>}
     </div>
   );
 }
@@ -122,16 +127,22 @@ export default function DashboardPage() {
   if (loading) return (
     <div className="flex items-center justify-center py-20">
       <div className="text-center">
-        <div className="w-8 h-8 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto mb-3" />
-        <span className="text-theme-faint text-sm">Loading dashboard...</span>
+        <div
+          className="w-8 h-8 border-2 rounded-full animate-spin mx-auto mb-3"
+          style={{
+            borderColor: 'var(--mt-accent-soft)',
+            borderTopColor: 'var(--mt-accent)',
+          }}
+        />
+        <span className="text-sm" style={{ color: 'var(--mt-text-faint)' }}>Loading dashboard...</span>
       </div>
     </div>
   );
 
   if (!data) return (
     <div className="text-center py-20">
-      <Activity size={40} className="mx-auto text-theme-faint mb-3" />
-      <span className="text-theme-faint">No data available</span>
+      <Activity size={40} className="mx-auto mb-3" style={{ color: 'var(--mt-text-faint)' }} />
+      <span style={{ color: 'var(--mt-text-faint)' }}>No data available</span>
     </div>
   );
 
@@ -208,8 +219,8 @@ export default function DashboardPage() {
     <div className="animate-fade-in">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-theme-heading">Actuals</h1>
-          <p className="text-theme-faint mt-1 text-sm">
+          <h1 className="mt-heading text-2xl">Actuals</h1>
+          <p className="mt-1 text-sm" style={{ color: 'var(--mt-text-faint)' }}>
             {activeStreamName
               ? `${activeStreamName} \u2014 ${currentPeriod?.label || data.fy?.label || 'All Time'}`
               : `${currentPeriod?.label || data.fy?.label || 'All Time'} Overview`}
@@ -220,7 +231,8 @@ export default function DashboardPage() {
             data-tour="period-filter"
             value={selectedPeriod}
             onChange={e => setSelectedPeriod(e.target.value)}
-            className="input text-sm py-2 w-64"
+            className="mt-input"
+            style={{ width: '16rem', padding: '8px 12px' }}
           >
             {periodOptions.map(p => (
               <option key={p.value} value={p.value}>{p.label}</option>
@@ -285,8 +297,16 @@ export default function DashboardPage() {
                 );
               })}
               {streams.length === 0 && (
-                <div className="card border border-dashed border-slate-700 flex items-center justify-center">
-                  <p className="text-sm text-theme-faint text-center">Configure revenue streams in Admin Panel</p>
+                <div
+                  className="flex items-center justify-center p-6 rounded-2xl"
+                  style={{
+                    border: '1px dashed var(--mt-border)',
+                    background: 'var(--mt-bg-muted)',
+                  }}
+                >
+                  <p className="text-sm text-center" style={{ color: 'var(--mt-text-faint)' }}>
+                    Configure revenue streams in Admin Panel
+                  </p>
                 </div>
               )}
             </>
@@ -298,21 +318,28 @@ export default function DashboardPage() {
       {!isClinicStream && !isPharmaStream && (showTrend || showPie) && (
         <div className={`grid grid-cols-1 ${showTrend && showPie ? 'lg:grid-cols-3' : ''} gap-5 mb-6`}>
           {showTrend && (
-            <div className={`card ${showPie ? 'lg:col-span-2' : ''}`}>
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Monthly Revenue Trend</h3>
-              <p className="text-xs text-theme-faint mb-6">Revenue breakdown by stream</p>
+            <div className={`mt-card p-5 ${showPie ? 'lg:col-span-2' : ''}`}>
+              <h3 className="mt-heading text-sm mb-1">Monthly Revenue Trend</h3>
+              <p className="text-xs mb-6" style={{ color: 'var(--mt-text-faint)' }}>
+                Revenue breakdown by stream
+              </p>
               {trendData.length > 0 ? (
                 <ResponsiveContainer width="100%" height={300}>
                   <BarChart data={trendData} barGap={2}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" vertical={false} />
-                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                    <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--mt-border)" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--mt-text-faint)' }} axisLine={false} tickLine={false} />
+                    <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 11, fill: 'var(--mt-text-faint)' }} axisLine={false} tickLine={false} />
                     <Tooltip
                       formatter={(v: number) => formatINR(v)}
-                      contentStyle={{ backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '12px' }}
-                      labelStyle={{ color: '#94a3b8' }}
+                      contentStyle={{
+                        backgroundColor: 'var(--mt-bg-raised)',
+                        border: '1px solid var(--mt-border)',
+                        borderRadius: '12px',
+                        color: 'var(--mt-text-primary)',
+                      }}
+                      labelStyle={{ color: 'var(--mt-text-muted)' }}
                     />
-                    <Legend />
+                    <Legend wrapperStyle={{ color: 'var(--mt-text-muted)', fontSize: 12 }} />
                     {chartStreams.map((stream: any, i: number) => {
                       const key = stream.name.toLowerCase().replace(/\s+/g, '_');
                       return (
@@ -322,7 +349,7 @@ export default function DashboardPage() {
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="flex items-center justify-center h-[300px] text-theme-faint">
+                <div className="flex items-center justify-center h-[300px]" style={{ color: 'var(--mt-text-faint)' }}>
                   <div className="text-center">
                     <Activity size={32} className="mx-auto mb-2" />
                     <p className="text-sm">Import data to see trends</p>
@@ -333,9 +360,9 @@ export default function DashboardPage() {
           )}
 
           {showPie && (
-            <div className="card">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Revenue Split</h3>
-              <p className="text-xs text-theme-faint mb-6">By stream</p>
+            <div className="mt-card p-5">
+              <h3 className="mt-heading text-sm mb-1">Revenue Split</h3>
+              <p className="text-xs mb-6" style={{ color: 'var(--mt-text-faint)' }}>By stream</p>
               {pieData.length > 0 ? (
                 <ResponsiveContainer width="100%" height={300}>
                   <PieChart>
@@ -353,12 +380,17 @@ export default function DashboardPage() {
                     </Pie>
                     <Tooltip
                       formatter={(v: number) => formatINR(v)}
-                      contentStyle={{ backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '12px' }}
+                      contentStyle={{
+                        backgroundColor: 'var(--mt-bg-raised)',
+                        border: '1px solid var(--mt-border)',
+                        borderRadius: '12px',
+                        color: 'var(--mt-text-primary)',
+                      }}
                     />
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="flex items-center justify-center h-[300px] text-theme-faint">
+                <div className="flex items-center justify-center h-[300px]" style={{ color: 'var(--mt-text-faint)' }}>
                   <p className="text-sm">No data</p>
                 </div>
               )}

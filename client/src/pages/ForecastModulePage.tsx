@@ -10,7 +10,7 @@ import CashFlowReport from '../components/forecast/CashFlowReport';
 import CategoryMappingEditor from '../components/forecast/CategoryMappingEditor';
 import BudgetVsActualReport from '../components/forecast/BudgetVsActualReport';
 import {
-  BarChart3, Table2, FileText, Building2, Banknote, ChevronLeft, ChevronRight, Calendar, Download, Printer, FileDown, Settings, TrendingUp
+  BarChart3, Table2, FileText, Building2, Banknote, ChevronLeft, ChevronRight, Calendar, Printer, FileDown, Settings, TrendingUp
 } from 'lucide-react';
 import DownloadPrintPanel from '../components/forecast/DownloadPrintPanel';
 import { exportAllItemsCSV } from '../components/forecast/csvExport';
@@ -153,20 +153,17 @@ export default function ForecastModulePage() {
   return (
     <div className="forecast-module animate-fade-in">
       {/* Top Navigation Tabs */}
-      <div className="bg-dark-800 border-b border-dark-400/30 -mx-4 -mt-4 px-4 md:-mx-8 md:-mt-8 md:px-8 mb-0">
+      <div
+        className="-mx-4 -mt-4 px-4 md:-mx-8 md:-mt-8 md:px-8 mb-0"
+        style={{ background: 'var(--mt-bg-raised)', borderBottom: '1px solid var(--mt-border)' }}
+      >
         <div className="flex flex-col md:flex-row md:items-center md:justify-between">
           <div data-tour="forecast-tabs" className="flex overflow-x-auto scrollbar-hide">
             {topTabs.map(tab => (
               <NavLink
                 key={tab.path}
                 to={`/forecast/${tab.path}`}
-                className={({ isActive }) =>
-                  `flex items-center gap-1.5 md:gap-2 px-3 md:px-5 py-3 md:py-4 text-xs md:text-[13px] font-medium border-b-2 transition-all whitespace-nowrap ${
-                    isActive
-                      ? 'border-accent-500 text-accent-400'
-                      : 'border-transparent text-theme-faint hover:text-theme-secondary hover:border-dark-300'
-                  }`
-                }
+                className={({ isActive }) => `mt-tab${isActive ? ' mt-tab--active' : ''}`}
               >
                 <tab.icon size={15} />
                 {tab.label}
@@ -175,26 +172,22 @@ export default function ForecastModulePage() {
           </div>
           <div className="flex items-center gap-2 md:gap-3 pb-2 md:pb-0 px-1 md:px-0 flex-shrink-0">
             {isConsolidated && (
-              <span className="text-xs font-medium text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-lg">
-                Consolidated View (Read-only)
-              </span>
+              <span className="mt-pill mt-pill--warn">Consolidated View (Read-only)</span>
             )}
             {streamName && !isAllStreams && (
-              <span className="text-xs font-medium text-accent-400 bg-accent-500/10 px-2.5 py-1 rounded-lg">
-                {streamName}
-              </span>
+              <span className="mt-pill mt-pill--success">{streamName}</span>
             )}
             <button
               data-tour="print-button"
               onClick={() => setShowDownloadPanel(true)}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-theme-muted hover:text-accent-400 hover:bg-accent-500/10 rounded-xl transition-all"
+              className="mt-btn-ghost"
               title="Download & Print Reports"
             >
-              <Printer size={16} />
+              <Printer size={15} />
               <span className="hidden lg:inline">Print</span>
             </button>
             {!isConsolidated && <>
-            <div className="h-6 w-px bg-dark-400" />
+            <div style={{ height: 24, width: 1, background: 'var(--mt-border)' }} />
             <select
               data-tour="scenario-select"
               value={scenario?.id || ''}
@@ -202,7 +195,8 @@ export default function ForecastModulePage() {
                 const s = scenarios.find(sc => sc.id === Number(e.target.value));
                 if (s) setScenario(s);
               }}
-              className="input text-xs md:text-sm py-1 md:py-1.5 w-32 md:w-48"
+              className="mt-input"
+              style={{ padding: '6px 10px', fontSize: 12, width: '12rem' }}
             >
               {scenarios.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
@@ -214,7 +208,8 @@ export default function ForecastModulePage() {
                 const fy = fys.find(f => f.id === Number(e.target.value));
                 if (fy) setSelectedFY(fy);
               }}
-              className="input text-xs md:text-sm py-1 md:py-1.5 w-28 md:w-36"
+              className="mt-input"
+              style={{ padding: '6px 10px', fontSize: 12, width: '9rem' }}
             >
               {fys.map(fy => <option key={fy.id} value={fy.id}>{fy.label}</option>)}
             </select>
@@ -223,16 +218,38 @@ export default function ForecastModulePage() {
       </div>
 
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 py-3 border-b border-dark-400/30 -mx-4 px-4 md:-mx-8 md:px-8 bg-dark-800/50">
+      <div
+        className="flex flex-wrap items-center justify-between gap-2 py-3 -mx-4 px-4 md:-mx-8 md:px-8"
+        style={{
+          background: 'var(--mt-bg-surface)',
+          borderBottom: '1px solid var(--mt-border)',
+        }}
+      >
         <div className="flex items-center gap-2">
-          <div data-tour="view-mode" className="flex bg-dark-700 border border-dark-400/50 rounded-xl overflow-hidden">
+          <div
+            data-tour="view-mode"
+            className="flex overflow-hidden"
+            style={{
+              background: 'var(--mt-bg-raised)',
+              border: '1px solid var(--mt-border)',
+              borderRadius: 10,
+            }}
+          >
             <button
               onClick={() => setViewMode('yearly')}
-              className={`px-3 py-1.5 text-xs font-medium transition-all ${viewMode === 'yearly' ? 'bg-accent-500/15 text-accent-400' : 'text-theme-faint hover:text-theme-secondary'}`}
+              className="px-3 py-1.5 text-xs font-medium transition-colors"
+              style={{
+                color: viewMode === 'yearly' ? 'var(--mt-accent-text)' : 'var(--mt-text-faint)',
+                background: viewMode === 'yearly' ? 'var(--mt-accent-soft)' : 'transparent',
+              }}
             >Yearly</button>
             <button
               onClick={() => setViewMode('monthly')}
-              className={`px-3 py-1.5 text-xs font-medium transition-all ${viewMode === 'monthly' ? 'bg-accent-500/15 text-accent-400' : 'text-theme-faint hover:text-theme-secondary'}`}
+              className="px-3 py-1.5 text-xs font-medium transition-colors"
+              style={{
+                color: viewMode === 'monthly' ? 'var(--mt-accent-text)' : 'var(--mt-text-faint)',
+                background: viewMode === 'monthly' ? 'var(--mt-accent-soft)' : 'transparent',
+              }}
             >Monthly</button>
           </div>
           <div className="flex items-center gap-1 ml-3">
@@ -242,15 +259,16 @@ export default function ForecastModulePage() {
                 if (idx > 0) setSelectedFY(fys[idx - 1]);
               }}
               disabled={!selectedFY || fys.findIndex(f => f.id === selectedFY.id) <= 0}
-              className="p-1.5 hover:bg-dark-600 rounded-lg text-theme-faint transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              className="p-1.5 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ color: 'var(--mt-text-faint)' }}
               title="Previous fiscal year"
               aria-label="Previous fiscal year"
             >
               <ChevronLeft size={14} />
             </button>
-            <div className="flex items-center gap-1 px-2 text-sm text-theme-muted" title="Current fiscal year">
+            <div className="flex items-center gap-1 px-2 text-sm" style={{ color: 'var(--mt-text-muted)' }} title="Current fiscal year">
               <Calendar size={14} />
-              <span className="font-medium">{currentYear}-{String(currentYear + 1).slice(-2)}</span>
+              <span className="font-medium mt-num">{currentYear}-{String(currentYear + 1).slice(-2)}</span>
             </div>
             <button
               onClick={() => {
@@ -258,7 +276,8 @@ export default function ForecastModulePage() {
                 if (idx >= 0 && idx < fys.length - 1) setSelectedFY(fys[idx + 1]);
               }}
               disabled={!selectedFY || fys.findIndex(f => f.id === selectedFY.id) >= fys.length - 1}
-              className="p-1.5 hover:bg-dark-600 rounded-lg text-theme-faint transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              className="p-1.5 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ color: 'var(--mt-text-faint)' }}
               title="Next fiscal year"
               aria-label="Next fiscal year"
             >
@@ -267,14 +286,15 @@ export default function ForecastModulePage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="badge-warning text-[10px]">In Progress</span>
+          <span className="mt-pill mt-pill--warn">In Progress</span>
           <button
             onClick={() => exportAllItemsCSV(items, allValues, months, viewMode)}
-            className="flex items-center gap-1 px-2 py-1.5 hover:bg-dark-600 rounded-lg text-theme-faint hover:text-theme-secondary transition-colors"
+            className="mt-btn-ghost"
+            style={{ padding: '6px 10px', fontSize: 12 }}
             title="Download table as CSV"
           >
             <FileDown size={14} />
-            <span className="text-xs font-medium hidden sm:inline">CSV</span>
+            <span className="hidden sm:inline">CSV</span>
           </button>
         </div>
       </div>

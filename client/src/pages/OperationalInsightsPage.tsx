@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import api from '../api/client';
-import { formatINR, formatNumber, ragColor } from '../utils/format';
+import { formatINR, formatNumber } from '../utils/format';
 import {
-  Activity, TrendingUp, TrendingDown, Users, ShoppingBag, Target,
+  Activity, Users, ShoppingBag,
   AlertTriangle, Info, ArrowUp, ArrowDown, Minus, Download,
 } from 'lucide-react';
 import InsightDownloadPanel from '../components/dashboard/InsightDownloadPanel';
@@ -30,8 +30,33 @@ interface InsightsData {
   actions: { severity: string; stream: string; message: string }[];
 }
 
-const RAG_DOT: Record<string, string> = {
-  GREEN: 'bg-emerald-400', AMBER: 'bg-amber-400', RED: 'bg-red-400', GREY: 'bg-zinc-500',
+// Tone helpers
+type Tone = { fg: string; soft: string; border: string };
+const tone = (hex: string): Tone => ({
+  fg: hex,
+  soft: `color-mix(in srgb, ${hex} 14%, transparent)`,
+  border: `color-mix(in srgb, ${hex} 32%, transparent)`,
+});
+const TONES: Record<string, Tone> = {
+  accent: tone('#10b981'),
+  blue:   tone('#3b82f6'),
+  amber:  tone('#f59e0b'),
+  danger: tone('#ef4444'),
+};
+
+// RAG → tone mapping
+const RAG_TONE: Record<string, Tone> = {
+  GREEN: TONES.accent,
+  AMBER: TONES.amber,
+  RED:   TONES.danger,
+  GREY:  { fg: 'var(--mt-text-muted)', soft: 'var(--mt-bg-muted)', border: 'var(--mt-border)' },
+};
+
+const RAG_LABEL: Record<string, string> = {
+  GREEN: 'On Track',
+  AMBER: 'Needs Attention',
+  RED:   'Behind Target',
+  GREY:  'No Target',
 };
 
 function fmtVal(v: number, unit: string) {
@@ -44,8 +69,12 @@ function TrendBadge({ current, previous }: { current: number; previous: number }
   if (!previous || !current) return null;
   const pct = ((current - previous) / previous) * 100;
   const up = pct >= 0;
+  const t = up ? TONES.accent : TONES.danger;
   return (
-    <span className={`inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded ${up ? 'text-emerald-400 bg-emerald-500/10' : 'text-red-400 bg-red-500/10'}`}>
+    <span
+      className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded"
+      style={{ background: t.soft, color: t.fg, border: `1px solid ${t.border}` }}
+    >
       {up ? <ArrowUp size={10} /> : <ArrowDown size={10} />}
       {Math.abs(Math.round(pct))}%
     </span>
@@ -57,11 +86,36 @@ function VariationBadge({ actual, forecast }: { actual: number; forecast: number
   const diff = actual - forecast;
   const pct = (diff / forecast) * 100;
   const positive = diff >= 0;
+  const t = positive ? TONES.accent : TONES.danger;
   return (
-    <span className={`inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded ${positive ? 'text-emerald-400 bg-emerald-500/10' : 'text-red-400 bg-red-500/10'}`}>
+    <span
+      className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded"
+      style={{ background: t.soft, color: t.fg, border: `1px solid ${t.border}` }}
+    >
       {positive ? <ArrowUp size={10} /> : <ArrowDown size={10} />}
       {Math.abs(Math.round(pct * 10) / 10)}%
     </span>
+  );
+}
+
+function DownloadButton({ onClick }: { onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
+      style={{
+        background: hover ? 'var(--mt-bg-muted)' : 'var(--mt-bg-raised)',
+        color: hover ? 'var(--mt-text-primary)' : 'var(--mt-text-secondary)',
+        border: '1px solid var(--mt-border)',
+      }}
+      title="Download operational insight report"
+    >
+      <Download size={14} />
+      <span className="hidden sm:inline">Download Insight</span>
+    </button>
   );
 }
 
@@ -79,42 +133,57 @@ export default function OperationalInsightsPage() {
 
   if (loading) return (
     <div className="flex items-center justify-center py-20">
-      <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin" />
+      <div
+        className="w-6 h-6 rounded-full animate-spin"
+        style={{
+          border: '2px solid color-mix(in srgb, var(--mt-accent) 30%, transparent)',
+          borderTopColor: 'var(--mt-accent)',
+        }}
+      />
     </div>
   );
 
   if (!data || data.streams.length === 0) return (
-    <div className="p-6 text-center text-theme-muted">No data available. Import actuals to see insights.</div>
+    <div className="p-6 text-center text-sm" style={{ color: 'var(--mt-text-muted)' }}>
+      No data available. Import actuals to see insights.
+    </div>
   );
 
   const { streams, combined, actions, daysElapsed, daysInMonth, daysRemaining } = data;
   const dailyTargetLine = combined.targetRevenue > 0 ? Math.round(combined.targetRevenue / daysInMonth) : 0;
+  const ragTone = RAG_TONE[combined.rag] || RAG_TONE.GREY;
 
   return (
-    <div className="p-4 md:p-6 space-y-5 max-w-[1400px] mx-auto">
+    <div className="p-4 md:p-6 space-y-5 max-w-[1400px] mx-auto animate-fade-in">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
-          <h1 className="text-lg font-bold text-theme-primary flex items-center gap-2">
-            <Activity size={20} className="text-accent-400" />
+          <h1
+            className="mt-heading text-lg flex items-center gap-2"
+            style={{ color: 'var(--mt-text-heading)' }}
+          >
+            <Activity size={20} style={{ color: 'var(--mt-accent)' }} />
             Operational Insights
           </h1>
-          <p className="text-xs text-theme-muted mt-0.5">
+          <p className="text-xs mt-0.5" style={{ color: 'var(--mt-text-muted)' }}>
             {data.monthLabel} &middot; Day {daysElapsed} of {daysInMonth} &middot; {daysRemaining} days remaining
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setDownloadOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-dark-600 hover:bg-dark-500 text-theme-secondary border border-dark-400/50 transition-colors"
-            title="Download operational insight report"
+          <DownloadButton onClick={() => setDownloadOpen(true)} />
+          <div
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold"
+            style={{
+              background: ragTone.soft,
+              color: ragTone.fg,
+              border: `1px solid ${ragTone.border}`,
+            }}
           >
-            <Download size={14} />
-            <span className="hidden sm:inline">Download Insight</span>
-          </button>
-          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold ${ragColor(combined.rag)}`}>
-            <span className={`w-2 h-2 rounded-full ${RAG_DOT[combined.rag]}`} />
-            {combined.rag === 'GREEN' ? 'On Track' : combined.rag === 'AMBER' ? 'Needs Attention' : combined.rag === 'RED' ? 'Behind Target' : 'No Target'}
+            <span
+              className="w-2 h-2 rounded-full"
+              style={{ background: ragTone.fg, boxShadow: `0 0 6px ${ragTone.fg}` }}
+            />
+            {RAG_LABEL[combined.rag] || 'No Target'}
           </div>
         </div>
       </div>
@@ -128,31 +197,44 @@ export default function OperationalInsightsPage() {
 
       {/* Combined Overview Bar */}
       {combined.targetRevenue > 0 && (
-        <div className="card p-4">
+        <div className="mt-card p-4">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-theme-muted">Combined Revenue Progress</span>
-            <span className="text-xs text-theme-faint">
+            <span className="text-xs font-medium" style={{ color: 'var(--mt-text-muted)' }}>
+              Combined Revenue Progress
+            </span>
+            <span className="text-xs mt-num" style={{ color: 'var(--mt-text-faint)' }}>
               {formatINR(combined.mtdRevenue)} / {formatINR(combined.targetRevenue)}
             </span>
           </div>
-          <div className="relative h-5 bg-dark-600 rounded-full overflow-hidden">
-            {/* Actual fill */}
+          <div
+            className="relative h-5 rounded-full overflow-hidden"
+            style={{ background: 'var(--mt-bg-muted)' }}
+          >
             <div
-              className="absolute inset-y-0 left-0 bg-accent-500/70 rounded-full transition-all"
-              style={{ width: `${Math.min((combined.mtdRevenue / combined.targetRevenue) * 100, 100)}%` }}
+              className="absolute inset-y-0 left-0 rounded-full transition-all"
+              style={{
+                width: `${Math.min((combined.mtdRevenue / combined.targetRevenue) * 100, 100)}%`,
+                background: `linear-gradient(90deg, ${TONES.accent.fg}, ${TONES.accent.fg}dd)`,
+              }}
             />
-            {/* Projected marker */}
             {combined.projectedRevenue > 0 && (
               <div
-                className="absolute top-0 bottom-0 w-0.5 bg-white/60"
-                style={{ left: `${Math.min((combined.projectedRevenue / combined.targetRevenue) * 100, 100)}%` }}
+                className="absolute top-0 bottom-0 w-0.5"
+                style={{
+                  left: `${Math.min((combined.projectedRevenue / combined.targetRevenue) * 100, 100)}%`,
+                  background: 'var(--mt-text-heading)',
+                  opacity: 0.55,
+                }}
                 title={`Projected: ${formatINR(combined.projectedRevenue)}`}
               />
             )}
           </div>
-          <div className="flex justify-between mt-1.5 text-[10px] text-theme-faint">
+          <div className="flex justify-between mt-1.5 text-[10px] mt-num" style={{ color: 'var(--mt-text-faint)' }}>
             <span>MTD: {Math.round((combined.mtdRevenue / combined.targetRevenue) * 100)}%</span>
-            <span>Projected: {formatINR(combined.projectedRevenue)} ({Math.round((combined.projectedRevenue / combined.targetRevenue) * 100)}%)</span>
+            <span>
+              Projected: {formatINR(combined.projectedRevenue)} (
+              {Math.round((combined.projectedRevenue / combined.targetRevenue) * 100)}%)
+            </span>
           </div>
         </div>
       )}
@@ -168,17 +250,27 @@ export default function OperationalInsightsPage() {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             {clinicCats.map(cat => (
               <div key={cat} className="space-y-2">
-                <div className="text-[11px] font-semibold text-theme-muted uppercase tracking-wider">{cat}</div>
+                <div
+                  className="text-[11px] font-semibold uppercase tracking-wider"
+                  style={{ color: 'var(--mt-text-muted)' }}
+                >
+                  {cat}
+                </div>
                 {clinicStream!.cards.filter(c => c.category === cat).map(card => (
-                  <PaceCard key={card.label} card={card} daysInMonth={daysInMonth} daysElapsed={daysElapsed} daysRemaining={daysRemaining} />
+                  <PaceCard key={card.label} card={card} />
                 ))}
               </div>
             ))}
             {pharmacyStream && (
               <div className="space-y-2">
-                <div className="text-[11px] font-semibold text-theme-muted uppercase tracking-wider">Pharmacy</div>
+                <div
+                  className="text-[11px] font-semibold uppercase tracking-wider"
+                  style={{ color: 'var(--mt-text-muted)' }}
+                >
+                  Pharmacy
+                </div>
                 {pharmacyStream.cards.map(card => (
-                  <PaceCard key={card.label} card={card} daysInMonth={daysInMonth} daysElapsed={daysElapsed} daysRemaining={daysRemaining} />
+                  <PaceCard key={card.label} card={card} />
                 ))}
               </div>
             )}
@@ -188,45 +280,60 @@ export default function OperationalInsightsPage() {
 
       {/* Per-stream Weekly + Chart */}
       {streams.map(stream => (
-        <StreamSection key={stream.streamId} stream={stream} daysInMonth={daysInMonth} daysElapsed={daysElapsed} daysRemaining={daysRemaining} dailyTargetLine={dailyTargetLine} />
+        <StreamSection
+          key={stream.streamId}
+          stream={stream}
+          dailyTargetLine={dailyTargetLine}
+        />
       ))}
 
       {/* Action Items */}
       {actions.length > 0 && (
         <div className="space-y-2">
-          <h2 className="text-sm font-semibold text-theme-primary">Action Items</h2>
-          {actions.map((a, i) => (
-            <div key={i} className={`flex items-start gap-2.5 px-3 py-2.5 rounded-lg border text-xs ${
-              a.severity === 'RED' ? 'bg-red-500/5 border-red-500/20 text-red-300' :
-              a.severity === 'AMBER' ? 'bg-amber-500/5 border-amber-500/20 text-amber-300' :
-              'bg-blue-500/5 border-blue-500/20 text-blue-300'
-            }`}>
-              {a.severity === 'RED' ? <AlertTriangle size={14} className="mt-0.5 shrink-0" /> :
-               a.severity === 'AMBER' ? <AlertTriangle size={14} className="mt-0.5 shrink-0" /> :
-               <Info size={14} className="mt-0.5 shrink-0" />}
-              <span>{a.message}</span>
-            </div>
-          ))}
+          <h2 className="mt-heading text-sm" style={{ color: 'var(--mt-text-heading)' }}>Action Items</h2>
+          {actions.map((a, i) => {
+            const t =
+              a.severity === 'RED' ? TONES.danger :
+              a.severity === 'AMBER' ? TONES.amber :
+              TONES.blue;
+            const Icon = a.severity === 'RED' || a.severity === 'AMBER' ? AlertTriangle : Info;
+            return (
+              <div
+                key={i}
+                className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg text-xs"
+                style={{
+                  background: t.soft,
+                  border: `1px solid ${t.border}`,
+                  color: t.fg,
+                }}
+              >
+                <Icon size={14} className="mt-0.5 shrink-0" />
+                <span>{a.message}</span>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
 
-function StreamSection({ stream, daysInMonth, daysElapsed, daysRemaining, dailyTargetLine }: {
-  stream: StreamData; daysInMonth: number; daysElapsed: number; daysRemaining: number; dailyTargetLine: number;
+function StreamSection({ stream, dailyTargetLine }: {
+  stream: StreamData; dailyTargetLine: number;
 }) {
   const isClinic = stream.name.toLowerCase().includes('clinic');
   const StreamIcon = isClinic ? Users : ShoppingBag;
 
   return (
     <div className="space-y-3">
-      <h2 className="text-sm font-semibold text-theme-primary flex items-center gap-2">
-        <StreamIcon size={16} className="text-accent-400" />
+      <h2
+        className="mt-heading text-sm flex items-center gap-2"
+        style={{ color: 'var(--mt-text-heading)' }}
+      >
+        <StreamIcon size={16} style={{ color: 'var(--mt-accent)' }} />
         {stream.name}
       </h2>
 
-      {/* Weekly + Chart Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <WeeklyComparison stream={stream} isClinic={isClinic} />
         <DailyChart stream={stream} isClinic={isClinic} dailyTargetLine={dailyTargetLine} />
@@ -235,60 +342,96 @@ function StreamSection({ stream, daysInMonth, daysElapsed, daysRemaining, dailyT
   );
 }
 
-function PaceCard({ card, daysInMonth, daysElapsed, daysRemaining }: {
-  card: CardData; daysInMonth: number; daysElapsed: number; daysRemaining: number;
-}) {
+function PaceCard({ card }: { card: CardData }) {
   const pct = card.target > 0 ? (card.mtd / card.target) * 100 : 0;
   const gapPositive = card.requiredRate <= card.dailyRate;
+  const ragTone = RAG_TONE[card.rag] || RAG_TONE.GREY;
 
   return (
-    <div className="card p-3 space-y-2">
+    <div className="mt-card p-3 space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-[11px] font-medium text-theme-muted uppercase tracking-wider">{card.label}</span>
-        {card.rag !== 'GREY' && <span className={`w-2 h-2 rounded-full ${RAG_DOT[card.rag]}`} />}
-        {card.rag === 'GREY' && card.lastMonthMtd > 0 && <TrendBadge current={card.mtd} previous={card.lastMonthMtd} />}
+        <span
+          className="text-[11px] font-medium uppercase tracking-wider"
+          style={{ color: 'var(--mt-text-muted)' }}
+        >
+          {card.label}
+        </span>
+        {card.rag !== 'GREY' && (
+          <span
+            className="w-2 h-2 rounded-full"
+            style={{ background: ragTone.fg, boxShadow: `0 0 6px ${ragTone.fg}` }}
+          />
+        )}
+        {card.rag === 'GREY' && card.lastMonthMtd > 0 && (
+          <TrendBadge current={card.mtd} previous={card.lastMonthMtd} />
+        )}
       </div>
-      <div className="text-xl font-bold text-theme-primary">{fmtVal(card.mtd, card.unit)}</div>
+      <div
+        className="text-xl font-bold mt-num"
+        style={{ color: 'var(--mt-text-heading)' }}
+      >
+        {fmtVal(card.mtd, card.unit)}
+      </div>
       {card.target > 0 && card.unit !== 'percent' && (
         <>
           <div className="flex items-center justify-between text-[10px]">
-            <span className="text-theme-faint">Target: {fmtVal(card.target, card.unit)}</span>
+            <span style={{ color: 'var(--mt-text-faint)' }}>
+              Target: <span className="mt-num">{fmtVal(card.target, card.unit)}</span>
+            </span>
             <TrendBadge current={card.mtd} previous={card.lastMonthMtd} />
           </div>
-          {/* Mini progress bar */}
-          <div className="h-1.5 bg-dark-600 rounded-full overflow-hidden">
+          <div
+            className="h-1.5 rounded-full overflow-hidden"
+            style={{ background: 'var(--mt-bg-muted)' }}
+          >
             <div
-              className={`h-full rounded-full ${card.rag === 'GREEN' ? 'bg-emerald-500' : card.rag === 'AMBER' ? 'bg-amber-500' : 'bg-red-500'}`}
-              style={{ width: `${Math.min(pct, 100)}%` }}
+              className="h-full rounded-full"
+              style={{
+                width: `${Math.min(pct, 100)}%`,
+                background: ragTone.fg,
+              }}
             />
           </div>
-          <div className="grid grid-cols-2 gap-1 text-[10px] text-theme-faint">
+          <div className="grid grid-cols-2 gap-1 text-[10px]">
             <div>
-              <div className="text-theme-muted">Pace</div>
-              <div>{fmtVal(card.dailyRate, card.unit)}/day</div>
+              <div style={{ color: 'var(--mt-text-muted)' }}>Pace</div>
+              <div className="mt-num" style={{ color: 'var(--mt-text-secondary)' }}>
+                {fmtVal(card.dailyRate, card.unit)}/day
+              </div>
             </div>
             <div>
-              <div className="text-theme-muted">Need</div>
-              <div className={gapPositive ? 'text-emerald-400' : 'text-amber-400'}>{fmtVal(card.requiredRate, card.unit)}/day</div>
+              <div style={{ color: 'var(--mt-text-muted)' }}>Need</div>
+              <div
+                className="mt-num"
+                style={{ color: gapPositive ? TONES.accent.fg : TONES.amber.fg }}
+              >
+                {fmtVal(card.requiredRate, card.unit)}/day
+              </div>
             </div>
           </div>
         </>
       )}
       {card.target > 0 && card.unit === 'percent' && (
         <div className="flex items-center justify-between text-[10px]">
-          <span className="text-theme-faint">Forecast: {card.target}%</span>
+          <span style={{ color: 'var(--mt-text-faint)' }}>
+            Forecast: <span className="mt-num">{card.target}%</span>
+          </span>
           <VariationBadge actual={card.mtd} forecast={card.target} />
         </div>
       )}
       {card.target === 0 && card.unit !== 'percent' && (
-        <div className="grid grid-cols-2 gap-1 text-[10px] text-theme-faint">
+        <div className="grid grid-cols-2 gap-1 text-[10px]">
           <div>
-            <div className="text-theme-muted">Pace</div>
-            <div>{fmtVal(card.dailyRate, card.unit)}/day</div>
+            <div style={{ color: 'var(--mt-text-muted)' }}>Pace</div>
+            <div className="mt-num" style={{ color: 'var(--mt-text-secondary)' }}>
+              {fmtVal(card.dailyRate, card.unit)}/day
+            </div>
           </div>
           <div>
-            <div className="text-theme-muted">Projected</div>
-            <div>{fmtVal(card.projected, card.unit)}</div>
+            <div style={{ color: 'var(--mt-text-muted)' }}>Projected</div>
+            <div className="mt-num" style={{ color: 'var(--mt-text-secondary)' }}>
+              {fmtVal(card.projected, card.unit)}
+            </div>
           </div>
         </div>
       )}
@@ -312,11 +455,19 @@ function WeeklyComparison({ stream, isClinic }: { stream: StreamData; isClinic: 
   ];
 
   return (
-    <div className="card p-3">
-      <h3 className="text-xs font-semibold text-theme-muted mb-2">This Week vs Last Week</h3>
+    <div className="mt-card p-3">
+      <h3
+        className="text-xs font-semibold mb-2"
+        style={{ color: 'var(--mt-text-muted)' }}
+      >
+        This Week vs Last Week
+      </h3>
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-[10px] text-theme-faint uppercase">
+          <tr
+            className="text-[10px] uppercase"
+            style={{ color: 'var(--mt-text-faint)' }}
+          >
             <th className="text-left py-1 font-medium">Metric</th>
             <th className="text-right py-1 font-medium">This Week</th>
             <th className="text-right py-1 font-medium">Last Week</th>
@@ -326,18 +477,39 @@ function WeeklyComparison({ stream, isClinic }: { stream: StreamData; isClinic: 
         <tbody>
           {rows.map(r => {
             const delta = r.prev > 0 ? ((r.cur - r.prev) / r.prev) * 100 : 0;
+            const up = delta >= 0;
             return (
-              <tr key={r.label} className="border-t border-dark-600">
-                <td className="py-1.5 text-theme-secondary">{r.label}</td>
-                <td className="py-1.5 text-right text-theme-primary font-medium">{fmtVal(r.cur, r.unit)}</td>
-                <td className="py-1.5 text-right text-theme-faint">{fmtVal(r.prev, r.unit)}</td>
+              <tr
+                key={r.label}
+                style={{ borderTop: '1px solid var(--mt-border)' }}
+              >
+                <td className="py-1.5" style={{ color: 'var(--mt-text-secondary)' }}>
+                  {r.label}
+                </td>
+                <td
+                  className="py-1.5 text-right font-medium mt-num"
+                  style={{ color: 'var(--mt-text-heading)' }}
+                >
+                  {fmtVal(r.cur, r.unit)}
+                </td>
+                <td
+                  className="py-1.5 text-right mt-num"
+                  style={{ color: 'var(--mt-text-faint)' }}
+                >
+                  {fmtVal(r.prev, r.unit)}
+                </td>
                 <td className="py-1.5 text-right">
                   {r.prev > 0 ? (
-                    <span className={`inline-flex items-center gap-0.5 ${delta >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {delta >= 0 ? <ArrowUp size={10} /> : <ArrowDown size={10} />}
+                    <span
+                      className="inline-flex items-center gap-0.5 mt-num"
+                      style={{ color: up ? TONES.accent.fg : TONES.danger.fg }}
+                    >
+                      {up ? <ArrowUp size={10} /> : <ArrowDown size={10} />}
                       {Math.abs(Math.round(delta))}%
                     </span>
-                  ) : <Minus size={10} className="text-theme-faint ml-auto" />}
+                  ) : (
+                    <Minus size={10} className="ml-auto" style={{ color: 'var(--mt-text-faint)' }} />
+                  )}
                 </td>
               </tr>
             );
@@ -348,35 +520,49 @@ function WeeklyComparison({ stream, isClinic }: { stream: StreamData; isClinic: 
   );
 }
 
-function DailyChart({ stream, isClinic, dailyTargetLine }: { stream: StreamData; isClinic: boolean; dailyTargetLine: number }) {
+function DailyChart({ stream, isClinic }: { stream: StreamData; isClinic: boolean; dailyTargetLine: number }) {
   const chartData = stream.daily.map(d => ({
-    date: d.date.slice(8, 10),  // day number
+    date: d.date.slice(8, 10),
     [isClinic ? 'Patients' : 'Revenue']: isClinic ? (d.patients || 0) : d.revenue,
   }));
 
   const dataKey = isClinic ? 'Patients' : 'Revenue';
-  const barColor = isClinic ? '#10b981' : '#3b82f6';
-
-  // Compute stream-specific daily target
-  const streamTarget = stream.cards.find(c => c.label === 'Revenue' || c.label === 'Sales')?.target || 0;
-  const streamDailyTarget = streamTarget > 0 ? Math.round(streamTarget / (chartData.length > 0 ? chartData.length + 5 : 30)) : 0;
+  const barColor = isClinic ? TONES.accent.fg : TONES.blue.fg;
 
   return (
-    <div className="card p-3">
-      <h3 className="text-xs font-semibold text-theme-muted mb-2">
+    <div className="mt-card p-3">
+      <h3
+        className="text-xs font-semibold mb-2"
+        style={{ color: 'var(--mt-text-muted)' }}
+      >
         Daily {isClinic ? 'Patients' : 'Revenue'} — {stream.name}
       </h3>
       {chartData.length === 0 ? (
-        <div className="text-xs text-theme-faint text-center py-6">No daily data yet</div>
+        <div
+          className="text-xs text-center py-6"
+          style={{ color: 'var(--mt-text-faint)' }}
+        >
+          No daily data yet
+        </div>
       ) : (
         <ResponsiveContainer width="100%" height={160}>
           <BarChart data={chartData} margin={{ top: 5, right: 5, bottom: 0, left: -15 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#2a2a3d" />
-            <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#6b7280' }} />
-            <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} />
+            <CartesianGrid
+              strokeDasharray="3 3"
+              stroke="var(--mt-border)"
+            />
+            <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--mt-text-faint)' }} />
+            <YAxis tick={{ fontSize: 10, fill: 'var(--mt-text-faint)' }} />
             <Tooltip
-              contentStyle={{ backgroundColor: '#1a1a2e', border: '1px solid #2a2a3d', borderRadius: '8px', fontSize: '11px' }}
-              labelStyle={{ color: '#9ca3af' }}
+              contentStyle={{
+                backgroundColor: 'var(--mt-bg-raised)',
+                border: '1px solid var(--mt-border)',
+                borderRadius: '10px',
+                fontSize: '11px',
+                boxShadow: 'var(--mt-shadow-pop)',
+              }}
+              labelStyle={{ color: 'var(--mt-text-muted)' }}
+              itemStyle={{ color: 'var(--mt-text-primary)' }}
               formatter={(value: number) => isClinic ? formatNumber(value) : formatINR(value)}
             />
             <Bar dataKey={dataKey} fill={barColor} radius={[3, 3, 0, 0]} />

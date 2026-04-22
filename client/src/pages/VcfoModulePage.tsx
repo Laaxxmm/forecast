@@ -209,7 +209,10 @@ export default function VcfoModulePage() {
   return (
     <div className="vcfo-module animate-fade-in">
       {/* Top Navigation Tabs */}
-      <div className="bg-dark-800 border-b border-dark-400/30 -mx-4 -mt-4 px-4 md:-mx-8 md:-mt-8 md:px-8 mb-0">
+      <div
+        className="-mx-4 -mt-4 px-4 md:-mx-8 md:-mt-8 md:px-8 mb-0"
+        style={{ background: 'var(--mt-bg-raised)', borderBottom: '1px solid var(--mt-border)' }}
+      >
         <div className="flex flex-col md:flex-row md:items-center md:justify-between">
           <div className="flex overflow-x-auto scrollbar-hide">
             {topTabs.map(tab => (
@@ -218,11 +221,7 @@ export default function VcfoModulePage() {
                 to={`/vcfo/${tab.path}`}
                 onClick={() => setActiveReportKey(tab.key)}
                 className={({ isActive }) =>
-                  `flex items-center gap-1.5 md:gap-2 px-3 md:px-5 py-3 md:py-4 text-xs md:text-[13px] font-medium border-b-2 transition-all whitespace-nowrap ${
-                    isActive
-                      ? 'border-accent-500 text-accent-400'
-                      : 'border-transparent text-theme-faint hover:text-theme-secondary hover:border-dark-300'
-                  }`
+                  `mt-tab ${isActive ? 'mt-tab--active' : ''}`
                 }
               >
                 <tab.icon size={15} />
@@ -232,7 +231,7 @@ export default function VcfoModulePage() {
           </div>
           <div className="flex items-center gap-2 md:gap-3 pb-2 md:pb-0 px-1 md:px-0 flex-shrink-0">
             {selectedCompany?.lastSyncedAt && (
-              <span className="hidden lg:inline text-xs text-theme-faint">
+              <span className="hidden lg:inline text-xs" style={{ color: 'var(--mt-text-faint)' }}>
                 Synced {new Date(selectedCompany.lastSyncedAt).toLocaleString()}
               </span>
             )}
@@ -244,14 +243,29 @@ export default function VcfoModulePage() {
             {canResetData && (
               <button
                 onClick={() => { setResetOpen(true); setResetError(null); setResetConfirmText(''); }}
-                className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-theme-faint hover:text-red-400 hover:bg-red-500/10 border border-dark-400/50 hover:border-red-500/30 rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg transition-colors"
+                style={{
+                  color: 'var(--mt-text-faint)',
+                  border: '1px solid var(--mt-border)',
+                  background: 'transparent',
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.color = 'var(--mt-danger-text)';
+                  e.currentTarget.style.background = 'var(--mt-danger-soft)';
+                  e.currentTarget.style.borderColor = 'var(--mt-danger-border)';
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.color = 'var(--mt-text-faint)';
+                  e.currentTarget.style.background = 'transparent';
+                  e.currentTarget.style.borderColor = 'var(--mt-border)';
+                }}
                 title="Delete all synced Tally data for this tenant"
               >
                 <Trash2 size={13} />
                 <span className="hidden md:inline">Reset</span>
               </button>
             )}
-            <div className="h-6 w-px bg-dark-400" />
+            <div className="h-6 w-px" style={{ background: 'var(--mt-border)' }} />
             <VcfoCompanyPicker
               companies={companies}
               selectedId={selectedCompanyId}
@@ -267,7 +281,8 @@ export default function VcfoModulePage() {
                   setPeriod({ preset: 'fy', from: fy.start_date, to: fy.end_date });
                 }
               }}
-              className="input text-xs md:text-sm py-1 md:py-1.5 w-28 md:w-36"
+              className="mt-input text-xs md:text-sm w-28 md:w-36"
+              style={{ padding: '6px 10px' }}
             >
               {fys.map(fy => (
                 <option key={fy.id} value={fy.id}>
@@ -280,19 +295,36 @@ export default function VcfoModulePage() {
       </div>
 
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 py-3 border-b border-dark-400/30 -mx-4 px-4 md:-mx-8 md:px-8 bg-dark-800/50">
+      <div
+        className="flex flex-wrap items-center justify-between gap-2 py-3 -mx-4 px-4 md:-mx-8 md:px-8"
+        style={{
+          borderBottom: '1px solid var(--mt-border)',
+          background: 'color-mix(in srgb, var(--mt-bg-raised) 55%, transparent)',
+        }}
+      >
         <div className="flex flex-wrap items-center gap-2">
           {(activeReportKey === 'pl' || activeReportKey === 'bs') && (
-            <div className="flex bg-dark-700 border border-dark-400/50 rounded-xl overflow-hidden">
+            <div
+              className="flex rounded-xl overflow-hidden"
+              style={{ background: 'var(--mt-bg-raised)', border: '1px solid var(--mt-border)' }}
+            >
               <button
                 onClick={() => setViewMode('yearly')}
-                className={`px-3 py-1.5 text-xs font-medium transition-all ${viewMode === 'yearly' ? 'bg-accent-500/15 text-accent-400' : 'text-theme-faint hover:text-theme-secondary'}`}
+                className="px-3 py-1.5 text-xs font-medium transition-all"
+                style={{
+                  background: viewMode === 'yearly' ? 'var(--mt-accent-soft)' : 'transparent',
+                  color: viewMode === 'yearly' ? 'var(--mt-accent-text)' : 'var(--mt-text-faint)',
+                }}
               >
                 Yearly
               </button>
               <button
                 onClick={() => setViewMode('monthly')}
-                className={`px-3 py-1.5 text-xs font-medium transition-all ${viewMode === 'monthly' ? 'bg-accent-500/15 text-accent-400' : 'text-theme-faint hover:text-theme-secondary'}`}
+                className="px-3 py-1.5 text-xs font-medium transition-all"
+                style={{
+                  background: viewMode === 'monthly' ? 'var(--mt-accent-soft)' : 'transparent',
+                  color: viewMode === 'monthly' ? 'var(--mt-accent-text)' : 'var(--mt-text-faint)',
+                }}
               >
                 Monthly
               </button>
@@ -309,11 +341,12 @@ export default function VcfoModulePage() {
           {canBifurcate && (
             <button
               onClick={() => setBifurcate(b => !b)}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                bifurcate
-                  ? 'bg-accent-500/15 text-accent-300 border-accent-500/30'
-                  : 'bg-dark-700 text-theme-secondary border-dark-400/50 hover:bg-dark-600'
-              }`}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors"
+              style={{
+                background: bifurcate ? 'var(--mt-accent-soft)' : 'var(--mt-bg-raised)',
+                color: bifurcate ? 'var(--mt-accent-text)' : 'var(--mt-text-secondary)',
+                border: `1px solid ${bifurcate ? 'var(--mt-accent-border)' : 'var(--mt-border)'}`,
+              }}
               title="Show one column per company"
             >
               <Columns size={13} />
@@ -321,12 +354,12 @@ export default function VcfoModulePage() {
             </button>
           )}
           {selectedCompanyId == null && companies.length > 1 && (
-            <span className="text-xs font-medium text-accent-400 bg-accent-500/10 px-2.5 py-1 rounded-lg">
+            <span className="mt-pill mt-pill--success mt-pill-sm">
               Consolidated · {companies.length} {companies.length === 1 ? 'company' : 'companies'}
             </span>
           )}
           {selectedCompany && (
-            <span className="text-xs font-medium text-accent-400 bg-accent-500/10 px-2.5 py-1 rounded-lg">
+            <span className="mt-pill mt-pill--success mt-pill-sm">
               {selectedCompany.name}
             </span>
           )}
@@ -336,18 +369,25 @@ export default function VcfoModulePage() {
       {/* Route Content */}
       <div className="mt-4 md:mt-6">
         {companiesLoading ? (
-          <div className="bg-dark-800 border border-dark-400/30 rounded-2xl p-10 text-center">
-            <p className="text-theme-muted">Loading…</p>
+          <div className="mt-card p-10 text-center">
+            <p style={{ color: 'var(--mt-text-muted)' }}>Loading…</p>
           </div>
         ) : companiesError ? (
-          <div className="bg-dark-800 border border-red-500/30 rounded-2xl p-10 text-center">
-            <p className="text-red-400 mb-2 font-medium">Couldn't load companies.</p>
-            <p className="text-sm text-theme-faint">{companiesError}</p>
+          <div
+            className="rounded-2xl p-10 text-center"
+            style={{
+              background: 'var(--mt-bg-raised)',
+              border: '1px solid var(--mt-danger-border)',
+              boxShadow: 'var(--mt-shadow-card)',
+            }}
+          >
+            <p className="mb-2 font-medium" style={{ color: 'var(--mt-danger-text)' }}>Couldn't load companies.</p>
+            <p className="text-sm" style={{ color: 'var(--mt-text-faint)' }}>{companiesError}</p>
           </div>
         ) : companies.length === 0 ? (
-          <div className="bg-dark-800 border border-dark-400/30 rounded-2xl p-10 text-center">
-            <p className="text-theme-muted mb-2 font-medium">No data synced yet.</p>
-            <p className="text-sm text-theme-faint">
+          <div className="mt-card p-10 text-center">
+            <p className="mb-2 font-medium" style={{ color: 'var(--mt-text-muted)' }}>No data synced yet.</p>
+            <p className="text-sm" style={{ color: 'var(--mt-text-faint)' }}>
               Install the VCFO Sync desktop agent and point it at your Tally ERP. Once a sync completes,
               reports appear here automatically.
             </p>
@@ -410,54 +450,75 @@ export default function VcfoModulePage() {
 
       {/* Reset-data confirm modal (admin-only, typed confirmation) */}
       {resetOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-dark-800 border border-red-500/30 rounded-2xl shadow-2xl max-w-md w-[92%] p-6">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm"
+          style={{ background: 'rgba(0,0,0,0.6)' }}
+        >
+          <div
+            className="rounded-2xl max-w-md w-[92%] p-6"
+            style={{
+              background: 'var(--mt-bg-raised)',
+              border: '1px solid var(--mt-danger-border)',
+              boxShadow: '0 20px 48px -12px rgba(0,0,0,0.6), var(--mt-shadow-card)',
+            }}
+          >
             <div className="flex items-start gap-3 mb-4">
-              <div className="p-2 bg-red-500/10 rounded-lg">
-                <Trash2 size={18} className="text-red-400" />
+              <div
+                className="p-2 rounded-lg"
+                style={{ background: 'var(--mt-danger-soft)' }}
+              >
+                <Trash2 size={18} style={{ color: 'var(--mt-danger-text)' }} />
               </div>
               <div>
-                <h3 className="text-base font-semibold text-theme-primary">Delete all synced Tally data?</h3>
-                <p className="text-xs text-theme-faint mt-1">
-                  This clears every <code className="text-[11px] bg-dark-700 px-1 py-0.5 rounded">vcfo_*</code> table
+                <h3 className="mt-heading text-base">Delete all synced Tally data?</h3>
+                <p className="text-xs mt-1" style={{ color: 'var(--mt-text-faint)' }}>
+                  This clears every <code
+                    className="text-[11px] px-1 py-0.5 rounded"
+                    style={{ background: 'var(--mt-bg-muted)' }}
+                  >vcfo_*</code> table
                   for this tenant: companies, ledgers, account groups, vouchers, stock summary, trial balance.
                   Non-VCFO data (forecast, budgets, dashboards) is untouched.
                 </p>
-                <p className="text-xs text-red-300 mt-2 font-medium">
+                <p className="text-xs mt-2 font-medium" style={{ color: 'var(--mt-danger-text)' }}>
                   Cannot be undone. The next Sync Now in the desktop agent will repopulate.
                 </p>
               </div>
             </div>
 
-            <label className="block text-xs text-theme-secondary mb-1.5">
-              Type <span className="font-mono font-semibold text-red-300">DELETE</span> to confirm:
+            <label className="block text-xs mb-1.5" style={{ color: 'var(--mt-text-secondary)' }}>
+              Type <span className="font-mono font-semibold" style={{ color: 'var(--mt-danger-text)' }}>DELETE</span> to confirm:
             </label>
             <input
               type="text"
               value={resetConfirmText}
               onChange={e => setResetConfirmText(e.target.value)}
               autoFocus
-              className="input w-full text-sm py-1.5 font-mono"
+              className="mt-input w-full text-sm font-mono"
               placeholder="DELETE"
               disabled={resetting}
             />
 
             {resetError && (
-              <p className="text-xs text-red-400 mt-2">{resetError}</p>
+              <p className="text-xs mt-2" style={{ color: 'var(--mt-danger-text)' }}>{resetError}</p>
             )}
 
             <div className="flex justify-end gap-2 mt-5">
               <button
                 onClick={() => { setResetOpen(false); setResetConfirmText(''); setResetError(null); }}
                 disabled={resetting}
-                className="px-3 py-1.5 text-xs text-theme-secondary hover:text-theme-primary hover:bg-dark-700 rounded-lg transition-colors"
+                className="mt-btn-ghost text-xs"
               >
                 Cancel
               </button>
               <button
                 onClick={performReset}
                 disabled={resetting || resetConfirmText !== 'DELETE'}
-                className="px-3 py-1.5 text-xs font-medium bg-red-500/20 text-red-300 hover:bg-red-500/30 border border-red-500/40 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{
+                  background: 'var(--mt-danger-soft)',
+                  color: 'var(--mt-danger-text)',
+                  border: '1px solid var(--mt-danger-border)',
+                }}
               >
                 {resetting ? 'Deleting…' : 'Delete everything'}
               </button>

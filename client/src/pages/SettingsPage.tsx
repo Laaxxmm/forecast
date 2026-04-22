@@ -31,9 +31,6 @@ export default function SettingsPage() {
   const showHp = enabledIntegrations.includes('healthplix');
   const showOg = enabledIntegrations.includes('oneglance');
   const showTuria = enabledIntegrations.includes('turia');
-  const enabledModules: string[] = (() => {
-    try { return JSON.parse(localStorage.getItem('enabled_modules') || '[]'); } catch { return []; }
-  })();
 
   const load = () => {
     Promise.all([api.get('/settings/fy'), api.get('/settings/doctors')]).then(([fyRes, docRes]) => {
@@ -153,39 +150,89 @@ export default function SettingsPage() {
 
   if (loading) return (
     <div className="flex items-center justify-center py-20">
-      <div className="text-theme-muted">Loading...</div>
+      <div style={{ color: 'var(--mt-text-muted)' }}>Loading...</div>
     </div>
+  );
+
+  const labelCls = "block text-sm font-medium mb-1.5";
+  const labelStyle = { color: 'var(--mt-text-muted)' } as React.CSSProperties;
+
+  const CredCard = ({
+    tone, Icon, title, subtitle, configured, children,
+  }: { tone: { fg: string; soft: string; border: string }, Icon: any, title: string, subtitle: string, configured: boolean, children: React.ReactNode }) => (
+    <div className="mt-card p-5">
+      <div className="flex items-center gap-3 mb-5">
+        <div
+          className="w-10 h-10 rounded-xl flex items-center justify-center"
+          style={{ background: tone.soft, boxShadow: `inset 0 0 0 1px ${tone.border}` }}
+        >
+          <Icon size={20} style={{ color: tone.fg }} />
+        </div>
+        <div className="flex-1">
+          <h3 className="mt-heading text-base">{title}</h3>
+          <p className="text-sm" style={{ color: 'var(--mt-text-faint)' }}>{subtitle}</p>
+        </div>
+        {configured && (
+          <span className="mt-pill mt-pill--success mt-pill-sm">
+            <CheckCircle size={10} /> Configured
+          </span>
+        )}
+      </div>
+      {children}
+    </div>
+  );
+
+  const tones = {
+    accent: { fg: '#10b981', soft: 'color-mix(in srgb, #10b981 12%, transparent)', border: 'color-mix(in srgb, #10b981 30%, transparent)' },
+    purple: { fg: '#8b5cf6', soft: 'color-mix(in srgb, #8b5cf6 12%, transparent)', border: 'color-mix(in srgb, #8b5cf6 30%, transparent)' },
+    blue:   { fg: '#3b82f6', soft: 'color-mix(in srgb, #3b82f6 12%, transparent)', border: 'color-mix(in srgb, #3b82f6 30%, transparent)' },
+  };
+
+  const clearBtn = (onClick: () => void) => (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1 text-sm transition-colors"
+      style={{ color: 'var(--mt-text-faint)' }}
+      onMouseEnter={e => { e.currentTarget.style.color = 'var(--mt-danger-text)'; }}
+      onMouseLeave={e => { e.currentTarget.style.color = 'var(--mt-text-faint)'; }}
+    >
+      <Trash2 size={14} /> Clear
+    </button>
   );
 
   return (
     <div className="animate-fade-in">
-      <h1 className="text-2xl font-bold text-theme-heading mb-6">Settings</h1>
+      <h1 className="mt-heading text-2xl mb-6">Settings</h1>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Financial Years */}
-        {showFY && <div className="card">
-          <h3 className="font-semibold text-theme-heading mb-4">Financial Years</h3>
+        {showFY && <div className="mt-card p-5">
+          <h3 className="mt-heading text-base mb-4">Financial Years</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-sm mb-4">
               <thead>
-                <tr className="border-b border-dark-400/50">
-                  <th className="text-left py-2 text-theme-faint font-medium text-xs uppercase">Label</th>
-                  <th className="text-left py-2 text-theme-faint font-medium text-xs uppercase">Period</th>
-                  <th className="text-center py-2 text-theme-faint font-medium text-xs uppercase">Active</th>
-                  <th className="text-right py-2 text-theme-faint font-medium text-xs uppercase">Actions</th>
+                <tr style={{ borderBottom: '1px solid var(--mt-border)' }}>
+                  <th className="text-left py-2 font-medium text-xs uppercase" style={{ color: 'var(--mt-text-faint)' }}>Label</th>
+                  <th className="text-left py-2 font-medium text-xs uppercase" style={{ color: 'var(--mt-text-faint)' }}>Period</th>
+                  <th className="text-center py-2 font-medium text-xs uppercase" style={{ color: 'var(--mt-text-faint)' }}>Active</th>
+                  <th className="text-right py-2 font-medium text-xs uppercase" style={{ color: 'var(--mt-text-faint)' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {fys.map(fy => (
-                  <tr key={fy.id} className="border-b border-dark-400/30">
-                    <td className="py-2.5 font-medium text-theme-primary">{fy.label}</td>
-                    <td className="py-2.5 text-theme-faint">{fy.start_date} to {fy.end_date}</td>
+                  <tr key={fy.id} style={{ borderBottom: '1px solid var(--mt-border)' }}>
+                    <td className="py-2.5 font-medium" style={{ color: 'var(--mt-text-heading)' }}>{fy.label}</td>
+                    <td className="py-2.5" style={{ color: 'var(--mt-text-faint)' }}>{fy.start_date} to {fy.end_date}</td>
                     <td className="py-2.5 text-center">
-                      {fy.is_active ? <span className="badge-success text-[10px]">Active</span> : null}
+                      {fy.is_active ? <span className="mt-pill mt-pill--success mt-pill-sm">Active</span> : null}
                     </td>
                     <td className="py-2.5 text-right">
                       {!fy.is_active && (
-                        <button onClick={() => activateFY(fy.id)} className="text-accent-400 hover:text-accent-300 text-xs font-medium transition-colors">
+                        <button
+                          onClick={() => activateFY(fy.id)}
+                          className="text-xs font-medium transition-colors"
+                          style={{ color: 'var(--mt-accent-text)' }}
+                        >
                           Set Active
                         </button>
                       )}
@@ -195,151 +242,128 @@ export default function SettingsPage() {
               </tbody>
             </table>
           </div>
-          <div className="border-t border-dark-400/30 pt-4">
-            <p className="text-sm text-theme-muted mb-2">Add Financial Year</p>
+          <div className="pt-4" style={{ borderTop: '1px solid var(--mt-border)' }}>
+            <p className="text-sm mb-2" style={{ color: 'var(--mt-text-muted)' }}>Add Financial Year</p>
             <div className="flex gap-2">
-              <input type="number" placeholder="Start year (e.g. 2026)" className="input w-48" onChange={e => generateFY(e.target.value)} />
-              <input type="text" value={newFY.label} readOnly className="input w-32 bg-dark-600" placeholder="Label" />
-              <button onClick={addFY} disabled={!newFY.label} className="btn-primary">Add</button>
+              <input type="number" placeholder="Start year (e.g. 2026)" className="mt-input w-48" onChange={e => generateFY(e.target.value)} />
+              <input type="text" value={newFY.label} readOnly className="mt-input w-32" placeholder="Label" style={{ background: 'var(--mt-bg-muted)' }} />
+              <button onClick={addFY} disabled={!newFY.label} className="mt-btn-gradient">Add</button>
             </div>
           </div>
         </div>}
 
         {/* Doctors */}
-        {showDoctors && <div className="card">
-          <h3 className="font-semibold text-theme-heading mb-4">Doctors</h3>
-          <p className="text-sm text-theme-faint mb-3">Doctors are auto-imported from Healthplix reports. You can also add manually.</p>
+        {showDoctors && <div className="mt-card p-5">
+          <h3 className="mt-heading text-base mb-4">Doctors</h3>
+          <p className="text-sm mb-3" style={{ color: 'var(--mt-text-faint)' }}>Doctors are auto-imported from Healthplix reports. You can also add manually.</p>
           <div className="max-h-64 overflow-y-auto mb-4">
             {doctors.map(d => (
-              <div key={d.id} className="flex items-center justify-between py-2.5 px-3 border-b border-dark-400/30">
-                <span className="text-sm text-theme-secondary">{d.name}</span>
-                <span className={`text-[10px] font-medium ${d.is_active ? 'text-accent-400' : 'text-theme-faint'}`}>
+              <div
+                key={d.id}
+                className="flex items-center justify-between py-2.5 px-3"
+                style={{ borderBottom: '1px solid var(--mt-border)' }}
+              >
+                <span className="text-sm" style={{ color: 'var(--mt-text-secondary)' }}>{d.name}</span>
+                <span
+                  className="text-[10px] font-medium"
+                  style={{ color: d.is_active ? 'var(--mt-accent-text)' : 'var(--mt-text-faint)' }}
+                >
                   {d.is_active ? 'Active' : 'Inactive'}
                 </span>
               </div>
             ))}
-            {doctors.length === 0 && <p className="text-theme-faint text-center py-4 text-sm">No doctors yet</p>}
+            {doctors.length === 0 && <p className="text-center py-4 text-sm" style={{ color: 'var(--mt-text-faint)' }}>No doctors yet</p>}
           </div>
           <div className="flex gap-2">
             <input type="text" value={newDoctor} onChange={e => setNewDoctor(e.target.value)}
-              placeholder="Doctor name" className="input flex-1" onKeyDown={e => e.key === 'Enter' && addDoctor()} />
-            <button onClick={addDoctor} className="btn-primary">Add</button>
+              placeholder="Doctor name" className="mt-input flex-1" onKeyDown={e => e.key === 'Enter' && addDoctor()} />
+            <button onClick={addDoctor} className="mt-btn-gradient">Add</button>
           </div>
         </div>}
 
         {/* Healthplix Credentials */}
-        {showHp && <div className="card">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="w-10 h-10 rounded-xl bg-accent-500/10 flex items-center justify-center">
-              <Stethoscope size={20} className="text-accent-400" />
-            </div>
-            <div className="flex-1">
-              <h3 className="font-semibold text-theme-heading">Healthplix Credentials</h3>
-              <p className="text-sm text-theme-faint">Clinic billing auto-sync</p>
-            </div>
-            {hpHasPassword && <span className="badge-success text-[10px]"><CheckCircle size={10} /> Configured</span>}
-          </div>
+        {showHp && <CredCard tone={tones.accent} Icon={Stethoscope} title="Healthplix Credentials" subtitle="Clinic billing auto-sync" configured={hpHasPassword}>
           <div className="space-y-3 mb-4">
             <div>
-              <label className="block text-sm font-medium text-theme-muted mb-1.5">Username / Email</label>
-              <input type="text" value={hpCreds.username} onChange={e => setHpCreds(c => ({ ...c, username: e.target.value }))} placeholder="your@email.com" className="input w-full" />
+              <label className={labelCls} style={labelStyle}>Username / Email</label>
+              <input type="text" value={hpCreds.username} onChange={e => setHpCreds(c => ({ ...c, username: e.target.value }))} placeholder="your@email.com" className="mt-input w-full" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-theme-muted mb-1.5">
-                Password {hpHasPassword && <span className="text-xs text-theme-faint">(saved)</span>}
+              <label className={labelCls} style={labelStyle}>
+                Password {hpHasPassword && <span className="text-xs" style={{ color: 'var(--mt-text-faint)' }}>(saved)</span>}
               </label>
               <div className="relative">
                 <input type={showHpPassword ? 'text' : 'password'} value={hpCreds.password} onChange={e => setHpCreds(c => ({ ...c, password: e.target.value }))}
-                  placeholder={hpHasPassword ? '••••••••' : 'Enter password'} className="input w-full pr-10" />
+                  placeholder={hpHasPassword ? '••••••••' : 'Enter password'} className="mt-input w-full pr-10" />
                 <button type="button" onClick={() => setShowHpPassword(!showHpPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-theme-faint hover:text-theme-secondary transition-colors">
+                  className="absolute right-3 top-1/2 -translate-y-1/2 transition-colors"
+                  style={{ color: 'var(--mt-text-faint)' }}
+                  onMouseEnter={e => { e.currentTarget.style.color = 'var(--mt-text-secondary)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = 'var(--mt-text-faint)'; }}
+                >
                   {showHpPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-theme-muted mb-1.5">Clinic Name</label>
-              <input type="text" value={hpCreds.clinicName} onChange={e => setHpCreds(c => ({ ...c, clinicName: e.target.value }))} placeholder="MagnaCode Bangalore" className="input w-full" />
+              <label className={labelCls} style={labelStyle}>Clinic Name</label>
+              <input type="text" value={hpCreds.clinicName} onChange={e => setHpCreds(c => ({ ...c, clinicName: e.target.value }))} placeholder="MagnaCode Bangalore" className="mt-input w-full" />
             </div>
           </div>
           <div className="flex gap-3 items-center">
-            <button onClick={saveHpCredentials} disabled={hpSaving || !hpCreds.username} className="btn-primary text-sm">
+            <button onClick={saveHpCredentials} disabled={hpSaving || !hpCreds.username} className="mt-btn-gradient text-sm">
               {hpSaving ? 'Saving...' : hpSaved ? 'Saved!' : 'Save'}
             </button>
-            {hpHasPassword && (
-              <button onClick={clearHpCredentials} className="flex items-center gap-1 text-sm text-red-400/60 hover:text-red-400 transition-colors">
-                <Trash2 size={14} /> Clear
-              </button>
-            )}
+            {hpHasPassword && clearBtn(clearHpCredentials)}
           </div>
-        </div>}
+        </CredCard>}
 
         {/* Oneglance Credentials */}
-        {showOg && <div className="card">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
-              <Pill size={20} className="text-purple-400" />
-            </div>
-            <div className="flex-1">
-              <h3 className="font-semibold text-theme-heading">Oneglance Credentials</h3>
-              <p className="text-sm text-theme-faint">Pharmacy reports auto-sync</p>
-            </div>
-            {ogHasPassword && <span className="badge-success text-[10px]"><CheckCircle size={10} /> Configured</span>}
-          </div>
+        {showOg && <CredCard tone={tones.purple} Icon={Pill} title="Oneglance Credentials" subtitle="Pharmacy reports auto-sync" configured={ogHasPassword}>
           <div className="space-y-3 mb-4">
             <div>
-              <label className="block text-sm font-medium text-theme-muted mb-1.5">Username</label>
-              <input type="text" value={ogCreds.username} onChange={e => setOgCreds(c => ({ ...c, username: e.target.value }))} placeholder="Username" className="input w-full" />
+              <label className={labelCls} style={labelStyle}>Username</label>
+              <input type="text" value={ogCreds.username} onChange={e => setOgCreds(c => ({ ...c, username: e.target.value }))} placeholder="Username" className="mt-input w-full" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-theme-muted mb-1.5">
-                Password {ogHasPassword && <span className="text-xs text-theme-faint">(saved)</span>}
+              <label className={labelCls} style={labelStyle}>
+                Password {ogHasPassword && <span className="text-xs" style={{ color: 'var(--mt-text-faint)' }}>(saved)</span>}
               </label>
               <div className="relative">
                 <input type={showOgPassword ? 'text' : 'password'} value={ogCreds.password} onChange={e => setOgCreds(c => ({ ...c, password: e.target.value }))}
-                  placeholder={ogHasPassword ? '••••••••' : 'Enter password'} className="input w-full pr-10" />
+                  placeholder={ogHasPassword ? '••••••••' : 'Enter password'} className="mt-input w-full pr-10" />
                 <button type="button" onClick={() => setShowOgPassword(!showOgPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-theme-faint hover:text-theme-secondary transition-colors">
+                  className="absolute right-3 top-1/2 -translate-y-1/2 transition-colors"
+                  style={{ color: 'var(--mt-text-faint)' }}
+                  onMouseEnter={e => { e.currentTarget.style.color = 'var(--mt-text-secondary)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = 'var(--mt-text-faint)'; }}
+                >
                   {showOgPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
             </div>
           </div>
           <div className="flex gap-3 items-center">
-            <button onClick={saveOgCredentials} disabled={ogSaving || !ogCreds.username} className="btn-primary text-sm">
+            <button onClick={saveOgCredentials} disabled={ogSaving || !ogCreds.username} className="mt-btn-gradient text-sm">
               {ogSaving ? 'Saving...' : ogSaved ? 'Saved!' : 'Save'}
             </button>
-            {ogHasPassword && (
-              <button onClick={clearOgCredentials} className="flex items-center gap-1 text-sm text-red-400/60 hover:text-red-400 transition-colors">
-                <Trash2 size={14} /> Clear
-              </button>
-            )}
+            {ogHasPassword && clearBtn(clearOgCredentials)}
           </div>
-        </div>}
+        </CredCard>}
 
         {/* Turia Credentials */}
-        {showTuria && <div className="card">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
-              <Briefcase size={20} className="text-blue-400" />
-            </div>
-            <div className="flex-1">
-              <h3 className="font-semibold text-theme-heading">Turia Credentials</h3>
-              <p className="text-sm text-theme-faint">Consultancy invoice auto-sync (OTP login)</p>
-            </div>
-            {turiaHasCreds && <span className="badge-success text-[10px]"><CheckCircle size={10} /> Configured</span>}
-          </div>
+        {showTuria && <CredCard tone={tones.blue} Icon={Briefcase} title="Turia Credentials" subtitle="Consultancy invoice auto-sync (OTP login)" configured={turiaHasCreds}>
           <div className="space-y-3 mb-4">
             <div>
-              <label className="block text-sm font-medium text-theme-muted mb-1.5">
+              <label className={labelCls} style={labelStyle}>
                 <Phone size={14} className="inline mr-1" /> Phone Number
               </label>
               <input type="tel" value={turiaCreds.phoneNumber} onChange={e => setTuriaCreds(c => ({ ...c, phoneNumber: e.target.value }))}
-                placeholder="9876543210" className="input w-full" />
+                placeholder="9876543210" className="mt-input w-full" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-theme-muted mb-1.5">Default Financial Year</label>
-              <select value={turiaCreds.financialYear} onChange={e => setTuriaCreds(c => ({ ...c, financialYear: e.target.value }))} className="input w-full">
+              <label className={labelCls} style={labelStyle}>Default Financial Year</label>
+              <select value={turiaCreds.financialYear} onChange={e => setTuriaCreds(c => ({ ...c, financialYear: e.target.value }))} className="mt-input w-full">
                 <option value="2023-24">2023-24</option>
                 <option value="2024-25">2024-25</option>
                 <option value="2025-26">2025-26</option>
@@ -348,27 +372,23 @@ export default function SettingsPage() {
             </div>
           </div>
           <div className="flex gap-3 items-center">
-            <button onClick={saveTuriaCredentials} disabled={turiaSaving || !turiaCreds.phoneNumber} className="btn-primary text-sm">
+            <button onClick={saveTuriaCredentials} disabled={turiaSaving || !turiaCreds.phoneNumber} className="mt-btn-gradient text-sm">
               {turiaSaving ? 'Saving...' : turiaSaved ? 'Saved!' : 'Save'}
             </button>
-            {turiaHasCreds && (
-              <button onClick={clearTuriaCredentials} className="flex items-center gap-1 text-sm text-red-400/60 hover:text-red-400 transition-colors">
-                <Trash2 size={14} /> Clear
-              </button>
-            )}
+            {turiaHasCreds && clearBtn(clearTuriaCredentials)}
           </div>
-        </div>}
+        </CredCard>}
 
         {!showFY && !showDoctors && !showHp && !showOg && !showTuria && (
-          <div className="card col-span-full text-center py-10">
-            <p className="text-theme-faint text-sm">No settings sections are enabled for your account.</p>
-            <p className="text-theme-faint text-xs mt-1">Contact your administrator to configure available settings.</p>
+          <div className="mt-card col-span-full text-center py-10 px-5">
+            <p className="text-sm" style={{ color: 'var(--mt-text-faint)' }}>No settings sections are enabled for your account.</p>
+            <p className="text-xs mt-1" style={{ color: 'var(--mt-text-faint)' }}>Contact your administrator to configure available settings.</p>
           </div>
         )}
       </div>
 
       {(showHp || showOg || showTuria) && (
-        <p className="text-xs text-theme-faint mt-4">
+        <p className="text-xs mt-4" style={{ color: 'var(--mt-text-faint)' }}>
           Credentials are encrypted and stored locally. They are only used to automate report downloads.
         </p>
       )}

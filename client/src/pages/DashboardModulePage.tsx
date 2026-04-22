@@ -132,7 +132,13 @@ export default function DashboardModulePage() {
   return (
     <div className="dashboard-module animate-fade-in">
       {/* Top Navigation */}
-      <div className="bg-dark-800 border-b border-dark-400/30 -mx-4 -mt-4 px-4 md:-mx-8 md:-mt-8 md:px-8 mb-0 rounded-none">
+      <div
+        className="-mx-4 -mt-4 px-4 md:-mx-8 md:-mt-8 md:px-8 mb-0 rounded-none"
+        style={{
+          background: 'var(--mt-bg-raised)',
+          borderBottom: '1px solid var(--mt-border)',
+        }}
+      >
         <div className="flex flex-col md:flex-row md:items-center md:justify-between">
           <div data-tour="analysis-tabs" className="flex overflow-x-auto scrollbar-hide">
             {tabs.filter(tab => isClientAdmin || tab.path !== 'update-actuals').map(tab => (
@@ -140,11 +146,7 @@ export default function DashboardModulePage() {
                 key={tab.path}
                 to={`/analysis/${tab.path}`}
                 className={({ isActive }) =>
-                  `flex items-center gap-1.5 md:gap-2 px-3 md:px-4 py-3 md:py-4 text-xs md:text-[13px] font-medium border-b-2 whitespace-nowrap transition-all ${
-                    isActive
-                      ? 'border-accent-500 text-accent-400'
-                      : 'border-transparent text-theme-faint hover:text-theme-secondary hover:border-dark-300'
-                  }`
+                  `mt-tab ${isActive ? 'mt-tab--active' : ''}`
                 }
               >
                 <tab.icon size={15} />
@@ -159,7 +161,8 @@ export default function DashboardModulePage() {
                 const s = scenarios.find(sc => sc.id === Number(e.target.value));
                 if (s) setScenario(s);
               }}
-              className="input text-xs md:text-sm py-1 md:py-1.5 w-32 md:w-48"
+              className="mt-input text-xs md:text-sm w-32 md:w-48"
+              style={{ padding: '6px 10px' }}
             >
               {scenarios.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
@@ -169,7 +172,8 @@ export default function DashboardModulePage() {
                 const fy = fys.find(f => f.id === Number(e.target.value));
                 if (fy) setSelectedFY(fy);
               }}
-              className="input text-xs md:text-sm py-1 md:py-1.5 w-28 md:w-36"
+              className="mt-input text-xs md:text-sm w-28 md:w-36"
+              style={{ padding: '6px 10px' }}
             >
               {fys.map(fy => <option key={fy.id} value={fy.id}>{fy.label}</option>)}
             </select>

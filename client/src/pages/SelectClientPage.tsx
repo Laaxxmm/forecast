@@ -75,37 +75,59 @@ export default function SelectClientPage() {
   const isOwner = localStorage.getItem('is_owner') === '1';
 
   return (
-    <div className="min-h-screen bg-dark-900 flex items-center justify-center p-4 relative overflow-hidden">
+    <div
+      className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden"
+      style={{ background: 'var(--mt-bg-app)' }}
+    >
       {/* Background effects */}
-      <div className="absolute inset-0 overflow-hidden">
-        <div className="absolute -top-40 -right-40 w-96 h-96 bg-accent-500/5 rounded-full blur-3xl" />
-        <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-accent-500/3 rounded-full blur-3xl" />
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div
+          className="absolute -top-40 -right-40 w-96 h-96 rounded-full blur-3xl"
+          style={{ background: 'color-mix(in srgb, var(--mt-accent) 6%, transparent)' }}
+        />
+        <div
+          className="absolute -bottom-40 -left-40 w-96 h-96 rounded-full blur-3xl"
+          style={{ background: 'color-mix(in srgb, #3b82f6 5%, transparent)' }}
+        />
       </div>
 
       <div className="w-full max-w-2xl relative z-10 animate-fade-in">
         <div className="text-center mb-10">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-accent-500 shadow-glow mb-4">
+          <div
+            className="inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-4"
+            style={{
+              background: 'linear-gradient(135deg, #10b981, #059669)',
+              boxShadow: '0 10px 30px -8px rgba(16,185,129,0.45), inset 0 1px 0 rgba(255,255,255,0.18)',
+              border: '1px solid rgba(16,185,129,0.35)',
+            }}
+          >
             <BarChart3 size={24} className="text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-theme-heading">Vision</h1>
-          <p className="text-theme-faint mt-1.5 text-sm">Select a client to manage</p>
+          <h1 className="mt-heading text-2xl">Vision</h1>
+          <p className="mt-1.5 text-sm" style={{ color: 'var(--mt-text-faint)' }}>Select a client to manage</p>
         </div>
 
         {loading ? (
-          <div className="text-center text-theme-faint">
-            <div className="w-6 h-6 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin mx-auto mb-3" />
+          <div className="text-center" style={{ color: 'var(--mt-text-faint)' }}>
+            <div
+              className="w-6 h-6 border-2 rounded-full animate-spin mx-auto mb-3"
+              style={{
+                borderColor: 'var(--mt-accent-soft)',
+                borderTopColor: 'var(--mt-accent)',
+              }}
+            />
             Loading clients...
           </div>
         ) : clients.length === 0 ? (
-          <div className="card text-center">
-            <p className="text-theme-muted mb-4">
+          <div className="mt-card p-8 text-center">
+            <p className="mb-4" style={{ color: 'var(--mt-text-muted)' }}>
               {isOwner ? 'No clients found.' : 'No clients have been assigned to you yet.'}
             </p>
-            <p className="text-theme-faint text-sm">
+            <p className="text-sm" style={{ color: 'var(--mt-text-faint)' }}>
               {isOwner ? '' : 'Contact the platform owner to get client access.'}
             </p>
             {isOwner && (
-              <button onClick={() => navigate('/admin')} className="btn-primary mt-3">
+              <button onClick={() => navigate('/admin')} className="mt-btn-gradient mt-3">
                 Create First Client
               </button>
             )}
@@ -116,23 +138,32 @@ export default function SelectClientPage() {
               <div
                 key={client.id}
                 onClick={() => selectClient(client)}
-                className="card-hover cursor-pointer group"
+                className="mt-card p-4 cursor-pointer group transition-all"
+                style={{ transition: 'transform .15s ease, border-color .15s ease' }}
+                onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.borderColor = 'var(--mt-accent-border)'; }}
+                onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.borderColor = 'var(--mt-border)'; }}
               >
                 <div className="flex items-center gap-4">
-                  <div className="w-11 h-11 rounded-xl bg-accent-500/15 flex items-center justify-center group-hover:bg-accent-500/25 transition-colors">
-                    <Building2 size={20} className="text-accent-400" />
+                  <div
+                    className="w-11 h-11 rounded-xl flex items-center justify-center transition-colors"
+                    style={{
+                      background: 'var(--mt-accent-soft)',
+                      border: '1px solid var(--mt-accent-border)',
+                    }}
+                  >
+                    <Building2 size={20} style={{ color: 'var(--mt-accent-text)' }} />
                   </div>
                   <div className="flex-1">
-                    <h3 className="text-base font-semibold text-theme-heading">{client.name}</h3>
+                    <h3 className="mt-heading text-base">{client.name}</h3>
                     <div className="flex items-center gap-3 mt-1">
-                      <span className="flex items-center gap-1 text-xs text-theme-faint">
+                      <span className="flex items-center gap-1 text-xs" style={{ color: 'var(--mt-text-faint)' }}>
                         <Users size={11} />
                         {client.user_count} user{client.user_count !== 1 ? 's' : ''}
                       </span>
                       {client.integrations && (
                         <span className="flex gap-1.5">
                           {client.integrations.split(',').map(i => (
-                            <span key={i} className="badge-info text-[10px]">
+                            <span key={i} className="mt-pill mt-pill--info mt-pill-sm">
                               {i}
                             </span>
                           ))}
@@ -140,14 +171,18 @@ export default function SelectClientPage() {
                       )}
                     </div>
                   </div>
-                  <ChevronRight size={18} className="text-theme-faint group-hover:text-accent-400 transition-colors" />
+                  <ChevronRight size={18} style={{ color: 'var(--mt-text-faint)' }} className="transition-colors" />
                 </div>
               </div>
             ))}
 
             {isOwner && (
               <div className="text-center mt-8">
-                <button onClick={() => navigate('/admin')} className="text-sm text-accent-500 hover:text-accent-400 font-medium transition-colors">
+                <button
+                  onClick={() => navigate('/admin')}
+                  className="text-sm font-medium transition-colors"
+                  style={{ color: 'var(--mt-accent-text)' }}
+                >
                   Manage Clients
                 </button>
               </div>

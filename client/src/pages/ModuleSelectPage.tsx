@@ -81,74 +81,112 @@ export default function ModuleSelectPage() {
     navigate(mod.path);
   };
 
-  const colorMap: Record<string, { bg: string; border: string; icon: string; glow: string }> = {
-    accent: { bg: 'bg-accent-500/10', border: 'border-accent-500/30', icon: 'text-accent-400', glow: 'shadow-[0_0_30px_rgba(16,185,129,0.1)]' },
-    blue: { bg: 'bg-blue-500/10', border: 'border-blue-500/30', icon: 'text-blue-400', glow: 'shadow-[0_0_30px_rgba(59,130,246,0.1)]' },
-    purple: { bg: 'bg-purple-500/10', border: 'border-purple-500/30', icon: 'text-purple-400', glow: 'shadow-[0_0_30px_rgba(168,85,247,0.1)]' },
-    amber: { bg: 'bg-amber-500/10', border: 'border-amber-500/30', icon: 'text-amber-400', glow: 'shadow-[0_0_30px_rgba(245,158,11,0.1)]' },
+  const colorMap: Record<string, { fg: string; bg: string; border: string }> = {
+    accent: { fg: '#10b981', bg: 'color-mix(in srgb, #10b981 12%, transparent)', border: 'color-mix(in srgb, #10b981 30%, transparent)' },
+    blue:   { fg: '#3b82f6', bg: 'color-mix(in srgb, #3b82f6 12%, transparent)', border: 'color-mix(in srgb, #3b82f6 30%, transparent)' },
+    purple: { fg: '#8b5cf6', bg: 'color-mix(in srgb, #8b5cf6 12%, transparent)', border: 'color-mix(in srgb, #8b5cf6 30%, transparent)' },
+    amber:  { fg: '#f59e0b', bg: 'color-mix(in srgb, #f59e0b 12%, transparent)', border: 'color-mix(in srgb, #f59e0b 30%, transparent)' },
   };
 
   return (
-    <div className="min-h-screen bg-dark-900 flex flex-col items-center justify-center p-8">
+    <div
+      className="min-h-screen flex flex-col items-center justify-center p-8"
+      style={{ background: 'var(--mt-bg-app)' }}
+    >
       {/* Header */}
       <div className="text-center mb-12">
         <div className="flex items-center justify-center gap-3 mb-4">
-          <div className="w-12 h-12 rounded-2xl bg-accent-500 flex items-center justify-center">
+          <div
+            className="w-12 h-12 rounded-2xl flex items-center justify-center"
+            style={{
+              background: 'linear-gradient(135deg, #10b981, #059669)',
+              boxShadow: '0 10px 30px -8px rgba(16,185,129,0.45), inset 0 1px 0 rgba(255,255,255,0.18)',
+              border: '1px solid rgba(16,185,129,0.35)',
+            }}
+          >
             <BarChart3 size={24} className="text-white" />
           </div>
         </div>
-        <h1 className="text-2xl font-bold text-theme-heading mb-1">Welcome to Vision</h1>
+        <h1 className="mt-heading text-2xl mb-1">Welcome to Vision</h1>
         {clientName && (
-          <p className="text-theme-muted text-sm">{clientName}</p>
+          <p className="text-sm" style={{ color: 'var(--mt-text-muted)' }}>{clientName}</p>
         )}
-        <p className="text-theme-faint text-xs mt-2">Select a module to get started</p>
+        <p className="text-xs mt-2" style={{ color: 'var(--mt-text-faint)' }}>Select a module to get started</p>
       </div>
 
       {/* Module Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-5xl w-full">
         {MODULE_CATALOG.map(mod => {
           const enabled = enabledModules.includes(mod.key);
-          const colors = colorMap[mod.color] || colorMap.accent;
+          const tone = colorMap[mod.color] || colorMap.accent;
           const Icon = mod.icon;
           const comingSoon = !mod.path;
+          const interactive = enabled && !comingSoon;
 
           return (
             <button
               key={mod.key}
               onClick={() => handleSelect(mod)}
               disabled={!enabled || comingSoon}
-              className={`group relative rounded-2xl p-6 text-left transition-all duration-300 border ${
-                enabled && !comingSoon
-                  ? `bg-dark-700 ${colors.border} hover:${colors.glow} hover:scale-[1.02] cursor-pointer`
-                  : 'bg-dark-700/50 border-dark-400/20 cursor-not-allowed opacity-60'
-              }`}
+              className="group relative rounded-2xl p-6 text-left transition-all duration-200"
+              style={{
+                background: 'var(--mt-bg-raised)',
+                border: `1px solid ${interactive ? tone.border : 'var(--mt-border)'}`,
+                boxShadow: 'var(--mt-shadow-card)',
+                opacity: interactive ? 1 : 0.6,
+                cursor: interactive ? 'pointer' : 'not-allowed',
+              }}
+              onMouseEnter={(e) => {
+                if (interactive) {
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  e.currentTarget.style.boxShadow = `0 12px 24px -8px ${tone.fg}40, var(--mt-shadow-card)`;
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (interactive) {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = 'var(--mt-shadow-card)';
+                }
+              }}
             >
               {/* Icon */}
-              <div className={`w-14 h-14 rounded-2xl ${colors.bg} flex items-center justify-center mb-5`}>
-                <Icon size={26} className={enabled ? colors.icon : 'text-theme-faint'} />
+              <div
+                className="w-14 h-14 rounded-2xl flex items-center justify-center mb-5"
+                style={{
+                  background: tone.bg,
+                  boxShadow: `inset 0 0 0 1px ${tone.border}`,
+                }}
+              >
+                <Icon size={26} style={{ color: enabled ? tone.fg : 'var(--mt-text-faint)' }} />
               </div>
 
               {/* Content */}
-              <h3 className={`text-lg font-semibold mb-2 ${enabled ? 'text-theme-heading' : 'text-theme-muted'}`}>
+              <h3
+                className="mt-heading text-lg mb-2"
+                style={{ color: enabled ? 'var(--mt-text-heading)' : 'var(--mt-text-muted)' }}
+              >
                 {mod.name}
               </h3>
-              <p className={`text-sm leading-relaxed ${enabled ? 'text-theme-secondary' : 'text-theme-faint'}`}>
+              <p
+                className="text-sm leading-relaxed"
+                style={{ color: enabled ? 'var(--mt-text-secondary)' : 'var(--mt-text-faint)' }}
+              >
                 {mod.description}
               </p>
 
               {/* Status badge */}
               <div className="mt-4">
                 {!enabled ? (
-                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-theme-faint">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--mt-text-faint)' }}>
                     <Lock size={11} /> Not enabled
                   </span>
                 ) : comingSoon ? (
-                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-400">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--mt-warn-text)' }}>
                     Coming soon
                   </span>
                 ) : (
-                  <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${colors.icon}`}>
-                    Open module &rarr;
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium" style={{ color: tone.fg }}>
+                    Open module →
                   </span>
                 )}
               </div>
@@ -161,7 +199,8 @@ export default function ModuleSelectPage() {
       {localStorage.getItem('user_type') === 'super_admin' && (
         <button
           onClick={() => navigate('/select-client')}
-          className="mt-8 flex items-center gap-2 text-sm text-theme-muted hover:text-accent-400 transition-colors"
+          className="mt-8 flex items-center gap-2 text-sm transition-colors"
+          style={{ color: 'var(--mt-text-muted)' }}
         >
           <ArrowLeft size={14} /> Back to client list
         </button>

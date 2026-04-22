@@ -77,13 +77,34 @@ const FREQ_LABEL: Record<string, string> = {
   annual: 'Annual',
 };
 
-const CATEGORY_CHIP: Record<string, string> = {
-  GST: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/20',
-  TDS: 'bg-sky-500/10 text-sky-300 border-sky-500/20',
-  Labour: 'bg-orange-500/10 text-orange-300 border-orange-500/20',
-  Licence: 'bg-fuchsia-500/10 text-fuchsia-300 border-fuchsia-500/20',
-  IT: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20',
-  Other: 'bg-zinc-500/10 text-zinc-300 border-zinc-500/20',
+// Tone helper
+type Tone = { fg: string; soft: string; border: string };
+const mkTone = (hex: string): Tone => ({
+  fg: hex,
+  soft: `color-mix(in srgb, ${hex} 14%, transparent)`,
+  border: `color-mix(in srgb, ${hex} 32%, transparent)`,
+});
+
+const CATEGORY_TONE: Record<string, Tone> = {
+  GST:     mkTone('#6366f1'), // indigo
+  TDS:     mkTone('#0ea5e9'), // sky
+  Labour:  mkTone('#f97316'), // orange
+  Licence: mkTone('#d946ef'), // fuchsia
+  IT:      mkTone('#10b981'), // emerald
+  Other:   mkTone('#71717a'), // zinc
+};
+
+const STATUS_TONE: Record<'filed' | 'overdue' | 'due-soon' | 'pending', Tone> = {
+  filed:     mkTone('#10b981'),
+  overdue:   mkTone('#ef4444'),
+  'due-soon': mkTone('#f59e0b'),
+  pending:   mkTone('#71717a'),
+};
+
+const SCOPE_TONE: Record<'state' | 'stream' | 'branch', Tone> = {
+  state:  mkTone('#3b82f6'),
+  stream: mkTone('#8b5cf6'),
+  branch: mkTone('#71717a'),
 };
 
 function daysBetween(a: string, b: string): number {
@@ -103,47 +124,86 @@ function effectiveStatus(c: Compliance): 'pending' | 'filed' | 'overdue' | 'due-
   return 'pending';
 }
 
-function statusChip(s: ReturnType<typeof effectiveStatus>): string {
-  switch (s) {
-    case 'filed':    return 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20';
-    case 'overdue':  return 'bg-red-500/10 text-red-300 border-red-500/20';
-    case 'due-soon': return 'bg-amber-500/10 text-amber-300 border-amber-500/20';
-    default:         return 'bg-zinc-500/10 text-zinc-300 border-zinc-500/20';
-  }
-}
-
-function statusDotClass(s: ReturnType<typeof effectiveStatus>): string {
-  switch (s) {
-    case 'filed':    return 'bg-emerald-400';
-    case 'overdue':  return 'bg-red-400';
-    case 'due-soon': return 'bg-amber-400';
-    default:         return 'bg-zinc-400';
-  }
-}
-
 function fmtDate(iso: string): string {
   const [y, m, d] = iso.split('-').map(n => parseInt(n, 10));
   const dt = new Date(y, m - 1, d);
   return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+function CategoryChip({ category }: { category: string }) {
+  const t = CATEGORY_TONE[category] || CATEGORY_TONE.Other;
+  return (
+    <span
+      className="inline-block px-2 py-0.5 text-[10px] font-semibold rounded"
+      style={{ background: t.soft, color: t.fg, border: `1px solid ${t.border}` }}
+    >
+      {category}
+    </span>
+  );
+}
+
+function StatusChip({ status }: { status: ReturnType<typeof effectiveStatus> }) {
+  const t = STATUS_TONE[status];
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded"
+      style={{ background: t.soft, color: t.fg, border: `1px solid ${t.border}` }}
+    >
+      <span className="w-1.5 h-1.5 rounded-full" style={{ background: t.fg }} />
+      {status === 'due-soon' ? 'Due soon' : status.charAt(0).toUpperCase() + status.slice(1)}
+    </span>
+  );
+}
+
+function CalendarStatusChip({ c, status }: { c: Compliance; status: ReturnType<typeof effectiveStatus> }) {
+  const t = STATUS_TONE[status];
+  return (
+    <div
+      title={`${c.name} — ${c.period_label} (${status})`}
+      className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded truncate"
+      style={{ background: t.soft, color: t.fg, border: `1px solid ${t.border}` }}
+    >
+      <span className="w-1 h-1 rounded-full flex-shrink-0" style={{ background: t.fg }} />
+      <span className="truncate">{c.name}</span>
+    </div>
+  );
+}
+
 function ScopeChip({ c, branchName, streamName }: { c: Compliance; branchName?: string; streamName?: string }) {
+  const t = SCOPE_TONE[c.scope_type];
+  const commonStyle = {
+    background: t.soft,
+    color: t.fg,
+    border: `1px solid ${t.border}`,
+  };
   if (c.scope_type === 'state') {
     return (
-      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium border rounded bg-blue-500/10 text-blue-300 border-blue-500/20" title="State-wide filing">
+      <span
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded"
+        style={commonStyle}
+        title="State-wide filing"
+      >
         <Globe2 size={10} /> {c.state || 'State'}
       </span>
     );
   }
   if (c.scope_type === 'stream') {
     return (
-      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium border rounded bg-purple-500/10 text-purple-300 border-purple-500/20" title="Stream-specific filing">
+      <span
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded"
+        style={commonStyle}
+        title="Stream-specific filing"
+      >
         <Layers size={10} /> {streamName || 'Stream'}{branchName ? ` · ${branchName}` : ''}
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium border rounded bg-zinc-500/10 text-zinc-300 border-zinc-500/20" title="Per-branch filing">
+    <span
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded"
+      style={commonStyle}
+      title="Per-branch filing"
+    >
       <Building2 size={10} /> {branchName || 'Branch'}
     </span>
   );
@@ -275,12 +335,22 @@ export default function CompliancesPage() {
 
   return (
     <div className="compliances-page animate-fade-in">
-      <div className="bg-dark-800 border-b border-dark-400/30 -mx-4 -mt-4 px-4 md:-mx-8 md:-mt-8 md:px-8 py-3 mb-4">
+      <div
+        className="-mx-4 -mt-4 px-4 md:-mx-8 md:-mt-8 md:px-8 py-3 mb-4"
+        style={{ background: 'var(--mt-bg-raised)', borderBottom: '1px solid var(--mt-border)' }}
+      >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <CalendarCheck size={18} className="text-accent-400" />
-            <h1 className="text-sm md:text-base font-semibold text-theme-heading">Compliances</h1>
-            <span className="text-[11px] text-theme-faint ml-1 px-2 py-0.5 bg-dark-700 rounded-lg">
+            <CalendarCheck size={18} style={{ color: 'var(--mt-accent-text)' }} />
+            <h1 className="mt-heading text-sm md:text-base">Compliances</h1>
+            <span
+              className="text-[11px] ml-1 px-2 py-0.5 rounded-lg"
+              style={{
+                background: 'var(--mt-bg-muted)',
+                color: 'var(--mt-text-faint)',
+                border: '1px solid var(--mt-border)',
+              }}
+            >
               {contextLabel}
             </span>
           </div>
@@ -288,7 +358,8 @@ export default function CompliancesPage() {
             <select
               value={freqFilter}
               onChange={e => setFreqFilter(e.target.value as any)}
-              className="input text-xs py-1.5"
+              className="mt-input"
+              style={{ fontSize: 12, padding: '6px 10px', width: 'auto' }}
             >
               <option value="all">All frequencies</option>
               <option value="monthly">Monthly</option>
@@ -299,24 +370,36 @@ export default function CompliancesPage() {
             <select
               value={statusFilter}
               onChange={e => setStatusFilter(e.target.value as any)}
-              className="input text-xs py-1.5"
+              className="mt-input"
+              style={{ fontSize: 12, padding: '6px 10px', width: 'auto' }}
             >
               <option value="all">All statuses</option>
               <option value="pending">Pending / Due soon</option>
               <option value="overdue">Overdue</option>
               <option value="filed">Filed</option>
             </select>
-            <div className="flex bg-dark-700 border border-dark-400/50 rounded-xl overflow-hidden">
+            <div
+              className="flex rounded-xl overflow-hidden"
+              style={{ background: 'var(--mt-bg-raised)', border: '1px solid var(--mt-border)' }}
+            >
               <button
                 onClick={() => setView('list')}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-all ${view === 'list' ? 'bg-accent-500/15 text-accent-400' : 'text-theme-faint hover:text-theme-secondary'}`}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors"
+                style={{
+                  color: view === 'list' ? 'var(--mt-accent-text)' : 'var(--mt-text-faint)',
+                  background: view === 'list' ? 'var(--mt-accent-soft)' : 'transparent',
+                }}
               >
                 <ListIcon size={13} />
                 List
               </button>
               <button
                 onClick={() => setView('calendar')}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-all ${view === 'calendar' ? 'bg-accent-500/15 text-accent-400' : 'text-theme-faint hover:text-theme-secondary'}`}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors"
+                style={{
+                  color: view === 'calendar' ? 'var(--mt-accent-text)' : 'var(--mt-text-faint)',
+                  background: view === 'calendar' ? 'var(--mt-accent-soft)' : 'transparent',
+                }}
               >
                 <CalendarDays size={13} />
                 Calendar
@@ -325,7 +408,8 @@ export default function CompliancesPage() {
             {canEdit && (
               <Link
                 to="/vcfo/compliances/settings"
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-dark-700 text-theme-secondary border border-dark-400/50 hover:bg-dark-600 rounded-xl transition-colors"
+                className="mt-btn-ghost"
+                style={{ padding: '6px 10px', fontSize: 12 }}
                 title="Manage registered services (GST, TDS, PF, …) and their auto-generated trackers"
               >
                 <Settings size={13} />
@@ -335,7 +419,8 @@ export default function CompliancesPage() {
             {canEdit && (
               <button
                 onClick={() => setAddOpen(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-accent-500/15 text-accent-300 border border-accent-500/30 hover:bg-accent-500/25 rounded-xl transition-colors"
+                className="mt-btn-soft"
+                style={{ padding: '6px 10px', fontSize: 12 }}
               >
                 <Plus size={13} />
                 Add compliance
@@ -353,12 +438,18 @@ export default function CompliancesPage() {
       </div>
 
       {loading ? (
-        <div className="bg-dark-800 border border-dark-400/30 rounded-2xl p-10 text-center">
-          <p className="text-theme-muted">Loading…</p>
+        <div className="mt-card p-10 text-center">
+          <p style={{ color: 'var(--mt-text-muted)' }}>Loading…</p>
         </div>
       ) : error ? (
-        <div className="bg-dark-800 border border-red-500/30 rounded-2xl p-10 text-center">
-          <p className="text-red-400 font-medium">{error}</p>
+        <div
+          className="rounded-2xl p-10 text-center"
+          style={{
+            background: 'var(--mt-bg-surface)',
+            border: '1px solid var(--mt-danger-border)',
+          }}
+        >
+          <p className="font-medium" style={{ color: 'var(--mt-danger-text)' }}>{error}</p>
         </div>
       ) : view === 'list' ? (
         <ListView
@@ -391,19 +482,23 @@ export default function CompliancesPage() {
 }
 
 function SummaryCard({ label, value, color, icon }: { label: string; value: number; color: 'zinc' | 'amber' | 'red' | 'emerald'; icon: React.ReactNode }) {
-  const tone = {
-    zinc: 'text-zinc-300 bg-zinc-500/10 border-zinc-500/20',
-    amber: 'text-amber-300 bg-amber-500/10 border-amber-500/20',
-    red: 'text-red-300 bg-red-500/10 border-red-500/20',
-    emerald: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20',
-  }[color];
+  const tone: Record<string, { bg: string; fg: string; border: string }> = {
+    zinc: { bg: 'var(--mt-bg-muted)', fg: 'var(--mt-text-secondary)', border: 'var(--mt-border)' },
+    amber: { bg: 'var(--mt-warn-soft)', fg: 'var(--mt-warn-text)', border: 'var(--mt-warn-border)' },
+    red: { bg: 'var(--mt-danger-soft)', fg: 'var(--mt-danger-text)', border: 'var(--mt-danger-border)' },
+    emerald: { bg: 'var(--mt-accent-soft)', fg: 'var(--mt-accent-text)', border: 'var(--mt-accent-border)' },
+  };
+  const t = tone[color];
   return (
-    <div className={`border rounded-2xl px-4 py-3 ${tone}`}>
+    <div
+      className="rounded-2xl px-4 py-3"
+      style={{ background: t.bg, color: t.fg, border: `1px solid ${t.border}` }}
+    >
       <div className="flex items-center justify-between">
         <span className="text-[11px] uppercase tracking-wider font-semibold opacity-80">{label}</span>
         {icon}
       </div>
-      <div className="text-2xl font-bold mt-1">{value}</div>
+      <div className="mt-num text-2xl font-bold mt-1">{value}</div>
     </div>
   );
 }
@@ -423,17 +518,24 @@ function ListView({
 }) {
   if (items.length === 0) {
     return (
-      <div className="bg-dark-800 border border-dark-400/30 rounded-2xl p-10 text-center">
-        <p className="text-theme-muted mb-1 font-medium">No compliances match these filters.</p>
-        <p className="text-sm text-theme-faint">Use "Add compliance" to create one from the catalog.</p>
+      <div className="mt-card p-10 text-center">
+        <p className="mb-1 font-medium" style={{ color: 'var(--mt-text-muted)' }}>
+          No compliances match these filters.
+        </p>
+        <p className="text-sm" style={{ color: 'var(--mt-text-faint)' }}>
+          Use "Add compliance" to create one from the catalog.
+        </p>
       </div>
     );
   }
   return (
-    <div className="bg-dark-800 border border-dark-400/30 rounded-2xl overflow-hidden">
+    <div className="mt-card overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full text-xs md:text-[13px]">
-          <thead className="bg-dark-700/60 text-theme-faint uppercase text-[10px] tracking-wider">
+          <thead
+            className="uppercase text-[10px] tracking-wider"
+            style={{ background: 'var(--mt-bg-muted)', color: 'var(--mt-text-faint)' }}
+          >
             <tr>
               <th className="text-left px-4 py-2.5 font-semibold">Name</th>
               <th className="text-left px-4 py-2.5 font-semibold">Category</th>
@@ -445,29 +547,35 @@ function ListView({
               <th className="text-right px-4 py-2.5 font-semibold">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-dark-400/30">
-            {items.map(c => {
+          <tbody>
+            {items.map((c, idx) => {
               const eff = effectiveStatus(c);
               const branch = branchById.get(c.branch_id);
               return (
-                <tr key={c.id} className="hover:bg-dark-700/40">
-                  <td className="px-4 py-2.5 text-theme-primary font-medium">{c.name}</td>
+                <tr
+                  key={c.id}
+                  style={{
+                    borderTop: idx === 0 ? undefined : '1px solid var(--mt-border)',
+                  }}
+                  className="hover:bg-[var(--mt-bg-muted)] transition-colors"
+                >
+                  <td
+                    className="px-4 py-2.5 font-medium"
+                    style={{ color: 'var(--mt-text-primary)' }}
+                  >
+                    {c.name}
+                  </td>
                   <td className="px-4 py-2.5">
-                    <span className={`inline-block px-2 py-0.5 text-[10px] font-medium border rounded ${CATEGORY_CHIP[c.category] || CATEGORY_CHIP.Other}`}>
-                      {c.category}
-                    </span>
+                    <CategoryChip category={c.category} />
                   </td>
                   <td className="px-4 py-2.5">
                     <ScopeChip c={c} branchName={branch?.name} />
                   </td>
-                  <td className="px-4 py-2.5 text-theme-secondary">{FREQ_LABEL[c.frequency]}</td>
-                  <td className="px-4 py-2.5 text-theme-secondary">{c.period_label}</td>
-                  <td className="px-4 py-2.5 text-theme-secondary">{fmtDate(c.due_date)}</td>
+                  <td className="px-4 py-2.5" style={{ color: 'var(--mt-text-secondary)' }}>{FREQ_LABEL[c.frequency]}</td>
+                  <td className="px-4 py-2.5" style={{ color: 'var(--mt-text-secondary)' }}>{c.period_label}</td>
+                  <td className="px-4 py-2.5 mt-num" style={{ color: 'var(--mt-text-secondary)' }}>{fmtDate(c.due_date)}</td>
                   <td className="px-4 py-2.5">
-                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium border rounded ${statusChip(eff)}`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${statusDotClass(eff)}`} />
-                      {eff === 'due-soon' ? 'Due soon' : eff.charAt(0).toUpperCase() + eff.slice(1)}
-                    </span>
+                    <StatusChip status={eff} />
                   </td>
                   <td className="px-4 py-2.5 text-right">
                     <div className="inline-flex items-center gap-1">
@@ -475,7 +583,8 @@ function ListView({
                         <button
                           onClick={() => onFile(c)}
                           title="Mark as filed"
-                          className="p-1.5 text-emerald-400 hover:bg-emerald-500/10 rounded transition-colors"
+                          className="p-1.5 rounded transition-colors"
+                          style={{ color: 'var(--mt-accent-text)' }}
                         >
                           <CheckCircle2 size={14} />
                         </button>
@@ -484,7 +593,10 @@ function ListView({
                         <button
                           onClick={() => onDelete(c)}
                           title="Delete"
-                          className="p-1.5 text-theme-faint hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                          className="p-1.5 rounded transition-colors"
+                          style={{ color: 'var(--mt-text-faint)' }}
+                          onMouseEnter={e => { e.currentTarget.style.color = 'var(--mt-danger-text)'; e.currentTarget.style.background = 'var(--mt-danger-soft)'; }}
+                          onMouseLeave={e => { e.currentTarget.style.color = 'var(--mt-text-faint)'; e.currentTarget.style.background = 'transparent'; }}
                         >
                           <Trash2 size={14} />
                         </button>
@@ -535,32 +647,40 @@ function CalendarView({
   const isCurrentMonth = today.getFullYear() === month.year && today.getMonth() === month.month;
 
   return (
-    <div className="bg-dark-800 border border-dark-400/30 rounded-2xl overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-dark-400/30">
+    <div className="mt-card overflow-hidden">
+      <div
+        className="flex items-center justify-between px-4 py-3"
+        style={{ borderBottom: '1px solid var(--mt-border)' }}
+      >
         <button
           onClick={() => {
             const m = month.month === 0 ? 11 : month.month - 1;
             const y = month.month === 0 ? month.year - 1 : month.year;
             onMonthChange({ year: y, month: m });
           }}
-          className="p-1.5 text-theme-faint hover:text-theme-primary hover:bg-dark-700 rounded-lg transition-colors"
+          className="p-1.5 rounded-lg transition-colors"
+          style={{ color: 'var(--mt-text-faint)' }}
         >
           <ChevronLeft size={16} />
         </button>
-        <h2 className="text-sm font-semibold text-theme-heading">{monthLabel}</h2>
+        <h2 className="mt-heading text-sm">{monthLabel}</h2>
         <button
           onClick={() => {
             const m = month.month === 11 ? 0 : month.month + 1;
             const y = month.month === 11 ? month.year + 1 : month.year;
             onMonthChange({ year: y, month: m });
           }}
-          className="p-1.5 text-theme-faint hover:text-theme-primary hover:bg-dark-700 rounded-lg transition-colors"
+          className="p-1.5 rounded-lg transition-colors"
+          style={{ color: 'var(--mt-text-faint)' }}
         >
           <ChevronRight size={16} />
         </button>
       </div>
 
-      <div className="grid grid-cols-7 text-[10px] uppercase tracking-wider text-theme-faint font-semibold border-b border-dark-400/30">
+      <div
+        className="grid grid-cols-7 text-[10px] uppercase tracking-wider font-semibold"
+        style={{ color: 'var(--mt-text-faint)', borderBottom: '1px solid var(--mt-border)' }}
+      >
         {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => (
           <div key={d} className="px-2 py-2 text-center">{d}</div>
         ))}
@@ -573,36 +693,33 @@ function CalendarView({
           return (
             <div
               key={idx}
-              className={`min-h-[88px] border-b border-r border-dark-400/20 p-1.5 ${
-                cell.day === null ? 'bg-dark-800/50' : 'bg-dark-800'
-              } ${isToday ? 'ring-1 ring-inset ring-accent-500/40' : ''}`}
+              className="min-h-[88px] p-1.5"
+              style={{
+                background: cell.day === null ? 'var(--mt-bg-muted)' : 'var(--mt-bg-raised)',
+                borderBottom: '1px solid var(--mt-border)',
+                borderRight: '1px solid var(--mt-border)',
+                boxShadow: isToday
+                  ? 'inset 0 0 0 1px color-mix(in srgb, var(--mt-accent) 40%, transparent)'
+                  : undefined,
+              }}
             >
               {cell.day !== null && (
                 <>
-                  <div className={`text-[11px] font-semibold mb-1 ${isToday ? 'text-accent-400' : 'text-theme-faint'}`}>
+                  <div
+                    className="mt-num text-[11px] font-semibold mb-1"
+                    style={{ color: isToday ? 'var(--mt-accent-text)' : 'var(--mt-text-faint)' }}
+                  >
                     {cell.day}
                   </div>
                   <div className="space-y-1">
                     {dayItems.slice(0, 3).map(c => {
                       const eff = effectiveStatus(c);
-                      const branch = branchById.get(c.branch_id);
-                      const scopeLabel =
-                        c.scope_type === 'state'  ? (c.state ? `${c.state}` : 'State')
-                      : c.scope_type === 'stream' ? 'Stream'
-                      :                             (branch?.name || 'Branch');
-                      return (
-                        <div
-                          key={c.id}
-                          title={`${c.name} — ${c.period_label} (${eff}) · ${scopeLabel}`}
-                          className={`flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium border rounded truncate ${statusChip(eff)}`}
-                        >
-                          <span className={`w-1 h-1 rounded-full flex-shrink-0 ${statusDotClass(eff)}`} />
-                          <span className="truncate">{c.name}</span>
-                        </div>
-                      );
+                      return <CalendarStatusChip key={c.id} c={c} status={eff} />;
                     })}
                     {dayItems.length > 3 && (
-                      <div className="text-[10px] text-theme-faint px-1">+ {dayItems.length - 3} more</div>
+                      <div className="text-[10px] px-1" style={{ color: 'var(--mt-text-faint)' }}>
+                        + {dayItems.length - 3} more
+                      </div>
                     )}
                   </div>
                 </>
@@ -714,17 +831,21 @@ function AddModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-dark-800 border border-dark-400/40 rounded-2xl shadow-2xl max-w-lg w-[92%] p-6 max-h-[90vh] overflow-y-auto">
+      <div
+        className="mt-card max-w-lg w-[92%] p-6 max-h-[90vh] overflow-y-auto"
+        style={{ boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)' }}
+      >
         <div className="flex items-start justify-between mb-4">
           <div>
-            <h3 className="text-base font-semibold text-theme-heading">Add compliance</h3>
-            <p className="text-xs text-theme-faint mt-0.5">
+            <h3 className="mt-heading text-base">Add compliance</h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--mt-text-faint)' }}>
               Pick a compliance from the catalog, then choose how it applies.
             </p>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 text-theme-faint hover:text-theme-primary hover:bg-dark-700 rounded-lg transition-colors"
+            className="p-1.5 rounded-lg transition-colors"
+            style={{ color: 'var(--mt-text-faint)' }}
           >
             <X size={16} />
           </button>
@@ -732,11 +853,11 @@ function AddModal({
 
         <div className="space-y-3">
           <div>
-            <label className="block text-xs text-theme-secondary mb-1">Compliance</label>
+            <label className="block text-xs mb-1" style={{ color: 'var(--mt-text-secondary)' }}>Compliance</label>
             <select
               value={catalogId ?? ''}
               onChange={e => setCatalogId(e.target.value ? Number(e.target.value) : null)}
-              className="input text-sm w-full"
+              className="mt-input"
             >
               <option value="" disabled>Select a compliance…</option>
               {catalog.map(c => (
@@ -746,13 +867,13 @@ function AddModal({
               ))}
             </select>
             {selected?.description && (
-              <p className="text-[11px] text-theme-faint mt-1">{selected.description}</p>
+              <p className="text-[11px] mt-1" style={{ color: 'var(--mt-text-faint)' }}>{selected.description}</p>
             )}
           </div>
 
           {/* Applicability picker */}
           <div>
-            <label className="block text-xs text-theme-secondary mb-1.5">Applicability</label>
+            <label className="block text-xs mb-1.5" style={{ color: 'var(--mt-text-secondary)' }}>Applicability</label>
             <div className="grid grid-cols-3 gap-2">
               {(['state', 'branch', 'stream'] as const).map(t => {
                 const active = scopeType === t;
@@ -762,11 +883,12 @@ function AddModal({
                     key={t}
                     type="button"
                     onClick={() => setScopeType(t)}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-xl border transition-colors ${
-                      active
-                        ? 'bg-accent-500/15 text-accent-300 border-accent-500/40'
-                        : 'bg-dark-700 text-theme-secondary border-dark-400/50 hover:bg-dark-600'
-                    }`}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-xl transition-colors"
+                    style={{
+                      background: active ? 'var(--mt-accent-soft)' : 'var(--mt-bg-raised)',
+                      color: active ? 'var(--mt-accent-text)' : 'var(--mt-text-secondary)',
+                      border: `1px solid ${active ? 'var(--mt-accent-border)' : 'var(--mt-border)'}`,
+                    }}
                   >
                     <Icon size={13} />
                     <span className="capitalize">{t}</span>
@@ -774,18 +896,18 @@ function AddModal({
                 );
               })}
             </div>
-            <p className="text-[11px] text-theme-faint mt-1.5">{scopeHintText}</p>
+            <p className="text-[11px] mt-1.5" style={{ color: 'var(--mt-text-faint)' }}>{scopeHintText}</p>
           </div>
 
           {/* Scope-specific fields */}
           {scopeType === 'state' && (
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-theme-secondary mb-1">State</label>
+                <label className="block text-xs mb-1" style={{ color: 'var(--mt-text-secondary)' }}>State</label>
                 <select
                   value={state}
                   onChange={e => setState(e.target.value)}
-                  className="input text-sm w-full"
+                  className="mt-input"
                 >
                   <option value="" disabled>Select a state…</option>
                   {availableStates.map(s => (
@@ -794,11 +916,11 @@ function AddModal({
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-theme-secondary mb-1">Anchor branch</label>
+                <label className="block text-xs mb-1" style={{ color: 'var(--mt-text-secondary)' }}>Anchor branch</label>
                 <select
                   value={branchId ?? ''}
                   onChange={e => setBranchId(e.target.value ? Number(e.target.value) : null)}
-                  className="input text-sm w-full"
+                  className="mt-input"
                 >
                   <option value="" disabled>Select a branch in this state…</option>
                   {branches.filter(b => !state || b.state?.toUpperCase() === state).map(b => (
@@ -811,11 +933,11 @@ function AddModal({
 
           {scopeType === 'branch' && (
             <div>
-              <label className="block text-xs text-theme-secondary mb-1">Branch</label>
+              <label className="block text-xs mb-1" style={{ color: 'var(--mt-text-secondary)' }}>Branch</label>
               <select
                 value={branchId ?? ''}
                 onChange={e => setBranchId(e.target.value ? Number(e.target.value) : null)}
-                className="input text-sm w-full"
+                className="mt-input"
               >
                 <option value="" disabled>Select a branch…</option>
                 {branches.map(b => (
@@ -830,11 +952,11 @@ function AddModal({
           {scopeType === 'stream' && (
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-theme-secondary mb-1">Branch</label>
+                <label className="block text-xs mb-1" style={{ color: 'var(--mt-text-secondary)' }}>Branch</label>
                 <select
                   value={branchId ?? ''}
                   onChange={e => setBranchId(e.target.value ? Number(e.target.value) : null)}
-                  className="input text-sm w-full"
+                  className="mt-input"
                 >
                   <option value="" disabled>Select a branch…</option>
                   {branches.map(b => (
@@ -843,11 +965,11 @@ function AddModal({
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-theme-secondary mb-1">Stream</label>
+                <label className="block text-xs mb-1" style={{ color: 'var(--mt-text-secondary)' }}>Stream</label>
                 <select
                   value={streamId ?? ''}
                   onChange={e => setStreamId(e.target.value ? Number(e.target.value) : null)}
-                  className="input text-sm w-full"
+                  className="mt-input"
                   disabled={branchStreams.length === 0}
                 >
                   <option value="" disabled>
@@ -863,63 +985,65 @@ function AddModal({
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs text-theme-secondary mb-1">Due date (optional)</label>
+              <label className="block text-xs mb-1" style={{ color: 'var(--mt-text-secondary)' }}>Due date (optional)</label>
               <input
                 type="date"
                 value={dueDate}
                 onChange={e => setDueDate(e.target.value)}
-                className="input text-sm w-full"
+                className="mt-input"
               />
-              <p className="text-[10px] text-theme-faint mt-1">Leave blank to auto-derive.</p>
+              <p className="text-[10px] mt-1" style={{ color: 'var(--mt-text-faint)' }}>Leave blank to auto-derive.</p>
             </div>
             <div>
-              <label className="block text-xs text-theme-secondary mb-1">Period label (optional)</label>
+              <label className="block text-xs mb-1" style={{ color: 'var(--mt-text-secondary)' }}>Period label (optional)</label>
               <input
                 type="text"
                 value={periodLabel}
                 onChange={e => setPeriodLabel(e.target.value)}
                 placeholder="e.g. Apr 2026"
-                className="input text-sm w-full"
+                className="mt-input"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-xs text-theme-secondary mb-1">Assignee (optional)</label>
+            <label className="block text-xs mb-1" style={{ color: 'var(--mt-text-secondary)' }}>Assignee (optional)</label>
             <input
               type="text"
               value={assignee}
               onChange={e => setAssignee(e.target.value)}
               placeholder="Name of responsible person"
-              className="input text-sm w-full"
+              className="mt-input"
             />
           </div>
 
           <div>
-            <label className="block text-xs text-theme-secondary mb-1">Notes (optional)</label>
+            <label className="block text-xs mb-1" style={{ color: 'var(--mt-text-secondary)' }}>Notes (optional)</label>
             <textarea
               value={notes}
               onChange={e => setNotes(e.target.value)}
               rows={2}
-              className="input text-sm w-full"
+              className="mt-input"
             />
           </div>
 
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          {error && <p className="text-xs" style={{ color: 'var(--mt-danger-text)' }}>{error}</p>}
         </div>
 
         <div className="flex justify-end gap-2 mt-5">
           <button
             onClick={onClose}
             disabled={submitting}
-            className="px-3 py-1.5 text-xs text-theme-secondary hover:text-theme-primary hover:bg-dark-700 rounded-lg transition-colors"
+            className="mt-btn-ghost"
+            style={{ padding: '6px 10px', fontSize: 12 }}
           >
             Cancel
           </button>
           <button
             onClick={submit}
             disabled={!canSubmit}
-            className="px-3 py-1.5 text-xs font-medium bg-accent-500/20 text-accent-300 hover:bg-accent-500/30 border border-accent-500/40 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="mt-btn-soft"
+            style={{ padding: '6px 10px', fontSize: 12 }}
           >
             {submitting ? 'Adding…' : 'Add compliance'}
           </button>

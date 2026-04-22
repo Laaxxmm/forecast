@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -36,6 +36,39 @@
   --surface-glass-bg: rgba(255, 255, 255, 0.72);
   --surface-glass-border: rgba(203, 213, 225, 0.6);
 
+  /* ─────────────────────────────────────────────────────────────
+     Vision-Indefine tokens (--mt-*) — parallel to --c-* system.
+     Used by the Accounting Tracker redesign and friends.
+     ───────────────────────────────────────────────────────────── */
+  --mt-bg-app:       #f6f7f9;
+  --mt-bg-surface:   #ffffff;
+  --mt-bg-raised:    #ffffff;
+  --mt-bg-muted:     #f1f3f6;
+  --mt-bg-subtle:    #f8f9fb;
+  --mt-border:       rgba(15, 23, 42, 0.08);
+  --mt-border-strong:rgba(15, 23, 42, 0.14);
+  --mt-text-heading: #0f172a;
+  --mt-text-primary: #1e293b;
+  --mt-text-secondary:#475569;
+  --mt-text-muted:   #64748b;
+  --mt-text-faint:   #94a3b8;
+  --mt-accent:       #10b981;
+  --mt-accent-soft:  rgba(16, 185, 129, 0.10);
+  --mt-accent-border:rgba(16, 185, 129, 0.28);
+  --mt-accent-text:  #047857;
+  --mt-info:         #3b82f6;
+  --mt-info-soft:    rgba(59, 130, 246, 0.10);
+  --mt-info-border:  rgba(59, 130, 246, 0.25);
+  --mt-info-text:    #1d4ed8;
+  --mt-warn-soft:    rgba(245, 158, 11, 0.12);
+  --mt-warn-border:  rgba(245, 158, 11, 0.28);
+  --mt-warn-text:    #b45309;
+  --mt-danger-soft:  rgba(239, 68, 68, 0.10);
+  --mt-danger-border:rgba(239, 68, 68, 0.28);
+  --mt-danger-text:  #b91c1c;
+  --mt-shadow-card:  0 1px 2px rgba(15,23,42,0.04), 0 2px 8px -2px rgba(15,23,42,0.06);
+  --mt-shadow-pop:   0 10px 32px -8px rgba(15,23,42,0.16), 0 2px 8px rgba(15,23,42,0.06);
+
   /* Component tokens */
   --scrollbar-track: transparent;
   --scrollbar-thumb: #cbd5e1;
@@ -62,6 +95,36 @@
                     radial-gradient(900px 500px at 100% 0%, rgba(59,130,246,0.05), transparent 55%);
   --surface-glass-bg: rgba(19, 22, 32, 0.72);
   --surface-glass-border: rgba(44, 49, 66, 0.7);
+
+  /* Vision-Indefine dark tokens */
+  --mt-bg-app:       #0a0c12;
+  --mt-bg-surface:   #10131c;
+  --mt-bg-raised:    #141826;
+  --mt-bg-muted:     #1a1f2e;
+  --mt-bg-subtle:    #0e1119;
+  --mt-border:       rgba(148, 163, 184, 0.10);
+  --mt-border-strong:rgba(148, 163, 184, 0.18);
+  --mt-text-heading: #f8fafc;
+  --mt-text-primary: #e2e8f0;
+  --mt-text-secondary:#cbd5e1;
+  --mt-text-muted:   #94a3b8;
+  --mt-text-faint:   #64748b;
+  --mt-accent:       #10b981;
+  --mt-accent-soft:  rgba(16, 185, 129, 0.12);
+  --mt-accent-border:rgba(16, 185, 129, 0.30);
+  --mt-accent-text:  #34d399;
+  --mt-info:         #60a5fa;
+  --mt-info-soft:    rgba(59, 130, 246, 0.15);
+  --mt-info-border:  rgba(96, 165, 250, 0.28);
+  --mt-info-text:    #93c5fd;
+  --mt-warn-soft:    rgba(245, 158, 11, 0.15);
+  --mt-warn-border:  rgba(245, 158, 11, 0.30);
+  --mt-warn-text:    #fbbf24;
+  --mt-danger-soft:  rgba(239, 68, 68, 0.15);
+  --mt-danger-border:rgba(239, 68, 68, 0.30);
+  --mt-danger-text:  #f87171;
+  --mt-shadow-card:  0 1px 2px rgba(0,0,0,0.3), 0 2px 8px -2px rgba(0,0,0,0.35);
+  --mt-shadow-pop:   0 12px 40px -12px rgba(0,0,0,0.6), 0 4px 12px rgba(0,0,0,0.3);
 
   --scrollbar-track: transparent;
   --scrollbar-thumb: #2a2f44;
@@ -565,4 +628,281 @@ button:focus-visible {
     background: linear-gradient(90deg, transparent, rgba(255,255,255,0.25), transparent);
     animation: shimmer-slide 2.4s infinite;
   }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     Vision-Indefine utility classes — Accounting Tracker redesign.
+     Prefix: .mt-* (Magna Tracker design-system tokens).
+     These render identically across both themes via CSS vars.
+     ═══════════════════════════════════════════════════════════════════ */
+
+  /* Monospace for numeric tabular data */
+  .mt-num {
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  /* Tight heading preset */
+  .mt-heading {
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--mt-text-heading);
+  }
+
+  /* Card surfaces */
+  .mt-card {
+    background-color: var(--mt-bg-raised);
+    border: 1px solid var(--mt-border);
+    border-radius: 16px;
+    box-shadow: var(--mt-shadow-card);
+  }
+  .mt-card-flat {
+    background-color: var(--mt-bg-raised);
+    border: 1px solid var(--mt-border);
+    border-radius: 14px;
+  }
+
+  /* Pills (status / category chips) */
+  .mt-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.2;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .mt-pill-sm { padding: 2px 6px; font-size: 10px; border-radius: 5px; }
+  .mt-pill--success { background: var(--mt-accent-soft); color: var(--mt-accent-text); border-color: var(--mt-accent-border); }
+  .mt-pill--info    { background: var(--mt-info-soft);   color: var(--mt-info-text);   border-color: var(--mt-info-border); }
+  .mt-pill--warn    { background: var(--mt-warn-soft);   color: var(--mt-warn-text);   border-color: var(--mt-warn-border); }
+  .mt-pill--danger  { background: var(--mt-danger-soft); color: var(--mt-danger-text); border-color: var(--mt-danger-border); }
+  .mt-pill--neutral { background: var(--mt-bg-muted);    color: var(--mt-text-secondary); border-color: var(--mt-border); }
+
+  /* Status dots (glowing) */
+  .mt-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .mt-dot--success { background: #10b981; box-shadow: 0 0 6px rgba(16,185,129,0.5); }
+  .mt-dot--warn    { background: #f59e0b; box-shadow: 0 0 6px rgba(245,158,11,0.4); }
+  .mt-dot--danger  { background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,0.4); }
+  .mt-dot--info    { background: #3b82f6; box-shadow: 0 0 6px rgba(59,130,246,0.4); }
+
+  /* Tone cards (review queue / due-this-week / overdue) */
+  .mt-tone-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+  }
+  .mt-tone-card--accent { background: var(--mt-accent-soft); border-color: var(--mt-accent-border); color: var(--mt-accent-text); }
+  .mt-tone-card--warn   { background: var(--mt-warn-soft);   border-color: var(--mt-warn-border);   color: var(--mt-warn-text); }
+  .mt-tone-card--danger { background: var(--mt-danger-soft); border-color: var(--mt-danger-border); color: var(--mt-danger-text); }
+  .mt-tone-card--info   { background: var(--mt-info-soft);   border-color: var(--mt-info-border);   color: var(--mt-info-text); }
+
+  .mt-tone-icon {
+    width: 30px; height: 30px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    background: rgba(255,255,255,0.08);
+  }
+
+  /* Avatar */
+  .mt-avatar {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--mt-bg-muted), var(--mt-bg-surface));
+    border: 1px solid var(--mt-border);
+    font-size: 10px; font-weight: 600;
+    color: var(--mt-text-secondary);
+    flex-shrink: 0;
+  }
+
+  /* Filter chips (segmented pill row) */
+  .mt-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 11px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--mt-bg-raised);
+    color: var(--mt-text-muted);
+    border: 1px solid var(--mt-border);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color .12s ease, color .12s ease, border-color .12s ease;
+  }
+  .mt-chip:hover { color: var(--mt-text-primary); }
+  .mt-chip--active {
+    background: var(--mt-accent-soft);
+    color: var(--mt-accent-text);
+    border-color: var(--mt-accent-border);
+  }
+
+  /* Emerald gradient CTA (used on TaskCardMini submit action and headers) */
+  .mt-btn-gradient {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 8px 14px; border-radius: 10px;
+    font-size: 13px; font-weight: 500; color: #fff;
+    background: linear-gradient(135deg, #10b981, #059669);
+    border: 1px solid rgba(5,150,105,0.5);
+    box-shadow: 0 1px 2px rgba(16,185,129,0.3), inset 0 1px 0 rgba(255,255,255,0.15);
+    cursor: pointer;
+    transition: filter .2s ease, box-shadow .2s ease, transform .15s cubic-bezier(0.4,0,0.2,1);
+  }
+  .mt-btn-gradient:hover:not(:disabled) {
+    filter: brightness(1.04);
+    box-shadow: 0 6px 18px -4px rgba(16,185,129,0.45), inset 0 1px 0 rgba(255,255,255,0.2);
+  }
+  .mt-btn-gradient:active:not(:disabled) { transform: translateY(1px); }
+  .mt-btn-gradient:disabled { opacity: 0.55; cursor: not-allowed; }
+
+  /* Ghost / secondary button */
+  .mt-btn-ghost {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 7px 12px; border-radius: 10px;
+    font-size: 13px; font-weight: 500;
+    color: var(--mt-text-muted);
+    background: var(--mt-bg-raised);
+    border: 1px solid var(--mt-border);
+    cursor: pointer;
+    transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+  }
+  .mt-btn-ghost:hover:not(:disabled) {
+    color: var(--mt-text-primary);
+    background: var(--mt-bg-muted);
+  }
+  .mt-btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Soft accent button (outlined emerald) */
+  .mt-btn-soft {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 7px 12px; border-radius: 10px;
+    font-size: 13px; font-weight: 500;
+    color: var(--mt-accent-text);
+    background: var(--mt-accent-soft);
+    border: 1px solid var(--mt-accent-border);
+    cursor: pointer;
+    transition: background-color .15s ease;
+  }
+  .mt-btn-soft:hover:not(:disabled) { filter: brightness(1.08); }
+
+  /* Vision input */
+  .mt-input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--mt-bg-raised);
+    border: 1px solid var(--mt-border);
+    color: var(--mt-text-primary);
+    font-size: 13px;
+    line-height: 1.4;
+    transition: border-color .15s ease, box-shadow .15s ease;
+    outline: none;
+  }
+  .mt-input::placeholder { color: var(--mt-text-faint); }
+  .mt-input:focus {
+    border-color: var(--mt-accent);
+    box-shadow: 0 0 0 3px var(--mt-accent-soft);
+  }
+  .mt-input:disabled { opacity: 0.6; cursor: not-allowed; }
+
+  /* Vision top-nav tab */
+  .mt-tab {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 12px 16px;
+    font-size: 13px; font-weight: 500;
+    color: var(--mt-text-faint);
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition: color .15s ease, border-color .15s ease;
+    white-space: nowrap;
+  }
+  .mt-tab:hover { color: var(--mt-text-primary); }
+  .mt-tab--active {
+    color: var(--mt-accent-text);
+    border-bottom-color: var(--mt-accent);
+  }
+
+  /* Vision KPI tile (big number + label + trend) */
+  .mt-kpi {
+    background-color: var(--mt-bg-raised);
+    border: 1px solid var(--mt-border);
+    border-radius: 16px;
+    padding: 18px 20px;
+    box-shadow: var(--mt-shadow-card);
+    position: relative;
+    overflow: hidden;
+    transition: transform .15s ease, border-color .15s ease;
+  }
+  .mt-kpi:hover { border-color: var(--mt-border-strong, var(--mt-border)); }
+  .mt-kpi__label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--mt-text-faint);
+  }
+  .mt-kpi__value {
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--mt-text-heading);
+    margin-top: 6px;
+  }
+  .mt-kpi__sub {
+    font-size: 11px;
+    color: var(--mt-text-muted);
+    margin-top: 6px;
+  }
+
+  /* Vision sidebar link */
+  .mt-sidebar-link {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    color: var(--mt-text-muted);
+    font-size: 13px; font-weight: 500;
+    transition: background-color .12s ease, color .12s ease;
+    cursor: pointer;
+  }
+  .mt-sidebar-link:hover {
+    color: var(--mt-text-primary);
+    background: var(--mt-bg-muted);
+  }
+  .mt-sidebar-link--active {
+    color: var(--mt-accent-text);
+    background: var(--mt-accent-soft);
+    border: 1px solid var(--mt-accent-border);
+  }
+
+  /* Divider line inside cards / rows */
+  .mt-divider {
+    height: 1px;
+    background: var(--mt-border);
+    width: 100%;
+  }
+
+  /* Sidebar NavLink (active + hover) — used by Sidebar.tsx */
+  .mt-nav-link {
+    color: var(--mt-text-muted);
+  }
+  .mt-nav-link:hover {
+    color: var(--mt-text-primary);
+    background: var(--mt-bg-muted);
+  }
+  .mt-nav-link--active {
+    color: var(--mt-accent-text);
+    background: var(--mt-accent-soft);
+    border: 1px solid var(--mt-accent-border);
+  }
+  .mt-nav-link--active:hover { background: var(--mt-accent-soft); }
 }
