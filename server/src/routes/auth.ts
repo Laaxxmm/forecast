@@ -129,7 +129,14 @@ router.post('/login', loginLimiter, async (req, res) => {
     const isMultiBranch = !!clientUser.is_multi_branch;
 
     if (isMultiBranch) {
-      if (clientUser.role === 'admin') {
+      // Roles that see all branches (entity-wide visibility):
+      //   admin      — tenant CFO, full control
+      //   accountant — needs the whole entity to close the books
+      // Roles scoped via user_branch_access:
+      //   operational_head — limited to the branches they own
+      //   user             — legacy read-only role
+      const seesAllBranches = clientUser.role === 'admin' || clientUser.role === 'accountant';
+      if (seesAllBranches) {
         branches = platformDb.all(
           'SELECT id, name, code, city, state FROM branches WHERE client_id = ? AND is_active = 1 ORDER BY sort_order, name',
           clientUser.cid
@@ -166,9 +173,12 @@ router.post('/login', loginLimiter, async (req, res) => {
       clientUser.cid
     );
 
-    // Get stream access for non-admin users
+    // Get stream access for branch-scoped users only. admin + accountant see
+    // every stream (entity-wide); operational_head + user are restricted to
+    // rows in user_branch_stream_access.
     let streamAccess: any[] = [];
-    if (clientUser.role !== 'admin') {
+    const seesAllStreams = clientUser.role === 'admin' || clientUser.role === 'accountant';
+    if (!seesAllStreams) {
       streamAccess = platformDb.all(
         `SELECT ubsa.branch_id, ubsa.stream_id
          FROM user_branch_stream_access ubsa

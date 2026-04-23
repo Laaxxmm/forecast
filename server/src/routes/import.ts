@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { upload } from '../middleware/upload.js';
-import { requireAdmin, requireIntegration } from '../middleware/auth.js';
+import { requireRole, requireIntegration } from '../middleware/auth.js';
 import { parseHealthplix } from '../services/parsers/healthplix.js';
 import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
 import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.js';
@@ -36,7 +36,7 @@ async function resolveStreamId(req: any, integrationHint: 'clinic' | 'pharmacy' 
 
 const router = Router();
 
-router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), upload.single('file'), async (req, res) => {
+router.post('/healthplix', requireRole('admin', 'operational_head'), requireIntegration('healthplix'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
     const db = req.tenantDb!;
@@ -129,7 +129,7 @@ router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), uploa
   }
 });
 
-router.post('/oneglance-sales', requireAdmin, requireIntegration('oneglance'), upload.single('file'), async (req, res) => {
+router.post('/oneglance-sales', requireRole('admin', 'operational_head'), requireIntegration('oneglance'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
     const db = req.tenantDb!;
@@ -212,7 +212,7 @@ router.post('/oneglance-sales', requireAdmin, requireIntegration('oneglance'), u
   }
 });
 
-router.post('/oneglance-purchase', requireAdmin, requireIntegration('oneglance'), upload.single('file'), async (req, res) => {
+router.post('/oneglance-purchase', requireRole('admin', 'operational_head'), requireIntegration('oneglance'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
     const db = req.tenantDb!;
@@ -266,7 +266,7 @@ router.post('/oneglance-purchase', requireAdmin, requireIntegration('oneglance')
   }
 });
 
-router.post('/oneglance-stock', requireAdmin, requireIntegration('oneglance'), upload.single('file'), async (req, res) => {
+router.post('/oneglance-stock', requireRole('admin', 'operational_head'), requireIntegration('oneglance'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
     const db = req.tenantDb!;
@@ -308,7 +308,7 @@ router.post('/oneglance-stock', requireAdmin, requireIntegration('oneglance'), u
   }
 });
 
-router.post('/turia', requireAdmin, requireIntegration('turia'), upload.single('file'), async (req, res) => {
+router.post('/turia', requireRole('admin', 'operational_head'), requireIntegration('turia'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
     const db = req.tenantDb!;
@@ -395,7 +395,7 @@ router.get('/history', async (req, res) => {
   res.json(db.all(`SELECT * FROM import_logs WHERE 1=1${bf.where} ORDER BY created_at DESC`, ...bf.params));
 });
 
-router.delete('/:id', requireAdmin, async (req, res) => {
+router.delete('/:id', requireRole('admin', 'operational_head'), async (req, res) => {
   const db = req.tenantDb!;
   const bf = branchFilter(req);
 

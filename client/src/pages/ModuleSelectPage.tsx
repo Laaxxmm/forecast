@@ -2,6 +2,23 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import { BarChart3, TrendingUp, ShieldCheck, ClipboardCheck, Scale, ArrowLeft, Lock } from 'lucide-react';
+import { getUserRole, isSuperAdmin, type ClientRole } from '../utils/roles';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Role → module allow-list.
+//
+// Keeps the module picker honest: accountants never see a VCFO card they can't
+// open, operational_heads never see a VCFO card they're not authorised for.
+// The tenant's `enabledModules` still further narrows this — an accountant in
+// a Forecast-only tenant sees exactly one module, same as an OH.
+// Anything outside this map (admin, super_admin, or unknown) gets all modules
+// and then relies on the tenant's `enabledModules` to filter.
+// ─────────────────────────────────────────────────────────────────────────────
+const ROLE_MODULE_ALLOW: Partial<Record<ClientRole, string[]>> = {
+  operational_head: ['forecast_ops'],
+  accountant:       ['forecast_ops', 'vcfo_portal'],
+  user:             ['forecast_ops'],
+};
 
 interface ModuleInfo {
   key: string;
@@ -51,7 +68,18 @@ const MODULE_CATALOG: ModuleInfo[] = [
 export default function ModuleSelectPage() {
   const navigate = useNavigate();
   const [enabledModules, setEnabledModules] = useState<string[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const clientName = localStorage.getItem('client_name');
+
+  // Role-scoped allow-list intersected with the tenant's enabled modules.
+  // super_admin / admin bypass the role filter entirely.
+  const role = getUserRole() as ClientRole | '';
+  const roleAllow = isSuperAdmin() || role === 'admin'
+    ? null
+    : (ROLE_MODULE_ALLOW[role as ClientRole] ?? []);
+  const availableModules = roleAllow
+    ? enabledModules.filter(k => roleAllow.includes(k))
+    : enabledModules;
 
   useEffect(() => {
     // Fetch fresh module/integration data from server
@@ -61,6 +89,7 @@ export default function ModuleSelectPage() {
       setEnabledModules(mods);
       localStorage.setItem('enabled_modules', JSON.stringify(mods));
       localStorage.setItem('enabled_integrations', JSON.stringify(ints));
+      setLoaded(true);
     }).catch(() => {
       // Fallback to localStorage
       const stored = localStorage.getItem('enabled_modules');
@@ -69,11 +98,26 @@ export default function ModuleSelectPage() {
       } else {
         setEnabledModules(['forecast_ops']);
       }
+      setLoaded(true);
     });
   }, []);
 
+  // Auto-skip the picker when there's exactly one module this role can open.
+  // Runs only once the module list has hydrated to avoid bouncing off an
+  // empty initial state.
+  useEffect(() => {
+    if (!loaded) return;
+    if (availableModules.length !== 1) return;
+    const only = availableModules[0];
+    const mod = MODULE_CATALOG.find(m => m.key === only);
+    if (!mod || !mod.path) return;
+    localStorage.setItem('active_module', mod.key);
+    navigate(mod.path, { replace: true });
+  }, [loaded, availableModules, navigate]);
+
   const handleSelect = async (mod: ModuleInfo) => {
     if (!enabledModules.includes(mod.key)) return;
+    if (roleAllow && !roleAllow.includes(mod.key)) return;
     if (!mod.path) return;
     localStorage.setItem('active_module', mod.key);
     // VCFO is now a first-class React tab under /vcfo/* — same-origin SPA nav,
@@ -114,9 +158,13 @@ export default function ModuleSelectPage() {
         <p className="text-xs mt-2" style={{ color: 'var(--mt-text-faint)' }}>Select a module to get started</p>
       </div>
 
-      {/* Module Cards */}
+      {/* Module Cards — hide cards outside the role's allow-list so accountants
+          don't see Audit/Litigation and OH doesn't see VCFO. Super-admin / admin
+          keep the full catalogue so tenant ops can spot disabled modules. */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-5xl w-full">
-        {MODULE_CATALOG.map(mod => {
+        {MODULE_CATALOG
+          .filter(mod => !roleAllow || roleAllow.includes(mod.key))
+          .map(mod => {
           const enabled = enabledModules.includes(mod.key);
           const tone = colorMap[mod.color] || colorMap.accent;
           const Icon = mod.icon;

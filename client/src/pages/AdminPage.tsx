@@ -8,6 +8,11 @@ import {
   ImagePlus,
 } from 'lucide-react';
 import AgentKeysPanel from '../components/admin/AgentKeysPanel';
+import { CLIENT_ROLE_LABELS, type ClientRole } from '../utils/roles';
+
+// Four canonical tenant roles. Keep this in sync with CLIENT_ROLES in
+// server/src/middleware/auth.ts.
+const CLIENT_ROLES: ClientRole[] = ['admin', 'operational_head', 'accountant', 'user'];
 
 /* ─── Types ──────────────────────────────────────────────── */
 
@@ -1016,10 +1021,12 @@ function UsersSection({ slug, users, onReload, resetPassword }: {
             <UserRow
               key={user.id}
               user={user}
+              slug={slug}
               isLast={i === users.length - 1}
               onManageAccess={() => setAccessUser(user)}
               onResetPassword={() => resetPassword(user.id, user.username)}
               onToggleActive={() => toggleUserActive(user.id, user.is_active)}
+              onRoleChanged={onReload}
               onDelete={async () => {
                 if (!confirm(`Delete user "${user.display_name}" (@${user.username})? This cannot be undone.`)) return;
                 await api.delete(`/admin/clients/${slug}/users/${user.id}`);
@@ -1042,16 +1049,44 @@ function UsersSection({ slug, users, onReload, resetPassword }: {
   );
 }
 
-function UserRow({ user, isLast, onManageAccess, onResetPassword, onToggleActive, onDelete }: {
+function UserRow({ user, slug, isLast, onManageAccess, onResetPassword, onToggleActive, onDelete, onRoleChanged }: {
   user: ClientUser;
+  slug: string;
   isLast: boolean;
   onManageAccess: () => void;
   onResetPassword: () => void;
   onToggleActive: () => void;
   onDelete: () => void;
+  onRoleChanged: () => void;
 }) {
+  const [savingRole, setSavingRole] = useState(false);
   const isAdmin = user.role === 'admin';
-  const roleTone = isAdmin ? TONES.amber : TONES.accent;
+  // Tint by role family: admin = amber (highest), accountant = blue (VCFO tone),
+  // operational_head = teal, everyone else falls through to the muted look.
+  const roleTone: Tone = (() => {
+    switch (user.role) {
+      case 'admin': return TONES.amber;
+      case 'accountant': return TONES.blue;
+      case 'operational_head': return TONES.teal;
+      default: return TONES.accent;
+    }
+  })();
+  const roleLabel = CLIENT_ROLE_LABELS[user.role as ClientRole] || user.role;
+  const isBranchScoped = user.role === 'operational_head' || user.role === 'user';
+
+  const changeRole = async (next: ClientRole) => {
+    if (next === user.role) return;
+    setSavingRole(true);
+    try {
+      await api.put(`/admin/clients/${slug}/users/${user.id}`, { role: next });
+      onRoleChanged();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to change role');
+    } finally {
+      setSavingRole(false);
+    }
+  };
+
   return (
     <div
       className="flex items-center justify-between px-5 py-3.5"
@@ -1061,9 +1096,9 @@ function UserRow({ user, isLast, onManageAccess, onResetPassword, onToggleActive
         <div
           className="w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold"
           style={{
-            background: isAdmin ? TONES.amber.soft : 'var(--mt-bg-muted)',
-            color: isAdmin ? TONES.amber.fg : 'var(--mt-text-muted)',
-            border: '1px solid ' + (isAdmin ? TONES.amber.border : 'var(--mt-border)'),
+            background: roleTone.soft,
+            color: roleTone.fg,
+            border: `1px solid ${roleTone.border}`,
           }}
         >
           {user.display_name.charAt(0).toUpperCase()}
@@ -1073,15 +1108,42 @@ function UserRow({ user, isLast, onManageAccess, onResetPassword, onToggleActive
             <span className="text-sm font-medium" style={{ color: 'var(--mt-text)' }}>{user.display_name}</span>
             <span className="text-[11px] font-mono" style={{ color: 'var(--mt-text-faint)' }}>@{user.username}</span>
           </div>
-          <span
-            className="text-[10px] font-semibold uppercase tracking-wider"
-            style={{ color: isAdmin ? roleTone.fg : 'var(--mt-text-faint)' }}
-          >
-            {user.role}
-          </span>
+          <div className="flex items-center gap-2 mt-0.5">
+            <span
+              className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded"
+              style={{
+                color: roleTone.fg,
+                background: roleTone.soft,
+                border: `1px solid ${roleTone.border}`,
+              }}
+            >
+              {roleLabel}
+            </span>
+            {isBranchScoped && (
+              <span className="text-[10px]" style={{ color: 'var(--mt-text-faint)' }} title="Branch-scoped role — needs explicit branch assignments">
+                · branch-scoped
+              </span>
+            )}
+          </div>
         </div>
       </div>
       <div className="flex items-center gap-2">
+        <select
+          value={user.role}
+          disabled={savingRole}
+          onChange={e => changeRole(e.target.value as ClientRole)}
+          className="text-xs px-2 py-1.5 rounded-lg"
+          title="Change role"
+          style={{
+            background: 'var(--mt-bg-raised)',
+            color: 'var(--mt-text-muted)',
+            border: '1px solid var(--mt-border)',
+          }}
+        >
+          {CLIENT_ROLES.map(r => (
+            <option key={r} value={r}>{CLIENT_ROLE_LABELS[r]}</option>
+          ))}
+        </select>
         <ToneButton icon={MapPin} label="Access" tone={TONES.accent} onClick={onManageAccess} />
         <MutedButton icon={KeyRound} label="Reset PW" onClick={onResetPassword} />
         <StatusToggleButton active={!!user.is_active} onClick={onToggleActive} />
@@ -2504,7 +2566,7 @@ function AddUserForm({ slug, onAdded, onCancel }: { slug: string; onAdded: () =>
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<'user' | 'admin'>('user');
+  const [role, setRole] = useState<ClientRole>('user');
   const [showPw, setShowPw] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -2548,7 +2610,9 @@ function AddUserForm({ slug, onAdded, onCancel }: { slug: string; onAdded: () =>
             </button>
           </div>
           <p className="font-mono text-sm mt-1" style={{ color: 'var(--mt-text)' }}>
-            Role: <span style={{ color: created.role === 'admin' ? TONES.amber.fg : 'var(--mt-text-muted)' }}>{created.role}</span>
+            Role: <span style={{ color: created.role === 'admin' ? TONES.amber.fg : 'var(--mt-text-muted)' }}>
+              {CLIENT_ROLE_LABELS[created.role as ClientRole] || created.role}
+            </span>
           </p>
         </div>
         <p className="text-xs mb-3" style={{ color: TONES.amber.fg }}>Save these credentials — the password won't be shown again</p>
@@ -2585,12 +2649,23 @@ function AddUserForm({ slug, onAdded, onCancel }: { slug: string; onAdded: () =>
         </div>
         <div>
           <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>Role</label>
-          <select value={role} onChange={e => setRole(e.target.value as 'user' | 'admin')} className="mt-input text-sm">
-            <option value="user">User</option>
-            <option value="admin">Admin</option>
+          <select value={role} onChange={e => setRole(e.target.value as ClientRole)} className="mt-input text-sm">
+            {CLIENT_ROLES.map(r => (
+              <option key={r} value={r}>{CLIENT_ROLE_LABELS[r]}</option>
+            ))}
           </select>
         </div>
       </div>
+      {role === 'operational_head' && (
+        <p className="text-xs mb-2" style={{ color: TONES.amber.fg }}>
+          Operational Heads are branch-scoped — remember to assign branches in the Branches tab after creation, otherwise they'll log in and see no data.
+        </p>
+      )}
+      {role === 'accountant' && (
+        <p className="text-xs mb-2" style={{ color: 'var(--mt-text-muted)' }}>
+          Accountants get full VCFO access (Compliances, Accounting Tracker, Table View) plus forecast read-only. They cannot approve/reject accounting tasks — that stays with Admin.
+        </p>
+      )}
       {error && <p className="text-xs mb-2" style={{ color: TONES.danger.fg }}>{error}</p>}
       <div className="flex gap-2">
         <button onClick={save} disabled={saving || !username || !password || !displayName} className="mt-btn-gradient text-xs">

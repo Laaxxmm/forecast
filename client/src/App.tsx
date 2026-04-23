@@ -20,6 +20,7 @@ import AdminPage from './pages/AdminPage';
 import ModuleSelectPage from './pages/ModuleSelectPage';
 import OperationalInsightsPage from './pages/OperationalInsightsPage';
 import RevenueSharingPage from './pages/RevenueSharingPage';
+import { canSeeVcfo } from './utils/roles';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const [auth, setAuth] = useState<boolean | null>(null);
@@ -71,6 +72,13 @@ function ModuleRoute({ moduleKey, children }: { moduleKey: string; children: Rea
   return enabledModules.includes(moduleKey) ? <>{children}</> : <Navigate to="/modules" replace />;
 }
 
+// Block operational_head (and any other role without VCFO access) from /vcfo/* routes
+// at the router level. Server-side role middleware is the source of truth; this just
+// prevents a 403 screen when the user types the URL directly.
+function VcfoRoleRoute({ children }: { children: React.ReactNode }) {
+  return canSeeVcfo() ? <>{children}</> : <Navigate to="/actuals" replace />;
+}
+
 // Block regular users from a page when its module toggle is disabled
 // Admins and super_admins always have access
 function UserModuleRoute({ moduleKey, children }: { moduleKey: string; children: React.ReactNode }) {
@@ -117,10 +125,10 @@ export default function App() {
           <Route path="/revenue-sharing" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><RevenueSharingPage /></ModuleRoute></ClientRoute>} />
           <Route path="/import" element={<ClientRoute><ClientAdminRoute><ModuleRoute moduleKey="forecast_ops"><ImportPage /></ModuleRoute></ClientAdminRoute></ClientRoute>} />
           <Route path="/stream/:streamId" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><StreamDetailPage /></ModuleRoute></ClientRoute>} />
-          <Route path="/vcfo/compliances/settings" element={<ClientRoute><ClientAdminRoute><ModuleRoute moduleKey="vcfo_portal"><ComplianceSettingsPage /></ModuleRoute></ClientAdminRoute></ClientRoute>} />
-          <Route path="/vcfo/compliances" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><CompliancesPage /></ModuleRoute></ClientRoute>} />
-          <Route path="/vcfo/accounting-tasks" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><AccountingTrackerPage /></ModuleRoute></ClientRoute>} />
-          <Route path="/vcfo/*" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><VcfoModulePage /></ModuleRoute></ClientRoute>} />
+          <Route path="/vcfo/compliances/settings" element={<ClientRoute><ClientAdminRoute><ModuleRoute moduleKey="vcfo_portal"><VcfoRoleRoute><ComplianceSettingsPage /></VcfoRoleRoute></ModuleRoute></ClientAdminRoute></ClientRoute>} />
+          <Route path="/vcfo/compliances" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><VcfoRoleRoute><CompliancesPage /></VcfoRoleRoute></ModuleRoute></ClientRoute>} />
+          <Route path="/vcfo/accounting-tasks" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><VcfoRoleRoute><AccountingTrackerPage /></VcfoRoleRoute></ModuleRoute></ClientRoute>} />
+          <Route path="/vcfo/*" element={<ClientRoute><ModuleRoute moduleKey="vcfo_portal"><VcfoRoleRoute><VcfoModulePage /></VcfoRoleRoute></ModuleRoute></ClientRoute>} />
           <Route path="/settings" element={<ClientRoute><ClientAdminRoute><SettingsPage /></ClientAdminRoute></ClientRoute>} />
           <Route path="/admin/*" element={<SuperAdminRoute><AdminPage /></SuperAdminRoute>} />
           <Route path="/" element={<DefaultRedirect />} />

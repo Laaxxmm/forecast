@@ -4,10 +4,13 @@ import { requireInt, requireString, requireNumber, optionalString, optionalNumbe
 
 const router = Router();
 
-// Write-protection: only admin/super_admin can modify forecast data
+// Write-protection: admin, operational_head, and super_admin can modify forecast data.
+// Accountants (read-only forecast) and legacy 'user' role are blocked.
 function requireWriteAccess(req: Request, res: Response, next: NextFunction) {
-  if (req.userType === 'super_admin' || req.session?.role === 'admin') return next();
-  return res.status(403).json({ error: 'Write access requires admin role' });
+  if (req.userType === 'super_admin') return next();
+  const role = req.session?.role;
+  if (role === 'admin' || role === 'operational_head') return next();
+  return res.status(403).json({ error: 'Write access requires admin or operational_head role' });
 }
 
 // === CONSOLIDATED VIEW (All Streams) ===

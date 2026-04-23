@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireAdmin } from '../middleware/auth.js';
+import { requireRole } from '../middleware/auth.js';
 import { branchFilter, getBranchIdForInsert, streamFilter, getStreamIdForInsert } from '../utils/branch.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
 import { requireInt, requireString, requireNumber, requireMonth, optionalString, ValidationError } from '../middleware/validate.js';
@@ -36,7 +36,7 @@ router.get('/', async (req, res) => {
 // Bulk upsert actuals: { scenario_id, entries: [{ category, item_name, linked_item_id?, month, amount }] }
 // Scoped by the caller's current branch so manual entries for one branch don't
 // overwrite another branch's row with the same (scenario, category, item, month).
-router.post('/bulk', requireAdmin, async (req, res) => {
+router.post('/bulk', requireRole('admin', 'operational_head'), async (req, res) => {
   const db = req.tenantDb!;
   const { entries } = req.body;
   if (!req.body.scenario_id || !entries) return res.status(400).json({ error: 'scenario_id and entries required' });

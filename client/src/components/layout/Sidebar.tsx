@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import api from '../../api/client';
 import { useTheme } from '../../contexts/ThemeContext';
+import { canSeeVcfo, canSeeForecast } from '../../utils/roles';
 
 // Forecast & Operations navigation
 const forecastLinks = [
@@ -149,11 +150,30 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
     try { return JSON.parse(localStorage.getItem('streams') || '[]'); } catch { return []; }
   };
 
-  const activeModule = localStorage.getItem('active_module') || 'forecast_ops';
   const enabledModules: string[] = (() => {
     try { return JSON.parse(localStorage.getItem('enabled_modules') || '[]'); } catch { return []; }
   })();
+
+  // Coerce `active_module` back to forecast_ops when the cached module is one
+  // the current role no longer has access to. Happens when an admin switches
+  // to a user who was just promoted from `accountant` to `operational_head`,
+  // or when the tenant disables the VCFO module mid-session.
+  let activeModule = localStorage.getItem('active_module') || 'forecast_ops';
+  if (activeModule === 'vcfo_portal' && !canSeeVcfo()) {
+    activeModule = 'forecast_ops';
+    localStorage.setItem('active_module', 'forecast_ops');
+  }
   const mainLinks = activeModule === 'vcfo_portal' ? vcfoLinks : forecastLinks;
+
+  // "Switch Module" link only makes sense when the user can actually reach
+  // both modules AND both are live on the tenant. OH never sees it (VCFO-less),
+  // accountant sees it only when a tenant runs both Forecast + VCFO.
+  const showModuleSwitcher =
+    !isSuperAdmin
+    && canSeeForecast()
+    && canSeeVcfo()
+    && enabledModules.includes('forecast_ops')
+    && enabledModules.includes('vcfo_portal');
   // Owner super_admin sees nothing (they use Admin Panel only).
   // Non-owner super_admin in client context sees module links like a client admin.
   const isOwnerAdmin = isSuperAdmin && isOwner;
@@ -523,7 +543,7 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
       )}
 
       {/* Switch Module link */}
-      {!isSuperAdmin && expanded && (
+      {showModuleSwitcher && expanded && (
         <div
           className="px-3 py-2 flex-shrink-0"
           style={{ borderBottom: '1px solid var(--mt-border)' }}

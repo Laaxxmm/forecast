@@ -11,7 +11,7 @@ import { seedDatabase } from './db/seed.js';
 import { getPlatformHelper, createPlatformBackup } from './db/platform-connection.js';
 import { initializePlatformSchema } from './db/platform-schema.js';
 import { seedPlatformDatabase } from './db/platform-seed.js';
-import { requireAuth, requireSuperAdmin, requireAdmin, requireModule } from './middleware/auth.js';
+import { requireAuth, requireSuperAdmin, requireAdmin, requireModule, requireRole } from './middleware/auth.js';
 import { validationErrorHandler } from './middleware/validate.js';
 import { resolveTenant } from './middleware/tenant.js';
 import { resolveBranch } from './middleware/branch.js';
@@ -240,8 +240,14 @@ app.use('/api/admin', requireAuth, requireSuperAdmin, adminRoutes);
 // ─── Client-scoped routes (require auth + tenant + branch + module) ────────
 const forecastOps = [requireAuth, resolveTenant, resolveBranch, requireModule('forecast_ops')];
 const vcfoOps = [requireAuth, resolveTenant, resolveBranch, requireModule('vcfo_portal')];
+// Role-based write gates:
+//   forecastWrite = admin + operational_head can mutate forecast data (accountants are read-only).
+//   vcfoWrite     = admin + accountant can mutate VCFO data (OH has no VCFO access at all).
+//   Per-route handlers still apply finer-grained checks (e.g. approve/reject is admin-only).
+const forecastWrite = requireRole('admin', 'operational_head');
+const vcfoWrite = requireRole('admin', 'accountant');
 app.use('/api/settings', requireAuth, resolveTenant, resolveBranch, settingsRoutes);
-app.use('/api/import', ...forecastOps, requireAdmin, importRoutes);
+app.use('/api/import', ...forecastOps, forecastWrite, importRoutes);
 app.use('/api/actuals', ...forecastOps, actualsRoutes);
 app.use('/api/budgets', ...forecastOps, budgetRoutes);
 app.use('/api/forecasts', ...forecastOps, forecastRoutes);
@@ -249,12 +255,14 @@ app.use('/api/dashboard', ...forecastOps, dashboardRoutes);
 app.use('/api/forecast-module', ...forecastOps, forecastModuleRoutes);
 // IMPORTANT: /api/vcfo/accounting-tasks must mount BEFORE the /api/vcfo catch-all
 // below — otherwise Express matches the catch-all first and the new routes 404.
+// NOTE: all /api/vcfo/* routes must use vcfoOps (vcfo_portal module gate); they
+// were previously mounted under forecastOps by mistake — see radiant-wiggling-nest plan.
 app.use('/api/vcfo/accounting-tasks', ...vcfoOps, vcfoAccountingTasksRoutes);
-app.use('/api/vcfo/compliance-services', ...forecastOps, vcfoComplianceServicesRoutes);
-app.use('/api/vcfo/compliances', ...forecastOps, vcfoComplianceRoutes);
-app.use('/api/vcfo', ...forecastOps, vcfoReportsRoutes);
+app.use('/api/vcfo/compliance-services', ...vcfoOps, vcfoComplianceServicesRoutes);
+app.use('/api/vcfo/compliances', ...vcfoOps, vcfoComplianceRoutes);
+app.use('/api/vcfo', ...vcfoOps, vcfoReportsRoutes);
 app.use('/api/dashboard-actuals', ...forecastOps, dashboardActualsRoutes);
-app.use('/api/sync', ...forecastOps, requireAdmin, syncRoutes);
+app.use('/api/sync', ...forecastOps, forecastWrite, syncRoutes);
 app.use('/api/revenue-sharing', ...forecastOps, revenueSharingRoutes);
 app.use('/api/db', requireAuth, resolveTenant, resolveBranch, requireSuperAdmin, dbViewerRoutes);
 

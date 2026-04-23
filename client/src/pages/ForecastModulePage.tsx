@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import DownloadPrintPanel from '../components/forecast/DownloadPrintPanel';
 import { exportAllItemsCSV } from '../components/forecast/csvExport';
+import { canWriteForecast, isSuperAdmin } from '../utils/roles';
 
 export interface FY { id: number; label: string; start_date: string; end_date: string; is_active: number; }
 export interface Scenario { id: number; fy_id: number; name: string; is_default: number; }
@@ -75,13 +76,13 @@ export default function ForecastModulePage() {
   const [showDownloadPanel, setShowDownloadPanel] = useState(false);
   const navigate = useNavigate();
 
-  // Role-based access: client admins and team members (super_admin) can edit forecast
-  const userRole = localStorage.getItem('user_role');
-  const userType = localStorage.getItem('user_type');
+  // Role-based access: admin + operational_head + super_admin can edit forecast.
+  // Accountants and legacy `user` role are read-only. Consolidated view stays
+  // super_admin-only because it spans branches (OH is branch-scoped).
   const isAllStreams = !localStorage.getItem('stream_id');
   const streamName = localStorage.getItem('stream_name');
   const [isConsolidated, setIsConsolidated] = useState(false);
-  const readOnly = (userRole !== 'admin' && userType !== 'super_admin') || (isConsolidated && userType !== 'super_admin');
+  const readOnly = !canWriteForecast() || (isConsolidated && !isSuperAdmin());
 
   useEffect(() => {
     api.get('/settings/fy').then(res => {

@@ -31,8 +31,14 @@
 
 import { Router, Request, Response } from 'express';
 import { getPlatformHelper } from '../db/platform-connection.js';
+import { requireRole } from '../middleware/auth.js';
 
 const router = Router();
+
+// Write-gate for every mutating endpoint in this router.
+// admin + accountant can mutate; operational_head has no VCFO access at all
+// (blocked upstream by the route mount) and legacy 'user' is read-only.
+const vcfoWrite = requireRole('admin', 'accountant');
 
 interface BranchRow { id: number; name: string; code: string | null; city: string | null; state: string | null }
 
@@ -226,7 +232,7 @@ router.get('/', async (req: Request, res: Response) => {
 //   { scope: { type: 'stream', branchId: 5, streamId: 12 },catalogId, ... }
 // For backwards compat also accepts a top-level `branchId` with implicit
 // scope='branch'.
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', vcfoWrite, async (req: Request, res: Response) => {
   const db = req.tenantDb!;
   const branches = await clientBranches(req);
   const branchById = new Map(branches.map(b => [b.id, b] as const));
@@ -297,7 +303,7 @@ router.post('/', async (req: Request, res: Response) => {
   res.status(201).json(row);
 });
 
-router.patch('/:id', async (req: Request, res: Response) => {
+router.patch('/:id', vcfoWrite, async (req: Request, res: Response) => {
   const db = req.tenantDb!;
   const id = toInt(req.params.id);
   if (id === null) return res.status(400).json({ error: 'id must be integer' });
@@ -325,7 +331,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
   res.json(db.get(`SELECT * FROM vcfo_compliances WHERE id = ?`, id));
 });
 
-router.post('/:id/file', async (req: Request, res: Response) => {
+router.post('/:id/file', vcfoWrite, async (req: Request, res: Response) => {
   const db = req.tenantDb!;
   const id = toInt(req.params.id);
   if (id === null) return res.status(400).json({ error: 'id must be integer' });
@@ -360,7 +366,7 @@ router.post('/:id/file', async (req: Request, res: Response) => {
   res.json({ filed: updated, next });
 });
 
-router.delete('/:id', async (req: Request, res: Response) => {
+router.delete('/:id', vcfoWrite, async (req: Request, res: Response) => {
   const db = req.tenantDb!;
   const id = toInt(req.params.id);
   if (id === null) return res.status(400).json({ error: 'id must be integer' });

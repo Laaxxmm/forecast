@@ -156,6 +156,62 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
 }
 
 /**
+ * Canonical set of tenant-level roles for client_users.
+ * super_admin is platform-level (stored in team_members) and bypasses these gates.
+ *
+ *   admin            — CFO / owner. Full R/W across Forecast + VCFO, approvals.
+ *   operational_head — Full R/W on Forecast (branch-scoped); NO access to VCFO.
+ *   accountant       — Forecast read-only; full VCFO R/W EXCEPT approve/reject.
+ *   user             — Legacy read-only role, kept for backwards compatibility.
+ */
+export const CLIENT_ROLES = ['admin', 'operational_head', 'accountant', 'user'] as const;
+export type ClientRole = (typeof CLIENT_ROLES)[number];
+
+export function isClientRole(val: unknown): val is ClientRole {
+  return typeof val === 'string' && (CLIENT_ROLES as readonly string[]).includes(val);
+}
+
+/**
+ * Middleware factory: require the caller's role to be in the allowed set.
+ * Super admins always bypass.
+ *
+ * Example: router.post('/', requireRole('admin', 'operational_head'), handler)
+ */
+export function requireRole(...allowed: ClientRole[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (req.userType === 'super_admin') return next();
+    const role = req.session?.role as ClientRole | undefined;
+    if (role && allowed.includes(role)) return next();
+    return res.status(403).json({ error: 'Insufficient role' });
+  };
+}
+
+/**
+ * Helpers for handlers that have conditional write-paths (use inside a route
+ * handler rather than as middleware). All three return true for super_admin.
+ */
+export function canWriteForecast(req: Request): boolean {
+  if (req.userType === 'super_admin') return true;
+  const role = req.session?.role;
+  return role === 'admin' || role === 'operational_head';
+}
+
+export function canWriteVcfo(req: Request): boolean {
+  if (req.userType === 'super_admin') return true;
+  const role = req.session?.role;
+  return role === 'admin' || role === 'accountant';
+}
+
+/**
+ * Maker-checker separation: only admin (CFO) / super_admin can approve or
+ * reject accounting tasks submitted by the accounting team.
+ */
+export function canApproveAccountingTask(req: Request): boolean {
+  if (req.userType === 'super_admin') return true;
+  return req.session?.role === 'admin';
+}
+
+/**
  * Middleware factory: require a specific module to be enabled for the client.
  * Super admins bypass module checks.
  */

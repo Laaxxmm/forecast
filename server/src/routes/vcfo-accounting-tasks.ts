@@ -18,23 +18,23 @@
 // (branchId = null) falls back to the client's first active branch for
 // `generate` and refuses task-creation (caller must pick a branch first).
 //
-// Endpoints:
+// Endpoints:  (vcfo_write = admin + accountant; approve/reject = admin only)
 //   GET    /api/vcfo/accounting-tasks                 — scoped list
 //   GET    /api/vcfo/accounting-tasks/catalog         — master list
 //   GET    /api/vcfo/accounting-tasks/:id             — single task + files + events
-//   POST   /api/vcfo/accounting-tasks/generate        — materialise this period (admin)
-//   POST   /api/vcfo/accounting-tasks                 — ad-hoc create (admin)
-//   PATCH  /api/vcfo/accounting-tasks/:id             — update fields
+//   POST   /api/vcfo/accounting-tasks/generate        — materialise this period (vcfo_write)
+//   POST   /api/vcfo/accounting-tasks                 — ad-hoc create (vcfo_write)
+//   PATCH  /api/vcfo/accounting-tasks/:id             — full edit (vcfo_write) or notes-only (assignee)
 //   POST   /api/vcfo/accounting-tasks/:id/claim       — self-assign
 //   POST   /api/vcfo/accounting-tasks/:id/submit      — submit for review (assignee)
-//   POST   /api/vcfo/accounting-tasks/:id/approve     — approve (admin)
-//   POST   /api/vcfo/accounting-tasks/:id/reject      — reject w/ reason (admin)
-//   POST   /api/vcfo/accounting-tasks/:id/reopen      — undo approval (admin)
-//   POST   /api/vcfo/accounting-tasks/:id/cancel      — soft-cancel (admin)
-//   DELETE /api/vcfo/accounting-tasks/:id             — hard-delete + unlink files (admin)
-//   POST   /api/vcfo/accounting-tasks/:id/files       — upload 1..10 files
+//   POST   /api/vcfo/accounting-tasks/:id/approve     — approve (ADMIN-ONLY maker-checker)
+//   POST   /api/vcfo/accounting-tasks/:id/reject      — reject w/ reason (ADMIN-ONLY maker-checker)
+//   POST   /api/vcfo/accounting-tasks/:id/reopen      — undo approval (vcfo_write)
+//   POST   /api/vcfo/accounting-tasks/:id/cancel      — soft-cancel (vcfo_write)
+//   DELETE /api/vcfo/accounting-tasks/:id             — hard-delete + unlink files (vcfo_write)
+//   POST   /api/vcfo/accounting-tasks/:id/files       — upload 1..10 files (vcfo_write or assignee)
 //   GET    /api/vcfo/accounting-tasks/:id/files/:fid  — stream file
-//   DELETE /api/vcfo/accounting-tasks/:id/files/:fid  — remove attachment
+//   DELETE /api/vcfo/accounting-tasks/:id/files/:fid  — remove attachment (vcfo_write or uploader)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Router, Request, Response } from 'express';
@@ -42,6 +42,7 @@ import path from 'path';
 import fs from 'fs';
 import { getPlatformHelper } from '../db/platform-connection.js';
 import { taskFileUpload, getTaskFilesDir } from '../middleware/upload.js';
+import { canWriteVcfo, canApproveAccountingTask } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -69,9 +70,9 @@ function isoDate(val: any): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
 }
 
-function isAdmin(req: Request): boolean {
-  return req.userType === 'super_admin' || req.session?.role === 'admin';
-}
+// Local alias kept for readability — delegates to the middleware helper which
+// grants VCFO write access to admin + accountant (and super_admin).
+// Approve / reject are still admin-only via canApproveAccountingTask.
 
 /**
  * Compute a concrete due_date from a catalog entry + a period end date.
@@ -271,7 +272,7 @@ router.get('/:id', async (req: Request, res: Response) => {
 // ── Generate tasks from catalog for a given period ─────────────────────────
 
 router.post('/generate', async (req: Request, res: Response) => {
-  if (!isAdmin(req)) return res.status(403).json({ error: 'admin access required' });
+  if (!canWriteVcfo(req)) return res.status(403).json({ error: 'VCFO write access required' });
   const db = req.tenantDb!;
 
   const periodLabel = String(req.body.period_label || '').trim();
@@ -350,7 +351,7 @@ router.post('/generate', async (req: Request, res: Response) => {
 // ── Ad-hoc create ──────────────────────────────────────────────────────────
 
 router.post('/', async (req: Request, res: Response) => {
-  if (!isAdmin(req)) return res.status(403).json({ error: 'admin access required' });
+  if (!canWriteVcfo(req)) return res.status(403).json({ error: 'VCFO write access required' });
   const db = req.tenantDb!;
 
   const title = String(req.body.title || '').trim();
@@ -408,14 +409,16 @@ router.patch('/:id', async (req: Request, res: Response) => {
   if (!task) return res.status(404).json({ error: 'not found' });
   const db = req.tenantDb!;
   const actorId = req.session?.userId || null;
-  const admin = isAdmin(req);
+  // canEditAll = admin + accountant + super_admin. They can touch every field.
+  // Assignees on their own task can only edit notes/submission_note.
+  const canEditAll = canWriteVcfo(req);
   const isAssignee = task.assignee_user_id && actorId && task.assignee_user_id === actorId;
-  if (!admin && !isAssignee) return res.status(403).json({ error: 'not authorised' });
+  if (!canEditAll && !isAssignee) return res.status(403).json({ error: 'not authorised' });
 
   const adminFields = ['title', 'category', 'frequency', 'period_label', 'period_start',
     'period_end', 'due_date', 'assignee_user_id', 'reviewer_user_id', 'priority', 'notes'];
   const assigneeFields = ['notes', 'submission_note'];
-  const allowed = admin ? adminFields : assigneeFields;
+  const allowed = canEditAll ? adminFields : assigneeFields;
 
   const fields: string[] = [];
   const params: any[] = [];
@@ -521,7 +524,8 @@ router.post('/:id/submit', async (req: Request, res: Response) => {
 // ── Approve ────────────────────────────────────────────────────────────────
 
 router.post('/:id/approve', async (req: Request, res: Response) => {
-  if (!isAdmin(req)) return res.status(403).json({ error: 'admin access required' });
+  // Maker-checker: approvals stay admin-only (accountant is the maker).
+  if (!canApproveAccountingTask(req)) return res.status(403).json({ error: 'admin access required to approve' });
   const id = toInt(req.params.id);
   if (id === null) return res.status(400).json({ error: 'id must be integer' });
   const task = await loadOwnedTask(req, id);
@@ -553,7 +557,8 @@ router.post('/:id/approve', async (req: Request, res: Response) => {
 // ── Reject ─────────────────────────────────────────────────────────────────
 
 router.post('/:id/reject', async (req: Request, res: Response) => {
-  if (!isAdmin(req)) return res.status(403).json({ error: 'admin access required' });
+  // Maker-checker: rejections stay admin-only (accountant is the maker).
+  if (!canApproveAccountingTask(req)) return res.status(403).json({ error: 'admin access required to reject' });
   const id = toInt(req.params.id);
   if (id === null) return res.status(400).json({ error: 'id must be integer' });
   const task = await loadOwnedTask(req, id);
@@ -589,7 +594,7 @@ router.post('/:id/reject', async (req: Request, res: Response) => {
 // ── Reopen (undo approval) ─────────────────────────────────────────────────
 
 router.post('/:id/reopen', async (req: Request, res: Response) => {
-  if (!isAdmin(req)) return res.status(403).json({ error: 'admin access required' });
+  if (!canWriteVcfo(req)) return res.status(403).json({ error: 'VCFO write access required' });
   const id = toInt(req.params.id);
   if (id === null) return res.status(400).json({ error: 'id must be integer' });
   const task = await loadOwnedTask(req, id);
@@ -620,7 +625,7 @@ router.post('/:id/reopen', async (req: Request, res: Response) => {
 // ── Cancel (soft) ──────────────────────────────────────────────────────────
 
 router.post('/:id/cancel', async (req: Request, res: Response) => {
-  if (!isAdmin(req)) return res.status(403).json({ error: 'admin access required' });
+  if (!canWriteVcfo(req)) return res.status(403).json({ error: 'VCFO write access required' });
   const id = toInt(req.params.id);
   if (id === null) return res.status(400).json({ error: 'id must be integer' });
   const task = await loadOwnedTask(req, id);
@@ -652,7 +657,7 @@ router.post('/:id/cancel', async (req: Request, res: Response) => {
 // ── Hard-delete ────────────────────────────────────────────────────────────
 
 router.delete('/:id', async (req: Request, res: Response) => {
-  if (!isAdmin(req)) return res.status(403).json({ error: 'admin access required' });
+  if (!canWriteVcfo(req)) return res.status(403).json({ error: 'VCFO write access required' });
   const id = toInt(req.params.id);
   if (id === null) return res.status(400).json({ error: 'id must be integer' });
   const task = await loadOwnedTask(req, id);
@@ -687,9 +692,9 @@ router.post('/:id/files', taskFileUpload.array('files', 10), async (req: Request
 
   const db = req.tenantDb!;
   const actorId = req.session?.userId || null;
-  const admin = isAdmin(req);
+  const elevated = canWriteVcfo(req); // admin + accountant + super_admin
   const isAssignee = task.assignee_user_id && actorId && task.assignee_user_id === actorId;
-  if (!admin && !isAssignee) return res.status(403).json({ error: 'only assignee or admin may upload' });
+  if (!elevated && !isAssignee) return res.status(403).json({ error: 'only assignee or VCFO-write role may upload' });
 
   const files = Array.isArray(req.files) ? req.files as Express.Multer.File[] : [];
   if (files.length === 0) return res.status(400).json({ error: 'no files received' });
@@ -777,9 +782,9 @@ router.delete('/:id/files/:fileId', async (req: Request, res: Response) => {
   if (!file) return res.status(404).json({ error: 'file not found' });
 
   const actorId = req.session?.userId || null;
-  const admin = isAdmin(req);
+  const elevated = canWriteVcfo(req); // admin + accountant + super_admin
   const isUploader = file.uploaded_by_user_id && actorId && file.uploaded_by_user_id === actorId;
-  if (!admin && !isUploader) return res.status(403).json({ error: 'only uploader or admin may delete' });
+  if (!elevated && !isUploader) return res.status(403).json({ error: 'only uploader or VCFO-write role may delete' });
 
   // Unlink on disk first.
   try {

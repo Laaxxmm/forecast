@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import { requireAdmin, requireIntegration } from '../middleware/auth.js';
+import { requireRole, requireIntegration } from '../middleware/auth.js';
 import { encrypt, decrypt } from '../utils/crypto.js';
 import { branchFilter, getBranchIdForInsert, branchSettingsKey } from '../utils/branch.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
@@ -70,7 +70,7 @@ router.get('/credentials/healthplix', requireIntegration('healthplix'), async (_
   });
 });
 
-router.put('/credentials/healthplix', requireAdmin, requireIntegration('healthplix'), async (req: Request, res: Response) => {
+router.put('/credentials/healthplix', requireRole('admin', 'operational_head'), requireIntegration('healthplix'), async (req: Request, res: Response) => {
   const { username, password, clinicName } = req.body;
   if (!username) return res.status(400).json({ error: 'Username is required' });
 
@@ -94,7 +94,7 @@ router.put('/credentials/healthplix', requireAdmin, requireIntegration('healthpl
   res.json({ ok: true });
 });
 
-router.delete('/credentials/healthplix', requireAdmin, requireIntegration('healthplix'), async (_req: Request, res: Response) => {
+router.delete('/credentials/healthplix', requireRole('admin', 'operational_head'), requireIntegration('healthplix'), async (_req: Request, res: Response) => {
   const db = _req.tenantDb!;
   const prefix = branchSettingsKey('healthplix_', _req);
   db.run("DELETE FROM app_settings WHERE key LIKE ?", prefix + '%');
@@ -103,7 +103,7 @@ router.delete('/credentials/healthplix', requireAdmin, requireIntegration('healt
 
 // ─── Sync Trigger ─────────────────────────────────────────────────────────────
 
-router.post('/healthplix', requireAdmin, requireIntegration('healthplix'), async (req: Request, res: Response) => {
+router.post('/healthplix', requireRole('admin', 'operational_head'), requireIntegration('healthplix'), async (req: Request, res: Response) => {
   const { fromDate, toDate } = req.body;
 
   if (!fromDate || !toDate) {
@@ -330,7 +330,7 @@ router.get('/credentials/oneglance', requireIntegration('oneglance'), async (_re
   });
 });
 
-router.put('/credentials/oneglance', requireAdmin, requireIntegration('oneglance'), async (req: Request, res: Response) => {
+router.put('/credentials/oneglance', requireRole('admin', 'operational_head'), requireIntegration('oneglance'), async (req: Request, res: Response) => {
   const { username, password } = req.body;
   if (!username) return res.status(400).json({ error: 'Username is required' });
 
@@ -350,7 +350,7 @@ router.put('/credentials/oneglance', requireAdmin, requireIntegration('oneglance
   res.json({ ok: true });
 });
 
-router.delete('/credentials/oneglance', requireAdmin, requireIntegration('oneglance'), async (_req: Request, res: Response) => {
+router.delete('/credentials/oneglance', requireRole('admin', 'operational_head'), requireIntegration('oneglance'), async (_req: Request, res: Response) => {
   const db = _req.tenantDb!;
   const prefix = branchSettingsKey('oneglance_', _req);
   db.run("DELETE FROM app_settings WHERE key LIKE ?", prefix + '%');
@@ -359,7 +359,7 @@ router.delete('/credentials/oneglance', requireAdmin, requireIntegration('onegla
 
 // ─── Oneglance Sync ──────────────────────────────────────────────────────────
 
-router.post('/oneglance', requireAdmin, requireIntegration('oneglance'), async (req: Request, res: Response) => {
+router.post('/oneglance', requireRole('admin', 'operational_head'), requireIntegration('oneglance'), async (req: Request, res: Response) => {
   const { fromDate, toDate, reportType } = req.body;
 
   if (!fromDate || !toDate) {
@@ -667,7 +667,7 @@ router.get('/credentials/turia', requireIntegration('turia'), async (_req: Reque
   });
 });
 
-router.put('/credentials/turia', requireAdmin, requireIntegration('turia'), async (req: Request, res: Response) => {
+router.put('/credentials/turia', requireRole('admin', 'operational_head'), requireIntegration('turia'), async (req: Request, res: Response) => {
   const { phoneNumber, financialYear } = req.body;
   if (!phoneNumber) return res.status(400).json({ error: 'Phone number is required' });
 
@@ -686,7 +686,7 @@ router.put('/credentials/turia', requireAdmin, requireIntegration('turia'), asyn
   res.json({ ok: true });
 });
 
-router.delete('/credentials/turia', requireAdmin, requireIntegration('turia'), async (_req: Request, res: Response) => {
+router.delete('/credentials/turia', requireRole('admin', 'operational_head'), requireIntegration('turia'), async (_req: Request, res: Response) => {
   const db = _req.tenantDb!;
   const prefix = branchSettingsKey('turia_', _req);
   db.run("DELETE FROM app_settings WHERE key LIKE ?", prefix + '%');
@@ -695,7 +695,7 @@ router.delete('/credentials/turia', requireAdmin, requireIntegration('turia'), a
 
 // ─── Turia Sync Trigger ─────────────────────────────────────────────────────
 
-router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Request, res: Response) => {
+router.post('/turia', requireRole('admin', 'operational_head'), requireIntegration('turia'), async (req: Request, res: Response) => {
   const tenantSlug = req.tenantSlug!;
   const state = getTuriaState(tenantSlug);
 
@@ -886,7 +886,7 @@ router.post('/turia', requireAdmin, requireIntegration('turia'), async (req: Req
 
 // ─── Turia OTP Submission ────────────────────────────────────────────────────
 
-router.post('/turia/otp', requireAdmin, requireIntegration('turia'), async (req: Request, res: Response) => {
+router.post('/turia/otp', requireRole('admin', 'operational_head'), requireIntegration('turia'), async (req: Request, res: Response) => {
   const { otp } = req.body;
   if (!otp || typeof otp !== 'string' || otp.length < 4) {
     return res.status(400).json({ error: 'Please provide a valid OTP (at least 4 digits)' });

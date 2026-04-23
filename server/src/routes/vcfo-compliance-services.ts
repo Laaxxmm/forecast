@@ -20,8 +20,14 @@
 
 import { Router, Request, Response } from 'express';
 import { getPlatformHelper } from '../db/platform-connection.js';
+import { requireRole } from '../middleware/auth.js';
 
 const router = Router();
+
+// Write-gate for every mutating endpoint in this router.
+// admin + accountant can mutate; operational_head has no VCFO access at all
+// (blocked upstream by the route mount) and legacy 'user' is read-only.
+const vcfoWrite = requireRole('admin', 'accountant');
 
 // ── Static service catalogue ────────────────────────────────────────────────
 // Each service maps to a set of catalog keys that materialise as tracker rows
@@ -301,7 +307,7 @@ router.get('/', async (req: Request, res: Response) => {
 
 // Upsert config (does NOT toggle enabled). Body:
 //   { serviceKey, scope: { type, state?, branchId }, config: {...} }
-router.put('/', async (req: Request, res: Response) => {
+router.put('/', vcfoWrite, async (req: Request, res: Response) => {
   const db = req.tenantDb!;
   const branches = await clientBranches(req);
   const branchById = new Map(branches.map(b => [b.id, b] as const));
@@ -333,7 +339,7 @@ router.put('/', async (req: Request, res: Response) => {
 });
 
 // Enable a service — upsert config, set enabled=1, spawn tracker rows.
-router.post('/enable', async (req: Request, res: Response) => {
+router.post('/enable', vcfoWrite, async (req: Request, res: Response) => {
   const db = req.tenantDb!;
   const branches = await clientBranches(req);
   const branchById = new Map(branches.map(b => [b.id, b] as const));
@@ -367,7 +373,7 @@ router.post('/enable', async (req: Request, res: Response) => {
 });
 
 // Disable — set enabled=0 and soft-cancel pending tracker rows.
-router.post('/disable', async (req: Request, res: Response) => {
+router.post('/disable', vcfoWrite, async (req: Request, res: Response) => {
   const db = req.tenantDb!;
   const branches = await clientBranches(req);
   const branchById = new Map(branches.map(b => [b.id, b] as const));

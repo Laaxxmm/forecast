@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import { validatePassword } from '../middleware/auth.js';
+import { validatePassword, isClientRole, CLIENT_ROLES } from '../middleware/auth.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
 import { getClientHelper, getClientsDir } from '../db/connection.js';
 import { initializeSchema } from '../db/schema.js';
@@ -367,6 +367,15 @@ router.post('/clients/:slug/users', async (req: Request, res: Response) => {
   const pwError = validatePassword(password);
   if (pwError) return res.status(400).json({ error: pwError });
 
+  // Validate role against the canonical vocabulary. Default to 'user' (the
+  // weakest legacy role) if unspecified.
+  const userRole = role || 'user';
+  if (!isClientRole(userRole)) {
+    return res.status(400).json({
+      error: `Invalid role: ${role}. Allowed values: ${CLIENT_ROLES.join(', ')}`,
+    });
+  }
+
   const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
@@ -377,7 +386,6 @@ router.post('/clients/:slug/users', async (req: Request, res: Response) => {
   if (existing) return res.status(409).json({ error: 'Username already exists for this client' });
 
   const hash = await bcrypt.hash(password, 12);
-  const userRole = role || 'user';
   db.run(
     'INSERT INTO client_users (client_id, username, password_hash, display_name, role) VALUES (?, ?, ?, ?, ?)',
     [client.id, username, hash, display_name, userRole]
@@ -385,8 +393,14 @@ router.post('/clients/:slug/users', async (req: Request, res: Response) => {
   const inserted = db.get('SELECT id FROM client_users WHERE client_id = ? AND username = ?', [client.id, username]);
   const newUserId = inserted.id;
 
-  // Auto-grant access to all active branches for non-admin users
-  if (userRole !== 'admin') {
+  // Auto-grant all branches for the legacy `user` role so it preserves its
+  // previous "read-only entity-wide" behaviour. Skip for:
+  //   - admin / accountant — they bypass user_branch_access at login
+  //     (see routes/auth.ts seesAllBranches flag), so rows would be dead weight.
+  //   - operational_head — must be explicitly branch-scoped; auto-granting
+  //     all branches would defeat the role. Operator assigns branches in the
+  //     Branches tab after creation.
+  if (userRole === 'user') {
     const activeBranches = db.all(
       'SELECT id FROM branches WHERE client_id = ? AND is_active = 1', [client.id]
     );
@@ -411,6 +425,12 @@ router.put('/clients/:slug/users/:id', async (req: Request, res: Response) => {
 
   const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
   if (!client) return res.status(404).json({ error: 'Client not found' });
+
+  if (role !== undefined && !isClientRole(role)) {
+    return res.status(400).json({
+      error: `Invalid role: ${role}. Allowed values: ${CLIENT_ROLES.join(', ')}`,
+    });
+  }
 
   if (display_name) db.run('UPDATE client_users SET display_name = ? WHERE id = ? AND client_id = ?', [display_name, userId, client.id]);
   if (role) db.run('UPDATE client_users SET role = ? WHERE id = ? AND client_id = ?', [role, userId, client.id]);

@@ -27,6 +27,7 @@ import {
   AlertTriangle, Send, Paperclip,
 } from 'lucide-react';
 import api from '../api/client';
+import { canWriteVcfo, canApproveAccountingTask } from '../utils/roles';
 
 interface CatalogEntry {
   id: number;
@@ -278,9 +279,11 @@ export default function AccountingTrackerPage() {
     return Number.isNaN(n) ? null : n;
   })();
 
-  const userRole = typeof window !== 'undefined' ? localStorage.getItem('user_role') : null;
-  const userType = typeof window !== 'undefined' ? localStorage.getItem('user_type') : null;
-  const canAdmin = userRole === 'admin' || userType === 'super_admin';
+  // VCFO write role (admin + accountant + super_admin) — can generate, edit,
+  // claim on behalf, upload/delete files, reopen, cancel, delete.
+  // Approvals (maker-checker) stay admin-only — see canApprove below.
+  const canEdit = canWriteVcfo();
+  const canApprove = canApproveAccountingTask();
 
   const periodInfo = useMemo(() => {
     if (periodType === 'quarterly') return currentQuarterLabel();
@@ -401,7 +404,7 @@ export default function AccountingTrackerPage() {
 
   // ── Actions ──────────────────────────────────────────────────────────
   const generatePeriod = async () => {
-    if (!canAdmin) return;
+    if (!canEdit) return;
     if (!confirm(`Generate ${periodType} tasks for ${periodInfo.label}? Duplicate (branch + catalog + period) rows are skipped automatically.`)) return;
     setGenerating(true);
     try {
@@ -532,7 +535,9 @@ export default function AccountingTrackerPage() {
   };
 
   const fullPageAction = (task: Task) => {
-    if (task.status === 'submitted' && canAdmin) return { label: 'Review & decide', fn: () => setSelectedTaskId(task.id), primary: true };
+    // Only admins (CFO) can actually approve/reject — for accountants this
+    // same submitted task falls through to the default "Open" view.
+    if (task.status === 'submitted' && canApprove) return { label: 'Review & decide', fn: () => setSelectedTaskId(task.id), primary: true };
     if (task.status === 'pending' && !task.assignee_user_id) return { label: 'Claim', fn: () => claimTask(task.id), primary: false };
     if (task.status === 'in_progress' || task.status === 'rejected') return { label: 'Submit for review', fn: () => submitTask(task.id), primary: task.status === 'in_progress' };
     if (task.status === 'approved') return { label: 'View', fn: () => setSelectedTaskId(task.id), primary: false };
@@ -583,7 +588,7 @@ export default function AccountingTrackerPage() {
             >
               <RefreshCw size={13} /> Refresh
             </button>
-            {canAdmin && (
+            {canEdit && (
               <button
                 onClick={generatePeriod}
                 disabled={generating}
@@ -711,7 +716,7 @@ export default function AccountingTrackerPage() {
         )}
 
         {!loading && !error && tasks.length === 0 && (
-          <EmptyState canAdmin={canAdmin} catalogSize={catalog.length} onGenerate={generatePeriod} periodLabel={periodInfo.label} />
+          <EmptyState canEdit={canEdit} catalogSize={catalog.length} onGenerate={generatePeriod} periodLabel={periodInfo.label} />
         )}
 
         {!loading && !error && tasks.length > 0 && filtered.length === 0 && (
@@ -777,7 +782,8 @@ export default function AccountingTrackerPage() {
           taskId={selectedTaskId}
           task={selectedTask}
           loading={drawerLoading}
-          canAdmin={canAdmin}
+          canEdit={canEdit}
+          canApprove={canApprove}
           onClose={() => setSelectedTaskId(null)}
           onClaim={() => claimTask(selectedTaskId)}
           onSubmit={() => submitTask(selectedTaskId)}
@@ -1160,8 +1166,8 @@ function TaskCardMini({
 // EmptyState
 // ═══════════════════════════════════════════════════════════════════════
 function EmptyState({
-  canAdmin, catalogSize, onGenerate, periodLabel,
-}: { canAdmin: boolean; catalogSize: number; onGenerate: () => void; periodLabel: string }) {
+  canEdit, catalogSize, onGenerate, periodLabel,
+}: { canEdit: boolean; catalogSize: number; onGenerate: () => void; periodLabel: string }) {
   return (
     <div
       className="p-8 text-center rounded-2xl"
@@ -1174,7 +1180,7 @@ function EmptyState({
       <p className="text-sm mb-3" style={{ color: 'var(--mt-text-faint)' }}>
         The catalogue has {catalogSize} CFO-grade month/quarter/year-end tasks ready to spin up.
       </p>
-      {canAdmin && (
+      {canEdit && (
         <button
           onClick={onGenerate}
           className="mt-btn-gradient"
@@ -1195,7 +1201,8 @@ function TaskDrawer(props: {
   taskId: number;
   task: Task | null;
   loading: boolean;
-  canAdmin: boolean;
+  canEdit: boolean;
+  canApprove: boolean;
   onClose: () => void;
   onClaim: () => void;
   onSubmit: () => void;
@@ -1207,7 +1214,7 @@ function TaskDrawer(props: {
   onDownloadFile: (fileId: number, name: string) => void;
   onDeleteFile: (fileId: number) => void;
 }) {
-  const { task, loading, canAdmin } = props;
+  const { task, loading, canEdit, canApprove } = props;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragActive, setDragActive] = useState(false);
 
@@ -1215,13 +1222,16 @@ function TaskDrawer(props: {
   const currentUserId = userIdRaw ? parseInt(userIdRaw, 10) : null;
   const isAssignee = task?.assignee_user_id != null && currentUserId != null && task.assignee_user_id === currentUserId;
 
-  const canClaim   = task && !task.assignee_user_id && ['pending', 'in_progress', 'rejected'].includes(task.status);
-  const canSubmit  = task && isAssignee && ['pending', 'in_progress', 'rejected'].includes(task.status);
-  const canApprove = task && canAdmin && task.status === 'submitted';
-  const canReject  = task && canAdmin && task.status === 'submitted';
-  const canReopen  = task && canAdmin && task.status === 'approved';
-  const canDelete  = task && canAdmin;
-  const canUpload  = task && (canAdmin || isAssignee);
+  // Button visibility flags — approve/reject gate on the maker-checker `canApprove`
+  // prop (admin / super_admin only); everything else (reopen, delete, upload) gates
+  // on `canEdit` which is true for admin + accountant.
+  const showClaim   = task && !task.assignee_user_id && ['pending', 'in_progress', 'rejected'].includes(task.status);
+  const showSubmit  = task && isAssignee && ['pending', 'in_progress', 'rejected'].includes(task.status);
+  const showApprove = task && canApprove && task.status === 'submitted';
+  const showReject  = task && canApprove && task.status === 'submitted';
+  const showReopen  = task && canEdit && task.status === 'approved';
+  const showDelete  = task && canEdit;
+  const showUpload  = task && (canEdit || isAssignee);
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -1295,22 +1305,22 @@ function TaskDrawer(props: {
 
             {/* Action buttons */}
             <div className="flex flex-wrap gap-2">
-              {canClaim && (
+              {showClaim && (
                 <ActionButton icon={<Hand size={13} />} label="Claim" onClick={props.onClaim} tone="warn" />
               )}
-              {canSubmit && (
+              {showSubmit && (
                 <ActionButton icon={<Send size={13} />} label="Submit for review" onClick={props.onSubmit} tone="info" primary />
               )}
-              {canApprove && (
+              {showApprove && (
                 <ActionButton icon={<CheckCircle2 size={13} />} label="Approve" onClick={props.onApprove} tone="success" primary />
               )}
-              {canReject && (
+              {showReject && (
                 <ActionButton icon={<XCircle size={13} />} label="Reject" onClick={props.onReject} tone="danger" />
               )}
-              {canReopen && (
+              {showReopen && (
                 <ActionButton icon={<RotateCcw size={13} />} label="Reopen" onClick={props.onReopen} tone="neutral" />
               )}
-              {canDelete && (
+              {showDelete && (
                 <ActionButton icon={<Trash2 size={13} />} label="Delete" onClick={props.onDelete} tone="danger-muted" />
               )}
             </div>
@@ -1373,7 +1383,7 @@ function TaskDrawer(props: {
                 <h4 className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--mt-text-faint)' }}>
                   Attachments {task.files?.length ? `(${task.files.length})` : ''}
                 </h4>
-                {canUpload && (
+                {showUpload && (
                   <>
                     <button
                       onClick={() => fileInputRef.current?.click()}
@@ -1396,7 +1406,7 @@ function TaskDrawer(props: {
                   </>
                 )}
               </div>
-              {canUpload && (
+              {showUpload && (
                 <div
                   onDragOver={e => { e.preventDefault(); setDragActive(true); }}
                   onDragLeave={() => setDragActive(false)}
@@ -1432,7 +1442,7 @@ function TaskDrawer(props: {
                       >
                         <Download size={12} />
                       </button>
-                      {(canAdmin || (currentUserId && f.uploaded_by_user_id === currentUserId)) && (
+                      {(canEdit || (currentUserId && f.uploaded_by_user_id === currentUserId)) && (
                         <button
                           onClick={() => props.onDeleteFile(f.id)}
                           className="p-1 rounded"

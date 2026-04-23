@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import api from '../api/client';
+import { canWriteVcfo } from '../utils/roles';
 
 interface Branch {
   id: number;
@@ -226,9 +227,9 @@ export default function CompliancesPage() {
     return { year: d.getFullYear(), month: d.getMonth() };
   });
 
-  const userRole = typeof window !== 'undefined' ? localStorage.getItem('user_role') : null;
-  const userType = typeof window !== 'undefined' ? localStorage.getItem('user_type') : null;
-  const canEdit = userRole === 'admin' || userType === 'super_admin';
+  // admin + accountant + super_admin can edit VCFO compliances.
+  // operational_head / legacy `user` cannot see this page at all (route-guarded).
+  const canEdit = canWriteVcfo();
 
   // Current sidebar context (already applied to every API call by the axios
   // client via X-Branch-Id / X-Stream-Id — we mirror it here only for display
