@@ -7,6 +7,7 @@ import {
   LayoutDashboard, Edit2, Calendar, Stethoscope, Upload, Server, BookOpen,
   ImagePlus,
 } from 'lucide-react';
+import AgentKeysPanel from '../components/admin/AgentKeysPanel';
 
 /* ─── Types ──────────────────────────────────────────────── */
 
@@ -27,7 +28,7 @@ interface Integration {
   key: string; name: string; description: string; enabled: boolean; group?: string;
 }
 
-type Tab = 'clients' | 'team';
+type Tab = 'clients' | 'team' | 'agent_keys';
 type ClientDetailTab = 'users' | 'modules' | 'integrations' | 'streams' | 'dashboard_cards' | 'branches' | 'assigned_team';
 
 /* ─── Tone helpers ───────────────────────────────────────── */
@@ -64,6 +65,7 @@ export default function AdminPage() {
   const tabs = [
     { key: 'clients' as Tab, label: 'Clients', icon: Building2 },
     ...(isOwner ? [{ key: 'team' as Tab, label: 'Team', icon: Shield }] : []),
+    { key: 'agent_keys' as Tab, label: 'Agent Keys', icon: KeyRound },
   ];
 
   return (
@@ -108,6 +110,7 @@ export default function AdminPage() {
 
       {tab === 'clients' && <ClientsPanel />}
       {tab === 'team' && isOwner && <TeamPanel />}
+      {tab === 'agent_keys' && <AgentKeysPanel />}
     </div>
   );
 }
