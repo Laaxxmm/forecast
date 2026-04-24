@@ -70,10 +70,6 @@ function isoDate(val: any): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
 }
 
-// Local alias kept for readability — delegates to the middleware helper which
-// grants VCFO write access to admin + accountant (and super_admin).
-// Approve / reject are still admin-only via canApproveAccountingTask.
-
 /**
  * Compute a concrete due_date from a catalog entry + a period end date.
  * Honours default_due_day / default_due_month (annual & half-yearly use the

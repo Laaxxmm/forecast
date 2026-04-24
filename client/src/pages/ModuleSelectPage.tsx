@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import { BarChart3, TrendingUp, ShieldCheck, ClipboardCheck, Scale, ArrowLeft, Lock } from 'lucide-react';
@@ -72,14 +72,23 @@ export default function ModuleSelectPage() {
   const clientName = localStorage.getItem('client_name');
 
   // Role-scoped allow-list intersected with the tenant's enabled modules.
-  // super_admin / admin bypass the role filter entirely.
+  // super_admin / admin bypass the role filter entirely. Unknown roles (empty
+  // string, legacy values, typos) also bypass — the server is the source of
+  // truth and will 403 anything they can't actually reach, so it's better to
+  // show them the full catalog than soft-lock them into an empty picker.
+  //
+  // Memoised so identity is stable across re-renders; otherwise React 18
+  // StrictMode can double-fire the auto-skip navigate() below.
   const role = getUserRole() as ClientRole | '';
-  const roleAllow = isSuperAdmin() || role === 'admin'
-    ? null
-    : (ROLE_MODULE_ALLOW[role as ClientRole] ?? []);
-  const availableModules = roleAllow
-    ? enabledModules.filter(k => roleAllow.includes(k))
-    : enabledModules;
+  const roleAllow = useMemo<string[] | null>(() => {
+    if (isSuperAdmin() || role === 'admin') return null;
+    if (role in ROLE_MODULE_ALLOW) return ROLE_MODULE_ALLOW[role as ClientRole] ?? null;
+    return null; // unknown / missing role → treat as unrestricted
+  }, [role]);
+  const availableModules = useMemo(
+    () => (roleAllow ? enabledModules.filter(k => roleAllow.includes(k)) : enabledModules),
+    [roleAllow, enabledModules]
+  );
 
   useEffect(() => {
     // Fetch fresh module/integration data from server

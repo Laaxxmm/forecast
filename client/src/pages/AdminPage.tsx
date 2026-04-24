@@ -1060,7 +1060,6 @@ function UserRow({ user, slug, isLast, onManageAccess, onResetPassword, onToggle
   onRoleChanged: () => void;
 }) {
   const [savingRole, setSavingRole] = useState(false);
-  const isAdmin = user.role === 'admin';
   // Tint by role family: admin = amber (highest), accountant = blue (VCFO tone),
   // operational_head = teal, everyone else falls through to the muted look.
   const roleTone: Tone = (() => {
@@ -1073,6 +1072,7 @@ function UserRow({ user, slug, isLast, onManageAccess, onResetPassword, onToggle
   })();
   const roleLabel = CLIENT_ROLE_LABELS[user.role as ClientRole] || user.role;
   const isBranchScoped = user.role === 'operational_head' || user.role === 'user';
+  const isLegacyRole = !(CLIENT_ROLES as readonly string[]).includes(user.role);
 
   const changeRole = async (next: ClientRole) => {
     if (next === user.role) return;
@@ -1140,6 +1140,15 @@ function UserRow({ user, slug, isLast, onManageAccess, onResetPassword, onToggle
             border: '1px solid var(--mt-border)',
           }}
         >
+          {/* Preserve legacy/unknown role values so the controlled <select> has a
+              matching option (otherwise React logs a warning and the chip shows
+              a stale value). They're disabled so admins can only migrate *away*
+              from them, never back. */}
+          {isLegacyRole && (
+            <option value={user.role} disabled>
+              Unknown: {user.role}
+            </option>
+          )}
           {CLIENT_ROLES.map(r => (
             <option key={r} value={r}>{CLIENT_ROLE_LABELS[r]}</option>
           ))}
