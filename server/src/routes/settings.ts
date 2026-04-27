@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAdmin } from '../middleware/auth.js';
+import { getBranchIdForInsert, branchFilter } from '../utils/branch.js';
 
 const router = Router();
 
@@ -25,16 +26,22 @@ router.put('/fy/:id/activate', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-router.get('/doctors', async (_req, res) => {
-  const db = _req.tenantDb!;
-  res.json(db.all('SELECT * FROM doctors ORDER BY name'));
+// Branch-scoped: a Chennai-restricted user only sees Chennai doctors. Doctors
+// with branch_id IS NULL stay visible everywhere (legacy / unassigned rows).
+router.get('/doctors', async (req, res) => {
+  const db = req.tenantDb!;
+  const bf = branchFilter(req);
+  res.json(db.all(`SELECT * FROM doctors WHERE 1=1${bf.where} ORDER BY name`, ...bf.params));
 });
 
 router.post('/doctors', requireAdmin, async (req, res) => {
   const { name } = req.body;
   if (!name) return res.status(400).json({ error: 'name required' });
   const db = req.tenantDb!;
-  const result = db.run('INSERT OR IGNORE INTO doctors (name) VALUES (?)', name);
+  // Stamp branch_id from the request context so the new doctor is visible
+  // only in the branch they were created from. NULL on single-branch tenants.
+  const branchId = getBranchIdForInsert(req);
+  const result = db.run('INSERT OR IGNORE INTO doctors (name, branch_id) VALUES (?, ?)', name, branchId);
   res.json({ id: result.lastInsertRowid });
 });
 

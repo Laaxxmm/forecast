@@ -255,12 +255,18 @@ router.delete('/categories/:id', requireRole('admin', 'operational_head'), (req,
 // ══════════════════════════════════════════════════════════════════════
 router.get('/rules', (req, res) => {
   const db = req.tenantDb!;
+  // Alias 'd' so the branch filter applies to the joined doctors row, not
+  // to revenue_sharing_rules itself (which has no branch_id — rules inherit
+  // visibility through the JOIN).
+  const bf = branchFilter(req, 'd');
   const rows = db.all(
     `SELECT r.*, d.name as doctor_name, c.name as category_name
      FROM revenue_sharing_rules r
      JOIN doctors d ON r.doctor_id = d.id
      JOIN revenue_sharing_categories c ON r.category_id = c.id
-     ORDER BY d.name, c.priority DESC`
+     WHERE 1=1${bf.where}
+     ORDER BY d.name, c.priority DESC`,
+    ...bf.params
   );
   res.json(rows);
 });
@@ -297,9 +303,15 @@ router.delete('/rules/:id', requireRole('admin', 'operational_head'), (req, res)
 });
 
 // ── Doctors list for dropdowns ──
+// Branch-scoped: a Chennai-restricted user only sees Chennai doctors. Doctors
+// with branch_id IS NULL stay visible to everyone (legacy / unassigned rows).
 router.get('/doctors', (req, res) => {
   const db = req.tenantDb!;
-  const rows = db.all('SELECT id, name FROM doctors WHERE is_active = 1 ORDER BY name');
+  const bf = branchFilter(req);
+  const rows = db.all(
+    `SELECT id, name FROM doctors WHERE is_active = 1${bf.where} ORDER BY name`,
+    ...bf.params
+  );
   res.json(rows);
 });
 

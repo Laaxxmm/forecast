@@ -625,6 +625,12 @@ export function initializeSchema(db: DbHelper) {
     'ALTER TABLE scenarios ADD COLUMN branch_id INTEGER',
     'ALTER TABLE dashboard_actuals ADD COLUMN branch_id INTEGER',
     'ALTER TABLE budgets ADD COLUMN branch_id INTEGER',
+    // Doctors are branch-scoped: each doctor belongs to one home branch (the
+    // branch their clinic billings are recorded under). NULL means
+    // "global / unassigned" so legacy rows stay visible to all branches until
+    // the admin assigns them. Revenue-sharing rules inherit branch visibility
+    // through the JOIN with doctors — no branch_id needed on the rules table.
+    'ALTER TABLE doctors ADD COLUMN branch_id INTEGER',
     // Stream scoping
     'ALTER TABLE scenarios ADD COLUMN stream_id INTEGER',
     'ALTER TABLE dashboard_actuals ADD COLUMN stream_id INTEGER',
@@ -667,6 +673,33 @@ export function initializeSchema(db: DbHelper) {
     `);
   } catch (e) {
     console.error('Failed to create idx_vcfo_compliances_scope:', e);
+  }
+
+  // ── doctors(branch_id) index + backfill ───────────────────────────────────
+  // For each existing doctor, infer their home branch from the clinic billings
+  // (sourced from Healthplix). The branch where their name appears in the
+  // most clinic_actuals rows wins. Doctors with no clinic match stay NULL,
+  // which branchFilter() treats as visible-to-all-branches — admin can
+  // reassign in the UI later. Idempotent: only updates rows still NULL.
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_doctors_branch
+        ON doctors(branch_id, is_active);
+      UPDATE doctors
+      SET branch_id = (
+        SELECT il.branch_id
+        FROM clinic_actuals ca
+        JOIN import_logs il ON ca.import_id = il.id
+        WHERE ca.billed_doctor = doctors.name
+          AND il.branch_id IS NOT NULL
+        GROUP BY il.branch_id
+        ORDER BY COUNT(*) DESC
+        LIMIT 1
+      )
+      WHERE branch_id IS NULL;
+    `);
+  } catch (e) {
+    console.error('Failed to create idx_doctors_branch / backfill:', e);
   }
 
   // ── vcfo_companies.last_full_sync_at backfill ─────────────────────────────

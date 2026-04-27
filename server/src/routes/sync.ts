@@ -210,10 +210,12 @@ router.post('/healthplix', requireRole('admin', 'operational_head'), requireInte
       console.error(`[hp-sync] ⚠ CRITICAL: 0 rows in clinic_actuals after batch insert — data may not have persisted`);
     }
 
-    // Auto-add doctors
+    // Auto-add doctors. Stamp branch_id so the doctor is scoped to the
+    // branch this sync ran for (Revenue Sharing visibility relies on it).
+    // Existing rows (UNIQUE on name) are left untouched by INSERT OR IGNORE.
     const doctors = [...new Set(rows.map((r: any) => r.billed_doctor).filter((d: any) => d && d !== '-'))];
     for (const d of doctors) {
-      db.run('INSERT OR IGNORE INTO doctors (name) VALUES (?)', d);
+      db.run('INSERT OR IGNORE INTO doctors (name, branch_id) VALUES (?, ?)', d, branchId);
     }
 
     // Auto-sync actuals to dashboard for the active scenario

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import api from '../api/client';
 import { formatINR } from '../utils/format';
+import { canWriteForecast } from '../utils/roles';
 import {
   PieChart as PieIcon, IndianRupee, Users, Building2, ChevronDown, ChevronRight,
-  Plus, Trash2, Settings2,
+  Plus, Trash2, Settings2, Eye,
 } from 'lucide-react';
 
 // ── Types ──
@@ -190,6 +191,11 @@ function SummaryCard({ icon: Icon, label, value, color }: { icon: any; label: st
 //  RULES TAB
 // ══════════════════════════════════════════════════════════════════════
 function RulesTab() {
+  // canEdit mirrors the server's requireRole('admin', 'operational_head') gate
+  // (plus implicit super_admin override). When false we hide every editing
+  // affordance — the Add form, the doctor/category dropdowns, and the trash
+  // icons. Server still enforces 403 even if the UI is bypassed.
+  const canEdit = canWriteForecast();
   const [categories, setCategories] = useState<any[]>([]);
   const [rules, setRules] = useState<any[]>([]);
   const [doctors, setDoctors] = useState<any[]>([]);
@@ -235,6 +241,24 @@ function RulesTab() {
 
   return (
     <div className="space-y-5">
+      {/* View-only banner for non-admin / non-operational_head roles. The
+          backend mutations are gated independently — this is purely UX. */}
+      {!canEdit && (
+        <div
+          className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
+          style={{
+            background: 'var(--mt-info-soft)',
+            border: '1px solid var(--mt-info-border)',
+            color: 'var(--mt-info-text)',
+          }}
+        >
+          <Eye size={14} className="mt-0.5 shrink-0" />
+          <span>
+            <strong>View only.</strong> Contact your admin to edit revenue-sharing rules.
+          </span>
+        </div>
+      )}
+
       {/* Service Categories */}
       <div>
         <div className="flex items-center gap-2 mb-2">
@@ -276,31 +300,33 @@ function RulesTab() {
           <h2 className="mt-heading text-sm">Doctor Sharing Rules</h2>
         </div>
 
-        {/* Add rule form */}
-        <div className="flex items-center gap-2 mb-3 flex-wrap">
-          <select value={newRule.doctor_id} onChange={e => setNewRule(p => ({ ...p, doctor_id: e.target.value }))}
-            className="mt-input text-xs w-48" style={{ padding: '6px 10px' }}>
-            <option value="">Select doctor...</option>
-            {doctors.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </select>
-          <select value={newRule.category_id} onChange={e => setNewRule(p => ({ ...p, category_id: e.target.value }))}
-            className="mt-input text-xs w-40" style={{ padding: '6px 10px' }}>
-            <option value="">Category...</option>
-            {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-          <div className="flex items-center gap-1">
-            <input type="number" min="0" max="100" placeholder="Dr %" value={newRule.doctor_pct}
-              onChange={e => setNewRule(p => ({ ...p, doctor_pct: e.target.value }))}
-              className="mt-input text-xs w-20 text-center" style={{ padding: '6px 10px' }} />
-            <span className="text-[10px]" style={{ color: 'var(--mt-text-faint)' }}>/</span>
-            <span className="text-xs w-12 text-center" style={{ color: 'var(--mt-text-muted)' }}>
-              {newRule.doctor_pct ? `${100 - Number(newRule.doctor_pct)}%` : '—'}
-            </span>
+        {/* Add rule form — admin / operational_head only */}
+        {canEdit && (
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            <select value={newRule.doctor_id} onChange={e => setNewRule(p => ({ ...p, doctor_id: e.target.value }))}
+              className="mt-input text-xs w-48" style={{ padding: '6px 10px' }}>
+              <option value="">Select doctor...</option>
+              {doctors.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+            <select value={newRule.category_id} onChange={e => setNewRule(p => ({ ...p, category_id: e.target.value }))}
+              className="mt-input text-xs w-40" style={{ padding: '6px 10px' }}>
+              <option value="">Category...</option>
+              {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <div className="flex items-center gap-1">
+              <input type="number" min="0" max="100" placeholder="Dr %" value={newRule.doctor_pct}
+                onChange={e => setNewRule(p => ({ ...p, doctor_pct: e.target.value }))}
+                className="mt-input text-xs w-20 text-center" style={{ padding: '6px 10px' }} />
+              <span className="text-[10px]" style={{ color: 'var(--mt-text-faint)' }}>/</span>
+              <span className="text-xs w-12 text-center" style={{ color: 'var(--mt-text-muted)' }}>
+                {newRule.doctor_pct ? `${100 - Number(newRule.doctor_pct)}%` : '—'}
+              </span>
+            </div>
+            <button onClick={addRule} className="mt-btn-soft text-xs flex items-center gap-1">
+              <Plus size={12} /> Add
+            </button>
           </div>
-          <button onClick={addRule} className="mt-btn-soft text-xs flex items-center gap-1">
-            <Plus size={12} /> Add
-          </button>
-        </div>
+        )}
 
         {/* Rules grouped by doctor */}
         <div className="space-y-2">
@@ -322,15 +348,17 @@ function RulesTab() {
                         <span className="mt-num" style={{ color: '#14b8a6' }}>{r.magna_pct}%</span>
                       </div>
                     </div>
-                    <button
-                      onClick={() => deleteRule(r.id)}
-                      className="p-1 transition-colors"
-                      style={{ color: 'var(--mt-text-faint)' }}
-                      onMouseEnter={e => { e.currentTarget.style.color = 'var(--mt-danger-text)'; }}
-                      onMouseLeave={e => { e.currentTarget.style.color = 'var(--mt-text-faint)'; }}
-                    >
-                      <Trash2 size={11} />
-                    </button>
+                    {canEdit && (
+                      <button
+                        onClick={() => deleteRule(r.id)}
+                        className="p-1 transition-colors"
+                        style={{ color: 'var(--mt-text-faint)' }}
+                        onMouseEnter={e => { e.currentTarget.style.color = 'var(--mt-danger-text)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.color = 'var(--mt-text-faint)'; }}
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

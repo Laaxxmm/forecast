@@ -85,10 +85,14 @@ router.post('/healthplix', requireRole('admin', 'operational_head'), requireInte
     const verifyCount = db.get('SELECT COUNT(*) as n FROM clinic_actuals WHERE import_id = ?', importId)?.n || 0;
     console.log(`[hp-import] Post-insert verification: expected=${rows.length}, actual=${verifyCount}, importId=${importId}`);
 
-    // Auto-add doctors
+    // Auto-add doctors. Stamp branch_id so the doctor is scoped to the
+    // branch this import belongs to (Revenue Sharing visibility relies on it).
+    // For multi-branch tenants only — single-branch returns NULL via
+    // getBranchIdForInsert. Existing rows (UNIQUE on name) are left untouched
+    // by INSERT OR IGNORE; their branch is set by the schema.ts backfill.
     const doctors = [...new Set(rows.map(r => r.billed_doctor).filter(d => d && d !== '-'))];
     for (const d of doctors) {
-      db.run('INSERT OR IGNORE INTO doctors (name) VALUES (?)', d);
+      db.run('INSERT OR IGNORE INTO doctors (name, branch_id) VALUES (?, ?)', d, branchId);
     }
 
     // Auto-sync clinic revenue to dashboard_actuals for active scenario
