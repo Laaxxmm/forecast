@@ -1,4 +1,4 @@
-import { chromium, type Page, type BrowserContext } from 'playwright';
+import { chromium, type Page, type BrowserContext, type FrameLocator, type Locator } from 'playwright';
 import path from 'path';
 import fs from 'fs';
 import { execSync } from 'child_process';
@@ -41,24 +41,151 @@ const MONTH_NAMES = [
 ];
 
 /**
+ * Locate the from/to date input on the Healthplix report page.
+ *
+ * Healthplix has historically used `name="fdate"`/`name="tdate"` and
+ * `class="report_from_date"`/`class="report_to_date"` on these inputs, but
+ * vendor markup is not a stable contract — they rename freely. This helper
+ * probes a wide list of candidate selectors against the main page first,
+ * then falls back to iframes (some report viewers are embedded).
+ *
+ * Returns the located input AND the scope it was found in, so the calendar
+ * popup can be searched in the same context (jQuery-style pickers render the
+ * popup inside the iframe; React portals render at the document root).
+ */
+async function findDateInputScope(
+  page: Page,
+  kind: 'from' | 'to',
+): Promise<{ locator: Locator; scope: Page | FrameLocator }> {
+  const isFrom = kind === 'from';
+  const candidates = isFrom
+    ? [
+        // Existing (legacy jQuery / php conventions)
+        'input[name="fdate"]',
+        'input.report_from_date',
+        // Name variants
+        'input[name*="from" i]',
+        'input[name*="start" i]',
+        'input[name*="frmDate" i]',
+        'input[name*="from_date" i]',
+        // Class variants
+        'input[class*="from" i][class*="date" i]',
+        'input[class*="start" i][class*="date" i]',
+        // Placeholder-based (existing comment notes "placeholder DD-MMM-YYYY")
+        'input[readonly][placeholder*="DD" i]',
+        'input[placeholder*="From" i]',
+        'input[placeholder*="Start" i]',
+        // id / data-testid
+        'input[id*="from" i][id*="date" i]',
+        '[data-testid*="from-date" i]',
+        '[data-testid*="start-date" i]',
+        // ARIA
+        'input[aria-label*="from" i]',
+        'input[aria-label*="start" i]',
+        // React/MUI/AntD wrappers
+        '.ant-picker input:first-of-type',
+        '[class*="MuiInputBase"] input[aria-label*="from" i]',
+        '.react-datepicker__input-container input',
+      ]
+    : [
+        // Existing
+        'input[name="tdate"]',
+        'input.report_to_date',
+        // Name variants
+        'input[name*="toDate" i]',
+        'input[name*="to_date" i]',
+        'input[name*="end" i]',
+        // Class variants
+        'input[class*="to" i][class*="date" i]',
+        'input[class*="end" i][class*="date" i]',
+        // Placeholder-based
+        'input[placeholder*="To" i]',
+        'input[placeholder*="End" i]',
+        // id / data-testid
+        'input[id*="to" i][id*="date" i]',
+        '[data-testid*="to-date" i]',
+        '[data-testid*="end-date" i]',
+        // ARIA
+        'input[aria-label*="to" i]',
+        'input[aria-label*="end" i]',
+        // React/MUI/AntD wrappers
+        '.ant-picker input:nth-of-type(2)',
+        '[class*="MuiInputBase"] input[aria-label*="to" i]',
+      ];
+
+  // Probe a scope (Page or FrameLocator) using a single combined CSS selector.
+  // .first() resolves to the first match in document order.
+  const probe = async (scope: Page | FrameLocator): Promise<Locator | null> => {
+    const combined = candidates.join(', ');
+    try {
+      const loc = scope.locator(combined).first();
+      await loc.waitFor({ state: 'visible', timeout: 5000 });
+      return loc;
+    } catch {
+      return null;
+    }
+  };
+
+  // 1. Try the main page first.
+  let found = await probe(page);
+  if (found) return { locator: found, scope: page };
+
+  // 2. Fall back to iframes, in DOM order.
+  const iframeCount = await page.locator('iframe').count().catch(() => 0);
+  for (let i = 0; i < iframeCount; i++) {
+    const frameLocator = page.frameLocator('iframe').nth(i);
+    found = await probe(frameLocator);
+    if (found) return { locator: found, scope: frameLocator };
+  }
+
+  throw new Error(
+    `Couldn't find the '${kind}' date input on the Healthplix report page. ` +
+    `The Healthplix UI may have changed. ` +
+    `Check the saved screenshot/HTML at /uploads/debug/hp-error-<ts>.{png,html}.`,
+  );
+}
+
+/**
  * Navigate the Healthplix calendar popup to a specific date.
  * Assumes the calendar popup is already open.
+ *
+ * `scope` is where the trigger input lives (Page or FrameLocator). The popup
+ * itself usually renders in the same scope, but React-portal-based pickers
+ * render at the document root regardless — so we probe `scope` first, then
+ * fall back to `page` for the popup.
  */
-async function selectDateInCalendar(page: Page, targetDate: { year: number; month: number; day: number }) {
-  // Wait for calendar popup to appear
-  await page.waitForSelector('.datepicker, .calendar, [class*="calendar"], [class*="datepicker"], .react-datepicker, .MuiPickersCalendar-root, [role="dialog"]', { timeout: 5000 }).catch(() => {});
+async function selectDateInCalendar(
+  scope: Page | FrameLocator,
+  page: Page,
+  targetDate: { year: number; month: number; day: number },
+) {
+  // Pick the scope where the calendar popup actually rendered. Try the input's
+  // scope first (in-iframe / inline pickers), fall back to page (React portals).
+  const popupSelectors = '.datepicker, .calendar, [class*="calendar"], [class*="datepicker"], .react-datepicker, .MuiPickersCalendar-root, [role="dialog"]';
+  let popupScope: Page | FrameLocator = scope;
+  try {
+    await scope.locator(popupSelectors).first().waitFor({ state: 'visible', timeout: 3000 });
+  } catch {
+    if (scope !== page) {
+      try {
+        await page.locator(popupSelectors).first().waitFor({ state: 'visible', timeout: 1500 });
+        popupScope = page;
+      } catch {
+        // Popup not found anywhere; some inline pickers don't have a discrete popup. Continue.
+      }
+    }
+  }
 
   // Give calendar a moment to render
   await page.waitForTimeout(500);
 
   // Try to navigate to the correct month/year
   // Healthplix may use different calendar implementations, so try multiple strategies
-
   const maxAttempts = 36; // max 3 years of navigation
   for (let i = 0; i < maxAttempts; i++) {
-    // Read the current month/year displayed in the calendar header
-    const headerText = await page.evaluate(() => {
-      // Try common calendar header selectors
+    // Read the current month/year displayed in the calendar header.
+    // We route through `body` so the same call works for both Page and FrameLocator scopes.
+    const headerText = await popupScope.locator('body').evaluate((body) => {
       const selectors = [
         '.datepicker-switch', '.react-datepicker__current-month',
         '.MuiPickersCalendarHeader-label',
@@ -67,18 +194,18 @@ async function selectDateInCalendar(page: Page, targetDate: { year: number; mont
         '.month-picker-header', '.calendar-header',
       ];
       for (const sel of selectors) {
-        const el = document.querySelector(sel);
+        const el = body.querySelector(sel);
         if (el?.textContent?.trim()) return el.textContent.trim();
       }
       // Fallback: find any element that looks like "Month Year"
-      const allElements = document.querySelectorAll('*');
+      const allElements = body.querySelectorAll('*');
       for (const el of allElements) {
         const text = el.textContent?.trim() || '';
         const match = text.match(/^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}$/);
         if (match && el.children.length === 0) return text;
       }
       return '';
-    });
+    }).catch(() => '');
 
     if (!headerText) {
       // Can't read header, try clicking the day directly
@@ -101,19 +228,18 @@ async function selectDateInCalendar(page: Page, targetDate: { year: number; mont
       // Calculate direction
       const currentTotal = currentYear * 12 + currentMonth;
       const targetTotal = targetDate.year * 12 + targetDate.month;
+      const goingBack = currentTotal > targetTotal;
 
-      if (currentTotal > targetTotal) {
-        // Need to go backward
-        const prevBtn = await page.$('.datepicker .prev, [class*="prev"], [aria-label*="revious"], button:has(svg[class*="left"]), .datepicker-days .prev') ||
-                        await page.$('th.prev, button.prev');
-        if (prevBtn) await prevBtn.click();
-        else break;
+      const navSelectors = goingBack
+        ? '.datepicker .prev, [class*="prev"], [aria-label*="revious"], button:has(svg[class*="left"]), .datepicker-days .prev, th.prev, button.prev'
+        : '.datepicker .next, [class*="next"], [aria-label*="ext"], button:has(svg[class*="right"]), .datepicker-days .next, th.next, button.next';
+
+      const navBtn = popupScope.locator(navSelectors).first();
+      const navCount = await navBtn.count().catch(() => 0);
+      if (navCount > 0) {
+        await navBtn.click().catch(() => {});
       } else {
-        // Need to go forward
-        const nextBtn = await page.$('.datepicker .next, [class*="next"], [aria-label*="ext"], button:has(svg[class*="right"]), .datepicker-days .next') ||
-                        await page.$('th.next, button.next');
-        if (nextBtn) await nextBtn.click();
-        else break;
+        break;
       }
       await page.waitForTimeout(300);
     } else {
@@ -124,12 +250,10 @@ async function selectDateInCalendar(page: Page, targetDate: { year: number; mont
   // Click the target day
   await page.waitForTimeout(300);
 
-  // Try to click the day number
   const dayStr = String(targetDate.day);
 
-  // Strategy 1: Find a td or button with exact text matching the day
-  const clicked = await page.evaluate((day) => {
-    // Look for calendar day cells
+  // Strategy 1: scan for a cell with exact day text in the popup scope
+  const clicked = await popupScope.locator('body').evaluate((body, day) => {
     const selectors = [
       'td.day', '.datepicker td', '.react-datepicker__day',
       '[class*="calendar"] td', '[role="gridcell"]',
@@ -137,7 +261,7 @@ async function selectDateInCalendar(page: Page, targetDate: { year: number; mont
     ];
 
     for (const sel of selectors) {
-      const cells = document.querySelectorAll(sel);
+      const cells = body.querySelectorAll(sel);
       for (const cell of cells) {
         const text = cell.textContent?.trim();
         if (text === day && !cell.classList.contains('old') && !cell.classList.contains('new') &&
@@ -148,8 +272,8 @@ async function selectDateInCalendar(page: Page, targetDate: { year: number; mont
       }
     }
 
-    // Fallback: find any clickable element with the day text inside a calendar/datepicker
-    const container = document.querySelector('.datepicker, [class*="calendar"], [class*="datepicker"], [role="dialog"]');
+    // Fallback: any clickable element with exact day text inside a calendar/datepicker container
+    const container = body.querySelector('.datepicker, [class*="calendar"], [class*="datepicker"], [role="dialog"]');
     if (container) {
       const tds = container.querySelectorAll('td, button, div[role="button"]');
       for (const td of tds) {
@@ -160,12 +284,12 @@ async function selectDateInCalendar(page: Page, targetDate: { year: number; mont
       }
     }
     return false;
-  }, dayStr);
+  }, dayStr).catch(() => false);
 
   if (!clicked) {
-    // Last resort: use getByText
+    // Last resort: text-based locator
     try {
-      await page.locator(`td:text-is("${dayStr}")`).first().click({ timeout: 3000 });
+      await popupScope.locator(`td:text-is("${dayStr}")`).first().click({ timeout: 3000 });
     } catch {
       throw new Error(`Could not select day ${dayStr} in calendar`);
     }
@@ -189,7 +313,15 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
   const isProd = process.env.NODE_ENV === 'production';
   const dataDir = process.env.DATA_DIR || (isProd ? '/data' : '.');
   const downloadDir = path.join(dataDir, 'uploads');
+  const debugDir = path.join(downloadDir, 'debug');
   if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
+
+  // Track the current sync step so error messages can name where we failed.
+  let currentStep = 'init';
+  const localProgress = (step: string, msg: string, pct: number) => {
+    currentStep = step;
+    progress(opts, step, msg, pct);
+  };
 
   // Verify Chromium path exists
   const chromiumPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium';
@@ -203,7 +335,7 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     console.log(`[HP Sync] Using alternative Chromium path: ${found}`);
   }
 
-  progress(opts, 'login', 'Launching browser...', 2);
+  localProgress('login', 'Launching browser...', 2);
   const browser = await chromium.launch({
     ...(isProd ? { executablePath: fs.existsSync(chromiumPath) ? chromiumPath : '/usr/bin/chromium-browser' } : { channel: 'chrome' }),
     headless: isProd ? true : false,
@@ -218,10 +350,12 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
   });
   const page = await context.newPage();
 
-  // Helper: save debug screenshot on failure
+  // Helper: save debug screenshot on failure (writes to /uploads/debug/ so the
+  // existing GET /api/sync/debug/screenshots endpoint can serve it).
   const saveDebugScreenshot = async (label: string) => {
     try {
-      const ssPath = path.join(downloadDir, `hp-debug-${label}-${Date.now()}.png`);
+      if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true });
+      const ssPath = path.join(debugDir, `hp-debug-${label}-${Date.now()}.png`);
       await page.screenshot({ path: ssPath, fullPage: true });
       console.log(`[HP Sync] Debug screenshot saved: ${ssPath}`);
     } catch (e) {
@@ -232,7 +366,7 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
   try {
     // ── Step 1: Go directly to the report page URL ──
     const REPORT_URL = 'https://md.healthplix.com/report/viewFDBillingReport.php';
-    progress(opts, 'login', 'Opening Healthplix...', 5);
+    localProgress('login', 'Opening Healthplix...', 5);
     await page.goto(REPORT_URL, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
     // Wait a bit for JS to load, but don't require full networkidle (can be slow)
     await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {
@@ -246,7 +380,7 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     console.log(`[HP Sync] Current URL: ${pageUrl}`);
     const isOnReportPage = currentUrl.pathname.includes('viewFDBillingReport');
     if (!isOnReportPage) {
-      progress(opts, 'login', 'Entering credentials...', 10);
+      localProgress('login', 'Entering credentials...', 10);
 
       // Wait for either a username input or a phone input (Healthplix may use phone login)
       const usernameInput = page.locator('input[type="text"], input[type="email"], input[type="tel"], input[name="username"], input[name="email"], input[name="phone"], input[placeholder*="mail"], input[placeholder*="user"], input[placeholder*="phone"], input[placeholder*="mobile"]').first();
@@ -315,13 +449,13 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
         }
       }
 
-      progress(opts, 'login', 'Logged in successfully', 20);
+      localProgress('login', 'Logged in successfully', 20);
     } else {
-      progress(opts, 'login', 'Already authenticated', 20);
+      localProgress('login', 'Already authenticated', 20);
     }
 
     // ── Step 3: Clinic selection (if prompted after login) ──
-    progress(opts, 'clinic', 'Checking for clinic selection...', 25);
+    localProgress('clinic', 'Checking for clinic selection...', 25);
     const postLoginPath = new URL(page.url()).pathname;
     if (!postLoginPath.includes('viewFDBillingReport')) {
       // May need to select clinic first
@@ -332,59 +466,82 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
           await clinicLink.click();
           await page.waitForTimeout(2000);
           await page.waitForLoadState('networkidle', { timeout: TIMEOUT });
-          progress(opts, 'clinic', `Selected "${opts.clinicName}"`, 30);
+          localProgress('clinic', `Selected "${opts.clinicName}"`, 30);
         } else {
-          progress(opts, 'clinic', 'Auto-selected', 30);
+          localProgress('clinic', 'Auto-selected', 30);
         }
       } catch {
-        progress(opts, 'clinic', 'Skipped', 30);
+        localProgress('clinic', 'Skipped', 30);
       }
 
       // Now navigate to the report page directly
-      progress(opts, 'navigate', 'Navigating to report page...', 35);
+      localProgress('navigate', 'Navigating to report page...', 35);
       await page.goto(REPORT_URL, { waitUntil: 'networkidle', timeout: TIMEOUT });
       await page.waitForTimeout(2000);
     } else {
-      progress(opts, 'clinic', 'Already on report page', 30);
+      localProgress('clinic', 'Already on report page', 30);
     }
 
     // ── Step 4: Confirm we're on the Billing Report page ──
-    progress(opts, 'navigate', 'Report page loaded', 50);
+    localProgress('navigate', 'Report page loaded', 50);
 
     // ── Step 5: Set date range ──
     // The date inputs are READONLY with a datepicker popup (placeholder DD-MMM-YYYY)
     // We must click each input to open the calendar, then navigate & select the date
-    progress(opts, 'dates', 'Setting date range...', 55);
+    localProgress('dates', 'Setting date range...', 55);
 
     const fromDate = parseDate(opts.fromDate);
     const toDate = parseDate(opts.toDate);
 
-    // Click the From date input to open its datepicker
-    const fromInput = page.locator('input[name="fdate"], input.report_from_date').first();
-    await fromInput.click({ timeout: TIMEOUT });
-    await page.waitForTimeout(500);
-    await selectDateInCalendar(page, fromDate);
-    progress(opts, 'dates', `From date set: ${opts.fromDate}`, 60);
+    // Helper: open one date input's datepicker and pick the target date.
+    const setOneDate = async (
+      kind: 'from' | 'to',
+      target: { year: number; month: number; day: number },
+    ) => {
+      const { locator, scope } = await findDateInputScope(page, kind);
+      await locator.click({ timeout: TIMEOUT });
+      await page.waitForTimeout(500);
+      await selectDateInCalendar(scope, page, target);
+    };
+
+    // One retry on transient Playwright timeouts (page may have been mid-render).
+    // We do NOT retry on "Couldn't find" errors — those mean Healthplix UI changed
+    // and a retry won't help.
+    const setDateWithRetry = async (
+      kind: 'from' | 'to',
+      target: { year: number; month: number; day: number },
+    ) => {
+      try {
+        await setOneDate(kind, target);
+      } catch (err: any) {
+        const msg: string = err?.message || '';
+        const isTransient =
+          /Timeout \d+ms exceeded/.test(msg) && !/Couldn't find the/.test(msg);
+        if (!isTransient) throw err;
+        console.log(`[HP Sync] Transient timeout on ${kind} date, retrying once...`);
+        await page.waitForTimeout(2000);
+        await setOneDate(kind, target);
+      }
+    };
+
+    await setDateWithRetry('from', fromDate);
+    localProgress('dates', `From date set: ${opts.fromDate}`, 60);
 
     await page.waitForTimeout(500);
 
-    // Click the To date input to open its datepicker
-    const toInput = page.locator('input[name="tdate"], input.report_to_date').first();
-    await toInput.click({ timeout: TIMEOUT });
-    await page.waitForTimeout(500);
-    await selectDateInCalendar(page, toDate);
-    progress(opts, 'dates', `To date set: ${opts.toDate}`, 65);
+    await setDateWithRetry('to', toDate);
+    localProgress('dates', `To date set: ${opts.toDate}`, 65);
 
     await page.waitForTimeout(500);
 
     // ── Step 6: Click GET BILLS ──
-    progress(opts, 'generate', 'Clicking GET BILLS...', 70);
+    localProgress('generate', 'Clicking GET BILLS...', 70);
     const getBillsBtn = page.locator('button:has-text("GET BILLS"), button:has-text("Get Bills"), button:has-text("GENERATE"), input[value="GET BILLS"], input[value="GENERATE"]').first();
     // noWaitAfter: don't block on navigation triggered by GET BILLS
     await getBillsBtn.click({ timeout: 30_000, noWaitAfter: true });
 
     // Wait for the page to settle after GET BILLS triggers a navigation/reload
-    progress(opts, 'generate', 'Waiting for report to generate...', 72);
+    localProgress('generate', 'Waiting for report to generate...', 72);
     await page.waitForLoadState('domcontentloaded', { timeout: 120_000 }).catch(() => {});
     await page.waitForTimeout(3000);
 
@@ -398,17 +555,17 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     }, { timeout: 120_000 }).catch(() => null);
 
     if (reportReady) {
-      progress(opts, 'generate', 'Bills loaded', 78);
+      localProgress('generate', 'Bills loaded', 78);
     } else {
       console.log('[HP Sync] Report indicators not found after 120s, trying download anyway');
-      progress(opts, 'generate', 'Attempting download...', 78);
+      localProgress('generate', 'Attempting download...', 78);
     }
 
     // ── Step 7: Click the "Download Report" button in the Bills tab ──
     // The Bills tab has a "Download Report" button (a[title="Download Report"])
     // which calls downloadTableToCSV() and includes ALL columns (ID, Addl. Disc,
     // Item Disc, Service Owner) that are missing from the old exportTable('exportBills').
-    progress(opts, 'download', 'Clicking download button...', 80);
+    localProgress('download', 'Clicking download button...', 80);
 
     await page.waitForLoadState('load', { timeout: 30_000 }).catch(() => {});
     await page.waitForTimeout(2000);
@@ -461,7 +618,7 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
     });
     console.log(`[HP Sync] Download clicked: a[title="Download Report"]`);
 
-    progress(opts, 'download', 'Downloading file...', 85);
+    localProgress('download', 'Downloading file...', 85);
     const download = await downloadPromise;
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -478,20 +635,53 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
       console.log(`[HP Sync] WARNING: File appears empty or too small`);
     }
 
-    progress(opts, 'download', 'File downloaded', 90);
-    progress(opts, 'complete', 'Download complete!', 100);
+    localProgress('download', 'File downloaded', 90);
+    localProgress('complete', 'Download complete!', 100);
 
     await browser.close();
     return { filePath, filename };
   } catch (err: any) {
-    // Save debug screenshot before closing
+    // Save screenshot AND HTML so the next iteration can see exactly what
+    // selector to add. Both go into /uploads/debug/ so the existing debug
+    // endpoint can list and serve them.
+    const ts = Date.now();
     try {
-      const ssPath = path.join(downloadDir, `hp-error-${Date.now()}.png`);
+      if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true });
+    } catch {}
+
+    try {
+      const ssPath = path.join(debugDir, `hp-error-${ts}.png`);
       await page.screenshot({ path: ssPath, fullPage: true });
       console.error(`[HP Sync] Error screenshot saved: ${ssPath}`);
     } catch {}
+
+    try {
+      const htmlPath = path.join(debugDir, `hp-error-${ts}.html`);
+      const html = await page.content();
+      fs.writeFileSync(htmlPath, html, 'utf8');
+      console.error(`[HP Sync] Error HTML saved: ${htmlPath}`);
+    } catch {}
+
+    try {
+      const url = page.url();
+      const title = await page.title().catch(() => '');
+      console.error(`[HP Sync] Failed at URL: ${url} (title: "${title}")`);
+    } catch {}
+
     console.error(`[HP Sync] Error:`, err.message);
     await browser.close();
-    throw new Error(`Healthplix sync failed: ${err.message}`);
+
+    // Friendlier error message for raw Playwright timeouts. Errors thrown by
+    // findDateInputScope (which include "Couldn't find the") are already
+    // friendly — pass them through as-is.
+    const raw: string = err?.message || String(err);
+    let friendly = raw;
+    if (/Timeout \d+ms exceeded/.test(raw) && /locator\./.test(raw) && !/Couldn't find the/.test(raw)) {
+      friendly =
+        `Healthplix page didn't respond as expected at step '${currentStep}'. ` +
+        `The Healthplix UI may have changed, or the page is loading slowly. ` +
+        `Debug files: /uploads/debug/hp-error-${ts}.{png,html}`;
+    }
+    throw new Error(`Healthplix sync failed: ${friendly}`);
   }
 }

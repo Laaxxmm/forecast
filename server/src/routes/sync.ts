@@ -942,7 +942,7 @@ router.get('/debug/screenshots', (_req: Request, res: Response) => {
     return res.json({ screenshots: [] });
   }
   const files = fs.readdirSync(debugDir)
-    .filter(f => f.endsWith('.png'))
+    .filter(f => f.endsWith('.png') || f.endsWith('.html'))
     .sort();
   res.json({
     screenshots: files.map(f => ({
