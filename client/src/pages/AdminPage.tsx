@@ -1694,6 +1694,71 @@ function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[
 
   const currentScope = scopes[activeScope] || { cards: [], charts: [], tables: [] };
 
+  // ── Pharmacy bucket grouping ─────────────────────────────
+  // Groups Pharmacy KPIs / Charts / Tables under sub-headings that mirror the
+  // analytics page tabs (Purchases, Sales & Profit, Stock & Expiry,
+  // Cross-Report) so the long flat list is easier to scan and toggle.
+  // Keys must stay in sync with PharmacyAnalytics.tsx tab cardKeys/chartKeys.
+  const PHARMA_BUCKETS = [
+    { key: 'purchases', label: 'Purchases' },
+    { key: 'sales',     label: 'Sales & Profit' },
+    { key: 'stock',     label: 'Stock & Expiry' },
+    { key: 'cross',     label: 'Cross-Report' },
+  ];
+  const PHARMA_KEY_TO_BUCKET: Record<string, string> = {
+    // Purchases
+    pharma_total_purchase: 'purchases',
+    pharma_total_invoices: 'purchases',
+    pharma_unique_stockists: 'purchases',
+    pharma_unique_products: 'purchases',
+    pharma_total_free_qty: 'purchases',
+    pharma_total_tax: 'purchases',
+    pharma_monthly_purchase_trend: 'purchases',
+    pharma_top_stockists: 'purchases',
+    pharma_top_manufacturers: 'purchases',
+    pharma_top_purchase_products: 'purchases',
+    pharma_profit_margin_dist: 'purchases',
+    pharma_free_qty_analysis: 'purchases',
+    pharma_purchase_table: 'purchases',
+    // Sales & Profit
+    pharma_total_sales: 'sales',
+    pharma_total_cogs: 'sales',
+    pharma_total_profit: 'sales',
+    pharma_profit_margin: 'sales',
+    pharma_total_bills: 'sales',
+    pharma_unique_patients: 'sales',
+    pharma_monthly_sales_trend: 'sales',
+    pharma_top_drugs_sales: 'sales',
+    pharma_top_drugs_profit: 'sales',
+    pharma_referral_analysis: 'sales',
+    pharma_sales_vs_cogs: 'sales',
+    pharma_top_patients: 'sales',
+    pharma_sales_table: 'sales',
+    // Stock & Expiry
+    pharma_stock_value: 'stock',
+    pharma_stock_skus: 'stock',
+    pharma_near_expiry: 'stock',
+    pharma_expired_items: 'stock',
+    pharma_total_batches: 'stock',
+    pharma_expiry_zones: 'stock',
+    pharma_top_stock_products: 'stock',
+    pharma_stock_table: 'stock',
+    // Cross-Report
+    pharma_cross_kpis: 'cross',
+    pharma_purchase_vs_sales: 'cross',
+    pharma_dead_stock: 'cross',
+  };
+  const isPharmaScope = !!streams.find((s: any) =>
+    String(s.id) === activeScope && String(s.name || '').toLowerCase().includes('pharma'),
+  );
+  const getPharmaBucket = (item: any): string | null => {
+    const k = item?.element_key as string | undefined;
+    return k ? (PHARMA_KEY_TO_BUCKET[k] ?? null) : null;
+  };
+  const pharmaGroupConfig = isPharmaScope
+    ? { buckets: PHARMA_BUCKETS, getBucketKey: getPharmaBucket }
+    : undefined;
+
   const SOURCE_TONES: Record<string, Tone> = {
     healthplix: TONES.teal,
     oneglance: TONES.orange,
@@ -1769,8 +1834,76 @@ function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[
     );
   };
 
-  const renderSection = (title: string, sectionKey: string, items: any[], type: 'card' | 'chart', getBadge?: (item: any) => string | undefined) => {
+  const renderSection = (
+    title: string,
+    sectionKey: string,
+    items: any[],
+    type: 'card' | 'chart',
+    getBadge?: (item: any) => string | undefined,
+    groupConfig?: { buckets: { key: string; label: string }[]; getBucketKey: (item: any) => string | null },
+  ) => {
     const isCollapsed = collapsed[`${activeScope}-${sectionKey}`];
+
+    // Build either a flat row or grouped sub-sections.
+    let body: React.ReactNode;
+    if (items.length === 0) {
+      body = (
+        <div className="mt-card px-4 py-6 text-center">
+          <p className="text-xs" style={{ color: 'var(--mt-text-faint)' }}>No {title.toLowerCase()} configured</p>
+        </div>
+      );
+    } else if (groupConfig) {
+      // Bucket items by groupConfig.getBucketKey. Items without a bucket fall
+      // into 'ungrouped' and render at the top (e.g. the auto stream card).
+      const ungrouped: any[] = [];
+      const byBucket = new Map<string, any[]>();
+      for (const b of groupConfig.buckets) byBucket.set(b.key, []);
+      for (const i of items) {
+        const k = groupConfig.getBucketKey(i);
+        if (k && byBucket.has(k)) byBucket.get(k)!.push(i);
+        else ungrouped.push(i);
+      }
+      body = (
+        <div className="space-y-3">
+          {ungrouped.length > 0 && (
+            <div className="mt-card p-0 overflow-hidden">
+              {ungrouped.map(item => renderToggleItem(item, type, getBadge?.(item)))}
+            </div>
+          )}
+          {groupConfig.buckets.map(b => {
+            const bucketItems = byBucket.get(b.key) || [];
+            if (bucketItems.length === 0) return null;
+            const bVisible = bucketItems.filter(i => i.is_visible).length;
+            return (
+              <div key={b.key}>
+                <div
+                  className="px-1 mb-1.5 text-[11px] font-semibold uppercase tracking-wider"
+                  style={{ color: 'var(--mt-text-muted)' }}
+                >
+                  {b.label}
+                  <span
+                    className="ml-1.5 normal-case font-normal"
+                    style={{ color: 'var(--mt-text-faint)' }}
+                  >
+                    ({bVisible}/{bucketItems.length} visible)
+                  </span>
+                </div>
+                <div className="mt-card p-0 overflow-hidden">
+                  {bucketItems.map(item => renderToggleItem(item, type, getBadge?.(item)))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    } else {
+      body = (
+        <div className="mt-card p-0 overflow-hidden">
+          {items.map(item => renderToggleItem(item, type, getBadge?.(item)))}
+        </div>
+      );
+    }
+
     return (
       <div className="mb-4">
         <button
@@ -1784,17 +1917,7 @@ function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[
             ({items.filter(i => i.is_visible).length}/{items.length} visible)
           </span>
         </button>
-        {!isCollapsed && (
-          items.length > 0 ? (
-            <div className="mt-card p-0 overflow-hidden">
-              {items.map(item => renderToggleItem(item, type, getBadge?.(item)))}
-            </div>
-          ) : (
-            <div className="mt-card px-4 py-6 text-center">
-              <p className="text-xs" style={{ color: 'var(--mt-text-faint)' }}>No {title.toLowerCase()} configured</p>
-            </div>
-          )
-        )}
+        {!isCollapsed && body}
       </div>
     );
   };
@@ -1836,14 +1959,17 @@ function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[
         })}
       </div>
 
-      {/* Sections */}
+      {/* Sections — Pharmacy scope groups items into buckets that mirror the
+          analytics page tabs (Purchases / Sales & Profit / Stock & Expiry /
+          Cross-Report). Other scopes render flat as before. */}
       {renderSection(
         'KPI Cards', 'cards', currentScope.cards, 'card',
         (item) => item._source === 'chart_visibility' ? undefined :
-          item.card_type === 'total' ? 'System' : item.card_type === 'stream' ? 'Auto' : 'Custom'
+          item.card_type === 'total' ? 'System' : item.card_type === 'stream' ? 'Auto' : 'Custom',
+        pharmaGroupConfig,
       )}
-      {renderSection('Charts', 'charts', currentScope.charts, 'chart')}
-      {renderSection('Tables', 'tables', currentScope.tables, 'chart')}
+      {renderSection('Charts', 'charts', currentScope.charts, 'chart', undefined, pharmaGroupConfig)}
+      {renderSection('Tables', 'tables', currentScope.tables, 'chart', undefined, pharmaGroupConfig)}
     </div>
   );
 }
