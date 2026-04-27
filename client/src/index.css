@@ -53,6 +53,7 @@
   --mt-text-muted:   #64748b;
   --mt-text-faint:   #94a3b8;
   --mt-accent:       #10b981;
+  --mt-accent-strong:#059669;
   --mt-accent-soft:  rgba(16, 185, 129, 0.10);
   --mt-accent-border:rgba(16, 185, 129, 0.28);
   --mt-accent-text:  #047857;
@@ -110,6 +111,7 @@
   --mt-text-muted:   #94a3b8;
   --mt-text-faint:   #64748b;
   --mt-accent:       #10b981;
+  --mt-accent-strong:#059669;
   --mt-accent-soft:  rgba(16, 185, 129, 0.12);
   --mt-accent-border:rgba(16, 185, 129, 0.30);
   --mt-accent-text:  #34d399;
