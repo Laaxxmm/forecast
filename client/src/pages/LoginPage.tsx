@@ -5,7 +5,6 @@ import {
   BarChart3,
   Eye,
   EyeOff,
-  Mail,
   Lock,
   TrendingUp,
   Calendar,
@@ -14,18 +13,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 
-function detectWorkspace(): string {
-  if (typeof window === 'undefined') return '';
-  const host = window.location.hostname;
-  if (host === 'localhost' || /^\d/.test(host)) return '';
-  const parts = host.split('.');
-  if (parts.length >= 3 && parts.slice(-2).join('.') === 'magna.in') return parts[0];
-  return '';
-}
-
 export default function LoginPage() {
-  const detectedWorkspace = detectWorkspace();
-  const [workspace, setWorkspace] = useState(detectedWorkspace);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -33,7 +21,6 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [platformLogo, setPlatformLogo] = useState<string | null>(null);
   const navigate = useNavigate();
-  const workspaceLocked = detectedWorkspace !== '';
 
   useEffect(() => {
     api.get('/logo').then(res => setPlatformLogo(res.data.platformLogo)).catch(() => {});
@@ -178,20 +165,7 @@ export default function LoginPage() {
             </div>
             <h1 className="mt-heading text-2xl mb-2">Sign in to your workspace</h1>
             <p className="text-sm" style={{ color: 'var(--mt-text-muted)' }}>
-              {workspaceLocked ? (
-                <>
-                  Continue as{' '}
-                  <span
-                    className="font-semibold"
-                    style={{ color: 'var(--mt-text-primary)' }}
-                  >
-                    {detectedWorkspace}
-                  </span>
-                  .magna.in — or switch tenant below.
-                </>
-              ) : (
-                'Sign in to your workspace below.'
-              )}
+              Enter your workspace and password to continue.
             </p>
           </div>
 
@@ -221,12 +195,12 @@ export default function LoginPage() {
               <div className="relative">
                 <input
                   type="text"
-                  value={workspace}
-                  onChange={e => setWorkspace(e.target.value)}
+                  value={username}
+                  onChange={e => setUsername(e.target.value)}
                   className="mt-input pr-20"
                   placeholder="your-workspace"
-                  readOnly={workspaceLocked}
-                  autoComplete="off"
+                  required
+                  autoComplete="username"
                 />
                 <span
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-sm pointer-events-none"
@@ -234,32 +208,6 @@ export default function LoginPage() {
                 >
                   .magna.in
                 </span>
-              </div>
-            </div>
-
-            {/* Email */}
-            <div className="mb-4">
-              <label
-                className="block text-xs font-semibold mb-2"
-                style={{ color: 'var(--mt-text-muted)' }}
-              >
-                Email
-              </label>
-              <div className="relative">
-                <Mail
-                  size={16}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-                  style={{ color: 'var(--mt-text-faint)' }}
-                />
-                <input
-                  type="email"
-                  value={username}
-                  onChange={e => setUsername(e.target.value)}
-                  className="mt-input pl-10"
-                  placeholder="you@company.com"
-                  required
-                  autoComplete="email"
-                />
               </div>
             </div>
 
