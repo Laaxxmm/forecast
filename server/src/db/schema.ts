@@ -815,6 +815,15 @@ export function initializeSchema(db: DbHelper) {
     GROUP BY branch_id, bill_month, billed_doctor, department`,
 
     `DROP VIEW IF EXISTS pharmacy_monthly_summary`,
+    // total_sales       = gross sales (incl. GST) — for GST filing / top-line revenue.
+    // total_net_sales   = sales ex-GST — denominator for margin / profitability.
+    // total_purchase_cost = COGS (already ex-GST).
+    // total_profit      = TRUE gross profit = sales - tax - cogs (NOT the source-system 'profit'
+    //                     column, which leaves GST in profit and is overstated by exactly
+    //                     the tax collected).
+    // profit_margin_pct = gross profit / net sales (ex-GST denominator).
+    // reported_profit   = source-system profit, kept ONLY for sanity check:
+    //                     reported_profit - total_profit must equal total_sales_tax.
     `CREATE VIEW pharmacy_monthly_summary AS
     SELECT
       branch_id,
@@ -822,13 +831,16 @@ export function initializeSchema(db: DbHelper) {
       COUNT(DISTINCT bill_no) as transactions,
       COALESCE(SUM(qty), 0) as total_qty,
       COALESCE(SUM(sales_amount), 0) as total_sales,
+      COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as total_net_sales,
       COALESCE(SUM(purchase_amount), 0) as total_purchase_cost,
-      COALESCE(SUM(profit), 0) as total_profit,
-      CASE WHEN SUM(sales_amount) > 0
-        THEN ROUND(SUM(profit) * 100.0 / SUM(sales_amount), 2)
+      COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)), 0) as total_profit,
+      CASE WHEN SUM(sales_amount - COALESCE(sales_tax, 0)) > 0
+        THEN ROUND(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)) * 100.0
+                   / SUM(sales_amount - COALESCE(sales_tax, 0)), 2)
         ELSE 0
       END as profit_margin_pct,
-      COALESCE(SUM(sales_tax), 0) as total_sales_tax
+      COALESCE(SUM(sales_tax), 0) as total_sales_tax,
+      COALESCE(SUM(profit), 0) as reported_profit
     FROM pharmacy_sales_actuals
     GROUP BY branch_id, bill_month`,
 

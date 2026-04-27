@@ -633,9 +633,27 @@ router.get('/export/:source', async (req, res) => {
         break;
 
       case 'pharma-sales':
+        // Computed columns:
+        //   net_sales        = sales_amount - sales_tax (sales ex-GST)
+        //   gross_profit     = net_sales - purchase_amount (true profit on goods)
+        //   gross_margin_pct = gross_profit / net_sales (denominator is net sales)
+        // The source-system 'profit' column is renamed `reported_profit` in the
+        // export and kept only for sanity check (reported - gross = sales_tax).
         rows = db.all(
           `SELECT bill_no, bill_date, patient_name, drug_name, batch_no, hsn_code,
-            qty, sales_amount, purchase_amount, sales_tax, profit, referred_by
+            qty,
+            sales_amount,
+            (sales_amount - COALESCE(sales_tax, 0)) AS net_sales,
+            COALESCE(sales_tax, 0) AS sales_tax,
+            COALESCE(purchase_amount, 0) AS purchase_amount,
+            (sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)) AS gross_profit,
+            CASE WHEN (sales_amount - COALESCE(sales_tax, 0)) > 0
+              THEN ROUND((sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)) * 100.0
+                         / (sales_amount - COALESCE(sales_tax, 0)), 2)
+              ELSE 0
+            END AS gross_margin_pct,
+            COALESCE(profit, 0) AS reported_profit,
+            referred_by
            FROM pharmacy_sales_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where}
            ORDER BY bill_date, bill_no`,
           from, to, ...bf.params

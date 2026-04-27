@@ -123,6 +123,10 @@ export const PHARMA_PURCHASE_EXPORT_COLUMNS: Column[] = [
   { header: 'Margin %', key: 'profit_pct', width: 10, format: 'percent' },
 ];
 
+// Pharmacy Sales export — Profit is the recomputed Gross Profit (Net Sales − COGS),
+// NOT the source-system 'profit' column (which leaves GST inside profit and is
+// overstated by exactly the tax collected). 'Reported Profit' is kept as the
+// last column for sanity check: reported − gross_profit ≡ sales_tax.
 export const PHARMA_SALES_EXPORT_COLUMNS: Column[] = [
   { header: 'Bill #', key: 'bill_no', width: 10 },
   { header: 'Date', key: 'bill_date', width: 12, format: 'date' },
@@ -131,9 +135,12 @@ export const PHARMA_SALES_EXPORT_COLUMNS: Column[] = [
   { header: 'Batch', key: 'batch_no', width: 12 },
   { header: 'HSN Code', key: 'hsn_code', width: 10 },
   { header: 'Qty', key: 'qty', width: 8, format: 'number' },
-  { header: 'Sales', key: 'sales_amount', width: 14, format: 'currency' },
-  { header: 'COGS', key: 'purchase_amount', width: 14, format: 'currency' },
-  { header: 'Tax', key: 'sales_tax', width: 12, format: 'currency' },
-  { header: 'Profit', key: 'profit', width: 14, format: 'currency' },
+  { header: 'Sales (incl. GST)', key: 'sales_amount', width: 16, format: 'currency' },
+  { header: 'GST', key: 'sales_tax', width: 12, format: 'currency' },
+  { header: 'Net Sales (ex-GST)', key: 'net_sales', width: 16, format: 'currency' },
+  { header: 'COGS (ex-GST)', key: 'purchase_amount', width: 14, format: 'currency' },
+  { header: 'Gross Profit', key: 'gross_profit', width: 14, format: 'currency' },
+  { header: 'Gross Margin %', key: 'gross_margin_pct', width: 14, format: 'percent' },
+  { header: 'Reported Profit (source)', key: 'reported_profit', width: 18, format: 'currency' },
   { header: 'Referred By', key: 'referred_by', width: 20 },
 ];

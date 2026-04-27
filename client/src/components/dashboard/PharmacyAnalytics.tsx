@@ -404,24 +404,38 @@ function PurchasesTab({ data, isVisible, search, setSearch, page, setPage, pageS
                 </tr>
               </thead>
               <tbody>
-                {pageRows.map((r: any, i: number) => (
-                  <tr key={i} className="border-b border-dark-400/10 hover:bg-dark-600/30">
-                    <td className="px-3 py-2 text-theme-secondary font-mono text-xs">{r.invoice_no}</td>
-                    <td className="px-3 py-2 text-theme-faint text-xs">{r.invoice_date}</td>
-                    <td className="px-3 py-2 text-theme-secondary text-xs truncate max-w-[120px]">{r.stockiest_name}</td>
-                    <td className="px-3 py-2 text-theme-heading text-xs truncate max-w-[150px]">{r.drug_name}</td>
-                    <td className="px-3 py-2 text-right text-theme-heading">{r.batch_qty}</td>
-                    <td className="px-3 py-2 text-right text-emerald-400">{r.free_qty || '-'}</td>
-                    <td className="px-3 py-2 text-right text-theme-faint">{formatINR(r.mrp || 0)}</td>
-                    <td className="px-3 py-2 text-right text-theme-heading">{formatINR(r.purchase_value || 0)}</td>
-                    <td className="px-3 py-2 text-right text-theme-faint">{formatINR(r.tax_amount || 0)}</td>
-                    <td className="px-3 py-2 text-right">
-                      <span className={r.profit_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}>
-                        {r.profit_pct != null ? `${r.profit_pct.toFixed(1)}%` : '-'}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {pageRows.map((r: any, i: number) => {
+                  // Free Qty > 0 means the supplier gave bonus stock that doesn't appear
+                  // in COGS — so the per-unit cost flowing to sales is overstated, and
+                  // gross profit on those batches is understated. Flag for awareness.
+                  const hasFreeQty = (Number(r.free_qty) || 0) > 0;
+                  return (
+                    <tr key={i} className={`border-b border-dark-400/10 hover:bg-dark-600/30 ${hasFreeQty ? 'bg-emerald-500/5' : ''}`}>
+                      <td className="px-3 py-2 text-theme-secondary font-mono text-xs">{r.invoice_no}</td>
+                      <td className="px-3 py-2 text-theme-faint text-xs">{r.invoice_date}</td>
+                      <td className="px-3 py-2 text-theme-secondary text-xs truncate max-w-[120px]">{r.stockiest_name}</td>
+                      <td className="px-3 py-2 text-theme-heading text-xs truncate max-w-[150px]">
+                        {r.drug_name}
+                        {hasFreeQty && (
+                          <span title={`Received ${r.free_qty} free unit(s). COGS doesn't credit free qty — gross profit on sales from this batch is slightly understated.`}
+                            className="ml-1.5 inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 align-middle">
+                            <Gift size={9} /> +{r.free_qty}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right text-theme-heading">{r.batch_qty}</td>
+                      <td className="px-3 py-2 text-right text-emerald-400">{r.free_qty || '-'}</td>
+                      <td className="px-3 py-2 text-right text-theme-faint">{formatINR(r.mrp || 0)}</td>
+                      <td className="px-3 py-2 text-right text-theme-heading">{formatINR(r.purchase_value || 0)}</td>
+                      <td className="px-3 py-2 text-right text-theme-faint">{formatINR(r.tax_amount || 0)}</td>
+                      <td className="px-3 py-2 text-right">
+                        <span className={r.profit_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}>
+                          {r.profit_pct != null ? `${r.profit_pct.toFixed(1)}%` : '-'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -464,25 +478,50 @@ function SalesTab({ data, isVisible, search, setSearch, page, setPage, pageSize,
         const visibleCount = cardKeys.filter(isVisible).length;
         const cols: Record<number, string> = { 1: '', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6' };
         return (
-          <div className={`grid grid-cols-2 md:grid-cols-3 ${cols[visibleCount] || 'lg:grid-cols-6'} gap-4 mb-6`}>
-            {isVisible('pharma_total_sales') && <MiniKPI label="Total Sales" value={formatINR(kpi.totalSales)} icon={TrendingUp} color="teal" />}
-            {isVisible('pharma_total_cogs') && <MiniKPI label="Cost of Goods" value={formatINR(kpi.totalCogs)} icon={DollarSign} color="blue" />}
-            {isVisible('pharma_total_profit') && <MiniKPI label="Total Profit" value={formatINR(kpi.totalProfit)} icon={TrendingUp} color="emerald" />}
-            {isVisible('pharma_profit_margin') && <MiniKPI label="Profit Margin" value={`${kpi.profitMargin}%`} icon={BarChart3} color="purple" />}
+          <div className={`grid grid-cols-2 md:grid-cols-3 ${cols[visibleCount] || 'lg:grid-cols-6'} gap-4 mb-3`}>
+            {isVisible('pharma_total_sales') && <MiniKPI label="Gross Sales (incl. GST)" sub="Top-line / GST filing" value={formatINR(kpi.totalSales)} icon={TrendingUp} color="teal" />}
+            {isVisible('pharma_total_cogs') && <MiniKPI label="COGS (ex-GST)" sub="Net purchase rate" value={formatINR(kpi.totalCogs)} icon={DollarSign} color="blue" />}
+            {isVisible('pharma_total_profit') && <MiniKPI label="Gross Profit" sub="Net Sales − COGS" value={formatINR(kpi.totalGrossProfit ?? kpi.totalProfit)} icon={TrendingUp} color="emerald" />}
+            {isVisible('pharma_profit_margin') && <MiniKPI label="Gross Margin %" sub="On Net Sales (ex-GST)" value={`${kpi.grossMarginPct ?? kpi.profitMargin}%`} icon={BarChart3} color="purple" />}
             {isVisible('pharma_total_bills') && <MiniKPI label="Total Bills" value={formatNumber(kpi.totalBills)} icon={FileText} color="amber" />}
             {isVisible('pharma_unique_patients') && <MiniKPI label="Unique Patients" value={formatNumber(kpi.uniquePatients)} icon={Users} color="cyan" />}
           </div>
         );
       })()}
 
+      {/* Profit math footnote — explains the GST-inclusive vs ex-GST split and
+          surfaces the sanity-check identity (reported − correct ≡ tax collected). */}
+      {anyCardVisible && kpi && (
+        <div className="text-[11px] text-theme-faint mb-6 px-3 py-2 rounded-lg border border-dark-400/20 bg-dark-700/30 leading-relaxed">
+          <span className="font-medium text-theme-secondary">Net Sales (ex-GST):</span>{' '}
+          {formatINR(kpi.totalNetSales ?? Math.max(0, (kpi.totalSales || 0) - (kpi.totalTax || 0)))}
+          {' · '}
+          <span className="font-medium text-theme-secondary">GST collected (govt liability, not income):</span>{' '}
+          {formatINR(kpi.totalTax || 0)}
+          {kpi.reportedProfit != null && (
+            <>
+              {' · '}
+              <span className="font-medium text-theme-secondary">Source-system &quot;profit&quot; was overstated by:</span>{' '}
+              {formatINR((kpi.reportedProfit || 0) - (kpi.totalGrossProfit ?? kpi.totalProfit ?? 0))}
+              <span className="text-theme-faint"> (matches GST collected — sanity check)</span>
+            </>
+          )}
+          <span className="block mt-1 text-theme-faint">
+            Gross Profit is profit on goods only — operating expenses (rent, salaries, expiries) still need to be deducted to get bottom-line profit.
+          </span>
+        </div>
+      )}
+
       {/* Charts */}
       {anyChartVisible && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
-          {/* Monthly Sales Trend */}
+          {/* Monthly Sales & Profitability — uses ex-GST values so the green
+              bar (Net Sales) and purple bar (Gross Profit) are directly
+              comparable to COGS, which is also ex-GST. */}
           {isVisible('pharma_monthly_sales_trend') && trendData.length > 0 && (
             <div className="card lg:col-span-2">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Monthly Sales & Profitability</h3>
-              <p className="text-xs text-theme-faint mb-4">Revenue, COGS, and profit trend</p>
+              <h3 className="text-sm font-semibold text-theme-heading mb-1">Monthly Sales &amp; Profitability</h3>
+              <p className="text-xs text-theme-faint mb-4">Net Sales (ex-GST), COGS, and Gross Profit per month</p>
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={trendData} barGap={2}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" vertical={false} />
@@ -490,19 +529,19 @@ function SalesTab({ data, isVisible, search, setSearch, page, setPage, pageSize,
                   <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
                   <Tooltip formatter={(v: number) => formatINR(v)} contentStyle={CHART_STYLE} />
                   <Legend />
-                  <Bar dataKey="sales" name="Sales" fill="#10b981" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="netSales" name="Net Sales (ex-GST)" fill="#10b981" radius={[6, 6, 0, 0]} />
                   <Bar dataKey="cogs" name="COGS" fill="#3b82f6" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="profit" name="Profit" fill="#8b5cf6" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="grossProfit" name="Gross Profit" fill="#8b5cf6" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
           )}
 
-          {/* Sales vs COGS Monthly Comparison */}
+          {/* Net Sales vs COGS — both ex-GST so the gap = Gross Profit. */}
           {isVisible('pharma_sales_vs_cogs') && trendData.length > 0 && (
             <div className="card">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Sales vs COGS</h3>
-              <p className="text-xs text-theme-faint mb-4">Monthly comparison</p>
+              <h3 className="text-sm font-semibold text-theme-heading mb-1">Net Sales vs COGS</h3>
+              <p className="text-xs text-theme-faint mb-4">Both ex-GST · gap = Gross Profit</p>
               <ResponsiveContainer width="100%" height={250}>
                 <LineChart data={trendData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" />
@@ -510,7 +549,7 @@ function SalesTab({ data, isVisible, search, setSearch, page, setPage, pageSize,
                   <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
                   <Tooltip formatter={(v: number) => formatINR(v)} contentStyle={CHART_STYLE} />
                   <Legend />
-                  <Line type="monotone" dataKey="sales" name="Sales" stroke="#10b981" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="netSales" name="Net Sales" stroke="#10b981" strokeWidth={2} dot={false} />
                   <Line type="monotone" dataKey="cogs" name="COGS" stroke="#ef4444" strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
@@ -542,21 +581,23 @@ function SalesTab({ data, isVisible, search, setSearch, page, setPage, pageSize,
             </div>
           )}
 
-          {/* Top Drugs by Profit */}
+          {/* Top Drugs by Gross Profit — uses recomputed gross profit (Net Sales − COGS),
+              not the source-system 'profit' which leaves GST inside profit. */}
           {isVisible('pharma_top_drugs_profit') && topDrugsByProfit?.length > 0 && (
             <div className="card">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Top Drugs by Profit</h3>
-              <p className="text-xs text-theme-faint mb-4">Highest profit-generating medicines</p>
+              <h3 className="text-sm font-semibold text-theme-heading mb-1">Top Drugs by Gross Profit</h3>
+              <p className="text-xs text-theme-faint mb-4">Margin % is on Net Sales (ex-GST)</p>
               <div className="space-y-2 max-h-[350px] overflow-y-auto pr-2">
                 {topDrugsByProfit.map((d: any, i: number) => {
-                  const maxVal = topDrugsByProfit[0]?.profit || 1;
-                  const width = Math.max(4, (d.profit / maxVal) * 100);
+                  const value = d.grossProfit ?? d.profit ?? 0;
+                  const maxVal = (topDrugsByProfit[0]?.grossProfit ?? topDrugsByProfit[0]?.profit) || 1;
+                  const width = Math.max(4, (value / maxVal) * 100);
                   const barColor = d.marginPct >= 30 ? '#10b981' : d.marginPct >= 15 ? '#f59e0b' : '#ef4444';
                   return (
                     <div key={i}>
                       <div className="flex justify-between text-xs mb-1">
                         <span className="text-theme-secondary truncate mr-2">{d.name}</span>
-                        <span className="text-theme-heading font-medium shrink-0">{formatINR(d.profit)} <span className="text-theme-faint">({d.marginPct}%)</span></span>
+                        <span className="text-theme-heading font-medium shrink-0">{formatINR(value)} <span className="text-theme-faint">({d.marginPct}%)</span></span>
                       </div>
                       <div className="h-5 rounded-md overflow-hidden bg-dark-600">
                         <div className="h-full rounded-md" style={{ width: `${width}%`, backgroundColor: barColor }} />
@@ -630,27 +671,61 @@ function SalesTab({ data, isVisible, search, setSearch, page, setPage, pageSize,
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-dark-400/20">
-                  {['Bill #', 'Date', 'Patient', 'Drug', 'Qty', 'Sales', 'COGS', 'Profit', 'Referred By'].map(h => (
+                  {['Bill #', 'Date', 'Patient', 'Drug', 'Qty', 'Sales (incl. GST)', 'GST', 'Net Sales', 'COGS', 'Gross Profit', 'Margin %', 'Flags', 'Referred By'].map(h => (
                     <th key={h} className="text-left text-xs font-medium text-theme-faint px-3 py-2">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {pageRows.map((r: any, i: number) => (
-                  <tr key={i} className="border-b border-dark-400/10 hover:bg-dark-600/30">
-                    <td className="px-3 py-2 text-theme-secondary font-mono text-xs">{r.bill_no}</td>
-                    <td className="px-3 py-2 text-theme-faint text-xs">{r.bill_date}</td>
-                    <td className="px-3 py-2 text-theme-heading text-xs truncate max-w-[120px]">{r.patient_name}</td>
-                    <td className="px-3 py-2 text-theme-secondary text-xs truncate max-w-[150px]">{r.drug_name}</td>
-                    <td className="px-3 py-2 text-right text-theme-heading">{r.qty}</td>
-                    <td className="px-3 py-2 text-right text-theme-heading">{formatINR(r.sales_amount || 0)}</td>
-                    <td className="px-3 py-2 text-right text-theme-faint">{formatINR(r.purchase_amount || 0)}</td>
-                    <td className="px-3 py-2 text-right">
-                      <span className={(r.profit || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}>{formatINR(r.profit || 0)}</span>
-                    </td>
-                    <td className="px-3 py-2 text-theme-faint text-xs truncate max-w-[100px]">{r.referred_by || '-'}</td>
-                  </tr>
-                ))}
+                {pageRows.map((r: any, i: number) => {
+                  const sales = Number(r.sales_amount) || 0;
+                  const tax = Number(r.sales_tax) || 0;
+                  const cogs = Number(r.purchase_amount) || 0;
+                  const netSales = sales - tax;
+                  const grossProfit = netSales - cogs;
+                  const marginPct = netSales > 0 ? (grossProfit / netSales) * 100 : 0;
+                  // Flag rules from the spec:
+                  //   loss-making: COGS > Net Sales (truly negative gross profit) — needs investigation
+                  //   outlier:     margin <5% or >40% — review (could be billing/discount errors)
+                  const isLoss = grossProfit < 0;
+                  const isOutlier = !isLoss && netSales > 0 && (marginPct < 5 || marginPct > 40);
+                  return (
+                    <tr key={i} className={`border-b border-dark-400/10 hover:bg-dark-600/30 ${isLoss ? 'bg-rose-500/5' : ''}`}>
+                      <td className="px-3 py-2 text-theme-secondary font-mono text-xs">{r.bill_no}</td>
+                      <td className="px-3 py-2 text-theme-faint text-xs">{r.bill_date}</td>
+                      <td className="px-3 py-2 text-theme-heading text-xs truncate max-w-[120px]">{r.patient_name}</td>
+                      <td className="px-3 py-2 text-theme-secondary text-xs truncate max-w-[150px]">{r.drug_name}</td>
+                      <td className="px-3 py-2 text-right text-theme-heading">{r.qty}</td>
+                      <td className="px-3 py-2 text-right text-theme-heading">{formatINR(sales)}</td>
+                      <td className="px-3 py-2 text-right text-theme-faint">{formatINR(tax)}</td>
+                      <td className="px-3 py-2 text-right text-theme-heading">{formatINR(netSales)}</td>
+                      <td className="px-3 py-2 text-right text-theme-faint">{formatINR(cogs)}</td>
+                      <td className="px-3 py-2 text-right">
+                        <span className={grossProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}>{formatINR(grossProfit)}</span>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <span className={isLoss ? 'text-red-400' : isOutlier ? 'text-amber-400' : 'text-theme-faint'}>
+                          {netSales > 0 ? `${marginPct.toFixed(1)}%` : '-'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        {isLoss && (
+                          <span title="COGS exceeds Net Sales — loss-making line. Could be a real loss, or a billing/discount error worth investigating."
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                            <AlertTriangle size={10} /> Loss
+                          </span>
+                        )}
+                        {isOutlier && (
+                          <span title={`Margin ${marginPct.toFixed(1)}% is outside the 5–40% normal band — review for billing/discount errors.`}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                            <AlertTriangle size={10} /> Outlier
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-theme-faint text-xs truncate max-w-[100px]">{r.referred_by || '-'}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

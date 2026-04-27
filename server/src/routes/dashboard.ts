@@ -569,12 +569,21 @@ router.get('/pharmacy-analytics', async (req, res) => {
   }
 
   // ── SALES TAB ──────────────────────────────────────────────────────────────
+  // Profit math (do NOT use the source-system 'profit' column — it leaves GST in
+  // profit and is overstated by exactly the tax collected):
+  //   netSales    = sales_amount - sales_tax       (sales ex-GST)
+  //   grossProfit = netSales - purchase_amount     (purchase_amount is already ex-GST)
+  //   marginPct   = grossProfit / netSales * 100   (denominator is net sales)
+  //   gstCollected = sales_tax                     (govt liability, NOT income)
+  //   reportedProfit = SUM(profit)                 (sanity: reported - correct = gstCollected)
   if (hasSales) {
     const salesKpi = db.get(`
       SELECT
         COALESCE(SUM(sales_amount), 0) as totalSales,
+        COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as totalNetSales,
         COALESCE(SUM(purchase_amount), 0) as totalCogs,
-        COALESCE(SUM(profit), 0) as totalProfit,
+        COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)), 0) as totalGrossProfit,
+        COALESCE(SUM(profit), 0) as reportedProfit,
         COUNT(DISTINCT bill_no) as totalBills,
         COUNT(DISTINCT CASE WHEN patient_id IS NOT NULL AND patient_id != '' THEN patient_id END) as uniquePatients,
         COUNT(DISTINCT drug_name) as uniqueDrugs,
@@ -584,26 +593,33 @@ router.get('/pharmacy-analytics', async (req, res) => {
       WHERE bill_month >= ? AND bill_month <= ?${bf.where}
     `, startMonth, endMonth, ...bf.params);
 
-    salesKpi.profitMargin = salesKpi.totalSales > 0
-      ? Math.round(salesKpi.totalProfit * 100 / salesKpi.totalSales * 100) / 100
+    // Aliases for backward compat with any consumer still using totalProfit / profitMargin.
+    salesKpi.totalProfit = salesKpi.totalGrossProfit;
+    salesKpi.profitMargin = salesKpi.totalNetSales > 0
+      ? Math.round(salesKpi.totalGrossProfit * 100 / salesKpi.totalNetSales * 100) / 100
       : 0;
+    salesKpi.grossMarginPct = salesKpi.profitMargin;
 
     const salesMonthly = db.all(`
       SELECT bill_month as month,
         COALESCE(SUM(sales_amount), 0) as sales,
+        COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as netSales,
+        COALESCE(SUM(sales_tax), 0) as tax,
         COALESCE(SUM(purchase_amount), 0) as cogs,
-        COALESCE(SUM(profit), 0) as profit,
+        COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)), 0) as grossProfit,
         COUNT(DISTINCT bill_no) as bills
       FROM pharmacy_sales_actuals
       WHERE bill_month >= ? AND bill_month <= ?${bf.where}
       GROUP BY bill_month ORDER BY bill_month
     `, startMonth, endMonth, ...bf.params);
+    // Backward-compat alias: 'profit' = grossProfit (recomputed correctly).
+    for (const m of salesMonthly) m.profit = m.grossProfit;
 
     const topDrugsBySales = db.all(`
       SELECT drug_name as name,
         COALESCE(SUM(sales_amount), 0) as sales,
         COALESCE(SUM(qty), 0) as qty,
-        COALESCE(SUM(profit), 0) as profit
+        COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)), 0) as grossProfit
       FROM pharmacy_sales_actuals
       WHERE bill_month >= ? AND bill_month <= ?${bf.where}
       GROUP BY drug_name ORDER BY sales DESC LIMIT 15
@@ -611,16 +627,20 @@ router.get('/pharmacy-analytics', async (req, res) => {
 
     const topDrugsByProfit = db.all(`
       SELECT drug_name as name,
-        COALESCE(SUM(profit), 0) as profit,
+        COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)), 0) as grossProfit,
+        COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as netSales,
         COALESCE(SUM(sales_amount), 0) as sales,
-        CASE WHEN SUM(sales_amount) > 0
-          THEN ROUND(SUM(profit) * 100.0 / SUM(sales_amount), 2)
+        CASE WHEN SUM(sales_amount - COALESCE(sales_tax, 0)) > 0
+          THEN ROUND(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)) * 100.0
+                     / SUM(sales_amount - COALESCE(sales_tax, 0)), 2)
           ELSE 0 END as marginPct
       FROM pharmacy_sales_actuals
       WHERE bill_month >= ? AND bill_month <= ?${bf.where}
-      GROUP BY drug_name HAVING SUM(sales_amount) > 0
-      ORDER BY profit DESC LIMIT 15
+      GROUP BY drug_name HAVING SUM(sales_amount - COALESCE(sales_tax, 0)) > 0
+      ORDER BY grossProfit DESC LIMIT 15
     `, startMonth, endMonth, ...bf.params);
+    // Backward-compat alias.
+    for (const d of topDrugsByProfit) d.profit = d.grossProfit;
 
     const referralAnalysis = db.all(`
       SELECT COALESCE(NULLIF(referred_by, ''), 'Walk-in / Unknown') as name,
@@ -643,9 +663,11 @@ router.get('/pharmacy-analytics', async (req, res) => {
       GROUP BY patient_id ORDER BY totalSales DESC LIMIT 20
     `, startMonth, endMonth, ...bf.params);
 
+    // sales_tax included so the client can compute net sales / gross profit / margin
+    // per row and surface flag indicators (loss-making, margin outliers).
     const salesTable = db.all(`
       SELECT bill_no, bill_date, patient_name, drug_name, batch_no,
-        qty, sales_amount, purchase_amount, profit, referred_by
+        qty, sales_amount, sales_tax, purchase_amount, profit as reported_profit, referred_by
       FROM pharmacy_sales_actuals
       WHERE bill_month >= ? AND bill_month <= ?${bf.where}
       ORDER BY sales_amount DESC LIMIT 200
