@@ -1071,7 +1071,7 @@ router.get('/operational-insights', async (req, res) => {
     const forecastGrossMargin = monthlyTarget > 0 ? Math.round((grossProfitTarget / monthlyTarget) * 10000) / 100 : 0;
 
     // ── MTD Actuals ──
-    let mtdPatients = 0, mtdRevenue = 0, mtdTransactions = 0, mtdProfit = 0, mtdCogs = 0;
+    let mtdPatients = 0, mtdRevenue = 0, mtdTransactions = 0, mtdProfit = 0, mtdCogs = 0, mtdNetSales = 0;
 
     // Per-category breakdown for clinic KPI cards
     let clinicCatBreakdown: { label: string; patients: number; revenue: number; lastRevenue: number; lastPatients: number }[] = [];
@@ -1108,14 +1108,21 @@ router.get('/operational-insights', async (req, res) => {
           lastRevenue: lr?.revenue || 0, lastPatients: lr?.patients || 0,
         });
       }
+    // mtdNetSales is the ex-GST denominator we need for Gross Margin.
+    // mtdProfit (below) is the recomputed Gross Profit (sales - tax - cogs);
+    // we ignore the source-system 'profit' column because it leaves GST inside.
     } else if (isPharmacy) {
       const r = db.get(
-        `SELECT COUNT(DISTINCT bill_no) as txns, COALESCE(SUM(sales_amount), 0) as revenue,
-                COALESCE(SUM(profit), 0) as profit, COALESCE(SUM(purchase_amount), 0) as cogs
+        `SELECT COUNT(DISTINCT bill_no) as txns,
+                COALESCE(SUM(sales_amount), 0) as revenue,
+                COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as netSales,
+                COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)), 0) as profit,
+                COALESCE(SUM(purchase_amount), 0) as cogs
          FROM pharmacy_sales_actuals WHERE bill_month = ?${bf.where}`,
         currentMonth, ...bf.params
       );
       mtdRevenue = r?.revenue || 0;
+      mtdNetSales = r?.netSales || 0;
       mtdTransactions = r?.txns || 0;
       mtdProfit = r?.profit || 0;
       mtdCogs = r?.cogs || 0;
@@ -1133,7 +1140,8 @@ router.get('/operational-insights', async (req, res) => {
       lastMonthMtdPatients = r?.patients || 0;
     } else if (isPharmacy) {
       const r = db.get(
-        `SELECT COALESCE(SUM(sales_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
+        `SELECT COALESCE(SUM(sales_amount), 0) as revenue,
+                COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)), 0) as profit
          FROM pharmacy_sales_actuals WHERE bill_month = ? AND CAST(SUBSTR(bill_date, 9, 2) AS INTEGER) <= ?${bf.where}`,
         lastMonth, lastMonthCutoffDay, ...bf.params
       );
@@ -1160,15 +1168,20 @@ router.get('/operational-insights', async (req, res) => {
       );
       lastWeek = { patients: lw?.patients || 0, revenue: lw?.revenue || 0, transactions: lw?.txns || 0, profit: 0, avgTicket: (lw?.patients || 0) > 0 ? Math.round((lw?.revenue || 0) / lw.patients) : 0 };
     } else if (isPharmacy) {
+      // Weekly profit is recomputed Gross Profit (sales - tax - cogs).
       const tw = db.get(
-        `SELECT COUNT(DISTINCT bill_no) as txns, COALESCE(SUM(sales_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
+        `SELECT COUNT(DISTINCT bill_no) as txns,
+                COALESCE(SUM(sales_amount), 0) as revenue,
+                COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)), 0) as profit
          FROM pharmacy_sales_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where}`,
         thisMondayStr, todayStr, ...bf.params
       );
       thisWeek = { patients: 0, revenue: tw?.revenue || 0, transactions: tw?.txns || 0, profit: tw?.profit || 0, avgTicket: (tw?.txns || 0) > 0 ? Math.round((tw?.revenue || 0) / tw.txns) : 0 };
 
       const lw = db.get(
-        `SELECT COUNT(DISTINCT bill_no) as txns, COALESCE(SUM(sales_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
+        `SELECT COUNT(DISTINCT bill_no) as txns,
+                COALESCE(SUM(sales_amount), 0) as revenue,
+                COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)), 0) as profit
          FROM pharmacy_sales_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where}`,
         lastMondayStr, lastSundayStr, ...bf.params
       );
@@ -1184,8 +1197,11 @@ router.get('/operational-insights', async (req, res) => {
         currentMonth, ...bf.params
       );
     } else if (isPharmacy) {
+      // Daily profit is recomputed Gross Profit (sales - tax - cogs).
       daily = db.all(
-        `SELECT bill_date as date, COUNT(DISTINCT bill_no) as transactions, COALESCE(SUM(sales_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
+        `SELECT bill_date as date, COUNT(DISTINCT bill_no) as transactions,
+                COALESCE(SUM(sales_amount), 0) as revenue,
+                COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)), 0) as profit
          FROM pharmacy_sales_actuals WHERE bill_month = ?${bf.where} GROUP BY bill_date ORDER BY bill_date`,
         currentMonth, ...bf.params
       );
@@ -1246,9 +1262,11 @@ router.get('/operational-insights', async (req, res) => {
         dailyRate: Math.round(gpDaily), requiredRate: gpNeed,
         rag: gpRag, lastMonthMtd: lastMonthMtdProfit, unit: 'currency',
       });
-      // Gross Margin card (with forecast comparison + variation badge)
-      if (mtdRevenue > 0) {
-        const actualMargin = Math.round((mtdProfit / mtdRevenue) * 10000) / 100;
+      // Gross Margin card. Denominator is Net Sales (ex-GST), NOT gross sales —
+      // gross sales would understate margin because the GST sitting inside the
+      // price isn't ours.
+      if (mtdNetSales > 0) {
+        const actualMargin = Math.round((mtdProfit / mtdNetSales) * 10000) / 100;
         cards.push({
           label: 'Gross Margin', mtd: actualMargin, target: forecastGrossMargin, projected: 0,
           dailyRate: 0, requiredRate: 0, rag: 'GREY', lastMonthMtd: 0, unit: 'percent',
