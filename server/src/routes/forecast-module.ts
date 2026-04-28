@@ -112,26 +112,37 @@ router.post('/scenarios/ensure', requireWriteAccess, async (req, res) => {
   }
 
   // Find a matching scenario, preferring ones that actually have forecast items.
-  // An empty orphan stub (branch_id=NULL, stream_id=X) can otherwise sort before
-  // the admin's populated scenario (branch_id=Y, stream_id=NULL) when ordering by
-  // NULLs first, causing the stream-specific view to appear empty.
+  //
+  // ORDER BY puts EXACT matches first (branch_id IS NULL = 1 sorts after a
+  // specific branch_id match where IS NULL = 0). Same for stream_id. So the
+  // chain is: exact-branch + exact-stream wins, then exact-branch + NULL
+  // stream (legacy fallback), then NULL-branch + exact-stream, finally
+  // NULL-branch + NULL-stream.
+  //
+  // Why this order matters: a tenant that has both a stream-specific scenario
+  // (e.g. clinic-Jubilee with items) AND a legacy NULL-NULL scenario (with
+  // items) used to resolve to the NULL-NULL one for BOTH the Clinic and
+  // Pharmacy views — same data showing in both. Flipping the sort fixes that
+  // by preferring the Clinic-specific scenario for the Clinic view.
+  // Legacy tenants without per-stream scenarios still work because the
+  // NULL-stream scenarios are still matched (just sorted last).
   let scenario = db.get(
     `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where}
        AND EXISTS (SELECT 1 FROM forecast_items WHERE scenario_id = scenarios.id)
-     ORDER BY branch_id IS NOT NULL, stream_id IS NOT NULL, id`,
+     ORDER BY branch_id IS NULL, stream_id IS NULL, id`,
     fy_id, ...bf.params, ...sf.params
   );
   // Fallback: any matching default scenario (even empty)
   if (!scenario) {
     scenario = db.get(
-      `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where} ORDER BY branch_id IS NOT NULL, stream_id IS NOT NULL, id`,
+      `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where} ORDER BY branch_id IS NULL, stream_id IS NULL, id`,
       fy_id, ...bf.params, ...sf.params
     );
   }
   // Fallback: any matching scenario (non-default)
   if (!scenario) {
     scenario = db.get(
-      `SELECT * FROM scenarios WHERE fy_id = ?${bf.where}${sf.where} ORDER BY branch_id IS NOT NULL, stream_id IS NOT NULL, id`,
+      `SELECT * FROM scenarios WHERE fy_id = ?${bf.where}${sf.where} ORDER BY branch_id IS NULL, stream_id IS NULL, id`,
       fy_id, ...bf.params, ...sf.params
     );
   }
@@ -139,7 +150,7 @@ router.post('/scenarios/ensure', requireWriteAccess, async (req, res) => {
   if (!scenario) {
     db.run('INSERT INTO scenarios (fy_id, name, is_default, branch_id, stream_id) VALUES (?, ?, 1, ?, ?)', fy_id, 'Original Scenario', branchId, streamId);
     scenario = db.get(
-      `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where} ORDER BY branch_id IS NOT NULL, stream_id IS NOT NULL, id`,
+      `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where} ORDER BY branch_id IS NULL, stream_id IS NULL, id`,
       fy_id, ...bf.params, ...sf.params
     );
   }

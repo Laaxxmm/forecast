@@ -860,6 +860,110 @@ async function start() {
         console.error(`  [stream-split] "${client.slug}" failed:`, e);
       }
 
+      // ── One-time: forecast_stream_split_v2 — clean up post-v1 leftovers ──
+      // v1 split legacy NULL-stream scenarios into per-stream scenarios. But
+      // any items added BETWEEN v1 running and the /scenarios/ensure ORDER BY
+      // fix could have landed back in a NULL-stream scenario (the "All
+      // streams" view of the Forecast page creates one with stream_id=NULL).
+      // Symptom: Clinic and Pharmacy views show identical numbers because
+      // both fall through to the same NULL-stream scenario via the `OR
+      // stream_id IS NULL` rule in the ensure handler.
+      //
+      // v2 finds any items still in a NULL-stream default scenario, classifies
+      // them by name (same regex as v1), and MOVES them (UPDATE scenario_id)
+      // into the appropriate stream-specific scenario for that branch.
+      // forecast_values reference forecast_items.id so they follow the move
+      // automatically — no copy needed. Source scenario gets marked
+      // non-default and renamed so it's clearly a legacy bucket.
+      // Idempotent — flag prevents re-running.
+      try {
+        const cDb = await getClientHelper(client.slug);
+        const splitV2Done = cDb.get("SELECT value FROM app_settings WHERE key = 'forecast_stream_split_v2'");
+        if (!splitV2Done) {
+          const pDb = await getPlatformHelper();
+          const cRow = pDb.get('SELECT id FROM clients WHERE slug = ?', client.slug);
+          if (cRow) {
+            const streams = pDb.all(
+              'SELECT id, name FROM business_streams WHERE client_id = ? AND is_active = 1',
+              cRow.id
+            );
+            const clinicStreamRow = streams.find((s: any) => /clinic|health/i.test(s.name));
+            const pharmaStreamRow = streams.find((s: any) => /pharma/i.test(s.name));
+
+            if (clinicStreamRow && pharmaStreamRow) {
+              const pharmaPatterns = /pharmacy|pharma\b|cogs|drug|medicine|purchase/i;
+              const orphanScenarios = cDb.all(
+                `SELECT s.* FROM scenarios s
+                 WHERE s.stream_id IS NULL
+                   AND s.is_default = 1
+                   AND EXISTS (SELECT 1 FROM forecast_items fi WHERE fi.scenario_id = s.id)`
+              );
+
+              for (const src of orphanScenarios) {
+                const items = cDb.all('SELECT id, name FROM forecast_items WHERE scenario_id = ?', src.id);
+                if (items.length === 0) continue;
+
+                // Find or create per-stream targets matching the source's branch.
+                // src.branch_id may be NULL (legacy company-level) — preserve that.
+                const findOrCreateTarget = (streamId: number): number | null => {
+                  const branchPredicate = src.branch_id == null ? 'branch_id IS NULL' : 'branch_id = ?';
+                  const params: any[] = src.branch_id == null
+                    ? [src.fy_id, streamId]
+                    : [src.fy_id, streamId, src.branch_id];
+                  let target = cDb.get(
+                    `SELECT id FROM scenarios WHERE fy_id = ? AND stream_id = ? AND ${branchPredicate} AND is_default = 1 ORDER BY id DESC LIMIT 1`,
+                    ...params
+                  );
+                  if (target) return target.id;
+                  cDb.run(
+                    'INSERT INTO scenarios (fy_id, name, is_default, branch_id, stream_id) VALUES (?, ?, 1, ?, ?)',
+                    src.fy_id, src.name || 'Default', src.branch_id, streamId
+                  );
+                  target = cDb.get(
+                    `SELECT id FROM scenarios WHERE fy_id = ? AND stream_id = ? AND ${branchPredicate} ORDER BY id DESC LIMIT 1`,
+                    ...params
+                  );
+                  return target?.id ?? null;
+                };
+
+                const clinicTargetId = findOrCreateTarget(clinicStreamRow.id);
+                const pharmaTargetId = findOrCreateTarget(pharmaStreamRow.id);
+                if (!clinicTargetId || !pharmaTargetId) continue;
+
+                let movedClinic = 0, movedPharma = 0;
+                for (const item of items) {
+                  const isPharma = pharmaPatterns.test(item.name);
+                  const targetId = isPharma ? pharmaTargetId : clinicTargetId;
+                  cDb.run('UPDATE forecast_items SET scenario_id = ? WHERE id = ?', targetId, item.id);
+                  if (isPharma) movedPharma++; else movedClinic++;
+                }
+
+                // Copy settings to both targets (idempotent).
+                const settings = cDb.all('SELECT key, value FROM forecast_settings WHERE scenario_id = ?', src.id);
+                for (const s of settings) {
+                  cDb.run('INSERT OR IGNORE INTO forecast_settings (scenario_id, key, value) VALUES (?, ?, ?)',
+                    clinicTargetId, s.key, s.value);
+                  cDb.run('INSERT OR IGNORE INTO forecast_settings (scenario_id, key, value) VALUES (?, ?, ?)',
+                    pharmaTargetId, s.key, s.value);
+                }
+
+                // Mark source non-default and tag the name so it's obviously legacy.
+                // Don't delete — some external reference might still point at it.
+                const tagged = (src.name || 'Default').includes('legacy NULL-stream')
+                  ? src.name
+                  : `${src.name || 'Default'} (legacy NULL-stream pre-v2)`;
+                cDb.run('UPDATE scenarios SET is_default = 0, name = ? WHERE id = ?', tagged, src.id);
+
+                console.log(`  [stream-split-v2] "${client.slug}": moved ${movedClinic} clinic + ${movedPharma} pharma item(s) out of NULL-stream scenario ${src.id}`);
+              }
+            }
+          }
+          cDb.run("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('forecast_stream_split_v2', '1')");
+        }
+      } catch (e) {
+        console.error(`  [stream-split-v2] "${client.slug}" failed:`, e);
+      }
+
       console.log(`Client DB "${client.slug}" schema + seed verified`);
     } catch (e) {
       console.error(`Failed to init client DB "${client.slug}":`, e);
