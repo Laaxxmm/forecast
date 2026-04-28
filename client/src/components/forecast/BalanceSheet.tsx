@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronRight, FileDown, Plus, X } from 'lucide-react';
 import { ForecastItem, Scenario, getMonthLabel, formatRs } from '../../pages/ForecastModulePage';
 import api from '../../api/client';
+import StatementSearch from '../common/StatementSearch';
 
 interface Props {
   items: ForecastItem[];
@@ -566,7 +567,14 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
     setCollapsed(newState);
   };
 
+  // Find-in-statement search; bypasses expand/collapse when active.
+  const [search, setSearch] = useState('');
   const isRowVisible = useCallback((row: BSRow): boolean => {
+    const q = search.trim().toLowerCase();
+    if (q) {
+      if ((row as any).kind === 'separator') return false;
+      return row.label.toLowerCase().includes(q);
+    }
     if (!row.parentId) return true;
     let pid: string | undefined = row.parentId;
     while (pid) {
@@ -575,7 +583,7 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
       pid = parent?.parentId;
     }
     return true;
-  }, [collapsed, bsRows]);
+  }, [collapsed, bsRows, search]);
 
   // Yearly aggregation
   const yearlyData = useMemo(() => {
@@ -683,6 +691,13 @@ export default function BalanceSheet({ items, allValues, months, viewMode, setti
           )}
         </div>
       </div>
+
+      <StatementSearch
+        value={search}
+        onChange={setSearch}
+        placeholder="Find line item in Balance Sheet…"
+        resultLabel={`${bsRows.filter(r => isRowVisible(r)).length} of ${bsRows.length} lines`}
+      />
 
       {/* Balance Sheet Table */}
       <div className="card overflow-x-auto p-0">

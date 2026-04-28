@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import { ForecastItem, FY, Scenario } from '../../pages/ForecastModulePage';
 import { buildPeriodOptions, sumForecastCat, sumActualsCat, calcChange, fmtRs, fmtPct, monthLabel } from './dashboardUtils';
+import StatementSearch from '../common/StatementSearch';
 
 interface Props {
   items: ForecastItem[];
@@ -121,10 +122,16 @@ export default function DashboardBalanceSheet({ items, allValues, months, settin
 
   const toggleExpand = (key: string) => setExpanded(prev => ({ ...prev, [key]: !prev[key] }));
 
-  const visibleRows = bsRows.filter(row => {
-    if (!row.parentKey) return true;
-    return expanded[row.parentKey];
-  });
+  // Find-in-statement search; bypasses expand/collapse when active.
+  const [search, setSearch] = useState('');
+  const visibleRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (q) return bsRows.filter(row => row.label.toLowerCase().includes(q));
+    return bsRows.filter(row => {
+      if (!row.parentKey) return true;
+      return expanded[row.parentKey];
+    });
+  }, [bsRows, expanded, search]);
 
   return (
     <div>
@@ -140,6 +147,13 @@ export default function DashboardBalanceSheet({ items, allValues, months, settin
           </div>
         </div>
       </div>
+
+      <StatementSearch
+        value={search}
+        onChange={setSearch}
+        placeholder="Find line item in Balance Sheet…"
+        resultLabel={`${visibleRows.length} of ${bsRows.length} lines`}
+      />
 
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm" style={view === 'monthly' ? { minWidth: periodMonths.length * 200 + 280 } : undefined}>

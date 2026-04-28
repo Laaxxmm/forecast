@@ -1,7 +1,8 @@
-import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import api from '../../api/client';
 import { formatRs } from '../../pages/ForecastModulePage';
+import StatementSearch, { filterSectionTree } from '../common/StatementSearch';
 
 interface CFLine {
   label: string;
@@ -46,6 +47,7 @@ export default function CashFlowReport({ companyId, companyIds, from, to, bifurc
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
     if (!companyId && !companyIds) {
@@ -96,6 +98,29 @@ export default function CashFlowReport({ companyId, companyIds, from, to, bifurc
 
   const columns = data.columns && data.bifurcated ? data.columns : null;
   const labelFor = (col: string): string => data.columnLabels?.[col] || (col === 'total' ? 'Total' : col);
+
+  // Find-in-statement search prunes the three activity sections (Operating /
+  // Investing / Financing) to matching subtrees. Subtotals stay accurate
+  // because they come from data.*TotalValues precomputed on the server.
+  // CFLine has { label, children? } so it's compatible with filterSectionTree
+  // (the helper only reads `key`, `label`, `children`); we synthesize a key
+  // from the label to satisfy the type.
+  const synth = (lines: CFLine[]): any[] =>
+    lines.map((l, i) => ({ ...l, key: `${l.label}-${i}`, children: l.children ? synth(l.children) : undefined }));
+  const operating = useMemo(
+    () => filterSectionTree(synth(data.operating), search).sections as unknown as CFLine[],
+    [data.operating, search]
+  );
+  const investing = useMemo(
+    () => filterSectionTree(synth(data.investing), search).sections as unknown as CFLine[],
+    [data.investing, search]
+  );
+  const financing = useMemo(
+    () => filterSectionTree(synth(data.financing), search).sections as unknown as CFLine[],
+    [data.financing, search]
+  );
+  const totalAllLines = data.operating.length + data.investing.length + data.financing.length;
+  const totalVisibleLines = operating.length + investing.length + financing.length;
 
   // Bifurcated layout — table with one column per company + total.
   if (columns) {
@@ -206,10 +231,16 @@ export default function CashFlowReport({ companyId, companyIds, from, to, bifurc
             {data.period.from} → {data.period.to} · Indirect method · By company
           </span>
         </div>
+        <StatementSearch
+          value={search}
+          onChange={setSearch}
+          placeholder="Find activity in Cash Flow…"
+          resultLabel={`${totalVisibleLines} of ${totalAllLines} top-level lines`}
+        />
 
-        {renderSection('Operating Activities', 'op', data.operating, data.operatingTotalValues, 'text-emerald-300')}
-        {renderSection('Investing Activities', 'inv', data.investing, data.investingTotalValues, 'text-sky-300')}
-        {renderSection('Financing Activities', 'fin', data.financing, data.financingTotalValues, 'text-violet-300')}
+        {renderSection('Operating Activities', 'op', operating, data.operatingTotalValues, 'text-emerald-300')}
+        {renderSection('Investing Activities', 'inv', investing, data.investingTotalValues, 'text-sky-300')}
+        {renderSection('Financing Activities', 'fin', financing, data.financingTotalValues, 'text-violet-300')}
 
         <div className="bg-dark-800 border border-accent-500/30 rounded-2xl shadow-elev-2 overflow-hidden">
           <div className="px-5 py-3 border-b border-dark-400/30">
@@ -336,10 +367,16 @@ export default function CashFlowReport({ companyId, companyIds, from, to, bifurc
           {data.period.from} → {data.period.to} · Indirect method
         </span>
       </div>
+      <StatementSearch
+        value={search}
+        onChange={setSearch}
+        placeholder="Find activity in Cash Flow…"
+        resultLabel={`${totalVisibleLines} of ${totalAllLines} top-level lines`}
+      />
 
-      {renderSection('Operating Activities', 'op', data.operating, data.operatingTotal, 'text-emerald-300')}
-      {renderSection('Investing Activities', 'inv', data.investing, data.investingTotal, 'text-sky-300')}
-      {renderSection('Financing Activities', 'fin', data.financing, data.financingTotal, 'text-violet-300')}
+      {renderSection('Operating Activities', 'op', operating, data.operatingTotal, 'text-emerald-300')}
+      {renderSection('Investing Activities', 'inv', investing, data.investingTotal, 'text-sky-300')}
+      {renderSection('Financing Activities', 'fin', financing, data.financingTotal, 'text-violet-300')}
 
       <div className="bg-dark-800 border border-accent-500/30 rounded-2xl shadow-elev-2 overflow-hidden">
         <div className="px-5 py-3 border-b border-dark-400/30">

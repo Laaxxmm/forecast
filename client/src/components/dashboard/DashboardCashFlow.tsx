@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { ForecastItem, FY, Scenario } from '../../pages/ForecastModulePage';
 import { buildPeriodOptions, sumForecastCat, sumActualsCat, calcChange, fmtRs, fmtPct, monthLabel } from './dashboardUtils';
+import StatementSearch from '../common/StatementSearch';
 
 interface Props {
   items: ForecastItem[];
@@ -85,6 +86,15 @@ export default function DashboardCashFlow({ items, allValues, months, settings, 
     ];
   }, [items, allValues, actuals]);
 
+  // Find-in-statement search. Headers/section titles also stay visible while
+  // searching so the structure of the statement is preserved.
+  const [search, setSearch] = useState('');
+  const visibleRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return cfRows;
+    return cfRows.filter(row => row.isHeader || row.label.toLowerCase().includes(q));
+  }, [cfRows, search]);
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
@@ -99,6 +109,13 @@ export default function DashboardCashFlow({ items, allValues, months, settings, 
           </div>
         </div>
       </div>
+
+      <StatementSearch
+        value={search}
+        onChange={setSearch}
+        placeholder="Find line item in Cash Flow…"
+        resultLabel={`${visibleRows.filter(r => !r.isHeader).length} of ${cfRows.filter(r => !r.isHeader).length} lines`}
+      />
 
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm" style={view === 'monthly' ? { minWidth: periodMonths.length * 200 + 280 } : undefined}>
@@ -122,7 +139,7 @@ export default function DashboardCashFlow({ items, allValues, months, settings, 
             </tr>
           </thead>
           <tbody>
-            {cfRows.map(row => {
+            {visibleRows.map(row => {
               if (row.isHeader) {
                 return (
                   <tr key={row.key} className="bg-dark-600 border-b border-dark-400/50">

@@ -1,7 +1,8 @@
-import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import api from '../../api/client';
 import { formatRs, getMonthLabel } from '../../pages/ForecastModulePage';
+import StatementSearch, { filterSectionTree } from '../common/StatementSearch';
 
 interface BSSection {
   key: string;
@@ -40,6 +41,7 @@ export default function BalanceSheetReport({ companyId, companyIds, asOf, view, 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
     if (!companyId && !companyIds) {
@@ -80,7 +82,18 @@ export default function BalanceSheetReport({ companyId, companyIds, asOf, view, 
     );
   }
 
-  const { columns, sections, totals, view: reportView, bifurcated, columnLabels } = data;
+  const { columns, sections: allSections, totals, view: reportView, bifurcated, columnLabels } = data;
+  // Find-in-statement search prunes both sides to only matching subtrees.
+  const { sections, expandKeys } = useMemo(
+    () => filterSectionTree(allSections, search),
+    [allSections, search]
+  );
+  const effectiveExpanded = useMemo(() => {
+    if (!search.trim()) return expanded;
+    const next = new Set(expanded);
+    expandKeys.forEach(k => next.add(k));
+    return next;
+  }, [expanded, expandKeys, search]);
   const liabilities = sections.filter(s => s.side === 'liability');
   const assets = sections.filter(s => s.side === 'asset');
   const labelFor = (col: string): string => {
@@ -101,7 +114,7 @@ export default function BalanceSheetReport({ companyId, companyIds, asOf, view, 
 
   const renderRow = (row: BSSection, depth: number): ReactNode => {
     const hasChildren = !!(row.children && row.children.length > 0);
-    const isOpen = expanded.has(row.key);
+    const isOpen = effectiveExpanded.has(row.key);
     const paddingLeft = 16 + depth * 20;
     const isParent = depth === 0;
 
@@ -192,6 +205,12 @@ export default function BalanceSheetReport({ companyId, companyIds, asOf, view, 
           {bifurcated ? 'By company' : reportView === 'monthly' ? 'Monthly view' : 'Yearly view'}
         </span>
       </div>
+      <StatementSearch
+        value={search}
+        onChange={setSearch}
+        placeholder="Find line item in Balance Sheet…"
+        resultLabel={`${sections.length} of ${allSections.length} sections`}
+      />
       {renderSide('Liabilities & Equity', liabilities, totals.totalLiabilities, 'text-rose-300')}
       {renderSide('Assets', assets, totals.totalAssets, 'text-emerald-300')}
     </div>

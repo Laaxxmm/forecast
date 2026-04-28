@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import { ForecastItem, FY, Scenario } from '../../pages/ForecastModulePage';
 import { buildPeriodOptions, sumForecastCat, sumActualsCat, sumForecastCatMonth, sumActualsCatMonth, calcChange, fmtRs, fmtPct, monthLabel } from './dashboardUtils';
+import StatementSearch from '../common/StatementSearch';
 
 interface Props {
   items: ForecastItem[];
@@ -149,10 +150,17 @@ export default function DashboardPnL({ items, allValues, months, settings, actua
 
   const toggleExpand = (key: string) => setExpanded(prev => ({ ...prev, [key]: !prev[key] }));
 
-  const visibleRows = pnlRows.filter(row => {
-    if (!row.parentKey) return true;
-    return expanded[row.parentKey];
-  });
+  // Find-in-statement search. When active, bypasses expand/collapse so users
+  // see every matching line regardless of which group it lives in.
+  const [search, setSearch] = useState('');
+  const visibleRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (q) return pnlRows.filter(row => row.label.toLowerCase().includes(q));
+    return pnlRows.filter(row => {
+      if (!row.parentKey) return true;
+      return expanded[row.parentKey];
+    });
+  }, [pnlRows, expanded, search]);
 
   const fmtVal = (v: number, isPct: boolean) => isPct ? `${v.toFixed(1)}%` : fmtRs(v);
 
@@ -170,6 +178,13 @@ export default function DashboardPnL({ items, allValues, months, settings, actua
           </div>
         </div>
       </div>
+
+      <StatementSearch
+        value={search}
+        onChange={setSearch}
+        placeholder="Find line item in P&L…"
+        resultLabel={`${visibleRows.length} of ${pnlRows.length} lines`}
+      />
 
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm" style={view === 'monthly' ? { minWidth: periodMonths.length * 200 + 280 } : undefined}>

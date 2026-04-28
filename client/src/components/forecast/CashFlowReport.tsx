@@ -5,6 +5,7 @@ import {
 } from 'recharts';
 import { FileDown, BarChart3, ChevronDown, Plus } from 'lucide-react';
 import { ForecastItem, Scenario, getMonthLabel, formatRs } from '../../pages/ForecastModulePage';
+import StatementSearch from '../common/StatementSearch';
 
 interface Props {
   items: ForecastItem[];
@@ -284,6 +285,14 @@ export default function CashFlowReport({ items, allValues, months, viewMode, set
     }));
   }, [months, monthData, viewMode, yearKeys, yearlyData]);
 
+  // Find-in-statement search.
+  const [search, setSearch] = useState('');
+  const visibleCfRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return cfRows;
+    return cfRows.filter(r => r.kind !== 'separator' && r.label.toLowerCase().includes(q));
+  }, [cfRows, search]);
+
   // CSV export
   const exportCSV = () => {
     const header = ['', ...displayCols.map(c => viewMode === 'yearly' ? c : getMonthLabel(c)), 'Total'];
@@ -422,6 +431,13 @@ export default function CashFlowReport({ items, allValues, months, viewMode, set
         </div>
       )}
 
+      <StatementSearch
+        value={search}
+        onChange={setSearch}
+        placeholder="Find line item in Cash Flow…"
+        resultLabel={`${visibleCfRows.filter(r => r.kind !== 'separator').length} of ${cfRows.filter(r => r.kind !== 'separator').length} lines`}
+      />
+
       {/* Data Table */}
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm" style={{ minWidth: displayCols.length * 110 + 320 }}>
@@ -439,7 +455,7 @@ export default function CashFlowReport({ items, allValues, months, viewMode, set
             </tr>
           </thead>
           <tbody>
-            {cfRows.map(row => {
+            {visibleCfRows.map(row => {
               // Separator
               if (row.kind === 'separator') {
                 return (

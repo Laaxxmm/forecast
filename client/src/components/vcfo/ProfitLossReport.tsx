@@ -1,7 +1,8 @@
-import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import api from '../../api/client';
 import { formatRs, getMonthLabel } from '../../pages/ForecastModulePage';
+import StatementSearch, { filterSectionTree } from '../common/StatementSearch';
 
 interface PLSection {
   key: string;
@@ -49,6 +50,7 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
     if (!companyId && !companyIds) {
@@ -88,7 +90,18 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
     );
   }
 
-  const { columns, sections, computed, view: reportView, bifurcated, columnLabels } = data;
+  const { columns, sections: allSections, computed, view: reportView, bifurcated, columnLabels } = data;
+  // Prune the section tree to matches when the user is searching.
+  const { sections, expandKeys } = useMemo(
+    () => filterSectionTree(allSections, search),
+    [allSections, search]
+  );
+  const effectiveExpanded = useMemo(() => {
+    if (!search.trim()) return expanded;
+    const next = new Set(expanded);
+    expandKeys.forEach(k => next.add(k));
+    return next;
+  }, [expanded, expandKeys, search]);
   const labelFor = (col: string): string => {
     if (columnLabels && columnLabels[col]) return columnLabels[col];
     if (bifurcated) return col === 'total' ? 'Total' : col;
@@ -113,7 +126,7 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
 
   const renderRow = (section: PLSection, depth: number): ReactNode => {
     const hasChildren = !!(section.children && section.children.length > 0);
-    const isOpen = expanded.has(section.key);
+    const isOpen = effectiveExpanded.has(section.key);
     const paddingLeft = 16 + depth * 20;
     const isParent = depth === 0;
 
@@ -174,6 +187,14 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
           {data.period.from} → {data.period.to} ·{' '}
           {bifurcated ? 'By company' : reportView === 'monthly' ? 'Monthly view' : 'Yearly view'}
         </span>
+      </div>
+      <div className="px-5 pt-3">
+        <StatementSearch
+          value={search}
+          onChange={setSearch}
+          placeholder="Find line item in P&L…"
+          resultLabel={`${sections.length} of ${allSections.length} sections`}
+        />
       </div>
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-sm">

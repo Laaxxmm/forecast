@@ -3,6 +3,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { ChevronDown, ChevronRight, MoreVertical, FileDown, BarChart3, Plus, Pencil, Trash2, Copy, ArrowRightLeft, Merge } from 'lucide-react';
 import { ForecastItem, Scenario, getMonthLabel, formatRs } from '../../pages/ForecastModulePage';
 import api from '../../api/client';
+import StatementSearch from '../common/StatementSearch';
 
 interface Props {
   items: ForecastItem[];
@@ -249,7 +250,16 @@ export default function ProfitAndLoss({ items, allValues, months, viewMode, sett
     setCollapsed(newState);
   };
 
+  // Find-in-statement search. When active, bypasses expand/collapse so users
+  // see every matching row regardless of which group it lives in.
+  const [search, setSearch] = useState('');
   const isRowVisible = useCallback((row: PnLRow): boolean => {
+    const q = search.trim().toLowerCase();
+    if (q) {
+      // Match on label; keep separators hidden during search
+      if (row.kind === 'separator') return false;
+      return row.label.toLowerCase().includes(q);
+    }
     if (!row.parentId) return true;
     // Check all ancestor collapsibles
     let pid: string | undefined = row.parentId;
@@ -259,7 +269,7 @@ export default function ProfitAndLoss({ items, allValues, months, viewMode, sett
       pid = parent?.parentId;
     }
     return true;
-  }, [collapsed, pnlRows]);
+  }, [collapsed, pnlRows, search]);
 
   // Yearly aggregation
   const yearlyData = useMemo(() => {
@@ -445,6 +455,13 @@ export default function ProfitAndLoss({ items, allValues, months, viewMode, sett
           </div>
         </div>
       )}
+
+      <StatementSearch
+        value={search}
+        onChange={setSearch}
+        placeholder="Find line item in P&L…"
+        resultLabel={`${pnlRows.filter(r => r.kind !== 'separator' && isRowVisible(r)).length} of ${pnlRows.filter(r => r.kind !== 'separator').length} lines`}
+      />
 
       {/* P&L Table */}
       <div className="card overflow-x-auto p-0">

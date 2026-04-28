@@ -1,7 +1,8 @@
-import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import api from '../../api/client';
 import { formatRs } from '../../pages/ForecastModulePage';
+import StatementSearch from '../common/StatementSearch';
 
 interface TrialBalanceRow {
   ledgerName: string;
@@ -41,6 +42,7 @@ export default function TrialBalanceReport({ companyId, companyIds, from, to }: 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
     if (!companyId && !companyIds) {
@@ -90,13 +92,37 @@ export default function TrialBalanceReport({ companyId, companyIds, from, to }: 
 
   // Server-side groups are preferred; fall back to client-side grouping for
   // older server responses that didn't populate `groups` yet.
-  const groups: TrialBalanceGroup[] =
+  const allGroups: TrialBalanceGroup[] =
     data.groups && data.groups.length > 0
       ? data.groups
       : foldRowsClientSide(data.rows);
 
+  // Find-in-statement search. Matches a group OR any of its child ledgers; we
+  // expand matched groups automatically so the matching child is visible.
+  const groups = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return allGroups;
+    return allGroups
+      .map(g => {
+        const groupHit = g.groupName.toLowerCase().includes(q);
+        const matchedChildren = g.children.filter(c => c.ledgerName.toLowerCase().includes(q));
+        if (groupHit) return g; // group name matches → show whole group
+        if (matchedChildren.length > 0) return { ...g, children: matchedChildren };
+        return null;
+      })
+      .filter((g): g is TrialBalanceGroup => g != null);
+  }, [allGroups, search]);
+
+  // When a search filters to specific children, force-expand those groups.
+  const effectiveExpanded = useMemo(() => {
+    if (!search.trim()) return expanded;
+    const next = new Set(expanded);
+    for (const g of groups) next.add(g.key);
+    return next;
+  }, [expanded, groups, search]);
+
   const renderGroup = (g: TrialBalanceGroup): ReactNode => {
-    const isOpen = expanded.has(g.key);
+    const isOpen = effectiveExpanded.has(g.key);
     const hasChildren = g.children.length > 0;
     return (
       <Fragment key={g.key}>
@@ -146,6 +172,14 @@ export default function TrialBalanceReport({ companyId, companyIds, from, to }: 
         <span className="text-xs text-theme-faint">
           {data.period.from} → {data.period.to}
         </span>
+      </div>
+      <div className="px-5 pt-3">
+        <StatementSearch
+          value={search}
+          onChange={setSearch}
+          placeholder="Find group or ledger…"
+          resultLabel={`${groups.length} of ${allGroups.length} groups`}
+        />
       </div>
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-sm">
