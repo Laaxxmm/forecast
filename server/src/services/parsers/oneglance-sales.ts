@@ -20,6 +20,24 @@ interface SalesRow {
   profit: number;
 }
 
+// Column-to-DB-field map. Two OneGlance formats are supported:
+//
+// Bangalore / Chennai layout:
+//   • "Sales Amount"     → gross sales (incl. GST)
+//   • "Purchase Amount"  → ex-tax COGS (already net of input GST, since ITC
+//                          is reclaimed)
+//
+// Hyderabad / Filim Nagar layout:
+//   • "Total"            → gross sales (incl. GST)
+//   • "Sales Amount"     → NET sales (ex-GST) — different semantic from BG/CH
+//   • "Purchase Price"   → ex-tax COGS
+//   • "Purchase Amount"  → gross purchase (incl. tax) — different semantic
+//
+// We normalise on the way in so the DB always stores BG/CH semantics:
+// `sales_amount` = gross, `purchase_amount` = ex-tax. Detection happens after
+// header matching: if "Total" + "Purchase Price" are present, it's Hyderabad
+// and we remap those columns to the canonical fields (overriding the
+// BG/CH-style "Sales Amount" / "Purchase Amount" mappings for that file).
 const COLUMN_MAP: Record<string, string> = {
   'bill no': 'bill_no',
   'bill date': 'bill_date',
@@ -39,6 +57,11 @@ const COLUMN_MAP: Record<string, string> = {
   'purchase tax': 'purchase_tax',
   'sales tax': 'sales_tax',
   'profit': 'profit',
+  // Hyderabad-only columns. When present, the post-header normalisation block
+  // remaps them to override 'sales_amount' / 'purchase_amount' so the DB
+  // ends up with BG/CH semantics regardless of source.
+  'total': 'hyd_total_gross',
+  'purchase price': 'hyd_purchase_price_ex_tax',
 };
 
 export function parseOneglanceSales(filePath: string) {
@@ -72,6 +95,33 @@ export function parseOneglanceSales(filePath: string) {
 
   if (headerRowIdx === -1) {
     throw new Error('Could not find header row in Oneglance Sales report. Expected columns: Bill No, Bill Date, Drug Name, Sales Amount');
+  }
+
+  // ── Hyderabad-format normalisation ────────────────────────────────────────
+  // If the file has both "Total" and "Purchase Price" columns, it's the
+  // Hyderabad / Filim Nagar layout where:
+  //   • "Sales Amount" is NET (ex-GST), "Total" is GROSS
+  //   • "Purchase Amount" is GROSS (with tax), "Purchase Price" is ex-tax COGS
+  // We need the DB to hold BG/CH semantics (sales_amount = gross,
+  // purchase_amount = ex-tax COGS), so we remap the column indices: the
+  // "Total" column takes the sales_amount slot, and "Purchase Price" takes
+  // the purchase_amount slot. The original Hyderabad-only mappings are
+  // dropped from the lookup. BG/CH files (no Total / no Purchase Price
+  // columns) fall straight through this block unchanged.
+  const totalColIdx = Object.entries(colMapping).find(([_, v]) => v === 'hyd_total_gross')?.[0];
+  const purchasePriceColIdx = Object.entries(colMapping).find(([_, v]) => v === 'hyd_purchase_price_ex_tax')?.[0];
+  const isHyderabadFormat = totalColIdx != null && purchasePriceColIdx != null;
+  if (isHyderabadFormat) {
+    // Drop the BG/CH semantics for these fields — Hyderabad's "Sales Amount"
+    // (ex-tax) and "Purchase Amount" (gross) would mislead them.
+    for (const [idx, field] of Object.entries(colMapping)) {
+      if (field === 'sales_amount' || field === 'purchase_amount') {
+        delete colMapping[parseInt(idx)];
+      }
+    }
+    // Remap Hyderabad-only columns to the canonical DB fields.
+    colMapping[parseInt(totalColIdx!)] = 'sales_amount';
+    colMapping[parseInt(purchasePriceColIdx!)] = 'purchase_amount';
   }
 
   const rows: SalesRow[] = [];
