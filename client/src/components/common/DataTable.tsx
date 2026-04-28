@@ -64,6 +64,8 @@ export interface DataTableProps<T = any> {
   emptyMessage?: string;
   /** Row-level CSS class hook (e.g. tint loss-making rows). */
   rowClassName?: (row: T) => string | undefined;
+  /** Optional click handler — turns rows into clickable links (e.g. drill into client). */
+  onRowClick?: (row: T) => void;
   /** Optional toolbar content rendered above the table (right-aligned). */
   toolbar?: React.ReactNode;
   /** 'compact' uses tighter padding. Default 'normal'. */
@@ -314,6 +316,7 @@ export function DataTable<T = any>({
   defaultSort,
   emptyMessage = 'No matching rows',
   rowClassName,
+  onRowClick,
   toolbar,
   density = 'normal',
   searchPlaceholder = 'Search...',
@@ -488,10 +491,12 @@ export function DataTable<T = any>({
             ) : (
               pageRows.map((row, i) => {
                 const extra = rowClassName?.(row) || '';
+                const clickable = onRowClick != null;
                 return (
                   <tr
                     key={i}
-                    className={`hover:bg-dark-600/30 ${extra}`}
+                    onClick={clickable ? () => onRowClick(row) : undefined}
+                    className={`hover:bg-dark-600/30 ${extra} ${clickable ? 'cursor-pointer' : ''}`}
                     style={{ borderBottom: '1px solid var(--mt-border)' }}
                   >
                     {columns.map(col => {

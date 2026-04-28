@@ -19,6 +19,7 @@ import {
   Building2, Clock, ExternalLink, Monitor, Download, Server, Link as LinkIcon,
 } from 'lucide-react';
 import api from '../../api/client';
+import DataTable, { type ColumnDef } from '../common/DataTable';
 
 /* ─── Types ──────────────────────────────────────────────── */
 
@@ -208,96 +209,65 @@ export default function AgentKeysPanel() {
               No keys yet. Click <span style={{ color: TONES.accent.fg }}>Generate key</span> to create the first one.
             </p>
           </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr style={{ color: 'var(--mt-text-faint)', background: 'var(--mt-bg-muted)' }}>
-                  <th className="text-left font-medium px-5 py-2.5 text-xs uppercase tracking-wider">Prefix</th>
-                  <th className="text-left font-medium px-5 py-2.5 text-xs uppercase tracking-wider">Label</th>
-                  <th className="text-left font-medium px-5 py-2.5 text-xs uppercase tracking-wider">Created</th>
-                  <th className="text-left font-medium px-5 py-2.5 text-xs uppercase tracking-wider">Last used</th>
-                  <th className="text-left font-medium px-5 py-2.5 text-xs uppercase tracking-wider">Status</th>
-                  <th className="text-right font-medium px-5 py-2.5 text-xs uppercase tracking-wider"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {keys.map(k => (
-                  <KeyRow key={k.id} k={k} onRevoke={() => handleRevoke(k.id)} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        ) : (() => {
+          const cols: ColumnDef<AgentKey>[] = [
+            { key: 'prefix', header: 'Prefix', cellClassName: 'font-mono text-xs',
+              render: k => <span style={{ color: 'var(--mt-text)' }}>{k.prefix}…</span> },
+            { key: 'label', header: 'Label', render: k => k.label || '—' },
+            { key: 'createdAt', header: 'Created', type: 'date',
+              accessor: k => k.createdAt,
+              render: k => <span className="text-xs" style={{ color: 'var(--mt-text-muted)' }}>{relativeTime(k.createdAt)}</span> },
+            { key: 'lastUsedAt', header: 'Last used', type: 'date',
+              accessor: k => k.lastUsedAt,
+              render: k => k.lastUsedAt ? (
+                <span className="inline-flex items-center gap-1 text-xs" style={{ color: 'var(--mt-text-muted)' }}>
+                  <Clock size={11} /> {relativeTime(k.lastUsedAt)}
+                </span>
+              ) : (
+                <span className="text-xs" style={{ color: 'var(--mt-text-faint)' }}>Never</span>
+              ) },
+            { key: 'status', header: 'Status', accessor: k => k.revokedAt ? 'Revoked' : 'Active',
+              render: k => k.revokedAt ? (
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full"
+                  style={{ color: TONES.danger.fg, background: TONES.danger.soft }}>
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: TONES.danger.fg }} />
+                  Revoked
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full"
+                  style={{ color: TONES.accent.fg, background: TONES.accent.soft }}>
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: TONES.accent.fg }} />
+                  Active
+                </span>
+              ) },
+            { key: '_actions', header: '', type: 'custom', align: 'right', render: k => (
+              !k.revokedAt && (
+                <button
+                  onClick={() => handleRevoke(k.id)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all"
+                  style={{ color: TONES.danger.fg, border: `1px solid ${TONES.danger.border}`, background: 'transparent' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = TONES.danger.soft)}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <Trash2 size={12} /> Revoke
+                </button>
+              )
+            ) },
+          ];
+          return (
+            <div className="px-3 pb-3">
+              <DataTable
+                columns={cols}
+                rows={keys}
+                pageSize={50}
+                searchPlaceholder="Search by prefix or label..."
+                rowClassName={k => k.revokedAt ? 'opacity-55' : ''}
+              />
+            </div>
+          );
+        })()}
       </div>
     </div>
-  );
-}
-
-/* ─── KeyRow ─────────────────────────────────────────────── */
-
-function KeyRow({ k, onRevoke }: { k: AgentKey; onRevoke: () => void }) {
-  const [hover, setHover] = useState(false);
-  const revoked = !!k.revokedAt;
-  return (
-    <tr
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        background: hover && !revoked ? 'var(--mt-bg-muted)' : 'transparent',
-        opacity: revoked ? 0.55 : 1,
-        borderTop: '1px solid var(--mt-border)',
-      }}
-    >
-      <td className="px-5 py-3 font-mono text-xs" style={{ color: 'var(--mt-text)' }}>{k.prefix}…</td>
-      <td className="px-5 py-3" style={{ color: 'var(--mt-text)' }}>{k.label || '—'}</td>
-      <td className="px-5 py-3 text-xs" style={{ color: 'var(--mt-text-muted)' }}>{relativeTime(k.createdAt)}</td>
-      <td className="px-5 py-3 text-xs" style={{ color: 'var(--mt-text-muted)' }}>
-        {k.lastUsedAt ? (
-          <span className="inline-flex items-center gap-1">
-            <Clock size={11} /> {relativeTime(k.lastUsedAt)}
-          </span>
-        ) : (
-          <span style={{ color: 'var(--mt-text-faint)' }}>Never</span>
-        )}
-      </td>
-      <td className="px-5 py-3">
-        {revoked ? (
-          <span
-            className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full"
-            style={{ color: TONES.danger.fg, background: TONES.danger.soft }}
-          >
-            <span className="w-1.5 h-1.5 rounded-full" style={{ background: TONES.danger.fg }} />
-            Revoked
-          </span>
-        ) : (
-          <span
-            className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full"
-            style={{ color: TONES.accent.fg, background: TONES.accent.soft }}
-          >
-            <span className="w-1.5 h-1.5 rounded-full" style={{ background: TONES.accent.fg }} />
-            Active
-          </span>
-        )}
-      </td>
-      <td className="px-5 py-3 text-right">
-        {!revoked && (
-          <button
-            onClick={onRevoke}
-            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all"
-            style={{
-              color: TONES.danger.fg,
-              border: `1px solid ${TONES.danger.border}`,
-              background: 'transparent',
-            }}
-            onMouseEnter={e => (e.currentTarget.style.background = TONES.danger.soft)}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-          >
-            <Trash2 size={12} /> Revoke
-          </button>
-        )}
-      </td>
-    </tr>
   );
 }
 

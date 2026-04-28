@@ -6,6 +6,7 @@ import { Stethoscope, Pill, ShoppingCart, Upload, CheckCircle, AlertCircle, Tras
          Phone, KeyRound, Briefcase, Package, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { downloadXlsx, CLINIC_EXPORT_COLUMNS, PHARMA_SALES_EXPORT_COLUMNS, PHARMA_PURCHASE_EXPORT_COLUMNS, STOCK_COLUMNS } from '../utils/xlsxExport';
+import DataTable, { type ColumnDef } from '../components/common/DataTable';
 
 type Source = 'healthplix' | 'oneglance-sales' | 'oneglance-purchase' | 'oneglance-stock' | 'turia';
 type Mode = 'upload' | 'sync';
@@ -911,69 +912,59 @@ export default function ImportPage() {
         <h3 className="mt-heading text-sm mb-3">Import History</h3>
         {history.length === 0 ? (
           <p className="text-center py-4 text-sm" style={{ color: 'var(--mt-text-faint)' }}>No imports yet</p>
-        ) : (
-          <div className="overflow-x-auto -mx-1">
-            <table className="w-full text-xs">
-              <thead>
-                <tr style={{ borderBottom: '1px solid var(--mt-border)' }}>
-                  <th className="text-left py-2 px-2 font-medium uppercase tracking-wider" style={{ color: 'var(--mt-text-faint)' }}>Source</th>
-                  <th className="text-left py-2 px-2 font-medium uppercase tracking-wider" style={{ color: 'var(--mt-text-faint)' }}>File</th>
-                  <th className="text-right py-2 px-2 font-medium uppercase tracking-wider" style={{ color: 'var(--mt-text-faint)' }}>Rows</th>
-                  <th className="text-left py-2 px-2 font-medium uppercase tracking-wider" style={{ color: 'var(--mt-text-faint)' }}>Range</th>
-                  <th className="text-left py-2 px-2 font-medium uppercase tracking-wider" style={{ color: 'var(--mt-text-faint)' }}>When</th>
-                  <th className="py-2 px-2"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.map(log => {
-                  const pillTone =
-                    log.source === 'HEALTHPLIX_SYNC' ? 'mt-pill--info' :
-                    log.source.includes('ONEGLANCE') ? 'mt-pill--warn' :
-                    log.source.includes('TURIA') ? 'mt-pill--info' :
-                    'mt-pill--success';
-                  return (
-                    <tr
-                      key={log.id}
-                      className="transition-colors"
-                      style={{ borderBottom: '1px solid var(--mt-border)' }}
-                      onMouseEnter={e => { e.currentTarget.style.background = 'var(--mt-bg-muted)'; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-                    >
-                      <td className="py-1.5 px-2">
-                        <span className={`mt-pill ${pillTone} mt-pill-sm`}>
-                          {log.source === 'HEALTHPLIX_SYNC' ? 'HP Sync' :
-                           log.source === 'ONEGLANCE_SALES_SYNC' ? 'OG Sales' :
-                           log.source === 'ONEGLANCE_PURCHASE_SYNC' ? 'OG Purchase' :
-                           log.source === 'ONEGLANCE_STOCK_SYNC' ? 'OG Stock' :
-                           log.source === 'TURIA_SYNC' ? 'Turia Sync' :
-                           log.source === 'TURIA' ? 'Turia Upload' :
-                           log.source}
-                        </span>
-                      </td>
-                      <td className="py-1.5 px-2 truncate max-w-[180px]" style={{ color: 'var(--mt-text-secondary)' }}>{log.filename}</td>
-                      <td className="py-1.5 px-2 text-right font-medium mt-num" style={{ color: 'var(--mt-text-secondary)' }}>{log.rows_imported.toLocaleString('en-IN')}</td>
-                      <td className="py-1.5 px-2" style={{ color: 'var(--mt-text-faint)' }}>
-                        {log.date_range_start && log.date_range_end ? `${log.date_range_start} → ${log.date_range_end}` : '-'}
-                      </td>
-                      <td className="py-1.5 px-2" style={{ color: 'var(--mt-text-faint)' }}>{new Date(log.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}</td>
-                      <td className="py-1.5 px-2 text-right">
-                        <button
-                          onClick={() => handleDelete(log.id)}
-                          className="transition-colors"
-                          style={{ color: 'var(--mt-text-faint)' }}
-                          onMouseEnter={e => { e.currentTarget.style.color = 'var(--mt-danger-text)'; }}
-                          onMouseLeave={e => { e.currentTarget.style.color = 'var(--mt-text-faint)'; }}
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+        ) : (() => {
+          // Pre-compute the friendly source label so the DataTable filter/sort
+          // use it instead of the raw enum (e.g. 'HEALTHPLIX_SYNC').
+          const sourceLabel = (s: string) =>
+            s === 'HEALTHPLIX_SYNC' ? 'HP Sync' :
+            s === 'ONEGLANCE_SALES_SYNC' ? 'OG Sales' :
+            s === 'ONEGLANCE_PURCHASE_SYNC' ? 'OG Purchase' :
+            s === 'ONEGLANCE_STOCK_SYNC' ? 'OG Stock' :
+            s === 'TURIA_SYNC' ? 'Turia Sync' :
+            s === 'TURIA' ? 'Turia Upload' :
+            s;
+          const sourceTone = (s: string) =>
+            s === 'HEALTHPLIX_SYNC' ? 'mt-pill--info' :
+            s.includes('ONEGLANCE') ? 'mt-pill--warn' :
+            s.includes('TURIA') ? 'mt-pill--info' :
+            'mt-pill--success';
+          const cols: ColumnDef<ImportLog>[] = [
+            { key: 'source', header: 'Source', accessor: log => sourceLabel(log.source),
+              render: log => <span className={`mt-pill ${sourceTone(log.source)} mt-pill-sm`}>{sourceLabel(log.source)}</span> },
+            { key: 'filename', header: 'File', cellClassName: 'truncate max-w-[180px]' },
+            { key: 'rows_imported', header: 'Rows', type: 'number', format: 'number',
+              render: log => <span className="font-medium mt-num" style={{ color: 'var(--mt-text-secondary)' }}>{log.rows_imported.toLocaleString('en-IN')}</span> },
+            { key: 'range', header: 'Range', accessor: log => log.date_range_start || '',
+              render: log => <span style={{ color: 'var(--mt-text-faint)' }}>
+                {log.date_range_start && log.date_range_end ? `${log.date_range_start} → ${log.date_range_end}` : '-'}
+              </span> },
+            { key: 'created_at', header: 'When', type: 'date',
+              render: log => <span style={{ color: 'var(--mt-text-faint)' }}>
+                {new Date(log.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}
+              </span> },
+            { key: '_delete', header: '', type: 'custom', align: 'right', render: log => (
+              <button
+                onClick={() => handleDelete(log.id)}
+                className="transition-colors"
+                style={{ color: 'var(--mt-text-faint)' }}
+                onMouseEnter={e => { e.currentTarget.style.color = 'var(--mt-danger-text)'; }}
+                onMouseLeave={e => { e.currentTarget.style.color = 'var(--mt-text-faint)'; }}
+              >
+                <Trash2 size={13} />
+              </button>
+            ) },
+          ];
+          return (
+            <DataTable
+              columns={cols}
+              rows={history}
+              pageSize={50}
+              density="compact"
+              searchPlaceholder="Search by source, filename, range..."
+              defaultSort={{ key: 'created_at', dir: 'desc' }}
+            />
+          );
+        })()}
       </div>
     </div>
   );
