@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import api from '../api/client';
 import { formatINR } from '../utils/format';
-import { canWriteForecast } from '../utils/roles';
+import { canEditRevenueSharing } from '../utils/roles';
 import {
   PieChart as PieIcon, IndianRupee, Users, Building2, ChevronDown, ChevronRight,
   Plus, Trash2, Settings2, Eye,
@@ -191,11 +191,11 @@ function SummaryCard({ icon: Icon, label, value, color }: { icon: any; label: st
 //  RULES TAB
 // ══════════════════════════════════════════════════════════════════════
 function RulesTab() {
-  // canEdit mirrors the server's requireRole('admin', 'operational_head') gate
-  // (plus implicit super_admin override). When false we hide every editing
-  // affordance — the Add form, the doctor/category dropdowns, and the trash
-  // icons. Server still enforces 403 even if the UI is bypassed.
-  const canEdit = canWriteForecast();
+  // canEdit mirrors the server's requireRole('admin') gate (plus implicit
+  // super_admin override). Only admin / CFO can edit revenue-sharing config —
+  // operational_head, accountant, and regular users get a read-only view.
+  // Server still enforces 403 even if the UI is bypassed.
+  const canEdit = canEditRevenueSharing();
   const [categories, setCategories] = useState<any[]>([]);
   const [rules, setRules] = useState<any[]>([]);
   const [doctors, setDoctors] = useState<any[]>([]);

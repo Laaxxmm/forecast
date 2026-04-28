@@ -211,7 +211,7 @@ router.get('/categories', (req, res) => {
   res.json(rows);
 });
 
-router.post('/categories', requireRole('admin', 'operational_head'), (req, res) => {
+router.post('/categories', requireRole('admin'), (req, res) => {
   const db = req.tenantDb!;
   const name = requireString(req.body.name, 'name', 100);
   const source = optionalString(req.body.source, 'source', 50) || 'clinic';
@@ -226,7 +226,7 @@ router.post('/categories', requireRole('admin', 'operational_head'), (req, res) 
   res.json({ ok: true });
 });
 
-router.put('/categories/:id', requireRole('admin', 'operational_head'), (req, res) => {
+router.put('/categories/:id', requireRole('admin'), (req, res) => {
   const db = req.tenantDb!;
   const id = requireInt(req.params.id, 'id');
   const name = requireString(req.body.name, 'name', 100);
@@ -243,7 +243,7 @@ router.put('/categories/:id', requireRole('admin', 'operational_head'), (req, re
   res.json({ ok: true });
 });
 
-router.delete('/categories/:id', requireRole('admin', 'operational_head'), (req, res) => {
+router.delete('/categories/:id', requireRole('admin'), (req, res) => {
   const db = req.tenantDb!;
   const id = requireInt(req.params.id, 'id');
   db.run('DELETE FROM revenue_sharing_categories WHERE id = ?', id);
@@ -271,7 +271,7 @@ router.get('/rules', (req, res) => {
   res.json(rows);
 });
 
-router.post('/rules', requireRole('admin', 'operational_head'), (req, res) => {
+router.post('/rules', requireRole('admin'), (req, res) => {
   const db = req.tenantDb!;
   const doctor_id = requireInt(req.body.doctor_id, 'doctor_id');
   const category_id = requireInt(req.body.category_id, 'category_id');
@@ -286,7 +286,7 @@ router.post('/rules', requireRole('admin', 'operational_head'), (req, res) => {
   res.json({ ok: true });
 });
 
-router.put('/rules/:id', requireRole('admin', 'operational_head'), (req, res) => {
+router.put('/rules/:id', requireRole('admin'), (req, res) => {
   const db = req.tenantDb!;
   const id = requireInt(req.params.id, 'id');
   const doctor_pct = requireNumber(req.body.doctor_pct, 'doctor_pct');
@@ -295,7 +295,7 @@ router.put('/rules/:id', requireRole('admin', 'operational_head'), (req, res) =>
   res.json({ ok: true });
 });
 
-router.delete('/rules/:id', requireRole('admin', 'operational_head'), (req, res) => {
+router.delete('/rules/:id', requireRole('admin'), (req, res) => {
   const db = req.tenantDb!;
   const id = requireInt(req.params.id, 'id');
   db.run('DELETE FROM revenue_sharing_rules WHERE id = ?', id);

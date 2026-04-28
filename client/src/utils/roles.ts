@@ -80,6 +80,19 @@ export function canApproveAccountingTask(): boolean {
   return getUserRole() === 'admin';
 }
 
+// ── Revenue Sharing gate ───────────────────────────────────────────────────
+
+/**
+ * Revenue Sharing rules drive doctor payouts — only admin (CFO/owner) can
+ * edit them. Operational heads, accountants, and regular users see the
+ * config in read-only mode. Server enforces the same via
+ * requireRole('admin') on all mutation routes in revenue-sharing.ts.
+ */
+export function canEditRevenueSharing(): boolean {
+  if (isSuperAdmin()) return true;
+  return getUserRole() === 'admin';
+}
+
 // ── Destructive actions ────────────────────────────────────────────────────
 
 /**
