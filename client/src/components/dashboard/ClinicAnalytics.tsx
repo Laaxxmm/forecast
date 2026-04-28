@@ -6,6 +6,7 @@ import {
 import api from '../../api/client';
 import { formatINR, formatNumber } from '../../utils/format';
 import { Users, Stethoscope, FlaskConical, Activity, ArrowRight, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import DataTable, { type ColumnDef } from '../common/DataTable';
 
 const COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#06b6d4'];
 const CHART_STYLE = { backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '8px', fontSize: '11px' };
@@ -305,68 +306,38 @@ export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: Cli
       )}
 
       {/* Section E — Patient Summary Table */}
-      {tableVisible && patientTable.length > 0 && (
-        <div className="card p-3 mb-4">
-          <div className="flex items-center justify-between mb-2">
-            <div>
+      {tableVisible && patientTable.length > 0 && (() => {
+        const cols: ColumnDef<any>[] = [
+          { key: 'patient_id', header: 'ID', cellClassName: 'font-mono text-[10px]' },
+          { key: 'patient_name', header: 'Name' },
+          { key: 'departments', header: 'Departments', sortable: false, render: p => (
+            <div className="flex gap-1 flex-wrap">
+              {(p.departments || '').split(',').filter((d: string) => d.trim()).map((d: string, j: number) => (
+                <span key={j} className="text-[9px] px-1.5 py-0.5 rounded-full bg-dark-500 text-theme-faint">{d.trim()}</span>
+              ))}
+            </div>
+          ) },
+          { key: 'total_billed', header: 'Billed', type: 'number', format: 'currency' },
+          { key: 'total_paid', header: 'Paid', type: 'number', format: 'currency' },
+          { key: 'total_discount', header: 'Discount', type: 'number', format: 'currency' },
+          { key: 'visits', header: 'Visits', type: 'number', format: 'number' },
+        ];
+        return (
+          <div className="card p-3 mb-4">
+            <div className="flex items-center justify-between mb-2">
               <h3 className="text-xs font-semibold text-theme-heading">Patient Summary</h3>
-              <p className="text-[10px] text-theme-faint">{formatNumber(filteredPatients.length)} patients</p>
+              <p className="text-[10px] text-theme-faint">{formatNumber(patientTable.length)} patients</p>
             </div>
-            <div className="relative">
-              <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-theme-faint" />
-              <input
-                type="text" value={search} onChange={e => { setSearch(e.target.value); setPage(0); }}
-                placeholder="Search patient..." className="input text-xs pl-8 py-1.5 w-52"
-              />
-            </div>
+            <DataTable
+              columns={cols}
+              rows={patientTable}
+              pageSize={50}
+              density="compact"
+              searchPlaceholder="Search patient, ID, department..."
+            />
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-dark-400/20">
-                  <th className="text-left text-[10px] font-medium text-theme-faint px-2 py-1.5">ID</th>
-                  <th className="text-left text-[10px] font-medium text-theme-faint px-2 py-1.5">Name</th>
-                  <th className="text-left text-[10px] font-medium text-theme-faint px-2 py-1.5">Departments</th>
-                  <th className="text-right text-[10px] font-medium text-theme-faint px-2 py-1.5">Billed</th>
-                  <th className="text-right text-[10px] font-medium text-theme-faint px-2 py-1.5">Paid</th>
-                  <th className="text-right text-[10px] font-medium text-theme-faint px-2 py-1.5">Discount</th>
-                  <th className="text-right text-[10px] font-medium text-theme-faint px-2 py-1.5">Visits</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pagePatients.map((p: any, i: number) => (
-                  <tr key={i} className="border-b border-dark-400/10 hover:bg-dark-600/30">
-                    <td className="px-2 py-1.5 text-theme-secondary font-mono text-[10px]">{p.patient_id}</td>
-                    <td className="px-2 py-1.5 text-theme-heading text-xs">{p.patient_name}</td>
-                    <td className="px-2 py-1.5">
-                      <div className="flex gap-1 flex-wrap">
-                        {(p.departments || '').split(',').map((d: string, j: number) => (
-                          <span key={j} className="text-[9px] px-1.5 py-0.5 rounded-full bg-dark-500 text-theme-faint">{d.trim()}</span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-2 py-1.5 text-right text-theme-heading">{formatINR(p.total_billed)}</td>
-                    <td className="px-2 py-1.5 text-right text-theme-secondary">{formatINR(p.total_paid)}</td>
-                    <td className="px-2 py-1.5 text-right text-theme-faint">{formatINR(p.total_discount)}</td>
-                    <td className="px-2 py-1.5 text-right text-theme-heading">{p.visits}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between mt-2 pt-2 border-t border-dark-400/20">
-              <span className="text-[10px] text-theme-faint">Page {page + 1} of {totalPages}</span>
-              <div className="flex gap-1">
-                <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}
-                  className="p-1 rounded-md text-theme-faint hover:text-theme-secondary disabled:opacity-30"><ChevronLeft size={12} /></button>
-                <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1}
-                  className="p-1 rounded-md text-theme-faint hover:text-theme-secondary disabled:opacity-30"><ChevronRight size={12} /></button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

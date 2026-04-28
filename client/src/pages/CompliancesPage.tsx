@@ -21,6 +21,7 @@ import {
 import { Link } from 'react-router-dom';
 import api from '../api/client';
 import { canWriteVcfo } from '../utils/roles';
+import DataTable, { type ColumnDef } from '../components/common/DataTable';
 
 interface Branch {
   id: number;
@@ -517,99 +518,66 @@ function ListView({
   onFile: (c: Compliance) => void;
   onDelete: (c: Compliance) => void;
 }) {
-  if (items.length === 0) {
-    return (
-      <div className="mt-card p-10 text-center">
-        <p className="mb-1 font-medium" style={{ color: 'var(--mt-text-muted)' }}>
-          No compliances match these filters.
-        </p>
-        <p className="text-sm" style={{ color: 'var(--mt-text-faint)' }}>
-          Use "Add compliance" to create one from the catalog.
-        </p>
-      </div>
-    );
-  }
-  return (
-    <div className="mt-card overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs md:text-[13px]">
-          <thead
-            className="uppercase text-[10px] tracking-wider"
-            style={{ background: 'var(--mt-bg-muted)', color: 'var(--mt-text-faint)' }}
+  // Pre-compute the effective status + branch name once per row so the
+  // DataTable filter/sort can use them via accessors.
+  const enriched = items.map(c => ({
+    ...c,
+    _eff: effectiveStatus(c),
+    _branchName: branchById.get(c.branch_id)?.name || '',
+    _freqLabel: FREQ_LABEL[c.frequency] || c.frequency,
+  }));
+
+  const cols: ColumnDef<typeof enriched[number]>[] = [
+    { key: 'name', header: 'Name', cellClassName: 'font-medium', render: c => (
+      <span style={{ color: 'var(--mt-text-primary)' }}>{c.name}</span>
+    ) },
+    { key: 'category', header: 'Category', render: c => <CategoryChip category={c.category} /> },
+    { key: '_branchName', header: 'Applicability', accessor: c => c._branchName,
+      render: c => <ScopeChip c={c} branchName={branchById.get(c.branch_id)?.name} /> },
+    { key: 'frequency', header: 'Frequency', accessor: c => c._freqLabel,
+      render: c => <span style={{ color: 'var(--mt-text-secondary)' }}>{c._freqLabel}</span> },
+    { key: 'period_label', header: 'Period',
+      render: c => <span style={{ color: 'var(--mt-text-secondary)' }}>{c.period_label}</span> },
+    { key: 'due_date', header: 'Due date', type: 'date',
+      render: c => <span className="mt-num" style={{ color: 'var(--mt-text-secondary)' }}>{fmtDate(c.due_date)}</span> },
+    { key: '_eff', header: 'Status', accessor: c => c._eff, render: c => <StatusChip status={c._eff} /> },
+    { key: '_actions', header: 'Actions', type: 'custom', align: 'right', render: c => (
+      <div className="inline-flex items-center gap-1">
+        {canEdit && c._eff !== 'filed' && (
+          <button
+            onClick={() => onFile(c)}
+            title="Mark as filed"
+            className="p-1.5 rounded transition-colors"
+            style={{ color: 'var(--mt-accent-text)' }}
           >
-            <tr>
-              <th className="text-left px-4 py-2.5 font-semibold">Name</th>
-              <th className="text-left px-4 py-2.5 font-semibold">Category</th>
-              <th className="text-left px-4 py-2.5 font-semibold">Applicability</th>
-              <th className="text-left px-4 py-2.5 font-semibold">Frequency</th>
-              <th className="text-left px-4 py-2.5 font-semibold">Period</th>
-              <th className="text-left px-4 py-2.5 font-semibold">Due date</th>
-              <th className="text-left px-4 py-2.5 font-semibold">Status</th>
-              <th className="text-right px-4 py-2.5 font-semibold">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((c, idx) => {
-              const eff = effectiveStatus(c);
-              const branch = branchById.get(c.branch_id);
-              return (
-                <tr
-                  key={c.id}
-                  style={{
-                    borderTop: idx === 0 ? undefined : '1px solid var(--mt-border)',
-                  }}
-                  className="hover:bg-[var(--mt-bg-muted)] transition-colors"
-                >
-                  <td
-                    className="px-4 py-2.5 font-medium"
-                    style={{ color: 'var(--mt-text-primary)' }}
-                  >
-                    {c.name}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <CategoryChip category={c.category} />
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <ScopeChip c={c} branchName={branch?.name} />
-                  </td>
-                  <td className="px-4 py-2.5" style={{ color: 'var(--mt-text-secondary)' }}>{FREQ_LABEL[c.frequency]}</td>
-                  <td className="px-4 py-2.5" style={{ color: 'var(--mt-text-secondary)' }}>{c.period_label}</td>
-                  <td className="px-4 py-2.5 mt-num" style={{ color: 'var(--mt-text-secondary)' }}>{fmtDate(c.due_date)}</td>
-                  <td className="px-4 py-2.5">
-                    <StatusChip status={eff} />
-                  </td>
-                  <td className="px-4 py-2.5 text-right">
-                    <div className="inline-flex items-center gap-1">
-                      {canEdit && eff !== 'filed' && (
-                        <button
-                          onClick={() => onFile(c)}
-                          title="Mark as filed"
-                          className="p-1.5 rounded transition-colors"
-                          style={{ color: 'var(--mt-accent-text)' }}
-                        >
-                          <CheckCircle2 size={14} />
-                        </button>
-                      )}
-                      {canEdit && (
-                        <button
-                          onClick={() => onDelete(c)}
-                          title="Delete"
-                          className="p-1.5 rounded transition-colors"
-                          style={{ color: 'var(--mt-text-faint)' }}
-                          onMouseEnter={e => { e.currentTarget.style.color = 'var(--mt-danger-text)'; e.currentTarget.style.background = 'var(--mt-danger-soft)'; }}
-                          onMouseLeave={e => { e.currentTarget.style.color = 'var(--mt-text-faint)'; e.currentTarget.style.background = 'transparent'; }}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+            <CheckCircle2 size={14} />
+          </button>
+        )}
+        {canEdit && (
+          <button
+            onClick={() => onDelete(c)}
+            title="Delete"
+            className="p-1.5 rounded transition-colors"
+            style={{ color: 'var(--mt-text-faint)' }}
+            onMouseEnter={e => { e.currentTarget.style.color = 'var(--mt-danger-text)'; e.currentTarget.style.background = 'var(--mt-danger-soft)'; }}
+            onMouseLeave={e => { e.currentTarget.style.color = 'var(--mt-text-faint)'; e.currentTarget.style.background = 'transparent'; }}
+          >
+            <Trash2 size={14} />
+          </button>
+        )}
       </div>
+    ) },
+  ];
+
+  return (
+    <div className="mt-card p-3">
+      <DataTable
+        columns={cols}
+        rows={enriched}
+        pageSize={50}
+        searchPlaceholder="Search compliance, branch, period..."
+        emptyMessage="No compliances match these filters. Use 'Add compliance' to create one from the catalog."
+      />
     </div>
   );
 }

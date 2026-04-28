@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { downloadXlsx, PURCHASE_COLUMNS, SALES_COLUMNS, STOCK_COLUMNS,
   PHARMA_PURCHASE_EXPORT_COLUMNS, PHARMA_SALES_EXPORT_COLUMNS } from '../../utils/xlsxExport';
+import DataTable, { type ColumnDef } from '../common/DataTable';
 
 const COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#06b6d4', '#f97316', '#84cc16'];
 const CHART_STYLE = { backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '12px' };
@@ -375,73 +376,61 @@ function PurchasesTab({ data, isVisible, search, setSearch, page, setPage, pageS
       )}
 
       {/* Purchase Table */}
-      {tableVisible && table?.length > 0 && (
-        <div className="card mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-sm font-semibold text-theme-heading">Purchase Details</h3>
-              <p className="text-xs text-theme-faint">{formatNumber(filteredTable.length)} records</p>
-            </div>
-            <div className="flex items-center gap-2">
+      {tableVisible && table?.length > 0 && (() => {
+        // Pre-compute Free Qty flag so the row tint hook + render hook can share it.
+        const enriched = table.map((r: any) => ({
+          ...r,
+          _hasFreeQty: (Number(r.free_qty) || 0) > 0,
+        }));
+        const cols: ColumnDef<typeof enriched[number]>[] = [
+          { key: 'invoice_no', header: 'Invoice', cellClassName: 'font-mono text-xs', width: 'max-w-[110px]' },
+          { key: 'invoice_date', header: 'Date', type: 'date' },
+          { key: 'stockiest_name', header: 'Stockist', cellClassName: 'truncate max-w-[120px]' },
+          { key: 'drug_name', header: 'Drug', cellClassName: 'truncate max-w-[160px]', render: (r) => (
+            <>
+              {r.drug_name}
+              {r._hasFreeQty && (
+                <span title={`Received ${r.free_qty} free unit(s). COGS doesn't credit free qty — gross profit on sales from this batch is slightly understated.`}
+                  className="ml-1.5 inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 align-middle">
+                  <Gift size={9} /> +{r.free_qty}
+                </span>
+              )}
+            </>
+          ) },
+          { key: 'batch_qty', header: 'Batch Qty', type: 'number', format: 'number' },
+          { key: 'free_qty', header: 'Free', type: 'number', render: r => (
+            <span className="text-emerald-400">{r.free_qty || '-'}</span>
+          ) },
+          { key: 'mrp', header: 'MRP', type: 'number', format: 'currency' },
+          { key: 'purchase_value', header: 'Purchase Val', type: 'number', format: 'currency' },
+          { key: 'tax_amount', header: 'Tax', type: 'number', format: 'currency' },
+          { key: 'profit_pct', header: 'Margin %', type: 'number', accessor: r => r.profit_pct,
+            render: r => <span className={r.profit_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}>
+              {r.profit_pct != null ? `${r.profit_pct.toFixed(1)}%` : '-'}
+            </span> },
+        ];
+        return (
+          <div className="card mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-sm font-semibold text-theme-heading">Purchase Details</h3>
+                <p className="text-xs text-theme-faint">{formatNumber(table.length)} records</p>
+              </div>
               <button onClick={() => exportFromDb('pharma-purchase', PHARMA_PURCHASE_EXPORT_COLUMNS, 'Purchase_Details', fyStart, fyEnd)}
                 className="btn btn-sm btn-ghost flex items-center gap-1.5 text-xs text-theme-faint hover:text-accent-500" title="Download XLSX">
                 <Download size={14} /> Download
               </button>
-              <div className="relative">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-faint" />
-                <input type="text" value={search} onChange={e => { setSearch(e.target.value); setPage(() => 0); }}
-                  placeholder="Search drug, stockist..." className="input text-sm pl-9 w-64" />
-              </div>
             </div>
+            <DataTable
+              columns={cols}
+              rows={enriched}
+              pageSize={50}
+              searchPlaceholder="Search drug, stockist, invoice..."
+              rowClassName={r => r._hasFreeQty ? 'bg-emerald-500/5' : ''}
+            />
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-dark-400/20">
-                  {['Invoice', 'Date', 'Stockist', 'Drug', 'Batch Qty', 'Free', 'MRP', 'Purchase Val', 'Tax', 'Margin%'].map(h => (
-                    <th key={h} className="text-left text-xs font-medium text-theme-faint px-3 py-2">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {pageRows.map((r: any, i: number) => {
-                  // Free Qty > 0 means the supplier gave bonus stock that doesn't appear
-                  // in COGS — so the per-unit cost flowing to sales is overstated, and
-                  // gross profit on those batches is understated. Flag for awareness.
-                  const hasFreeQty = (Number(r.free_qty) || 0) > 0;
-                  return (
-                    <tr key={i} className={`border-b border-dark-400/10 hover:bg-dark-600/30 ${hasFreeQty ? 'bg-emerald-500/5' : ''}`}>
-                      <td className="px-3 py-2 text-theme-secondary font-mono text-xs">{r.invoice_no}</td>
-                      <td className="px-3 py-2 text-theme-faint text-xs">{r.invoice_date}</td>
-                      <td className="px-3 py-2 text-theme-secondary text-xs truncate max-w-[120px]">{r.stockiest_name}</td>
-                      <td className="px-3 py-2 text-theme-heading text-xs truncate max-w-[150px]">
-                        {r.drug_name}
-                        {hasFreeQty && (
-                          <span title={`Received ${r.free_qty} free unit(s). COGS doesn't credit free qty — gross profit on sales from this batch is slightly understated.`}
-                            className="ml-1.5 inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 align-middle">
-                            <Gift size={9} /> +{r.free_qty}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-right text-theme-heading">{r.batch_qty}</td>
-                      <td className="px-3 py-2 text-right text-emerald-400">{r.free_qty || '-'}</td>
-                      <td className="px-3 py-2 text-right text-theme-faint">{formatINR(r.mrp || 0)}</td>
-                      <td className="px-3 py-2 text-right text-theme-heading">{formatINR(r.purchase_value || 0)}</td>
-                      <td className="px-3 py-2 text-right text-theme-faint">{formatINR(r.tax_amount || 0)}</td>
-                      <td className="px-3 py-2 text-right">
-                        <span className={r.profit_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}>
-                          {r.profit_pct != null ? `${r.profit_pct.toFixed(1)}%` : '-'}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <TablePagination page={page} totalPages={totalPages} setPage={setPage} />
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
@@ -648,90 +637,78 @@ function SalesTab({ data, isVisible, search, setSearch, page, setPage, pageSize,
       )}
 
       {/* Sales Table */}
-      {tableVisible && table?.length > 0 && (
-        <div className="card mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-sm font-semibold text-theme-heading">Sales Details</h3>
-              <p className="text-xs text-theme-faint">{formatNumber(filteredTable.length)} records</p>
-            </div>
-            <div className="flex items-center gap-2">
+      {tableVisible && table?.length > 0 && (() => {
+        // Pre-compute derived fields ONCE per row so the DataTable filter/sort
+        // can read them via accessors. Same flag rules as before:
+        //   loss-making: COGS > Net Sales (truly negative gross profit)
+        //   outlier:     margin <5% or >40% (review for billing/discount errors)
+        const enriched = table.map((r: any) => {
+          const sales = Number(r.sales_amount) || 0;
+          const tax = Number(r.sales_tax) || 0;
+          const cogs = Number(r.purchase_amount) || 0;
+          const netSales = sales - tax;
+          const grossProfit = netSales - cogs;
+          const marginPct = netSales > 0 ? (grossProfit / netSales) * 100 : 0;
+          const isLoss = grossProfit < 0;
+          const isOutlier = !isLoss && netSales > 0 && (marginPct < 5 || marginPct > 40);
+          return { ...r, _sales: sales, _tax: tax, _cogs: cogs, _netSales: netSales, _grossProfit: grossProfit, _marginPct: marginPct, _isLoss: isLoss, _isOutlier: isOutlier };
+        });
+        const cols: ColumnDef<typeof enriched[number]>[] = [
+          { key: 'bill_no', header: 'Bill #', cellClassName: 'font-mono text-xs', width: 'max-w-[110px]' },
+          { key: 'bill_date', header: 'Date', type: 'date' },
+          { key: 'patient_name', header: 'Patient', cellClassName: 'truncate max-w-[120px]' },
+          { key: 'drug_name', header: 'Drug', cellClassName: 'truncate max-w-[150px]' },
+          { key: 'qty', header: 'Qty', type: 'number', format: 'number' },
+          { key: 'sales', header: 'Sales (incl. GST)', type: 'number', accessor: r => r._sales, render: r => formatINR(r._sales) },
+          { key: 'tax', header: 'GST', type: 'number', accessor: r => r._tax, render: r => formatINR(r._tax) },
+          { key: 'netSales', header: 'Net Sales', type: 'number', accessor: r => r._netSales, render: r => formatINR(r._netSales) },
+          { key: 'cogs', header: 'COGS', type: 'number', accessor: r => r._cogs, render: r => formatINR(r._cogs) },
+          { key: 'grossProfit', header: 'Gross Profit', type: 'number', accessor: r => r._grossProfit,
+            render: r => <span className={r._grossProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}>{formatINR(r._grossProfit)}</span> },
+          { key: 'marginPct', header: 'Margin %', type: 'number', accessor: r => r._marginPct,
+            render: r => <span className={r._isLoss ? 'text-red-400' : r._isOutlier ? 'text-amber-400' : 'text-theme-faint'}>
+              {r._netSales > 0 ? `${r._marginPct.toFixed(1)}%` : '-'}
+            </span> },
+          { key: 'flags', header: 'Flags', type: 'custom', render: r => (
+            <span className="text-xs">
+              {r._isLoss && (
+                <span title="COGS exceeds Net Sales — loss-making line. Could be a real loss, or a billing/discount error worth investigating."
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                  <AlertTriangle size={10} /> Loss
+                </span>
+              )}
+              {r._isOutlier && (
+                <span title={`Margin ${r._marginPct.toFixed(1)}% is outside the 5–40% normal band — review for billing/discount errors.`}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                  <AlertTriangle size={10} /> Outlier
+                </span>
+              )}
+            </span>
+          ) },
+          { key: 'referred_by', header: 'Referred By', cellClassName: 'truncate max-w-[100px]' },
+        ];
+        return (
+          <div className="card mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-sm font-semibold text-theme-heading">Sales Details</h3>
+                <p className="text-xs text-theme-faint">{formatNumber(table.length)} records</p>
+              </div>
               <button onClick={() => exportFromDb('pharma-sales', PHARMA_SALES_EXPORT_COLUMNS, 'Sales_Details', fyStart, fyEnd)}
                 className="btn btn-sm btn-ghost flex items-center gap-1.5 text-xs text-theme-faint hover:text-accent-500" title="Download XLSX">
                 <Download size={14} /> Download
               </button>
-              <div className="relative">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-faint" />
-                <input type="text" value={search} onChange={e => { setSearch(e.target.value); setPage(() => 0); }}
-                  placeholder="Search drug, patient..." className="input text-sm pl-9 w-64" />
-              </div>
             </div>
+            <DataTable
+              columns={cols}
+              rows={enriched}
+              pageSize={50}
+              searchPlaceholder="Search drug, patient, bill..."
+              rowClassName={r => r._isLoss ? 'bg-rose-500/5' : ''}
+            />
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-dark-400/20">
-                  {['Bill #', 'Date', 'Patient', 'Drug', 'Qty', 'Sales (incl. GST)', 'GST', 'Net Sales', 'COGS', 'Gross Profit', 'Margin %', 'Flags', 'Referred By'].map(h => (
-                    <th key={h} className="text-left text-xs font-medium text-theme-faint px-3 py-2">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {pageRows.map((r: any, i: number) => {
-                  const sales = Number(r.sales_amount) || 0;
-                  const tax = Number(r.sales_tax) || 0;
-                  const cogs = Number(r.purchase_amount) || 0;
-                  const netSales = sales - tax;
-                  const grossProfit = netSales - cogs;
-                  const marginPct = netSales > 0 ? (grossProfit / netSales) * 100 : 0;
-                  // Flag rules from the spec:
-                  //   loss-making: COGS > Net Sales (truly negative gross profit) — needs investigation
-                  //   outlier:     margin <5% or >40% — review (could be billing/discount errors)
-                  const isLoss = grossProfit < 0;
-                  const isOutlier = !isLoss && netSales > 0 && (marginPct < 5 || marginPct > 40);
-                  return (
-                    <tr key={i} className={`border-b border-dark-400/10 hover:bg-dark-600/30 ${isLoss ? 'bg-rose-500/5' : ''}`}>
-                      <td className="px-3 py-2 text-theme-secondary font-mono text-xs">{r.bill_no}</td>
-                      <td className="px-3 py-2 text-theme-faint text-xs">{r.bill_date}</td>
-                      <td className="px-3 py-2 text-theme-heading text-xs truncate max-w-[120px]">{r.patient_name}</td>
-                      <td className="px-3 py-2 text-theme-secondary text-xs truncate max-w-[150px]">{r.drug_name}</td>
-                      <td className="px-3 py-2 text-right text-theme-heading">{r.qty}</td>
-                      <td className="px-3 py-2 text-right text-theme-heading">{formatINR(sales)}</td>
-                      <td className="px-3 py-2 text-right text-theme-faint">{formatINR(tax)}</td>
-                      <td className="px-3 py-2 text-right text-theme-heading">{formatINR(netSales)}</td>
-                      <td className="px-3 py-2 text-right text-theme-faint">{formatINR(cogs)}</td>
-                      <td className="px-3 py-2 text-right">
-                        <span className={grossProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}>{formatINR(grossProfit)}</span>
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        <span className={isLoss ? 'text-red-400' : isOutlier ? 'text-amber-400' : 'text-theme-faint'}>
-                          {netSales > 0 ? `${marginPct.toFixed(1)}%` : '-'}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-xs">
-                        {isLoss && (
-                          <span title="COGS exceeds Net Sales — loss-making line. Could be a real loss, or a billing/discount error worth investigating."
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20">
-                            <AlertTriangle size={10} /> Loss
-                          </span>
-                        )}
-                        {isOutlier && (
-                          <span title={`Margin ${marginPct.toFixed(1)}% is outside the 5–40% normal band — review for billing/discount errors.`}
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                            <AlertTriangle size={10} /> Outlier
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-theme-faint text-xs truncate max-w-[100px]">{r.referred_by || '-'}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <TablePagination page={page} totalPages={totalPages} setPage={setPage} />
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
@@ -850,53 +827,39 @@ function StockTab({ data, isVisible, search, setSearch, page, setPage, pageSize,
       )}
 
       {/* Stock Table */}
-      {tableVisible && table?.length > 0 && (
-        <div className="card mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-sm font-semibold text-theme-heading">Stock Details</h3>
-              <p className="text-xs text-theme-faint">{formatNumber(filteredTable.length)} items</p>
-            </div>
-            <div className="flex items-center gap-2">
+      {tableVisible && table?.length > 0 && (() => {
+        const cols: ColumnDef<any>[] = [
+          { key: 'drug_name', header: 'Drug Name', cellClassName: 'truncate max-w-[180px]' },
+          { key: 'batch_no', header: 'Batch', cellClassName: 'font-mono text-xs' },
+          { key: 'received_date', header: 'Received', type: 'date' },
+          { key: 'expiry_date', header: 'Expiry', type: 'date' },
+          { key: 'avl_qty', header: 'Avl Qty', type: 'number', format: 'number' },
+          { key: 'strips', header: 'Strips', type: 'number', render: r => r.strips || '-' },
+          { key: 'purchase_price', header: 'Purchase Price', type: 'number', format: 'currency' },
+          { key: 'stock_value', header: 'Stock Value', type: 'number',
+            render: r => <span className="text-teal-400 font-medium">{formatINR(r.stock_value || 0)}</span> },
+        ];
+        return (
+          <div className="card mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-sm font-semibold text-theme-heading">Stock Details</h3>
+                <p className="text-xs text-theme-faint">{formatNumber(table.length)} items</p>
+              </div>
               <button onClick={() => exportFromDb('pharma-stock', STOCK_COLUMNS, 'Stock_Details')}
                 className="btn btn-sm btn-ghost flex items-center gap-1.5 text-xs text-theme-faint hover:text-accent-500" title="Download XLSX">
                 <Download size={14} /> Download
               </button>
-              <div className="relative">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-faint" />
-                <input type="text" value={search} onChange={e => { setSearch(e.target.value); setPage(() => 0); }}
-                  placeholder="Search drug, batch..." className="input text-sm pl-9 w-64" />
-              </div>
             </div>
+            <DataTable
+              columns={cols}
+              rows={table}
+              pageSize={50}
+              searchPlaceholder="Search drug, batch..."
+            />
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-dark-400/20">
-                  {['Drug Name', 'Batch', 'Received', 'Expiry', 'Avl Qty', 'Strips', 'Purchase Price', 'Stock Value'].map(h => (
-                    <th key={h} className="text-left text-xs font-medium text-theme-faint px-3 py-2">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {pageRows.map((r: any, i: number) => (
-                  <tr key={i} className="border-b border-dark-400/10 hover:bg-dark-600/30">
-                    <td className="px-3 py-2 text-theme-heading text-xs truncate max-w-[180px]">{r.drug_name}</td>
-                    <td className="px-3 py-2 text-theme-secondary font-mono text-xs">{r.batch_no}</td>
-                    <td className="px-3 py-2 text-theme-faint text-xs">{r.received_date || '-'}</td>
-                    <td className="px-3 py-2 text-theme-faint text-xs">{r.expiry_date || '-'}</td>
-                    <td className="px-3 py-2 text-right text-theme-heading">{formatNumber(r.avl_qty || 0)}</td>
-                    <td className="px-3 py-2 text-right text-theme-faint">{r.strips || '-'}</td>
-                    <td className="px-3 py-2 text-right text-theme-faint">{formatINR(r.purchase_price || 0)}</td>
-                    <td className="px-3 py-2 text-right text-teal-400 font-medium">{formatINR(r.stock_value || 0)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <TablePagination page={page} totalPages={totalPages} setPage={setPage} />
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
