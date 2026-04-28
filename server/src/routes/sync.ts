@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { requireRole, requireIntegration } from '../middleware/auth.js';
 import { encrypt, decrypt } from '../utils/crypto.js';
 import { branchFilter, getBranchIdForInsert, branchSettingsKey } from '../utils/branch.js';
+import { findActiveScenarioForStream } from '../utils/scenarios.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
 import { parseHealthplix } from '../services/parsers/healthplix.js';
 import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
@@ -226,13 +227,8 @@ router.post('/healthplix', requireRole('admin', 'operational_head'), requireInte
       req.clientId
     ) : null;
     const clinicStreamId = clinicStream?.id || null;
-    // Find the scenario for the clinic stream (not just any default)
-    const activeScenario = db.get(
-      `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
-       WHERE fy.is_active = 1 AND (s.stream_id = ? OR s.is_default = 1)
-       ORDER BY CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id LIMIT 1`,
-      clinicStreamId, clinicStreamId
-    );
+    // Canonical scenario helper — same scenario the dashboard read picks.
+    const activeScenario = findActiveScenarioForStream(db, req, clinicStreamId);
     if (activeScenario) {
       // Clear old Clinic Revenue entries before re-syncing (prevents stale month data)
       db.run(
@@ -467,12 +463,8 @@ router.post('/oneglance', requireRole('admin', 'operational_head'), requireInteg
         req.clientId
       ) : null;
       const pharmaStreamId = pharmaStream?.id || null;
-      // Find the scenario specifically for the pharma stream (not just any default)
-      const activeScenario = db.get(
-        `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
-         WHERE fy.is_active = 1 AND (s.stream_id = ? OR s.is_default = 1) ORDER BY CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id LIMIT 1`,
-        pharmaStreamId, pharmaStreamId
-      );
+      // Canonical scenario helper — same scenario the dashboard read picks.
+      const activeScenario = findActiveScenarioForStream(db, req, pharmaStreamId);
       if (activeScenario) {
         // Clear old Pharmacy Revenue/COGS entries before re-syncing (prevents stale month data).
         // branch_id scope is MANDATORY — syncing one branch must never wipe another branch's rollup.
@@ -796,14 +788,11 @@ router.post('/turia', requireRole('admin', 'operational_head'), requireIntegrati
       req.clientId
     ) : null;
     const consultStreamId = consultStream?.id || null;
-    // Find stream-specific scenario first, fall back to default
-    let activeScenario = db.get(
-      `SELECT s.id, s.name FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
-       WHERE fy.is_active = 1 AND (s.stream_id = ? OR s.is_default = 1)
-       ORDER BY CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id LIMIT 1`,
-      consultStreamId, consultStreamId
-    );
+    // Canonical scenario helper — same scenario the dashboard read picks.
+    let activeScenario: { id: number; name?: string } | null =
+      findActiveScenarioForStream(db, req, consultStreamId);
     if (!activeScenario) {
+      // Last-ditch fallback for tenants with no per-stream scenario set up yet.
       activeScenario = db.get('SELECT id, name FROM scenarios WHERE is_default = 1 LIMIT 1');
     }
 

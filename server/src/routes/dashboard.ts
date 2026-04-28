@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { branchFilter, streamFilter } from '../utils/branch.js';
+import { findActiveScenarioForStream } from '../utils/scenarios.js';
+import { requireRole } from '../middleware/auth.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
 
 const router = Router();
@@ -1331,6 +1333,114 @@ router.get('/operational-insights', async (req, res) => {
     },
     actions,
   });
+});
+
+// ── Resync actuals — one-shot repair for misattributed dashboard_actuals ──
+//
+// Repairs the historical bug where the auto-sync wrote dashboard_actuals
+// rows under a non-canonical scenario (no is_default=1 strict, no branch
+// filter) while the read picked a different scenario — so actuals appeared
+// missing on the dashboard even though clinic_actuals / pharmacy_sales_actuals
+// had the data.
+//
+// For each known stream, this:
+//   1. Resolves the canonical scenario via findActiveScenarioForStream()
+//      — same logic the read uses, so the rebuild lands where the dashboard
+//      will actually look for it.
+//   2. Deletes ANY existing rows for that stream's item_name (Clinic
+//      Revenue / Pharmacy Revenue / Pharmacy COGS / Consultancy Revenue)
+//      across ALL scenarios within the request's branch context — clearing
+//      misattributed orphans.
+//   3. Re-runs the SUM-and-insert from the source actuals tables against the
+//      canonical scenario.
+//
+// Admin-only. Idempotent — running twice produces the same result. The
+// branch context (X-Branch-Id header) determines which branch's rows are
+// repaired; running in consolidated mode repairs everything visible to the
+// user.
+router.post('/resync-actuals', requireRole('admin'), async (req, res) => {
+  const db = req.tenantDb!;
+  const bf = branchFilter(req);
+  const platformDb = await getPlatformHelper();
+
+  const streams = req.clientId ? platformDb.all(
+    'SELECT id, name FROM business_streams WHERE client_id = ? AND is_active = 1',
+    req.clientId
+  ) : [];
+
+  const result: Record<string, any> = {};
+
+  // Helper: rebuild one item_name from one source table for one scenario.
+  const rebuildItem = (
+    scenarioId: number,
+    streamId: number,
+    itemName: string,
+    category: string,
+    table: string,
+    amountCol: string,
+    monthCol: string,
+  ): { months: number; total: number } => {
+    // Step 2: clear any existing rows for this item across ALL scenarios
+    // within the branch context — the bug we're repairing left orphans
+    // under the wrong scenario_id.
+    db.run(
+      `DELETE FROM dashboard_actuals WHERE category = ? AND item_name = ?${bf.where}`,
+      category, itemName, ...bf.params
+    );
+    // Step 3: re-aggregate from the source table.
+    const monthly = db.all(
+      `SELECT ${monthCol} as month, COALESCE(SUM(${amountCol}), 0) as total
+       FROM ${table} WHERE ${monthCol} IS NOT NULL AND ${monthCol} != ''${bf.where}
+       GROUP BY ${monthCol}`,
+      ...bf.params
+    );
+    let totalSum = 0;
+    const branchId = (req as any).branchId || null;
+    for (const row of monthly) {
+      if (!row.month) continue;
+      db.run(
+        `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
+         DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
+        scenarioId, category, itemName, row.month, row.total, branchId, streamId
+      );
+      totalSum += row.total;
+    }
+    return { months: monthly.length, total: totalSum };
+  };
+
+  for (const stream of streams) {
+    const nameLower = stream.name.toLowerCase();
+    const scenario = findActiveScenarioForStream(db, req, stream.id);
+    if (!scenario) {
+      result[stream.name] = { skipped: 'no canonical scenario' };
+      continue;
+    }
+    try {
+      if (nameLower.includes('clinic') || nameLower.includes('health')) {
+        const r = rebuildItem(scenario.id, stream.id, 'Clinic Revenue', 'revenue',
+          'clinic_actuals', 'item_price', 'bill_month');
+        result[stream.name] = { scenario: scenario.id, ...r };
+      } else if (nameLower.includes('pharma')) {
+        const rev = rebuildItem(scenario.id, stream.id, 'Pharmacy Revenue', 'revenue',
+          'pharmacy_sales_actuals', 'sales_amount', 'bill_month');
+        const cogs = rebuildItem(scenario.id, stream.id, 'Pharmacy COGS', 'direct_costs',
+          'pharmacy_sales_actuals', 'purchase_amount', 'bill_month');
+        result[stream.name] = { scenario: scenario.id, revenue: rev, cogs };
+      } else if (nameLower.includes('consult') || nameLower.includes('turia')) {
+        const r = rebuildItem(scenario.id, stream.id, 'Consultancy Revenue', 'revenue',
+          'turia_invoices', 'total_amount', 'invoice_month');
+        result[stream.name] = { scenario: scenario.id, ...r };
+      } else {
+        result[stream.name] = { skipped: 'no known source table' };
+      }
+    } catch (e: any) {
+      result[stream.name] = { error: e?.message || String(e) };
+    }
+  }
+
+  res.json({ ok: true, streams: result });
 });
 
 export default router;

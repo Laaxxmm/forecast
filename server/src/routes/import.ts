@@ -7,6 +7,7 @@ import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.j
 import { parseOneglanceStock } from '../services/parsers/oneglance-stock.js';
 import { parseTuriaInvoices } from '../services/parsers/turia.js';
 import { getBranchIdForInsert, branchFilter, getStreamIdForInsert } from '../utils/branch.js';
+import { findActiveScenarioForStream } from '../utils/scenarios.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
 import fs from 'fs';
 
@@ -95,15 +96,12 @@ router.post('/healthplix', requireRole('admin', 'operational_head'), requireInte
       db.run('INSERT OR IGNORE INTO doctors (name, branch_id) VALUES (?, ?)', d, branchId);
     }
 
-    // Auto-sync clinic revenue to dashboard_actuals for active scenario
+    // Auto-sync clinic revenue to dashboard_actuals for active scenario.
+    // Use the canonical helper so we write to the SAME scenario the
+    // dashboard's read path picks (is_default=1 + branch-filtered).
     const bf = branchFilter(req);
     const clinicStreamId = await resolveStreamId(req, 'clinic');
-    const activeScenario = db.get(
-      `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
-       WHERE fy.is_active = 1 AND (s.stream_id = ? OR s.is_default = 1)
-       ORDER BY CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id LIMIT 1`,
-      clinicStreamId, clinicStreamId
-    );
+    const activeScenario = findActiveScenarioForStream(db, req, clinicStreamId);
     if (activeScenario) {
       db.run(
         `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Clinic Revenue'${bf.where}`,
@@ -178,15 +176,11 @@ router.post('/oneglance-sales', requireRole('admin', 'operational_head'), requir
       db.endBatch();
     } catch (e) { db.rollbackBatch(); throw e; }
 
-    // Auto-sync pharmacy sales revenue to dashboard_actuals for active scenario
+    // Auto-sync pharmacy sales revenue to dashboard_actuals for active scenario.
+    // Use the canonical helper — see clinic auto-sync above for context.
     const bf = branchFilter(req);
     const pharmaStreamId = await resolveStreamId(req, 'pharmacy');
-    const activeScenario = db.get(
-      `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
-       WHERE fy.is_active = 1 AND (s.stream_id = ? OR s.is_default = 1)
-       ORDER BY CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id LIMIT 1`,
-      pharmaStreamId, pharmaStreamId
-    );
+    const activeScenario = findActiveScenarioForStream(db, req, pharmaStreamId);
     if (activeScenario) {
       db.run(
         `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Pharmacy Revenue'${bf.where}`,
@@ -353,15 +347,10 @@ router.post('/turia', requireRole('admin', 'operational_head'), requireIntegrati
       db.endBatch();
     } catch (e) { db.rollbackBatch(); throw e; }
 
-    // Auto-sync consultancy revenue to dashboard_actuals
+    // Auto-sync consultancy revenue to dashboard_actuals — canonical scenario helper.
     const bf = branchFilter(req);
     const consultStreamId = await resolveStreamId(req, 'consultancy');
-    const activeScenario = db.get(
-      `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
-       WHERE fy.is_active = 1 AND (s.stream_id = ? OR s.is_default = 1)
-       ORDER BY CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id LIMIT 1`,
-      consultStreamId, consultStreamId
-    );
+    const activeScenario = findActiveScenarioForStream(db, req, consultStreamId);
     if (activeScenario) {
       // Clear old Consultancy Revenue entries before re-syncing (prevents stale month data)
       db.run(
