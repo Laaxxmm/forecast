@@ -265,6 +265,31 @@ router.get('/orphans', async (req, res) => {
   res.json({ scopeRequired: true, totalRows, counts });
 });
 
+/** Hard-delete every NULL-branch actuals row across all four tables.
+ *  Use this when the orphan rows are confirmed junk (leaked legacy
+ *  data) and you don't want them in the database at all. Destructive,
+ *  no undo. Admin / super_admin only — operational_head can't delete
+ *  tenant-wide data even if it's branch-less. */
+router.post('/delete-orphans', async (req, res) => {
+  if (req.userType !== 'super_admin' && req.session?.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin or super_admin role required to delete orphan actuals' });
+  }
+  const db = req.tenantDb!;
+  const r1 = db.run('DELETE FROM clinic_actuals            WHERE branch_id IS NULL');
+  const r2 = db.run('DELETE FROM pharmacy_sales_actuals    WHERE branch_id IS NULL');
+  const r3 = db.run('DELETE FROM pharmacy_purchase_actuals WHERE branch_id IS NULL');
+  const r4 = db.run('DELETE FROM dashboard_actuals         WHERE branch_id IS NULL');
+  res.json({
+    deleted: {
+      clinic_actuals:            r1.changes,
+      pharmacy_sales_actuals:    r2.changes,
+      pharmacy_purchase_actuals: r3.changes,
+      dashboard_actuals:         r4.changes,
+    },
+    totalRowsDeleted: r1.changes + r2.changes + r3.changes + r4.changes,
+  });
+});
+
 /** Reassign every NULL-branch actuals row to `targetBranchId`. After this
  *  the rows show up only on the target branch's view. Idempotent. Admin /
  *  super_admin can target any branch; ops_head must target a branch they

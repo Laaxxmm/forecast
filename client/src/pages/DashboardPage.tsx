@@ -144,6 +144,33 @@ export default function DashboardPage() {
       .catch(() => { /* endpoint missing on older deployments */ });
   }, []);
 
+  const handleDeleteActuals = async () => {
+    const c = actualsOrphans?.counts;
+    const summary = c
+      ? [
+          c.clinic_actuals.rows            > 0 ? `${c.clinic_actuals.rows.toLocaleString()} clinic rows` : null,
+          c.pharmacy_sales_actuals.rows    > 0 ? `${c.pharmacy_sales_actuals.rows.toLocaleString()} pharmacy sales rows` : null,
+          c.pharmacy_purchase_actuals.rows > 0 ? `${c.pharmacy_purchase_actuals.rows.toLocaleString()} pharmacy purchase rows` : null,
+          c.dashboard_actuals.rows         > 0 ? `${c.dashboard_actuals.rows.toLocaleString()} dashboard rollup rows` : null,
+        ].filter(Boolean).join(' · ')
+      : `${actualsOrphans?.totalRows} rows`;
+    const ok = window.confirm(
+      `PERMANENTLY DELETE ${summary}?\n\n` +
+      `This removes the rows from the database entirely. There is no undo. ` +
+      `Use this when you know the orphan rows are leaked / wrong data and you don't want them anywhere.`
+    );
+    if (!ok) return;
+    setMigratingActuals(true);
+    try {
+      await api.post('/actuals/delete-orphans');
+      setActualsOrphans(null);
+      window.location.reload();
+    } catch (e: any) {
+      alert(`Delete failed: ${e?.response?.data?.error || e.message || 'unknown error'}`);
+      setMigratingActuals(false);
+    }
+  };
+
   const handleMigrateActuals = async () => {
     const targetBranchId = localStorage.getItem('branch_id');
     const branchName = localStorage.getItem('branch_name') || 'this branch';
@@ -329,17 +356,28 @@ export default function DashboardPage() {
                 </div>
               </div>
             </div>
-            <button
-              onClick={handleMigrateActuals}
-              disabled={migratingActuals}
-              className="mt-btn-gradient whitespace-nowrap"
-              style={{ padding: '8px 14px', fontSize: 13 }}
-              title="Reassigns the orphan actuals to your current branch. Other branches keep showing their own data."
-            >
-              {migratingActuals
-                ? 'Moving…'
-                : `Move into ${localStorage.getItem('branch_name') || 'current branch'}`}
-            </button>
+            <div className="flex gap-2 whitespace-nowrap">
+              <button
+                onClick={handleMigrateActuals}
+                disabled={migratingActuals}
+                className="mt-btn-gradient"
+                style={{ padding: '8px 14px', fontSize: 13 }}
+                title="Reassigns the orphan actuals to your current branch. Other branches keep showing their own data."
+              >
+                {migratingActuals
+                  ? 'Working…'
+                  : `Move into ${localStorage.getItem('branch_name') || 'current branch'}`}
+              </button>
+              <button
+                onClick={handleDeleteActuals}
+                disabled={migratingActuals}
+                className="mt-btn-ghost"
+                style={{ padding: '8px 14px', fontSize: 13, borderColor: 'color-mix(in srgb, #ef4444 50%, transparent)', color: '#ef4444' }}
+                title="Permanently deletes the orphan rows from the database. Use when you know the data is leaked / wrong."
+              >
+                Delete
+              </button>
+            </div>
           </div>
         );
       })()}
