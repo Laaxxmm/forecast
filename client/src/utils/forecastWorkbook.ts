@@ -157,15 +157,17 @@ interface CategorySheetOpts {
 
 function renderCategorySheet(o: CategorySheetOpts): number {
   const { sheet, title, contextLine, months, monthLabels, items, allValues, itemNameById } = o;
-  const totalCol = 2 + months.length;          // A = name, B..M = months, then Total
-  const lastMonthCol = 1 + months.length;
+  const lastMonthCol = 1 + months.length;        // M (col 13)
+  const totalCol = 2 + months.length;             // N (col 14)
+  const notesCol = totalCol + 1;                  // O (col 15) — only used in the method block
 
   // ─ Column widths ─
   sheet.getColumn(1).width = 32;
   for (let c = 2; c <= lastMonthCol; c++) sheet.getColumn(c).width = 12;
   sheet.getColumn(totalCol).width = 14;
+  sheet.getColumn(notesCol).width = 42;
 
-  // ─ Row 1: title bar (merged across all columns) ─
+  // ─ Row 1: title bar (merged across A:N — title spans the data area, not Notes) ─
   sheet.mergeCells(1, 1, 1, totalCol);
   const titleCell = sheet.getCell(1, 1);
   titleCell.value = title.toUpperCase();
@@ -194,22 +196,34 @@ function renderCategorySheet(o: CategorySheetOpts): number {
     cell.border = { bottom: { style: 'thin', color: { argb: COLOR.accent } } };
   });
 
-  // ─ Row 5+: item rows ─
+  // ─ Layout map ─
+  // The TOP table (items × months) is purely DERIVED — every monthly cell is
+  // a formula pointing DOWN to the corresponding cell in the Calculation
+  // Method block. Edit any input below → top updates immediately.
   const FIRST_ITEM_ROW = HEADER_ROW + 1;
-  let r = FIRST_ITEM_ROW;
+  const TOTAL_ROW = FIRST_ITEM_ROW + items.length;        // last item row + 1
+  const METHOD_HEADER_ROW = TOTAL_ROW + 2;
+  const METHOD_COL_HEADERS_ROW = METHOD_HEADER_ROW + 1;
+  const METHOD_FIRST_INPUT_ROW = METHOD_COL_HEADERS_ROW + 1;
+
+  // ─ Top table: items × months — every cell is a formula referencing the
+  //   method block input row. The Total column is a simple SUM across the
+  //   formula cells in that row.
   items.forEach((item, idx) => {
+    const r = FIRST_ITEM_ROW + idx;
+    const methodRow = METHOD_FIRST_INPUT_ROW + idx;
     const row = sheet.getRow(r);
     row.getCell(1).value = item.name;
     row.getCell(1).alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
     row.getCell(1).font = { color: { argb: COLOR.textHeading } };
-    months.forEach((m, j) => {
-      const cell = row.getCell(2 + j);
-      cell.value = allValues[item.id]?.[m] ?? 0;
+    months.forEach((_m, j) => {
+      const c = 2 + j;
+      const cell = row.getCell(c);
+      cell.value = { formula: `${colLetter(c)}${methodRow}` };
       cell.numFmt = NUM_FMT;
       cell.alignment = { horizontal: 'right', vertical: 'middle' };
       cell.font = { color: { argb: COLOR.textHeading } };
     });
-    // Total = SUM(B:M)
     const totalCell = row.getCell(totalCol);
     totalCell.value = {
       formula: `SUM(${colLetter(2)}${r}:${colLetter(lastMonthCol)}${r})`,
@@ -217,49 +231,34 @@ function renderCategorySheet(o: CategorySheetOpts): number {
     totalCell.numFmt = NUM_FMT;
     totalCell.alignment = { horizontal: 'right', vertical: 'middle' };
     totalCell.font = { color: { argb: COLOR.textHeading } };
-    // Banded rows
     if (idx % 2 === 1) {
-      row.eachCell((c, n) => {
-        if (n > totalCol) return;
-        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.bgSubtle } };
-      });
+      for (let c = 1; c <= totalCol; c++) {
+        row.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.bgSubtle } };
+      }
     }
-    r++;
   });
 
   // ─ TOTAL row ─
-  const TOTAL_ROW = r;
   const totalRowObj = sheet.getRow(TOTAL_ROW);
   totalRowObj.getCell(1).value = 'TOTAL';
   totalRowObj.getCell(1).font = { bold: true, color: { argb: COLOR.white } };
   totalRowObj.getCell(1).alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
   for (let c = 2; c <= lastMonthCol; c++) {
     const cell = totalRowObj.getCell(c);
-    if (items.length > 0) {
-      cell.value = {
-        formula: `SUM(${colLetter(c)}${FIRST_ITEM_ROW}:${colLetter(c)}${TOTAL_ROW - 1})`,
-      };
-    } else {
-      cell.value = 0;
-    }
+    cell.value = items.length > 0
+      ? { formula: `SUM(${colLetter(c)}${FIRST_ITEM_ROW}:${colLetter(c)}${TOTAL_ROW - 1})` }
+      : 0;
     cell.numFmt = NUM_FMT;
     cell.font = { bold: true, color: { argb: COLOR.white } };
     cell.alignment = { horizontal: 'right', vertical: 'middle' };
   }
-  // Total of totals
   const grandTotalCell = totalRowObj.getCell(totalCol);
-  if (items.length > 0) {
-    grandTotalCell.value = {
-      formula: `SUM(${colLetter(2)}${TOTAL_ROW}:${colLetter(lastMonthCol)}${TOTAL_ROW})`,
-    };
-  } else {
-    grandTotalCell.value = 0;
-  }
+  grandTotalCell.value = items.length > 0
+    ? { formula: `SUM(${colLetter(2)}${TOTAL_ROW}:${colLetter(lastMonthCol)}${TOTAL_ROW})` }
+    : 0;
   grandTotalCell.numFmt = NUM_FMT;
   grandTotalCell.font = { bold: true, color: { argb: COLOR.white } };
   grandTotalCell.alignment = { horizontal: 'right', vertical: 'middle' };
-
-  // Fill the entire TOTAL row emerald
   for (let c = 1; c <= totalCol; c++) {
     const cell = totalRowObj.getCell(c);
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.accent } };
@@ -270,48 +269,75 @@ function renderCategorySheet(o: CategorySheetOpts): number {
   }
   totalRowObj.height = 22;
 
-  // ─ Calculation Method block ─
-  const METHOD_HEADER_ROW = TOTAL_ROW + 2;
-  sheet.mergeCells(METHOD_HEADER_ROW, 1, METHOD_HEADER_ROW, totalCol);
+  // ═════════════════ CALCULATION METHOD block ═════════════════
+  // This is the SOURCE OF TRUTH. Each item gets one row with 12 editable
+  // monthly input cells, an Annual SUM, and a Notes column describing the
+  // method (constant ₹X/month, units × price, percent of …, varying, etc.).
+
+  // Section header bar
+  sheet.mergeCells(METHOD_HEADER_ROW, 1, METHOD_HEADER_ROW, notesCol);
   const methodHeaderCell = sheet.getCell(METHOD_HEADER_ROW, 1);
-  methodHeaderCell.value = 'CALCULATION METHOD';
-  methodHeaderCell.font = { bold: true, size: 11, color: { argb: COLOR.textHeading } };
+  methodHeaderCell.value = 'CALCULATION METHOD  ·  edit cells below to drive the table above';
+  methodHeaderCell.font = { bold: true, size: 11, color: { argb: COLOR.white } };
   methodHeaderCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
-  methodHeaderCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.bgMuted } };
-  methodHeaderCell.border = { bottom: { style: 'thin', color: { argb: COLOR.border } } };
-  sheet.getRow(METHOD_HEADER_ROW).height = 20;
+  methodHeaderCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.accentStrong } };
+  sheet.getRow(METHOD_HEADER_ROW).height = 22;
 
-  // Row immediately after: column headers for the method table
-  const METHOD_HEADERS_ROW = METHOD_HEADER_ROW + 1;
-  sheet.mergeCells(METHOD_HEADERS_ROW, 2, METHOD_HEADERS_ROW, totalCol);
-  const headerItemCell = sheet.getCell(METHOD_HEADERS_ROW, 1);
-  headerItemCell.value = 'Item';
-  headerItemCell.font = { bold: true, size: 10, color: { argb: COLOR.textMuted } };
-  headerItemCell.alignment = { horizontal: 'left', indent: 1 };
-  const headerMethodCell = sheet.getCell(METHOD_HEADERS_ROW, 2);
-  headerMethodCell.value = 'Method';
-  headerMethodCell.font = { bold: true, size: 10, color: { argb: COLOR.textMuted } };
-  headerMethodCell.alignment = { horizontal: 'left', indent: 1 };
+  // Column headers row: Item | Apr | May | … | Mar | Annual | Method
+  const methodColHeaderRow = sheet.getRow(METHOD_COL_HEADERS_ROW);
+  methodColHeaderRow.values = ['Item', ...monthLabels, 'Annual', 'Method'];
+  methodColHeaderRow.height = 22;
+  methodColHeaderRow.eachCell((cell, colNumber) => {
+    if (colNumber > notesCol) return;
+    cell.font = { bold: true, color: { argb: COLOR.textHeading }, size: 11 };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.bgMuted } };
+    cell.alignment = {
+      horizontal: colNumber === 1 || colNumber === notesCol ? 'left' : 'right',
+      vertical: 'middle',
+      indent: colNumber === 1 || colNumber === notesCol ? 1 : 0,
+    };
+    cell.border = { bottom: { style: 'thin', color: { argb: COLOR.border } } };
+  });
 
-  // Row(s): one per item with derived calculation method
-  let mr = METHOD_HEADERS_ROW + 1;
+  // Input rows
   items.forEach((item, idx) => {
-    const row = sheet.getRow(mr);
+    const r = METHOD_FIRST_INPUT_ROW + idx;
+    const row = sheet.getRow(r);
     row.getCell(1).value = item.name;
-    row.getCell(1).font = { color: { argb: COLOR.textHeading } };
-    row.getCell(1).alignment = { horizontal: 'left', vertical: 'top', indent: 1, wrapText: true };
-    sheet.mergeCells(mr, 2, mr, totalCol);
-    const methodCell = sheet.getCell(mr, 2);
-    methodCell.value = describeCalculation(item, itemNameById);
-    methodCell.font = { color: { argb: COLOR.textMuted }, italic: true };
-    methodCell.alignment = { horizontal: 'left', vertical: 'top', indent: 1, wrapText: true };
+    row.getCell(1).font = { color: { argb: COLOR.textHeading }, bold: true };
+    row.getCell(1).alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+
+    // 12 monthly input cells (NOT formulas — these are the editable inputs)
+    months.forEach((m, j) => {
+      const c = 2 + j;
+      const cell = row.getCell(c);
+      cell.value = allValues[item.id]?.[m] ?? 0;
+      cell.numFmt = NUM_FMT;
+      cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      cell.font = { color: { argb: COLOR.accentStrong } };  // hint that these are editable inputs
+    });
+
+    // Annual = SUM of the 12 monthly inputs in this row
+    const annualCell = row.getCell(totalCol);
+    annualCell.value = {
+      formula: `SUM(${colLetter(2)}${r}:${colLetter(lastMonthCol)}${r})`,
+    };
+    annualCell.numFmt = NUM_FMT;
+    annualCell.alignment = { horizontal: 'right', vertical: 'middle' };
+    annualCell.font = { color: { argb: COLOR.textHeading }, bold: true };
+
+    // Notes column: plain-English description of the calculation
+    const notesCell = row.getCell(notesCol);
+    notesCell.value = describeCalculation(item, itemNameById, allValues);
+    notesCell.font = { color: { argb: COLOR.textMuted }, italic: true, size: 10 };
+    notesCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1, wrapText: true };
+
     if (idx % 2 === 1) {
-      for (let c = 1; c <= totalCol; c++) {
-        sheet.getCell(mr, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.bgSubtle } };
+      for (let c = 1; c <= notesCol; c++) {
+        row.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.bgSubtle } };
       }
     }
     row.height = 22;
-    mr++;
   });
 
   return TOTAL_ROW;
@@ -319,17 +345,19 @@ function renderCategorySheet(o: CategorySheetOpts): number {
 
 // ─── Calculation method (plain-English) derivation ──────────────────────────
 
-function describeCalculation(item: ForecastItem, itemNameById: Map<number, string>): string {
+function describeCalculation(
+  item: ForecastItem,
+  itemNameById: Map<number, string>,
+  allValues: Record<number, Record<string, number>>,
+): string {
   const meta: any = item.meta || {};
-  const start = item.start_month
-    ? formatYYYYMM(item.start_month)
-    : '';
+  const start = item.start_month ? formatYYYYMM(item.start_month) : '';
   const startSuffix = start ? ` from ${start}` : '';
   const raiseSuffix = item.annual_raise_pct && item.annual_raise_pct > 0
     ? `, with ${item.annual_raise_pct}% annual raise compounding from ${start || 'the start of FY'}`
     : '';
 
-  // Step-based revenue items (item_type set by ItemEditForm)
+  // ── Step-based revenue (unit_sales / billable_hours / recurring) ──
   if (item.item_type) {
     const u = meta.units ?? meta.unit_count;
     const p = meta.price ?? meta.unit_price;
@@ -345,7 +373,7 @@ function describeCalculation(item: ForecastItem, itemNameById: Map<number, strin
     }
   }
 
-  // Percentage-of-other-item modes
+  // ── Percentage-of-other-item modes ──
   const linkedId = meta.linked_item_id ?? meta.parent_item_id;
   const pct = meta.percentage ?? meta.pct;
   if (item.entry_mode === 'pct_specific' && linkedId && pct != null) {
@@ -356,7 +384,7 @@ function describeCalculation(item: ForecastItem, itemNameById: Map<number, strin
     return `${pct}% of total ${labelForCategory(item.category)}`;
   }
 
-  // Constant
+  // ── Constant amount stored on the item ──
   if (item.entry_mode === 'constant' && item.constant_amount) {
     if (item.constant_period === 'year') {
       const monthly = item.constant_amount / 12;
@@ -365,11 +393,43 @@ function describeCalculation(item: ForecastItem, itemNameById: Map<number, strin
     return `Constant ₹${formatRupees(item.constant_amount)}/month${startSuffix}${raiseSuffix}`;
   }
 
-  // Fallback
-  if (item.entry_mode === 'varying' || !item.entry_mode) {
-    return 'Per-month manual entries';
+  // ── Fallbacks: derive from actual monthly values in allValues ──
+  // Many items in real data are stored with entry_mode='varying' or with
+  // entry_mode='constant' but no constant_amount on the row (the user typed
+  // values directly into each month). The shape of those values still tells
+  // us whether the item is effectively a constant, has a known raise, or is
+  // genuinely varying — derive a useful description from there.
+  const monthValues = (allValues[item.id] ?? {}) as Record<string, number>;
+  const sortedMonths = Object.keys(monthValues).sort();
+  const series = sortedMonths.map(m => monthValues[m] ?? 0);
+  const nonZero = series.filter(v => v !== 0);
+
+  if (nonZero.length === 0) {
+    return 'No values entered yet — fill the input cells to drive the table above.';
   }
-  return `${item.entry_mode}${startSuffix}${raiseSuffix}`.trim();
+
+  const allEqual = nonZero.every(v => v === nonZero[0]);
+  if (allEqual) {
+    const v = nonZero[0];
+    const annual = v * series.length;
+    return `Constant ₹${formatRupees(v)}/month (₹${formatRupees(annual)}/yr equivalent). Edit any month cell to override.`;
+  }
+
+  // Two-tier pattern: e.g. constant for first half then a step-up — common
+  // for raise-driven items where the engine writes the raised amount only
+  // for months ≥ raise anniversary.
+  const distinct = Array.from(new Set(nonZero)).sort((a, b) => a - b);
+  if (distinct.length === 2) {
+    const [low, high] = distinct;
+    const stepPct = low > 0 ? Math.round(((high - low) / low) * 100) : 0;
+    return `Two-step pattern: ₹${formatRupees(low)}/mo then ₹${formatRupees(high)}/mo (${stepPct}% step). Edit any cell to override.`;
+  }
+
+  // Genuinely varying (3+ distinct values)
+  const minV = Math.min(...nonZero);
+  const maxV = Math.max(...nonZero);
+  const avg = Math.round(nonZero.reduce((a, b) => a + b, 0) / nonZero.length);
+  return `Varies month-to-month: ₹${formatRupees(minV)} to ₹${formatRupees(maxV)} (avg ₹${formatRupees(avg)}/mo). Edit any cell to override.`;
 }
 
 // ─── Summary sheet renderer ─────────────────────────────────────────────────
