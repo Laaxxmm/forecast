@@ -45,14 +45,24 @@ api.interceptors.response.use(
         localStorage.setItem('is_multi_branch', '1');
         if (res.data.defaultBranchId) {
           localStorage.setItem('branch_id', String(res.data.defaultBranchId));
-          // Find branch name from the branches array
+          // Find branch name + location info from the branches array. State /
+          // city are surfaced on reports (e.g. PDF headers) — store them here
+          // so a report doesn't need a round-trip to look them up.
           const defaultBranch = res.data.branches?.find((b: any) => b.id === res.data.defaultBranchId);
-          if (defaultBranch) localStorage.setItem('branch_name', defaultBranch.name);
+          if (defaultBranch) {
+            localStorage.setItem('branch_name', defaultBranch.name);
+            if (defaultBranch.state) localStorage.setItem('branch_state', defaultBranch.state);
+            else localStorage.removeItem('branch_state');
+            if (defaultBranch.city) localStorage.setItem('branch_city', defaultBranch.city);
+            else localStorage.removeItem('branch_city');
+          }
         }
       } else {
         localStorage.removeItem('is_multi_branch');
         localStorage.removeItem('branch_id');
         localStorage.removeItem('branch_name');
+        localStorage.removeItem('branch_state');
+        localStorage.removeItem('branch_city');
       }
       // Store enabled modules
       if (res.data.enabledModules) {
@@ -90,6 +100,8 @@ api.interceptors.response.use(
       localStorage.removeItem('is_multi_branch');
       localStorage.removeItem('branch_id');
       localStorage.removeItem('branch_name');
+      localStorage.removeItem('branch_state');
+      localStorage.removeItem('branch_city');
       localStorage.removeItem('enabled_modules');
       localStorage.removeItem('enabled_integrations');
       localStorage.removeItem('active_module');

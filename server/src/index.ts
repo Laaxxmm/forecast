@@ -307,12 +307,12 @@ app.get('/api/branches', requireAuth, resolveTenant, resolveBranch, async (req, 
   let branches;
   if (req.userType === 'super_admin' || req.session?.role === 'admin') {
     branches = platformDb.all(
-      'SELECT id, name, code, city, manager_name, sort_order FROM branches WHERE client_id = ? AND is_active = 1 ORDER BY sort_order, name',
+      'SELECT id, name, code, city, state, manager_name, sort_order FROM branches WHERE client_id = ? AND is_active = 1 ORDER BY sort_order, name',
       req.clientId
     );
   } else {
     branches = platformDb.all(
-      `SELECT b.id, b.name, b.code, b.city, b.manager_name, b.sort_order, uba.can_view_consolidated
+      `SELECT b.id, b.name, b.code, b.city, b.state, b.manager_name, b.sort_order, uba.can_view_consolidated
        FROM branches b
        JOIN user_branch_access uba ON uba.branch_id = b.id
        WHERE b.client_id = ? AND b.is_active = 1 AND uba.user_id = ?

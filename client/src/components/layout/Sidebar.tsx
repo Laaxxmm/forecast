@@ -108,9 +108,20 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
         // Auto-select first branch if none selected
         if (!localStorage.getItem('branch_id') && res.data.branches?.length > 0) {
           const defaultId = String(res.data.branches[0].id);
+          const first = res.data.branches[0];
           setSelectedBranchId(defaultId);
           localStorage.setItem('branch_id', defaultId);
-          localStorage.setItem('branch_name', res.data.branches[0].name);
+          localStorage.setItem('branch_name', first.name);
+          if (first.state) localStorage.setItem('branch_state', first.state); else localStorage.removeItem('branch_state');
+          if (first.city) localStorage.setItem('branch_city', first.city); else localStorage.removeItem('branch_city');
+        } else if (localStorage.getItem('branch_id')) {
+          // Refresh state/city for the currently-selected branch (the login
+          // payload may not have included them, e.g. legacy sessions).
+          const current = res.data.branches?.find((b: any) => String(b.id) === localStorage.getItem('branch_id'));
+          if (current) {
+            if (current.state) localStorage.setItem('branch_state', current.state); else localStorage.removeItem('branch_state');
+            if (current.city) localStorage.setItem('branch_city', current.city); else localStorage.removeItem('branch_city');
+          }
         }
       }
     }).catch(() => {});
@@ -122,6 +133,12 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
     setSelectedBranchId(id);
     localStorage.setItem('branch_id', id);
     localStorage.setItem('branch_name', name);
+    // Persist state / city alongside branch_name so report headers don't have
+    // to re-fetch them. Look up the full branch record from the in-memory list
+    // populated by /api/branches (the dropdown user just clicked from).
+    const branch = branches.find(b => String(b.id) === String(id));
+    if (branch?.state) localStorage.setItem('branch_state', branch.state); else localStorage.removeItem('branch_state');
+    if (branch?.city) localStorage.setItem('branch_city', branch.city); else localStorage.removeItem('branch_city');
     // Reset stream when branch changes
     localStorage.removeItem('stream_id');
     localStorage.removeItem('stream_name');

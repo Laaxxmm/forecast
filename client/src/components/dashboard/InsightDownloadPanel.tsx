@@ -30,8 +30,12 @@ interface Props {
   onClose: () => void;
   data: InsightsData;
   clientName?: string;
+  /** The location label shown beneath the logo in the report header,
+   *  e.g. "BTM Layout". */
   branchName?: string;
-  streamName?: string;
+  /** State the branch is in, e.g. "Karnataka". Rendered on its own line
+   *  below the branch name in muted text. */
+  branchState?: string;
 }
 
 /** Holds the client logo as an in-memory PNG data URL plus its aspect ratio
@@ -86,19 +90,19 @@ function pctChange(cur: number, prev: number): string {
 }
 
 /** Build the footer label rendered at the bottom of every page. Includes
- *  client + branch + stream so a printed copy is unambiguous about which
- *  organisation / location / line of business it pertains to. */
+ *  client + branch + state so a printed copy is unambiguous about which
+ *  organisation and location it pertains to. */
 function footerLabel(
   reportType: string,
   monthLabel: string,
   clientName: string,
   branchName: string,
-  streamName: string,
+  branchState: string,
 ): string {
   const parts: string[] = [reportType, monthLabel];
   if (clientName) parts.push(clientName);
-  if (branchName) parts.push(branchName);
-  if (streamName) parts.push(streamName);
+  if (branchName && branchState) parts.push(`${branchName}, ${branchState}`);
+  else if (branchName) parts.push(branchName);
   return parts.map(p => safeText(p)).join('  |  ');
 }
 
@@ -565,15 +569,28 @@ function drawInlineBarPaced(
 
 /* ──────── Page chrome ──────── */
 
+/** Header layout constants. The teal bar's height is bumped to 42mm to
+ *  give the logo + branch info comfortable vertical breathing room — this
+ *  shifts the white card down by 6mm relative to the old 34mm bar. */
+const HEADER_BAR_H = 42;
+const HEADER_BORDER_H = 2;
+const HEADER_TOTAL_H = HEADER_BAR_H + HEADER_BORDER_H;  // 44mm
+const CARD_TOP_AFTER_HEADER = HEADER_TOTAL_H + 4;       // 48mm — first row of card content
+const FIRST_CONTENT_Y = HEADER_TOTAL_H + 12;            // 56mm — y returned to caller
+
 /** Draw the teal title bar that crowns every report's first page.
  *
- *  Layout, left → right:
- *    • Logo box (when supplied) — 22mm tall, width by aspect, capped at 36mm
- *    • Title (large bold) and subtitle, anchored to the right edge of the logo
- *    • Right rail: company name (bold), branch · stream context, generated date
+ *  Layout, left ↔ right:
+ *    • LEFT — title (bold), subtitle (regular), generated-at timestamp (faint)
+ *    • RIGHT — logo box (when present), then branch name + state stacked
+ *      beneath. If no logo is configured, the company name sits at the top
+ *      of the right rail in its place so the bar never feels lopsided.
  *
- *  When `logo` is null the layout collapses gracefully and the title sits at
- *  x=14 like before, so reports for clients without a logo still look right.
+ *  Logo sizing is bounding-box based: we fit the image inside a
+ *  `LOGO_MAX_W × LOGO_MAX_H` rectangle while preserving aspect ratio, so a
+ *  square logo, a tall logo, and a wide logo all render without distortion.
+ *  The previous fixed-height approach stretched square logos when the
+ *  reported aspect ratio was off.
  */
 function addHeader(
   doc: jsPDF,
@@ -581,67 +598,92 @@ function addHeader(
   subtitle: string,
   clientName: string,
   branchName: string,
-  streamName: string,
+  branchState: string,
   logo: LogoState | null,
 ) {
   const pageW = doc.internal.pageSize.getWidth();
+  const RIGHT_X = pageW - 14;
+
+  // Backdrop — teal bar + thin darker stripe just below
   doc.setFillColor(...PRIMARY);
-  doc.rect(0, 0, pageW, 34, 'F');
+  doc.rect(0, 0, pageW, HEADER_BAR_H, 'F');
   doc.setFillColor(...PRIMARY_DARK);
-  doc.rect(0, 34, pageW, 2, 'F');
+  doc.rect(0, HEADER_BAR_H, pageW, HEADER_BORDER_H, 'F');
 
-  // ── Logo (left) ──
-  let titleX = 14;
+  // ── RIGHT side: logo (or company name) + branch info ─────────────────
+  // Track where the right-side branch text should start vertically.
+  // When a logo is present, branch info sits below it; when there's no
+  // logo, we promote the company name into the logo's slot.
+  let rightTextY = 14;
+
   if (logo && logo.dataUrl) {
-    const logoH = 22;
+    const LOGO_MAX_W = 38;
+    const LOGO_MAX_H = 22;
     const aspect = logo.aspect && isFinite(logo.aspect) && logo.aspect > 0 ? logo.aspect : 1;
-    // Cap width so very-wide logos don't crowd the title; floor so very-tall
-    // logos keep some presence. Height stays at 22mm so the logo always sits
-    // visually centred inside the 34mm bar.
-    const logoW = Math.max(8, Math.min(36, logoH * aspect));
-    try {
-      doc.addImage(logo.dataUrl, 'PNG', 14, 6, logoW, logoH, undefined, 'FAST');
-      titleX = 14 + logoW + 5;
-    } catch {
-      // ignore; fall through to a text-only header
+
+    // Fit inside the bounding box, preserving aspect.
+    let logoW: number, logoH: number;
+    if (aspect >= LOGO_MAX_W / LOGO_MAX_H) {
+      // Wider than the box — width is the binding constraint
+      logoW = LOGO_MAX_W;
+      logoH = LOGO_MAX_W / aspect;
+    } else {
+      // Taller than the box — height is the binding constraint
+      logoH = LOGO_MAX_H;
+      logoW = LOGO_MAX_H * aspect;
     }
-  }
 
-  // ── Title + subtitle ──
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(18);
-  doc.setFont('helvetica', 'bold');
-  doc.text(title, titleX, 15);
-
-  doc.setFontSize(9.5);
-  doc.setFont('helvetica', 'normal');
-  doc.text(subtitle, titleX, 23);
-
-  // ── Right rail: company name, branch · stream, generated timestamp ──
-  if (clientName) {
-    doc.setFontSize(11);
+    const logoX = RIGHT_X - logoW;
+    const logoY = 5;
+    try {
+      doc.addImage(logo.dataUrl, 'PNG', logoX, logoY, logoW, logoH, undefined, 'FAST');
+      rightTextY = logoY + logoH + 5;  // 5mm gap below the logo
+    } catch {
+      // Fall back to text-only on the right rail
+      rightTextY = 14;
+    }
+  } else if (clientName) {
+    // No logo → company name takes the prominent slot
+    doc.setFontSize(13);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(255, 255, 255);
-    doc.text(safeText(clientName), pageW - 14, 13, { align: 'right' });
+    doc.text(safeText(clientName), RIGHT_X, 14, { align: 'right' });
+    rightTextY = 22;
   }
 
-  const ctxParts: string[] = [];
-  if (branchName) ctxParts.push(safeText(branchName));
-  if (streamName) ctxParts.push(safeText(streamName));
-  if (ctxParts.length) {
+  // Branch name (bold) + state (regular, slightly muted) stacked
+  if (branchName) {
+    doc.setFontSize(10.5);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(255, 255, 255);
+    doc.text(safeText(branchName), RIGHT_X, rightTextY, { align: 'right' });
+  }
+  if (branchState) {
     doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
-    // Slightly muted teal-on-teal so the company name stays visually dominant
-    doc.setTextColor(220, 245, 235);
-    doc.text(ctxParts.join('  ·  '), pageW - 14, 21, { align: 'right' });
+    // Muted teal-on-teal — keeps the hierarchy clear without harsh contrast
+    doc.setTextColor(216, 240, 232);
+    doc.text(safeText(branchState), RIGHT_X, rightTextY + 5.5, { align: 'right' });
   }
 
+  // ── LEFT side: title, subtitle, generated timestamp ──────────────────
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(19);
+  doc.setFont('helvetica', 'bold');
+  doc.text(title, 14, 16);
+
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  doc.text(subtitle, 14, 25);
+
+  // Generated timestamp moves to the left side now that the right rail is
+  // logo + branch only. Sits low in the bar in a faded teal-on-teal.
   doc.setFontSize(8);
   doc.setFont('helvetica', 'normal');
-  doc.setTextColor(220, 245, 235);
+  doc.setTextColor(216, 240, 232);
   doc.text(
     `Generated ${new Date().toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}`,
-    pageW - 14, 28, { align: 'right' }
+    14, 35
   );
 }
 
@@ -971,15 +1013,15 @@ function drawFirstPageChrome(
   subtitle: string,
   clientName: string,
   branchName: string,
-  streamName: string,
+  branchState: string,
   logo: LogoState | null,
 ): number {
   drawPageBg(doc);
-  addHeader(doc, title, subtitle, clientName, branchName, streamName, logo);
+  addHeader(doc, title, subtitle, clientName, branchName, branchState, logo);
   const pw = doc.internal.pageSize.getWidth();
   const ph = doc.internal.pageSize.getHeight();
-  drawCard(doc, 8, 40, pw - 16, ph - 54);
-  return 48;
+  drawCard(doc, 8, CARD_TOP_AFTER_HEADER, pw - 16, ph - CARD_TOP_AFTER_HEADER - 14);
+  return FIRST_CONTENT_Y;
 }
 
 /** New page with just the white panel (no teal header repeat). */
@@ -1399,7 +1441,7 @@ function generateDailyPDF(
   data: InsightsData,
   clientName: string,
   branchName: string,
-  streamName: string,
+  branchState: string,
   logo: LogoState | null,
 ) {
   const doc = new jsPDF({ orientation: 'portrait', format: 'a4', unit: 'mm' });
@@ -1416,7 +1458,7 @@ function generateDailyPDF(
     `${data.monthLabel}  |  Day ${data.daysElapsed} of ${data.daysInMonth}  |  ${data.daysRemaining} days remaining`,
     clientName,
     branchName,
-    streamName,
+    branchState,
     logo,
   );
 
@@ -1551,7 +1593,7 @@ function generateDailyPDF(
   // ── Actions ──
   y = drawActionsBlock(doc, "Today's Actions", narrative.actions, y, INNER_X, INNER_W);
 
-  addFooter(doc, footerLabel('Daily Insight', data.monthLabel, clientName, branchName, streamName));
+  addFooter(doc, footerLabel('Daily Insight', data.monthLabel, clientName, branchName, branchState));
   doc.save(filename('Daily_Insight', data.month, branchName, latestDate || 'today'));
 }
 
@@ -1561,7 +1603,7 @@ function generateWeeklyPDF(
   data: InsightsData,
   clientName: string,
   branchName: string,
-  streamName: string,
+  branchState: string,
   logo: LogoState | null,
 ) {
   const doc = new jsPDF({ orientation: 'portrait', format: 'a4', unit: 'mm' });
@@ -1576,7 +1618,7 @@ function generateWeeklyPDF(
     `${data.monthLabel}  |  Day ${data.daysElapsed} of ${data.daysInMonth}  |  ${data.daysRemaining} days remaining`,
     clientName,
     branchName,
-    streamName,
+    branchState,
     logo,
   );
 
@@ -1607,7 +1649,7 @@ function generateWeeklyPDF(
   // ── Actions ──
   y = drawActionsBlock(doc, 'Focus Areas for Next Week', narrative.actions, y, INNER_X, INNER_W);
 
-  addFooter(doc, footerLabel('Weekly Insight', data.monthLabel, clientName, branchName, streamName));
+  addFooter(doc, footerLabel('Weekly Insight', data.monthLabel, clientName, branchName, branchState));
   doc.save(filename('Weekly_Insight', data.month, branchName));
 }
 
@@ -1617,7 +1659,7 @@ function generateMonthlyPDF(
   data: InsightsData,
   clientName: string,
   branchName: string,
-  streamName: string,
+  branchState: string,
   logo: LogoState | null,
 ) {
   const doc = new jsPDF({ orientation: 'portrait', format: 'a4', unit: 'mm' });
@@ -1632,7 +1674,7 @@ function generateMonthlyPDF(
     `${data.monthLabel}  |  Day ${data.daysElapsed} of ${data.daysInMonth}  |  ${data.daysRemaining} days remaining`,
     clientName,
     branchName,
-    streamName,
+    branchState,
     logo,
   );
 
@@ -1663,7 +1705,7 @@ function generateMonthlyPDF(
   // ── Management Actions ──
   y = drawActionsBlock(doc, 'Management Actions to Achieve Monthly Target', narrative.actions, y, INNER_X, INNER_W);
 
-  addFooter(doc, footerLabel('Monthly Insight', data.monthLabel, clientName, branchName, streamName));
+  addFooter(doc, footerLabel('Monthly Insight', data.monthLabel, clientName, branchName, branchState));
   doc.save(filename('Monthly_Insight', data.month, branchName));
 }
 
@@ -1671,7 +1713,7 @@ function generateMonthlyPDF(
 
 export default function InsightDownloadPanel({
   open, onClose, data,
-  clientName = '', branchName = '', streamName = '',
+  clientName = '', branchName = '', branchState = '',
 }: Props) {
   const [variant, setVariant] = useState<ReportVariant>('monthly');
   const [generating, setGenerating] = useState(false);
@@ -1734,9 +1776,9 @@ export default function InsightDownloadPanel({
   const handleDownload = async () => {
     setGenerating(true);
     try {
-      if (variant === 'daily') generateDailyPDF(data, clientName, branchName, streamName, logo);
-      else if (variant === 'weekly') generateWeeklyPDF(data, clientName, branchName, streamName, logo);
-      else generateMonthlyPDF(data, clientName, branchName, streamName, logo);
+      if (variant === 'daily') generateDailyPDF(data, clientName, branchName, branchState, logo);
+      else if (variant === 'weekly') generateWeeklyPDF(data, clientName, branchName, branchState, logo);
+      else generateMonthlyPDF(data, clientName, branchName, branchState, logo);
       setTimeout(() => { setGenerating(false); onClose(); }, 400);
     } catch (err) {
       console.error('PDF generation error:', err);
