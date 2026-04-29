@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import DownloadPrintPanel from '../components/forecast/DownloadPrintPanel';
 import { exportAllItemsCSV } from '../components/forecast/csvExport';
+import { buildForecastWorkbook } from '../utils/forecastWorkbook';
 import { canWriteForecast, isSuperAdmin } from '../utils/roles';
 
 export interface FY { id: number; label: string; start_date: string; end_date: string; is_active: number; }
@@ -289,10 +290,38 @@ export default function ForecastModulePage() {
         <div className="flex items-center gap-2">
           <span className="mt-pill mt-pill--warn">In Progress</span>
           <button
+            onClick={async () => {
+              try {
+                const branchName = (typeof window !== 'undefined' ? localStorage.getItem('branch_name') : '') || undefined;
+                const streamName = (typeof window !== 'undefined' ? localStorage.getItem('stream_name') : '') || undefined;
+                const blob = await buildForecastWorkbook({
+                  items, allValues, months, settings, scenario, fy: selectedFY, branchName, streamName,
+                });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                const fyTag = selectedFY?.label ? `_${selectedFY.label.replace(/\s+/g, '_')}` : '';
+                const branchTag = branchName ? `_${branchName.replace(/\s+/g, '_')}` : '';
+                link.download = `Forecast${fyTag}${branchTag}.xlsx`;
+                link.click();
+                URL.revokeObjectURL(url);
+              } catch (e) {
+                console.error('Forecast XLSX export failed:', e);
+                alert('Could not generate the Excel workbook. Check the browser console for details.');
+              }
+            }}
+            className="mt-btn-gradient"
+            style={{ padding: '6px 12px', fontSize: 12 }}
+            title="Download a multi-sheet Excel workbook (Summary + per-category sheets with formulas)"
+          >
+            <FileDown size={14} />
+            <span className="hidden sm:inline">Excel</span>
+          </button>
+          <button
             onClick={() => exportAllItemsCSV(items, allValues, months, viewMode)}
             className="mt-btn-ghost"
             style={{ padding: '6px 10px', fontSize: 12 }}
-            title="Download table as CSV"
+            title="Download table as CSV (legacy single-sheet export)"
           >
             <FileDown size={14} />
             <span className="hidden sm:inline">CSV</span>
