@@ -83,6 +83,11 @@ export default function DashboardPage() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [selectedPeriod, setSelectedPeriod] = useState('current_month');
+  // Orphan-actuals recovery state — same pattern as ForecastModulePage's
+  // orphan-scenario banner. Strict branch isolation hides NULL-branch
+  // rows; if any exist, surface them so an admin can claim them.
+  const [actualsOrphans, setActualsOrphans] = useState<{ totalRows: number; counts: any } | null>(null);
+  const [migratingActuals, setMigratingActuals] = useState(false);
 
   // Active stream filter (set by sidebar or KPI card click)
   const activeStreamId = localStorage.getItem('stream_id');
@@ -123,6 +128,57 @@ export default function DashboardPage() {
       setLoading(false);
     }).catch(() => setLoading(false));
   }, [periodStartMonth, periodEndMonth]);
+
+  // Detect orphan (NULL-branch) actuals once on mount. Multi-branch
+  // tenants only — single-branch has nothing to leak. Skipped silently
+  // on older deployments (endpoint 404s before this migration deploys).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!localStorage.getItem('is_multi_branch')) return;
+    api.get('/actuals/orphans')
+      .then(res => {
+        if (res.data?.scopeRequired) {
+          setActualsOrphans({ totalRows: res.data.totalRows || 0, counts: res.data.counts });
+        }
+      })
+      .catch(() => { /* endpoint missing on older deployments */ });
+  }, []);
+
+  const handleMigrateActuals = async () => {
+    const targetBranchId = localStorage.getItem('branch_id');
+    const branchName = localStorage.getItem('branch_name') || 'this branch';
+    if (!targetBranchId) {
+      alert('Switch to a specific branch first — orphan actuals can only be moved into a chosen branch, not the consolidated view.');
+      return;
+    }
+    const c = actualsOrphans?.counts;
+    const summary = c
+      ? [
+          c.clinic_actuals.rows            > 0 ? `${c.clinic_actuals.rows.toLocaleString()} clinic rows` : null,
+          c.pharmacy_sales_actuals.rows    > 0 ? `${c.pharmacy_sales_actuals.rows.toLocaleString()} pharmacy sales rows` : null,
+          c.pharmacy_purchase_actuals.rows > 0 ? `${c.pharmacy_purchase_actuals.rows.toLocaleString()} pharmacy purchase rows` : null,
+          c.dashboard_actuals.rows         > 0 ? `${c.dashboard_actuals.rows.toLocaleString()} dashboard rollup rows` : null,
+        ].filter(Boolean).join(' · ')
+      : `${actualsOrphans?.totalRows} rows`;
+    const ok = window.confirm(
+      `Move ${summary} into "${branchName}"?\n\n` +
+      `After this, the data shows ONLY in ${branchName} and is hidden from every other branch. ` +
+      `This cannot be undone automatically.`
+    );
+    if (!ok) return;
+    setMigratingActuals(true);
+    try {
+      await api.post('/actuals/migrate-orphans', {
+        targetBranchId: parseInt(targetBranchId),
+      });
+      setActualsOrphans(null);
+      // Reload so the migrated rows show up in the current branch's view
+      window.location.reload();
+    } catch (e: any) {
+      alert(`Migration failed: ${e?.response?.data?.error || e.message || 'unknown error'}`);
+      setMigratingActuals(false);
+    }
+  };
 
   if (loading) return (
     <div className="flex items-center justify-center py-20">
@@ -240,6 +296,53 @@ export default function DashboardPage() {
           </select>
         )}
       </div>
+
+      {/* Orphan-actuals recovery banner. Surfaces only when there's
+          NULL-branch data sitting in clinic_actuals / pharmacy_*_actuals
+          / dashboard_actuals — i.e. legacy rows from pre-multi-branch
+          imports or imports done in consolidated mode. After strict
+          isolation those rows are invisible until reassigned. */}
+      {actualsOrphans && actualsOrphans.totalRows > 0 && (() => {
+        const c = actualsOrphans.counts;
+        const lines: string[] = [];
+        if (c?.clinic_actuals?.rows > 0)            lines.push(`${c.clinic_actuals.rows.toLocaleString()} clinic actuals (₹${Math.round(c.clinic_actuals.revenue).toLocaleString('en-IN')})`);
+        if (c?.pharmacy_sales_actuals?.rows > 0)    lines.push(`${c.pharmacy_sales_actuals.rows.toLocaleString()} pharmacy sales (₹${Math.round(c.pharmacy_sales_actuals.sales).toLocaleString('en-IN')})`);
+        if (c?.pharmacy_purchase_actuals?.rows > 0) lines.push(`${c.pharmacy_purchase_actuals.rows.toLocaleString()} pharmacy purchases`);
+        if (c?.dashboard_actuals?.rows > 0)         lines.push(`${c.dashboard_actuals.rows.toLocaleString()} dashboard rollup rows`);
+        return (
+          <div
+            className="mb-6 px-4 py-3 rounded-lg flex items-center justify-between gap-4 text-sm"
+            style={{
+              background: 'color-mix(in srgb, #f59e0b 12%, transparent)',
+              border: '1px solid color-mix(in srgb, #f59e0b 35%, transparent)',
+              color: 'var(--mt-text-heading)',
+            }}
+          >
+            <div className="flex items-start gap-3 flex-1">
+              <span style={{ fontSize: 18, lineHeight: 1, color: '#f59e0b' }}>⚠</span>
+              <div>
+                <div style={{ fontWeight: 600 }}>
+                  Actuals data not tied to any branch ({actualsOrphans.totalRows.toLocaleString()} rows)
+                </div>
+                <div style={{ color: 'var(--mt-text-muted)', marginTop: 2 }}>
+                  {lines.join(' · ')} — hidden from every branch&apos;s view because they were imported without a branch context. Move them into the current branch to make them visible here.
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={handleMigrateActuals}
+              disabled={migratingActuals}
+              className="mt-btn-gradient whitespace-nowrap"
+              style={{ padding: '8px 14px', fontSize: 13 }}
+              title="Reassigns the orphan actuals to your current branch. Other branches keep showing their own data."
+            >
+              {migratingActuals
+                ? 'Moving…'
+                : `Move into ${localStorage.getItem('branch_name') || 'current branch'}`}
+            </button>
+          </div>
+        );
+      })()}
 
       {/* KPI Cards — only in "All" mode */}
       {isAllStreams && (

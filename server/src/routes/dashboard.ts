@@ -9,7 +9,12 @@ const router = Router();
 router.get('/overview', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id, startMonth: qStart, endMonth: qEnd } = req.query;
-  const bf = branchFilter(req);
+  // Strict isolation: a branch sees only rows it owns. NULL-branch
+  // legacy data (clinic_actuals / pharmacy_sales_actuals / scenarios
+  // imported pre-multi-branch or in consolidated mode) is hidden until
+  // an admin reassigns it via POST /actuals/migrate-orphans (or the
+  // forecast equivalent for scenarios).
+  const bf = branchFilter(req, { strict: true });
   const sf = streamFilter(req);
   const fy = fy_id
     ? db.get('SELECT * FROM financial_years WHERE id = ?', fy_id)
@@ -261,7 +266,12 @@ router.get('/overview', async (req, res) => {
 router.get('/clinic-analytics', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id, startMonth: qStart, endMonth: qEnd } = req.query;
-  const bf = branchFilter(req);
+  // Strict isolation: a branch sees only rows it owns. NULL-branch
+  // legacy data (clinic_actuals / pharmacy_sales_actuals / scenarios
+  // imported pre-multi-branch or in consolidated mode) is hidden until
+  // an admin reassigns it via POST /actuals/migrate-orphans (or the
+  // forecast equivalent for scenarios).
+  const bf = branchFilter(req, { strict: true });
 
   const fy = fy_id
     ? db.get('SELECT * FROM financial_years WHERE id = ?', fy_id)
@@ -478,7 +488,12 @@ router.get('/clinic-analytics', async (req, res) => {
 router.get('/pharmacy-analytics', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id, startMonth: qStart, endMonth: qEnd } = req.query;
-  const bf = branchFilter(req);
+  // Strict isolation: a branch sees only rows it owns. NULL-branch
+  // legacy data (clinic_actuals / pharmacy_sales_actuals / scenarios
+  // imported pre-multi-branch or in consolidated mode) is hidden until
+  // an admin reassigns it via POST /actuals/migrate-orphans (or the
+  // forecast equivalent for scenarios).
+  const bf = branchFilter(req, { strict: true });
 
   const fy = fy_id
     ? db.get('SELECT * FROM financial_years WHERE id = ?', fy_id)
@@ -891,7 +906,12 @@ router.get('/pharmacy-analytics', async (req, res) => {
 router.get('/variance', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id } = req.query;
-  const bf = branchFilter(req);
+  // Strict isolation: a branch sees only rows it owns. NULL-branch
+  // legacy data (clinic_actuals / pharmacy_sales_actuals / scenarios
+  // imported pre-multi-branch or in consolidated mode) is hidden until
+  // an admin reassigns it via POST /actuals/migrate-orphans (or the
+  // forecast equivalent for scenarios).
+  const bf = branchFilter(req, { strict: true });
   const sf = streamFilter(req);
   if (!fy_id) return res.status(400).json({ error: 'fy_id required' });
 
@@ -986,7 +1006,12 @@ router.get('/variance', async (req, res) => {
 // ── Operational Insights (COO decision dashboard) ──────────────────────
 router.get('/operational-insights', async (req, res) => {
   const db = req.tenantDb!;
-  const bf = branchFilter(req);
+  // Strict isolation: a branch sees only rows it owns. NULL-branch
+  // legacy data (clinic_actuals / pharmacy_sales_actuals / scenarios
+  // imported pre-multi-branch or in consolidated mode) is hidden until
+  // an admin reassigns it via POST /actuals/migrate-orphans (or the
+  // forecast equivalent for scenarios).
+  const bf = branchFilter(req, { strict: true });
 
   const fy = db.get('SELECT * FROM financial_years WHERE is_active = 1');
   if (!fy) return res.json({ error: 'No active FY' });
@@ -1413,7 +1438,12 @@ router.get('/operational-insights', async (req, res) => {
 // user.
 router.post('/resync-actuals', requireRole('admin'), async (req, res) => {
   const db = req.tenantDb!;
-  const bf = branchFilter(req);
+  // Strict isolation: a branch sees only rows it owns. NULL-branch
+  // legacy data (clinic_actuals / pharmacy_sales_actuals / scenarios
+  // imported pre-multi-branch or in consolidated mode) is hidden until
+  // an admin reassigns it via POST /actuals/migrate-orphans (or the
+  // forecast equivalent for scenarios).
+  const bf = branchFilter(req, { strict: true });
   const platformDb = await getPlatformHelper();
 
   const streams = req.clientId ? platformDb.all(

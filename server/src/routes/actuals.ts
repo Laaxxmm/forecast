@@ -6,7 +6,10 @@ const router = Router();
 router.get('/clinic', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id } = req.query;
-  const bf = branchFilter(req);
+  // Strict isolation: each branch sees only its own actuals. NULL-branch
+  // legacy rows (pre-multi-branch / consolidated-mode imports) are
+  // hidden until reassigned via POST /actuals/migrate-orphans.
+  const bf = branchFilter(req, { strict: true });
 
   if (fy_id) {
     const fy = db.get('SELECT * FROM financial_years WHERE id = ?', fy_id);
@@ -35,7 +38,10 @@ router.get('/clinic', async (req, res) => {
 router.get('/clinic/doctors', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id, month } = req.query;
-  const bf = branchFilter(req);
+  // Strict isolation: each branch sees only its own actuals. NULL-branch
+  // legacy rows (pre-multi-branch / consolidated-mode imports) are
+  // hidden until reassigned via POST /actuals/migrate-orphans.
+  const bf = branchFilter(req, { strict: true });
 
   if (month) {
     return res.json(db.all(
@@ -70,7 +76,10 @@ router.get('/clinic/doctors', async (req, res) => {
 router.get('/pharmacy', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id } = req.query;
-  const bf = branchFilter(req);
+  // Strict isolation: each branch sees only its own actuals. NULL-branch
+  // legacy rows (pre-multi-branch / consolidated-mode imports) are
+  // hidden until reassigned via POST /actuals/migrate-orphans.
+  const bf = branchFilter(req, { strict: true });
 
   if (fy_id) {
     const fy = db.get('SELECT * FROM financial_years WHERE id = ?', fy_id);
@@ -117,7 +126,10 @@ router.get('/pharmacy', async (req, res) => {
 router.get('/pharmacy/purchases', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id } = req.query;
-  const bf = branchFilter(req);
+  // Strict isolation: each branch sees only its own actuals. NULL-branch
+  // legacy rows (pre-multi-branch / consolidated-mode imports) are
+  // hidden until reassigned via POST /actuals/migrate-orphans.
+  const bf = branchFilter(req, { strict: true });
 
   if (fy_id) {
     const fy = db.get('SELECT * FROM financial_years WHERE id = ?', fy_id);
@@ -149,7 +161,10 @@ router.get('/pharmacy/purchases', async (req, res) => {
 router.get('/stream/:streamId/summary', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id, scenario_id } = req.query;
-  const bf = branchFilter(req);
+  // Strict isolation: each branch sees only its own actuals. NULL-branch
+  // legacy rows (pre-multi-branch / consolidated-mode imports) are
+  // hidden until reassigned via POST /actuals/migrate-orphans.
+  const bf = branchFilter(req, { strict: true });
   const sid = parseInt(req.params.streamId);
 
   let scenarioId = scenario_id;
@@ -181,6 +196,110 @@ router.get('/stream/:streamId/summary', async (req, res) => {
   );
 
   res.json({ monthly, totals });
+});
+
+// === ORPHAN ACTUALS RECOVERY ===
+//
+// Strict branch isolation hides every actuals row with `branch_id IS NULL`.
+// For tenants who imported clinic / pharmacy data pre-multi-branch (or in
+// consolidated mode) those rows still exist but are now invisible. These
+// two endpoints surface them and migrate them into a chosen branch — same
+// shape as /forecast-module/scenarios/orphans + migrate-orphans.
+
+interface OrphanCounts {
+  clinic_actuals:           { rows: number; revenue: number; bill_months: string[] };
+  pharmacy_sales_actuals:   { rows: number; sales: number;   bill_months: string[] };
+  pharmacy_purchase_actuals:{ rows: number; cost: number;    invoice_months: string[] };
+  dashboard_actuals:        { rows: number; amount: number };
+}
+
+/** Read-only diagnostic. Lists how much data is parked in NULL-branch
+ *  for each actuals table — what the user gets back from the loose
+ *  filter that was leaking into every branch's view before strict mode. */
+router.get('/orphans', async (req, res) => {
+  const db = req.tenantDb!;
+  if (!req.isMultiBranch) {
+    return res.json({ scopeRequired: false, counts: null as OrphanCounts | null });
+  }
+
+  const clinic = db.get(
+    `SELECT COUNT(*) as rows, COALESCE(SUM(item_price), 0) as revenue
+       FROM clinic_actuals WHERE branch_id IS NULL`
+  );
+  const clinicMonths = db.all(
+    `SELECT DISTINCT bill_month FROM clinic_actuals
+      WHERE branch_id IS NULL AND bill_month IS NOT NULL ORDER BY bill_month`
+  ).map((r: any) => r.bill_month);
+
+  const pharma = db.get(
+    `SELECT COUNT(*) as rows, COALESCE(SUM(sales_amount), 0) as sales
+       FROM pharmacy_sales_actuals WHERE branch_id IS NULL`
+  );
+  const pharmaMonths = db.all(
+    `SELECT DISTINCT bill_month FROM pharmacy_sales_actuals
+      WHERE branch_id IS NULL AND bill_month IS NOT NULL ORDER BY bill_month`
+  ).map((r: any) => r.bill_month);
+
+  const purch = db.get(
+    `SELECT COUNT(*) as rows, COALESCE(SUM(purchase_value), 0) as cost
+       FROM pharmacy_purchase_actuals WHERE branch_id IS NULL`
+  );
+  const purchMonths = db.all(
+    `SELECT DISTINCT invoice_month FROM pharmacy_purchase_actuals
+      WHERE branch_id IS NULL AND invoice_month IS NOT NULL ORDER BY invoice_month`
+  ).map((r: any) => r.invoice_month);
+
+  const dash = db.get(
+    `SELECT COUNT(*) as rows, COALESCE(SUM(amount), 0) as amount
+       FROM dashboard_actuals WHERE branch_id IS NULL`
+  );
+
+  const counts: OrphanCounts = {
+    clinic_actuals:            { rows: clinic?.rows || 0, revenue: clinic?.revenue || 0, bill_months: clinicMonths },
+    pharmacy_sales_actuals:    { rows: pharma?.rows || 0, sales: pharma?.sales || 0,    bill_months: pharmaMonths },
+    pharmacy_purchase_actuals: { rows: purch?.rows  || 0, cost:  purch?.cost  || 0,    invoice_months: purchMonths },
+    dashboard_actuals:         { rows: dash?.rows   || 0, amount: dash?.amount || 0 },
+  };
+  const totalRows = counts.clinic_actuals.rows + counts.pharmacy_sales_actuals.rows
+                  + counts.pharmacy_purchase_actuals.rows + counts.dashboard_actuals.rows;
+  res.json({ scopeRequired: true, totalRows, counts });
+});
+
+/** Reassign every NULL-branch actuals row to `targetBranchId`. After this
+ *  the rows show up only on the target branch's view. Idempotent. Admin /
+ *  super_admin can target any branch; ops_head must target a branch they
+ *  own (mirrors the forecast orphan-migration auth check). */
+router.post('/migrate-orphans', async (req, res) => {
+  // Same auth gate as the forecast version. Op-heads should not be able
+  // to silently absorb the tenant's company-level data into their branch.
+  if (req.userType !== 'super_admin' && req.session?.role !== 'admin' && req.session?.role !== 'operational_head') {
+    return res.status(403).json({ error: 'Write access required' });
+  }
+  const targetBranchId = Number(req.body?.targetBranchId);
+  if (!Number.isFinite(targetBranchId) || targetBranchId <= 0) {
+    return res.status(400).json({ error: 'targetBranchId required (positive integer)' });
+  }
+  const isPrivileged = req.userType === 'super_admin' || req.session?.role === 'admin';
+  if (!isPrivileged && !req.allowedBranchIds?.includes(targetBranchId)) {
+    return res.status(403).json({ error: 'Cannot migrate orphans to a branch you do not own' });
+  }
+
+  const db = req.tenantDb!;
+  const r1 = db.run('UPDATE clinic_actuals            SET branch_id = ? WHERE branch_id IS NULL', targetBranchId);
+  const r2 = db.run('UPDATE pharmacy_sales_actuals    SET branch_id = ? WHERE branch_id IS NULL', targetBranchId);
+  const r3 = db.run('UPDATE pharmacy_purchase_actuals SET branch_id = ? WHERE branch_id IS NULL', targetBranchId);
+  const r4 = db.run('UPDATE dashboard_actuals         SET branch_id = ? WHERE branch_id IS NULL', targetBranchId);
+
+  res.json({
+    targetBranchId,
+    migrated: {
+      clinic_actuals:            r1.changes,
+      pharmacy_sales_actuals:    r2.changes,
+      pharmacy_purchase_actuals: r3.changes,
+      dashboard_actuals:         r4.changes,
+    },
+    totalRowsMigrated: r1.changes + r2.changes + r3.changes + r4.changes,
+  });
 });
 
 export default router;
