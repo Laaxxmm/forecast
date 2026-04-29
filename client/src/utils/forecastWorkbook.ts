@@ -76,14 +76,29 @@ export async function buildForecastWorkbook(opts: BuildWorkbookOpts): Promise<Bl
   ].filter(Boolean).join(' · ');
 
   // Per-category sheet metadata. Order mirrors the Forecast page tabs.
-  const CATEGORIES: Array<{ key: string; label: string; sheetName: string }> = [
-    { key: 'revenue',      label: 'Revenue',      sheetName: 'Revenue' },
-    { key: 'direct_costs', label: 'Direct Costs', sheetName: 'Direct Costs' },
-    { key: 'personnel',    label: 'Personnel',    sheetName: 'Personnel' },
-    { key: 'expenses',     label: 'Expenses',     sheetName: 'Expenses' },
-    { key: 'assets',       label: 'Assets',       sheetName: 'Assets' },
-    { key: 'taxes',         label: 'Taxes',        sheetName: 'Taxes' },
-    { key: 'dividends',    label: 'Dividends',    sheetName: 'Dividends' },
+  // qtyLabel/rateLabel control the column headers in the Calculation Method
+  // block — the user's mental model is "the inputs are units × avg price",
+  // but the actual semantic varies by category. For Revenue, units × avg
+  // revenue per unit. For Personnel, headcount × monthly salary. For
+  // expenses, quantity × monthly rate (often quantity is just 1).
+  const CATEGORIES: Array<{
+    key: string; label: string; sheetName: string;
+    qtyLabel: string; rateLabel: string;
+  }> = [
+    { key: 'revenue',      label: 'Revenue',      sheetName: 'Revenue',
+      qtyLabel: 'Units',     rateLabel: 'Avg Revenue (₹/unit)' },
+    { key: 'direct_costs', label: 'Direct Costs', sheetName: 'Direct Costs',
+      qtyLabel: 'Quantity',  rateLabel: 'Rate (₹/unit)' },
+    { key: 'personnel',    label: 'Personnel',    sheetName: 'Personnel',
+      qtyLabel: 'Headcount', rateLabel: 'Monthly Salary' },
+    { key: 'expenses',     label: 'Expenses',     sheetName: 'Expenses',
+      qtyLabel: 'Quantity',  rateLabel: 'Monthly Amount' },
+    { key: 'assets',       label: 'Assets',       sheetName: 'Assets',
+      qtyLabel: 'Quantity',  rateLabel: 'Unit Cost' },
+    { key: 'taxes',        label: 'Taxes',        sheetName: 'Taxes',
+      qtyLabel: 'Quantity',  rateLabel: 'Monthly Amount' },
+    { key: 'dividends',    label: 'Dividends',    sheetName: 'Dividends',
+      qtyLabel: 'Quantity',  rateLabel: 'Monthly Amount' },
   ];
 
   // Build Summary first as a placeholder; we'll fill it after we know each
@@ -119,6 +134,8 @@ export async function buildForecastWorkbook(opts: BuildWorkbookOpts): Promise<Bl
       items: catItems,
       allValues: opts.allValues,
       itemNameById,
+      qtyLabel: cat.qtyLabel,
+      rateLabel: cat.rateLabel,
     });
     totalRowByCategory[cat.key] = totalRow;
   }
@@ -153,18 +170,49 @@ interface CategorySheetOpts {
   items: ForecastItem[];
   allValues: Record<number, Record<string, number>>;
   itemNameById: Map<number, string>;
+  /** Column header for the "quantity" inputs (e.g. "Units", "Headcount"). */
+  qtyLabel: string;
+  /** Column header for the "rate" input (e.g. "Avg Revenue (₹/unit)"). */
+  rateLabel: string;
 }
 
 function renderCategorySheet(o: CategorySheetOpts): number {
-  const { sheet, title, contextLine, months, monthLabels, items, allValues, itemNameById } = o;
+  const { sheet, title, contextLine, months, monthLabels, items, allValues,
+          itemNameById, qtyLabel, rateLabel } = o;
+
+  // Layout
+  //
+  //   Top table (items × months as DERIVED VALUES):
+  //     A: Item       B-M: Apr-Mar (formulas: =qty × rate)       N: Total (=SUM)
+  //
+  //   Calculation Method block (the SOURCE OF TRUTH — editable inputs):
+  //     A: Item       B-M: Apr-Mar Quantity (editable)
+  //     N: Annual Qty (=SUM of B:M)       O: Rate (editable, single cell)
+  //     P: Annual Revenue / Cost (=N × O)       Q: Notes
+  //
+  //   Top monthly cell formulas reference the method block:
+  //     Apr cell (col B) = =B{methodRow} * O{methodRow}
+  //     May cell (col C) = =C{methodRow} * O{methodRow}
+  //     ... etc.
+  //
+  //   This way:
+  //   - Edit any monthly Quantity in the method block → that month's top cell
+  //     updates, the row Total updates, the category TOTAL row updates, and
+  //     the Summary sheet's P&L / CF / BS lines all cascade.
+  //   - Edit the Rate (single cell, col O) → all 12 months for that item
+  //     scale together (e.g. raise the avg consultation fee → revenue jumps).
   const lastMonthCol = 1 + months.length;        // M (col 13)
   const totalCol = 2 + months.length;             // N (col 14)
-  const notesCol = totalCol + 1;                  // O (col 15) — only used in the method block
+  const rateCol = totalCol + 1;                   // O (col 15)
+  const annualRevCol = totalCol + 2;              // P (col 16)
+  const notesCol = totalCol + 3;                  // Q (col 17) — method-block only
 
   // ─ Column widths ─
   sheet.getColumn(1).width = 32;
   for (let c = 2; c <= lastMonthCol; c++) sheet.getColumn(c).width = 12;
   sheet.getColumn(totalCol).width = 14;
+  sheet.getColumn(rateCol).width = 16;
+  sheet.getColumn(annualRevCol).width = 16;
   sheet.getColumn(notesCol).width = 42;
 
   // ─ Row 1: title bar (merged across A:N — title spans the data area, not Notes) ─
@@ -206,12 +254,13 @@ function renderCategorySheet(o: CategorySheetOpts): number {
   const METHOD_COL_HEADERS_ROW = METHOD_HEADER_ROW + 1;
   const METHOD_FIRST_INPUT_ROW = METHOD_COL_HEADERS_ROW + 1;
 
-  // ─ Top table: items × months — every cell is a formula referencing the
-  //   method block input row. The Total column is a simple SUM across the
-  //   formula cells in that row.
+  // ─ Top table: items × months — every cell is a formula =qty × rate
+  //   referencing the method block. The Total column is a simple SUM across
+  //   the formula cells in that row.
   items.forEach((item, idx) => {
     const r = FIRST_ITEM_ROW + idx;
     const methodRow = METHOD_FIRST_INPUT_ROW + idx;
+    const rateRef = `${colLetter(rateCol)}${methodRow}`;
     const row = sheet.getRow(r);
     row.getCell(1).value = item.name;
     row.getCell(1).alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
@@ -219,7 +268,7 @@ function renderCategorySheet(o: CategorySheetOpts): number {
     months.forEach((_m, j) => {
       const c = 2 + j;
       const cell = row.getCell(c);
-      cell.value = { formula: `${colLetter(c)}${methodRow}` };
+      cell.value = { formula: `${colLetter(c)}${methodRow}*${rateRef}` };
       cell.numFmt = NUM_FMT;
       cell.alignment = { horizontal: 'right', vertical: 'middle' };
       cell.font = { color: { argb: COLOR.textHeading } };
@@ -283,10 +332,21 @@ function renderCategorySheet(o: CategorySheetOpts): number {
   methodHeaderCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.accentStrong } };
   sheet.getRow(METHOD_HEADER_ROW).height = 22;
 
-  // Column headers row: Item | Apr | May | … | Mar | Annual | Method
+  // Column headers row:
+  //   Item | Apr-Mar (qty per month) | Annual {qty} | {rate label} | Annual Total | Method
+  // The B-M columns hold quantity inputs (e.g. units, headcount) — multiplying
+  // these by the single rate cell at column O recovers the original amount in
+  // the top table.
   const methodColHeaderRow = sheet.getRow(METHOD_COL_HEADERS_ROW);
-  methodColHeaderRow.values = ['Item', ...monthLabels, 'Annual', 'Method'];
-  methodColHeaderRow.height = 22;
+  methodColHeaderRow.values = [
+    'Item',
+    ...monthLabels,
+    `Annual ${qtyLabel}`,
+    rateLabel,
+    'Annual Total',
+    'Method',
+  ];
+  methodColHeaderRow.height = 30;
   methodColHeaderRow.eachCell((cell, colNumber) => {
     if (colNumber > notesCol) return;
     cell.font = { bold: true, color: { argb: COLOR.textHeading }, size: 11 };
@@ -295,11 +355,23 @@ function renderCategorySheet(o: CategorySheetOpts): number {
       horizontal: colNumber === 1 || colNumber === notesCol ? 'left' : 'right',
       vertical: 'middle',
       indent: colNumber === 1 || colNumber === notesCol ? 1 : 0,
+      wrapText: true,  // so longer rate labels like 'Avg Revenue (₹/unit)' wrap
     };
     cell.border = { bottom: { style: 'thin', color: { argb: COLOR.border } } };
   });
 
-  // Input rows
+  // Input rows.
+  //
+  //   B-M = monthly quantity (editable input)
+  //   N   = SUM(B:M) — annual quantity
+  //   O   = rate (editable input — single per-row cell)
+  //   P   = N × O — annual total (this is what the top-table row total
+  //         comes out to, and matches SUM of the top table's B:M)
+  //   Q   = plain-English notes
+  //
+  // The top table's monthly cells are formulas =B{r}*O{r}, =C{r}*O{r}, etc.,
+  // so editing any quantity in this block instantly updates the top table,
+  // and editing the rate scales all 12 months for that item together.
   items.forEach((item, idx) => {
     const r = METHOD_FIRST_INPUT_ROW + idx;
     const row = sheet.getRow(r);
@@ -307,24 +379,53 @@ function renderCategorySheet(o: CategorySheetOpts): number {
     row.getCell(1).font = { color: { argb: COLOR.textHeading }, bold: true };
     row.getCell(1).alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
 
-    // 12 monthly input cells (NOT formulas — these are the editable inputs)
+    // Pick a sensible default rate. For unit_sales items with meta.price the
+    // rate is the per-unit price (qty becomes # units / month). For constant
+    // entry-mode items, the constant amount is the rate (qty becomes 1 each
+    // month). For everything else, rate=1 — qty just equals the monthly
+    // amount (mirroring legacy behaviour, but now exposed for editing).
+    const rate = defaultRate(item);
+
+    // 12 monthly QUANTITY input cells (NOT formulas — these are the editable
+    // inputs that feed the top table via multiplication by the rate cell).
     months.forEach((m, j) => {
       const c = 2 + j;
       const cell = row.getCell(c);
-      cell.value = allValues[item.id]?.[m] ?? 0;
+      const monthlyAmount = allValues[item.id]?.[m] ?? 0;
+      // qty = monthly_amount / rate; the top table multiplies by rate to
+      // recover the displayed amount. Guard against div-by-zero.
+      cell.value = rate > 0 ? monthlyAmount / rate : monthlyAmount;
       cell.numFmt = NUM_FMT;
       cell.alignment = { horizontal: 'right', vertical: 'middle' };
-      cell.font = { color: { argb: COLOR.accentStrong } };  // hint that these are editable inputs
+      cell.font = { color: { argb: COLOR.accentStrong } };  // emerald = editable
     });
 
-    // Annual = SUM of the 12 monthly inputs in this row
-    const annualCell = row.getCell(totalCol);
-    annualCell.value = {
+    // Annual qty = SUM of the 12 monthly inputs
+    const annualQtyCell = row.getCell(totalCol);
+    annualQtyCell.value = {
       formula: `SUM(${colLetter(2)}${r}:${colLetter(lastMonthCol)}${r})`,
     };
-    annualCell.numFmt = NUM_FMT;
-    annualCell.alignment = { horizontal: 'right', vertical: 'middle' };
-    annualCell.font = { color: { argb: COLOR.textHeading }, bold: true };
+    annualQtyCell.numFmt = NUM_FMT;
+    annualQtyCell.alignment = { horizontal: 'right', vertical: 'middle' };
+    annualQtyCell.font = { color: { argb: COLOR.textHeading }, bold: true };
+
+    // Rate (single editable cell per row — drives all 12 monthly top-table
+    // cells via the =qty*rate formulas)
+    const rateCell = row.getCell(rateCol);
+    rateCell.value = rate;
+    rateCell.numFmt = NUM_FMT;
+    rateCell.alignment = { horizontal: 'right', vertical: 'middle' };
+    rateCell.font = { color: { argb: COLOR.accentStrong }, bold: true };  // emerald = editable
+
+    // Annual Total = Annual Qty × Rate (=N{r}*O{r}). Should match the top
+    // table's row-total cell exactly.
+    const annualTotalCell = row.getCell(annualRevCol);
+    annualTotalCell.value = {
+      formula: `${colLetter(totalCol)}${r}*${colLetter(rateCol)}${r}`,
+    };
+    annualTotalCell.numFmt = NUM_FMT;
+    annualTotalCell.alignment = { horizontal: 'right', vertical: 'middle' };
+    annualTotalCell.font = { color: { argb: COLOR.textHeading }, bold: true };
 
     // Notes column: plain-English description of the calculation
     const notesCell = row.getCell(notesCol);
@@ -806,4 +907,26 @@ function labelForCategory(cat: string): string {
  */
 function computeOpeningEquity(_items: ForecastItem[], settings: Record<string, any>): number {
   return Number(settings?.opening_equity) || 0;
+}
+
+/**
+ * Pick a sensible default rate (per-unit price / monthly cost) for the
+ * Calculation Method block's editable rate cell.
+ *
+ *   • Items with explicit unit-price metadata → use it (qty becomes
+ *     monthly_amount / rate, typically the unit count per month).
+ *   • Constant entry-mode items → use constant_amount as the rate (qty
+ *     becomes 1 each month if the monthly amount equals the constant).
+ *   • Everything else → 1 (qty just equals the monthly amount, preserving
+ *     legacy behaviour while still exposing a rate cell the user can edit).
+ */
+function defaultRate(item: ForecastItem): number {
+  const meta: any = item.meta || {};
+  if (meta.price != null && Number(meta.price) > 0) return Number(meta.price);
+  if (meta.unit_price != null && Number(meta.unit_price) > 0) return Number(meta.unit_price);
+  if (meta.hourly_rate != null && Number(meta.hourly_rate) > 0) return Number(meta.hourly_rate);
+  if (item.entry_mode === 'constant' && item.constant_amount && item.constant_amount > 0) {
+    return Number(item.constant_amount);
+  }
+  return 1;
 }
