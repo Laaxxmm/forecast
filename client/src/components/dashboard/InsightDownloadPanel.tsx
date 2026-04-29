@@ -1239,7 +1239,10 @@ function drawStreamSection(
   const tw = stream.thisWeek;
   const lw = stream.lastWeek;
   const wowRows: WoWRow[] = isClinic ? [
-    { label: 'Patients', cur: fmtCount(tw.patients), prev: fmtCount(lw.patients), pct: lw.patients > 0 ? ((tw.patients - lw.patients) / lw.patients) * 100 : 0 },
+    // Was "Patients" (unique). Now plots "Visits" — encounter counts
+    // straight from order_number, so a patient who came twice this week
+    // contributes 2 to the headline number.
+    { label: 'Visits', cur: fmtCount(tw.patients), prev: fmtCount(lw.patients), pct: lw.patients > 0 ? ((tw.patients - lw.patients) / lw.patients) * 100 : 0 },
     { label: 'Revenue',  cur: fmtRs(tw.revenue),    prev: fmtRs(lw.revenue),    pct: lw.revenue > 0 ? ((tw.revenue - lw.revenue) / lw.revenue) * 100 : 0 },
     { label: 'Avg Ticket', cur: fmtRs(tw.avgTicket), prev: fmtRs(lw.avgTicket), pct: lw.avgTicket > 0 ? ((tw.avgTicket - lw.avgTicket) / lw.avgTicket) * 100 : 0 },
   ] : [
@@ -1489,7 +1492,8 @@ function generateDailyPDF(
     const isClinic = stream.name.toLowerCase().includes('clinic') || stream.name.toLowerCase().includes('health');
 
     const rows: WoWRow[] = isClinic ? [
-      { label: 'Patients', cur: today ? fmtCount(today.patients || 0) : '--', prev: yesterday ? fmtCount(yesterday.patients || 0) : '--',
+      // Day-over-day comparison row: encounter count, not unique patients.
+      { label: 'Visits', cur: today ? fmtCount(today.patients || 0) : '--', prev: yesterday ? fmtCount(yesterday.patients || 0) : '--',
         pct: (yesterday && yesterday.patients) ? (((today?.patients || 0) - (yesterday.patients || 0)) / yesterday.patients) * 100 : 0 },
       { label: 'Revenue',  cur: today ? fmtRs(today.revenue || 0) : '--',    prev: yesterday ? fmtRs(yesterday.revenue || 0) : '--',
         pct: (yesterday && yesterday.revenue) ? (((today?.revenue || 0) - (yesterday.revenue || 0)) / yesterday.revenue) * 100 : 0 },

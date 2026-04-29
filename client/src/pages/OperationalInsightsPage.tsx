@@ -448,7 +448,7 @@ function WeeklyComparison({ stream, isClinic }: { stream: StreamData; isClinic: 
   const lw = stream.lastWeek;
 
   const rows = isClinic ? [
-    { label: 'Patients', cur: tw.patients, prev: lw.patients, unit: 'count' as const },
+    { label: 'Visits', cur: tw.patients, prev: lw.patients, unit: 'count' as const },
     { label: 'Revenue', cur: tw.revenue, prev: lw.revenue, unit: 'currency' as const },
     { label: 'Avg Ticket', cur: tw.avgTicket, prev: lw.avgTicket, unit: 'currency' as const },
   ] : [
@@ -525,12 +525,15 @@ function WeeklyComparison({ stream, isClinic }: { stream: StreamData; isClinic: 
 }
 
 function DailyChart({ stream, isClinic }: { stream: StreamData; isClinic: boolean; dailyTargetLine: number }) {
+  // Clinic chart used to be "Patients" (unique). Now plots daily VISITS
+  // (encounters) — a patient with two visits on the same day still
+  // counts as two distinct order_numbers from Healthplix.
   const chartData = stream.daily.map(d => ({
     date: d.date.slice(8, 10),
-    [isClinic ? 'Patients' : 'Revenue']: isClinic ? (d.patients || 0) : d.revenue,
+    [isClinic ? 'Visits' : 'Revenue']: isClinic ? (d.patients || 0) : d.revenue,
   }));
 
-  const dataKey = isClinic ? 'Patients' : 'Revenue';
+  const dataKey = isClinic ? 'Visits' : 'Revenue';
   const barColor = isClinic ? TONES.accent.fg : TONES.blue.fg;
 
   return (
@@ -539,7 +542,7 @@ function DailyChart({ stream, isClinic }: { stream: StreamData; isClinic: boolea
         className="text-xs font-semibold mb-2"
         style={{ color: 'var(--mt-text-muted)' }}
       >
-        Daily {isClinic ? 'Patients' : 'Revenue'} — {stream.name}
+        Daily {isClinic ? 'Visits' : 'Revenue'} — {stream.name}
       </h3>
       {chartData.length === 0 ? (
         <div

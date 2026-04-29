@@ -312,13 +312,45 @@ router.get('/clinic-analytics', async (req, res) => {
   const LAB = 'LAB TEST';
   const OTHER = 'OTHER SERVICES';
 
-  // KPI counts
+  // ── KPI counts ──────────────────────────────────────────────────────
+  // The bucket counts (Appointment / Lab Test / Other / Direct walk-ins)
+  // were originally distinct-patient counts. Ops asked for encounter
+  // counts: a patient who books two appointments on different dates is
+  // 2, not 1. We now bucket at ORDER level (Healthplix's `#order` groups
+  // bill lines into a single visit). Distinct patient count survives as
+  // `totalUnique` for the standalone "Unique Patients" card.
   const totalUnique = patients.length;
-  const apptPatients = deptSets.filter((p: any) => p.deptSet.has(APPT)).length;
-  const labPatients = deptSets.filter((p: any) => p.deptSet.has(LAB)).length;
-  const otherPatients = deptSets.filter((p: any) => p.deptSet.has(OTHER)).length;
-  const directLabWalkins = deptSets.filter((p: any) => p.deptSet.has(LAB) && !p.deptSet.has(APPT)).length;
-  const directOtherWalkins = deptSets.filter((p: any) => p.deptSet.has(OTHER) && !p.deptSet.has(APPT)).length;
+
+  // Build per-order department sets, then bucket. One query, JS-side
+  // aggregation — mirrors the patient-set approach above and avoids
+  // multiple round-trips.
+  const orders = db.all(
+    `SELECT order_number, GROUP_CONCAT(DISTINCT department) as departments
+       FROM clinic_actuals
+      WHERE bill_month >= ? AND bill_month <= ?
+        AND order_number IS NOT NULL AND order_number != ''${bf.where}
+      GROUP BY order_number`,
+    startMonth, endMonth, ...bf.params
+  );
+  const orderDeptSets = orders.map((o: any) => ({
+    deptSet: new Set((o.departments || '').split(',').map((d: string) => d.trim()).filter(Boolean)),
+  }));
+
+  const apptPatients      = orderDeptSets.filter((o: any) => o.deptSet.has(APPT)).length;
+  const labPatients       = orderDeptSets.filter((o: any) => o.deptSet.has(LAB)).length;
+  const otherPatients     = orderDeptSets.filter((o: any) => o.deptSet.has(OTHER)).length;
+  const directLabWalkins  = orderDeptSets.filter((o: any) => o.deptSet.has(LAB)   && !o.deptSet.has(APPT)).length;
+  const directOtherWalkins = orderDeptSets.filter((o: any) => o.deptSet.has(OTHER) && !o.deptSet.has(APPT)).length;
+
+  // Repeat-traffic aggregates derived from the patient-level query
+  // (already has per-patient `visits` = COUNT(DISTINCT order_number)).
+  // totalVisits = sum of visits across patients = total order count.
+  // repeatVisits = visits beyond the first per patient (i.e. the
+  //                "extra" visits returning patients contributed).
+  // repeatPatients = how many distinct patients came back at least once.
+  const totalVisits    = patients.reduce((s: number, p: any) => s + (p.visits || 0), 0);
+  const repeatPatients = patients.filter((p: any) => (p.visits || 0) > 1).length;
+  const repeatVisits   = Math.max(0, totalVisits - totalUnique);
 
   // Department overlap counts
   const in1 = deptSets.filter((p: any) => p.dept_count === 1).length;
@@ -413,7 +445,14 @@ router.get('/clinic-analytics', async (req, res) => {
 
   res.json({
     hasData: true,
-    kpi: { totalUnique, apptPatients, labPatients, otherPatients, directLabWalkins, directOtherWalkins },
+    kpi: {
+      totalUnique,
+      // Encounter (order-level) counts — was distinct-patient counts.
+      apptPatients, labPatients, otherPatients,
+      directLabWalkins, directOtherWalkins,
+      // Repeat-traffic aggregates.
+      totalVisits, repeatVisits, repeatPatients,
+    },
     departmentOverlap: { in1, in2, in3 },
     combinations,
     revenueByDeptCount: revByDeptCount,
@@ -1080,7 +1119,7 @@ router.get('/operational-insights', async (req, res) => {
 
     if (isClinic) {
       const r = db.get(
-        `SELECT COUNT(DISTINCT COALESCE(NULLIF(patient_id, ''), patient_name)) as patients, COALESCE(SUM(item_price), 0) as revenue, COUNT(*) as txns
+        `SELECT COUNT(DISTINCT order_number) as patients, COALESCE(SUM(item_price), 0) as revenue, COUNT(*) as txns
          FROM clinic_actuals WHERE bill_month = ?${bf.where}`,
         currentMonth, ...bf.params
       );
@@ -1096,12 +1135,12 @@ router.get('/operational-insights', async (req, res) => {
       ];
       for (const cat of catDefs) {
         const cr = db.get(
-          `SELECT COUNT(DISTINCT COALESCE(NULLIF(patient_id, ''), patient_name)) as patients, COALESCE(SUM(item_price), 0) as revenue
+          `SELECT COUNT(DISTINCT order_number) as patients, COALESCE(SUM(item_price), 0) as revenue
            FROM clinic_actuals WHERE bill_month = ? ${cat.where}${bf.where}`,
           currentMonth, ...bf.params
         );
         const lr = db.get(
-          `SELECT COALESCE(SUM(item_price), 0) as revenue, COUNT(DISTINCT COALESCE(NULLIF(patient_id, ''), patient_name)) as patients
+          `SELECT COALESCE(SUM(item_price), 0) as revenue, COUNT(DISTINCT order_number) as patients
            FROM clinic_actuals WHERE bill_month = ? AND CAST(SUBSTR(bill_date, 9, 2) AS INTEGER) <= ? ${cat.where}${bf.where}`,
           lastMonth, lastMonthCutoffDay, ...bf.params
         );
@@ -1134,7 +1173,7 @@ router.get('/operational-insights', async (req, res) => {
     let lastMonthMtdRevenue = 0, lastMonthMtdPatients = 0, lastMonthMtdProfit = 0;
     if (isClinic) {
       const r = db.get(
-        `SELECT COUNT(DISTINCT COALESCE(NULLIF(patient_id, ''), patient_name)) as patients, COALESCE(SUM(item_price), 0) as revenue
+        `SELECT COUNT(DISTINCT order_number) as patients, COALESCE(SUM(item_price), 0) as revenue
          FROM clinic_actuals WHERE bill_month = ? AND CAST(SUBSTR(bill_date, 9, 2) AS INTEGER) <= ?${bf.where}`,
         lastMonth, lastMonthCutoffDay, ...bf.params
       );
@@ -1157,14 +1196,14 @@ router.get('/operational-insights', async (req, res) => {
 
     if (isClinic) {
       const tw = db.get(
-        `SELECT COUNT(DISTINCT COALESCE(NULLIF(patient_id, ''), patient_name)) as patients, COALESCE(SUM(item_price), 0) as revenue, COUNT(*) as txns
+        `SELECT COUNT(DISTINCT order_number) as patients, COALESCE(SUM(item_price), 0) as revenue, COUNT(*) as txns
          FROM clinic_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where}`,
         thisMondayStr, todayStr, ...bf.params
       );
       thisWeek = { patients: tw?.patients || 0, revenue: tw?.revenue || 0, transactions: tw?.txns || 0, profit: 0, avgTicket: (tw?.patients || 0) > 0 ? Math.round((tw?.revenue || 0) / tw.patients) : 0 };
 
       const lw = db.get(
-        `SELECT COUNT(DISTINCT COALESCE(NULLIF(patient_id, ''), patient_name)) as patients, COALESCE(SUM(item_price), 0) as revenue, COUNT(*) as txns
+        `SELECT COUNT(DISTINCT order_number) as patients, COALESCE(SUM(item_price), 0) as revenue, COUNT(*) as txns
          FROM clinic_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where}`,
         lastMondayStr, lastSundayStr, ...bf.params
       );
@@ -1194,7 +1233,7 @@ router.get('/operational-insights', async (req, res) => {
     let daily: any[] = [];
     if (isClinic) {
       daily = db.all(
-        `SELECT bill_date as date, COUNT(DISTINCT COALESCE(NULLIF(patient_id, ''), patient_name)) as patients, COALESCE(SUM(item_price), 0) as revenue
+        `SELECT bill_date as date, COUNT(DISTINCT order_number) as patients, COALESCE(SUM(item_price), 0) as revenue
          FROM clinic_actuals WHERE bill_month = ?${bf.where} GROUP BY bill_date ORDER BY bill_date`,
         currentMonth, ...bf.params
       );
@@ -1223,14 +1262,18 @@ router.get('/operational-insights', async (req, res) => {
       for (const cat of clinicCatBreakdown) {
         const ct = catTargets[cat.label] || { units: 0, revenue: 0 };
 
-        // Card 1: Patients
+        // Card 1: Visits (was "Patients" — flipped to encounter counting
+        // so a patient with two appointments shows as 2. The underlying
+        // `cat.patients` field now holds COUNT(DISTINCT order_number); the
+        // field name stays for client back-compat but the user-visible
+        // label here is the truth.)
         const patDaily = daysElapsed > 0 ? cat.patients / daysElapsed : 0;
         const patProj = Math.round(patDaily * daysInMonth);
         const patNeed = ct.units > 0 && daysRemaining > 0 ? Math.round((ct.units - cat.patients) / daysRemaining) : 0;
         const patPct = ct.units > 0 ? (patProj / ct.units) * 100 : 0;
         const patRag = ct.units === 0 ? 'GREY' : patPct >= 95 ? 'GREEN' : patPct >= 80 ? 'AMBER' : 'RED';
         cards.push({
-          label: 'Patients', mtd: cat.patients, target: ct.units, projected: patProj,
+          label: 'Visits', mtd: cat.patients, target: ct.units, projected: patProj,
           dailyRate: Math.round(patDaily), requiredRate: patNeed,
           rag: patRag, lastMonthMtd: cat.lastPatients, unit: 'count', category: cat.label,
         });

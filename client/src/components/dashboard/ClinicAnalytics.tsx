@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import api from '../../api/client';
 import { formatINR, formatNumber } from '../../utils/format';
-import { Users, Stethoscope, FlaskConical, Activity, ArrowRight, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Users, Stethoscope, FlaskConical, Activity, ArrowRight, Repeat, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import DataTable, { type ColumnDef } from '../common/DataTable';
 
 const COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#06b6d4'];
@@ -56,7 +56,7 @@ export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: Cli
 
   const { kpi, departmentOverlap, combinations, revenueByDeptCount, patientFlow, crossSellFunnel, doctorCrossSell } = data;
 
-  const anyCardVisible = ['total_unique_patients', 'appointment_patients', 'lab_test_patients', 'other_services_patients', 'direct_lab_walkins', 'direct_other_walkins'].some(isVisible);
+  const anyCardVisible = ['total_unique_patients', 'appointment_patients', 'lab_test_patients', 'other_services_patients', 'direct_lab_walkins', 'direct_other_walkins', 'repeat_visits'].some(isVisible);
   const anyChartVisible = ['department_overlap', 'patient_dept_donut', 'dept_combination_bars', 'revenue_per_patient', 'patient_flow_sankey', 'cross_sell_funnel', 'doctor_cross_sell_rate', 'doctor_stacked_bar'].some(isVisible);
   const tableVisible = isVisible('patient_summary_table');
 
@@ -107,14 +107,20 @@ export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: Cli
         <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-teal-500/10 text-teal-400">Healthplix</span>
       </div>
 
-      {/* Section A — Patient Count KPI Cards */}
+      {/* Section A — Visit Count KPI Cards.
+          Bucket cards (Appointment / Lab Test / Other Services / Direct
+          walk-ins) count ENCOUNTERS (distinct order_numbers), not unique
+          patients — so a patient with two appointments shows as 2. The
+          first card stays unique-patient counted ("Unique Patients") to
+          give ops a true headcount alongside the visit-count cards.
+          The trailing "Repeat Visits" card surfaces returning traffic. */}
       {anyCardVisible && (() => {
-        const visibleCount = ['total_unique_patients', 'appointment_patients', 'lab_test_patients', 'other_services_patients', 'direct_lab_walkins', 'direct_other_walkins'].filter(isVisible).length;
-        const lgColsClass: Record<number, string> = { 1: '', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6' };
+        const visibleCount = ['total_unique_patients', 'appointment_patients', 'lab_test_patients', 'other_services_patients', 'direct_lab_walkins', 'direct_other_walkins', 'repeat_visits'].filter(isVisible).length;
+        const lgColsClass: Record<number, string> = { 1: '', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6', 7: 'lg:grid-cols-7' };
         return (
-        <div className={`grid grid-cols-3 md:grid-cols-3 ${lgColsClass[visibleCount] || 'lg:grid-cols-6'} gap-2.5 mb-4`}>
+        <div className={`grid grid-cols-3 md:grid-cols-3 ${lgColsClass[visibleCount] || 'lg:grid-cols-7'} gap-2.5 mb-4`}>
           {isVisible('total_unique_patients') && (
-            <MiniKPI label="Total Patients" value={formatNumber(kpi.totalUnique)} icon={Users} color="teal" />
+            <MiniKPI label="Unique Patients" value={formatNumber(kpi.totalUnique)} icon={Users} color="teal" />
           )}
           {isVisible('appointment_patients') && (
             <MiniKPI label="Appointment" value={formatNumber(kpi.apptPatients)} icon={Stethoscope} color="blue" />
@@ -130,6 +136,15 @@ export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: Cli
           )}
           {isVisible('direct_other_walkins') && (
             <MiniKPI label="Direct Other Walk-ins" value={formatNumber(kpi.directOtherWalkins)} icon={ArrowRight} color="amber" sub="No appointment" />
+          )}
+          {isVisible('repeat_visits') && (
+            <MiniKPI
+              label="Repeat Visits"
+              value={formatNumber(kpi.repeatVisits || 0)}
+              icon={Repeat}
+              color="teal"
+              sub={`${formatNumber(kpi.repeatPatients || 0)} patients returned`}
+            />
           )}
         </div>
         );
