@@ -7,26 +7,42 @@ import { Request } from 'express';
  * - single-branch client or no branch context → no filtering
  * - specific branch → AND branch_id = ?
  * - consolidated → AND branch_id IN (?,?,?)
+ *
+ * The default behaviour INCLUDES rows with `branch_id IS NULL` so
+ * "company-level" data created in consolidated mode is visible from every
+ * branch's view. Some modules (notably Forecast) need strict per-branch
+ * isolation instead — they should call `branchFilter(req, { strict: true })`
+ * to drop the `OR branch_id IS NULL` clause.
  */
 export function branchFilter(
   req: Request,
-  alias?: string
+  optsOrAlias?: string | { strict?: boolean; alias?: string }
 ): { where: string; params: any[] } {
-  const col = alias ? `${alias}.branch_id` : 'branch_id';
+  // Back-compat: legacy callers passed an alias string positionally.
+  const opts = typeof optsOrAlias === 'string'
+    ? { alias: optsOrAlias }
+    : (optsOrAlias || {});
+  const col = opts.alias ? `${opts.alias}.branch_id` : 'branch_id';
+  const strict = !!opts.strict;
 
   if (!req.isMultiBranch || req.branchMode === 'single') {
     return { where: '', params: [] };
   }
 
   if (req.branchMode === 'specific' && req.branchId) {
-    // Include NULL so company-level data (created in consolidated mode) is
-    // visible to users viewing a specific branch.
-    return { where: ` AND (${col} = ? OR ${col} IS NULL)`, params: [req.branchId] };
+    // Strict mode (forecast): scope the row to ONLY this branch — NULL-branch
+    // legacy data does NOT leak in. Loose mode (default): also include NULL
+    // so company-level rows show alongside branch-specific ones.
+    return strict
+      ? { where: ` AND ${col} = ?`, params: [req.branchId] }
+      : { where: ` AND (${col} = ? OR ${col} IS NULL)`, params: [req.branchId] };
   }
 
   if (req.branchMode === 'consolidated' && req.allowedBranchIds?.length) {
     const placeholders = req.allowedBranchIds.map(() => '?').join(',');
-    return { where: ` AND (${col} IN (${placeholders}) OR ${col} IS NULL)`, params: [...req.allowedBranchIds] };
+    return strict
+      ? { where: ` AND ${col} IN (${placeholders})`, params: [...req.allowedBranchIds] }
+      : { where: ` AND (${col} IN (${placeholders}) OR ${col} IS NULL)`, params: [...req.allowedBranchIds] };
   }
 
   // Multi-branch client but no allowed branches — deny all data

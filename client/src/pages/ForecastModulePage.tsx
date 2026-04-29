@@ -74,6 +74,15 @@ export default function ForecastModulePage() {
   const [allValues, setAllValues] = useState<Record<number, Record<string, number>>>({});
   const [settings, setSettings] = useState<Record<string, any>>({});
   const [showDownloadPanel, setShowDownloadPanel] = useState(false);
+  // ── Orphan-scenario recovery banner ──────────────────────────────────────
+  // Strict branch isolation hides scenarios with `branch_id IS NULL`. For
+  // tenants migrating from single-branch (or whose admin once entered data
+  // in consolidated mode) those rows still exist but are now invisible.
+  // GET /scenarios/orphans returns the count; if non-zero we surface a
+  // one-click recovery banner that reassigns them to the user's current
+  // branch via POST /scenarios/migrate-orphans.
+  const [orphanInfo, setOrphanInfo] = useState<{ scenarioCount: number; itemCount: number } | null>(null);
+  const [migrating, setMigrating] = useState(false);
   const navigate = useNavigate();
 
   // Role-based access: admin + operational_head + super_admin can edit forecast.
@@ -147,6 +156,45 @@ export default function ForecastModulePage() {
   }, [scenario]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Detect orphan (NULL-branch) scenarios for the recovery banner.
+  // Skipped for single-branch tenants (no leak risk) and for read-only
+  // viewers (they can't migrate anyway, so the banner would be noise).
+  useEffect(() => {
+    if (readOnly) return;
+    if (typeof window === 'undefined') return;
+    if (!localStorage.getItem('is_multi_branch')) return;
+    api.get('/forecast-module/scenarios/orphans')
+      .then(res => setOrphanInfo(res.data))
+      .catch(() => { /* endpoint missing on older deployments — silently ignore */ });
+  }, [readOnly]);
+
+  const handleMigrateOrphans = async () => {
+    const targetBranchId = localStorage.getItem('branch_id');
+    const branchName = localStorage.getItem('branch_name') || 'this branch';
+    if (!targetBranchId) {
+      alert('Switch to a specific branch first — orphan forecasts can only be moved into a chosen branch, not the consolidated view.');
+      return;
+    }
+    const ok = window.confirm(
+      `Move ${orphanInfo?.scenarioCount} forecast scenario(s) (${orphanInfo?.itemCount} line items) into "${branchName}"?\n\n` +
+      `After this, the data shows ONLY in ${branchName} and is hidden from every other branch. ` +
+      `This cannot be undone automatically.`
+    );
+    if (!ok) return;
+    setMigrating(true);
+    try {
+      await api.post('/forecast-module/scenarios/migrate-orphans', {
+        targetBranchId: parseInt(targetBranchId),
+      });
+      setOrphanInfo({ scenarioCount: 0, itemCount: 0 });
+      // Reload so the moved scenarios show up in the current branch's view
+      window.location.reload();
+    } catch (e: any) {
+      alert(`Migration failed: ${e?.response?.data?.error || e.message || 'unknown error'}`);
+      setMigrating(false);
+    }
+  };
 
   const months = selectedFY ? getFYMonths(selectedFY.start_date) : [];
   const currentYear = selectedFY ? parseInt(selectedFY.start_date.slice(0, 4)) : 2026;
@@ -318,6 +366,42 @@ export default function ForecastModulePage() {
           </button>
         </div>
       </div>
+
+      {/* Orphan-scenario recovery banner (only when there's data to recover) */}
+      {orphanInfo && orphanInfo.scenarioCount > 0 && (
+        <div
+          className="mt-4 px-4 py-3 rounded-lg flex items-center justify-between gap-4 text-sm"
+          style={{
+            background: 'color-mix(in srgb, #f59e0b 12%, transparent)',
+            border: '1px solid color-mix(in srgb, #f59e0b 35%, transparent)',
+            color: 'var(--mt-text-heading)',
+          }}
+        >
+          <div className="flex items-start gap-3 flex-1">
+            <span style={{ fontSize: 18, lineHeight: 1, color: '#f59e0b' }}>⚠</span>
+            <div>
+              <div style={{ fontWeight: 600 }}>
+                {orphanInfo.scenarioCount} forecast scenario{orphanInfo.scenarioCount === 1 ? '' : 's'} not tied to any branch
+              </div>
+              <div style={{ color: 'var(--mt-text-muted)', marginTop: 2 }}>
+                {orphanInfo.itemCount} line item{orphanInfo.itemCount === 1 ? '' : 's'} are hidden from every branch's view because they were created without a branch context.
+                Move them into the current branch to make them visible here.
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleMigrateOrphans}
+            disabled={migrating}
+            className="mt-btn-gradient whitespace-nowrap"
+            style={{ padding: '8px 14px', fontSize: 13 }}
+            title="Reassigns the orphan scenarios to your current branch. Other branches keep showing nothing."
+          >
+            {migrating
+              ? 'Moving…'
+              : `Move into ${localStorage.getItem('branch_name') || 'current branch'}`}
+          </button>
+        </div>
+      )}
 
       {/* Route Content */}
       <div className="mt-4 md:mt-6">

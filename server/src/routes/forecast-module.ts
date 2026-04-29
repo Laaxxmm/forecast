@@ -16,7 +16,9 @@ function requireWriteAccess(req: Request, res: Response, next: NextFunction) {
 // === CONSOLIDATED VIEW (All Streams) ===
 router.get('/consolidated', async (req, res) => {
   const db = req.tenantDb!;
-  const bf = branchFilter(req);
+  // Strict isolation: a branch sees only scenarios it owns. NULL-branch
+  // legacy data is hidden — recover via POST /scenarios/migrate-orphans.
+  const bf = branchFilter(req, { strict: true });
   if (!req.query.fy_id) return res.status(400).json({ error: 'fy_id required' });
   const fy_id = requireInt(req.query.fy_id, 'fy_id');
 
@@ -69,7 +71,9 @@ router.get('/consolidated', async (req, res) => {
 // === SCENARIOS ===
 router.get('/scenarios', async (req, res) => {
   const db = req.tenantDb!;
-  const bf = branchFilter(req);
+  // Strict isolation: a branch sees only scenarios it owns. NULL-branch
+  // legacy data is hidden — recover via POST /scenarios/migrate-orphans.
+  const bf = branchFilter(req, { strict: true });
   const sf = streamFilter(req);
   if (!req.query.fy_id) return res.status(400).json({ error: 'fy_id required' });
   const fy_id = requireInt(req.query.fy_id, 'fy_id');
@@ -80,7 +84,9 @@ router.post('/scenarios', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
   const fy_id = requireInt(req.body.fy_id, 'fy_id');
   const name = requireString(req.body.name, 'name', 200);
-  const bf = branchFilter(req);
+  // Strict isolation: a branch sees only scenarios it owns. NULL-branch
+  // legacy data is hidden — recover via POST /scenarios/migrate-orphans.
+  const bf = branchFilter(req, { strict: true });
   const sf = streamFilter(req);
   const branchId = getBranchIdForInsert(req);
   const streamId = getStreamIdForInsert(req);
@@ -91,58 +97,110 @@ router.post('/scenarios', requireWriteAccess, async (req, res) => {
   res.json(created);
 });
 
+// === ORPHAN SCENARIO RECOVERY ===
+//
+// Strict branch isolation hides any scenarios with `branch_id IS NULL`. Most
+// tenants will never have such rows; the few that do (legacy single-branch
+// data, or forecasts entered while in consolidated mode pre-fix) need a way
+// to claim that data into a specific branch instead of losing visibility of
+// it. These two endpoints — list + migrate — are the recovery path.
+
+/** Count NULL-branch ("orphan") scenarios + items in this tenant. Read-only.
+ *  Used by the UI to show the recovery banner only when there's something to
+ *  recover. */
+router.get('/scenarios/orphans', async (req, res) => {
+  const db = req.tenantDb!;
+  if (!req.isMultiBranch) {
+    // Single-branch tenants don't have a leak problem — branchFilter is a
+    // no-op for them. Skip the lookup entirely.
+    return res.json({ scenarioCount: 0, itemCount: 0, scenarios: [] });
+  }
+  const scenarios = db.all(
+    `SELECT s.id, s.fy_id, s.name, s.stream_id, s.is_default, s.created_at,
+            (SELECT COUNT(*) FROM forecast_items WHERE scenario_id = s.id) AS item_count
+       FROM scenarios s
+      WHERE s.branch_id IS NULL
+      ORDER BY s.created_at, s.id`
+  );
+  const itemCount = scenarios.reduce((n: number, s: any) => n + (s.item_count || 0), 0);
+  res.json({ scenarioCount: scenarios.length, itemCount, scenarios });
+});
+
+/** Reassign every NULL-branch scenario to `targetBranchId`. After running
+ *  this, the rows show up in the target branch's view and in no other
+ *  branch's. Idempotent — calling it again with no NULL-branch rows is a
+ *  no-op that returns `{ migratedScenarios: 0 }`. Admin-only. */
+router.post('/scenarios/migrate-orphans', requireWriteAccess, async (req, res) => {
+  const db = req.tenantDb!;
+  const targetBranchId = requireInt(req.body.targetBranchId, 'targetBranchId');
+
+  // Verify the target is a branch the caller is actually allowed to write to
+  // — otherwise an op-head for branch A could silently hijack the tenant's
+  // company-level data into A. Super admins and tenant admins skip this check
+  // (they can write to every branch).
+  const isPrivileged = req.userType === 'super_admin' || req.session?.role === 'admin';
+  if (!isPrivileged) {
+    if (!req.allowedBranchIds?.includes(targetBranchId)) {
+      return res.status(403).json({ error: 'Cannot migrate orphans to a branch you do not own' });
+    }
+  }
+
+  const before = db.get('SELECT COUNT(*) as n FROM scenarios WHERE branch_id IS NULL');
+  const result = db.run('UPDATE scenarios SET branch_id = ? WHERE branch_id IS NULL', targetBranchId);
+  res.json({
+    migratedScenarios: result.changes,
+    nullBranchScenariosBefore: before?.n || 0,
+    targetBranchId,
+  });
+});
+
 router.post('/scenarios/ensure', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
   if (!req.body.fy_id) return res.status(400).json({ error: 'fy_id required' });
   const fy_id = requireInt(req.body.fy_id, 'fy_id');
-  const bf = branchFilter(req);
+  // Strict isolation: a branch sees only scenarios it owns. NULL-branch
+  // legacy data is hidden — recover via POST /scenarios/migrate-orphans.
+  const bf = branchFilter(req, { strict: true });
   const sf = streamFilter(req);
   const branchId = getBranchIdForInsert(req);
   const streamId = getStreamIdForInsert(req);
 
   // Don't create scenarios for "all" stream mode — use /consolidated instead
   if (req.streamMode === 'all' || req.streamMode === 'none') {
-    // Prefer NULL-branch (company-level, admin-created) scenarios so branch
-    // users see the populated data instead of an auto-created empty stub.
+    // With strict branch filtering the result is uniquely scoped to the
+    // current branch — NULL-branch rows never match — so a stable `id` sort
+    // is enough.
     const scenario = db.get(
-      `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where} ORDER BY branch_id IS NOT NULL, id`,
+      `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where} ORDER BY id`,
       fy_id, ...bf.params
     );
     return res.json(scenario || null);
   }
 
-  // Find a matching scenario, preferring ones that actually have forecast items.
-  //
-  // ORDER BY puts EXACT matches first (branch_id IS NULL = 1 sorts after a
-  // specific branch_id match where IS NULL = 0). Same for stream_id. So the
-  // chain is: exact-branch + exact-stream wins, then exact-branch + NULL
-  // stream (legacy fallback), then NULL-branch + exact-stream, finally
-  // NULL-branch + NULL-stream.
-  //
-  // Why this order matters: a tenant that has both a stream-specific scenario
-  // (e.g. clinic-Jubilee with items) AND a legacy NULL-NULL scenario (with
-  // items) used to resolve to the NULL-NULL one for BOTH the Clinic and
-  // Pharmacy views — same data showing in both. Flipping the sort fixes that
-  // by preferring the Clinic-specific scenario for the Clinic view.
-  // Legacy tenants without per-stream scenarios still work because the
-  // NULL-stream scenarios are still matched (just sorted last).
+  // Pick the matching scenario for this (branch, stream). Branch is already
+  // strict-isolated by `bf`; the only remaining ambiguity is the stream axis,
+  // where `sf` still includes NULL-stream rows (company-level data within a
+  // single branch is fine — only cross-branch leak was the bug). Sort
+  // NULL-stream rows last so a stream-specific scenario beats a legacy
+  // NULL-stream one when both exist for the same branch (the original
+  // commit a47a4f9 fix, kept intact).
   let scenario = db.get(
     `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where}
        AND EXISTS (SELECT 1 FROM forecast_items WHERE scenario_id = scenarios.id)
-     ORDER BY branch_id IS NULL, stream_id IS NULL, id`,
+     ORDER BY stream_id IS NULL, id`,
     fy_id, ...bf.params, ...sf.params
   );
   // Fallback: any matching default scenario (even empty)
   if (!scenario) {
     scenario = db.get(
-      `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where} ORDER BY branch_id IS NULL, stream_id IS NULL, id`,
+      `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where} ORDER BY stream_id IS NULL, id`,
       fy_id, ...bf.params, ...sf.params
     );
   }
   // Fallback: any matching scenario (non-default)
   if (!scenario) {
     scenario = db.get(
-      `SELECT * FROM scenarios WHERE fy_id = ?${bf.where}${sf.where} ORDER BY branch_id IS NULL, stream_id IS NULL, id`,
+      `SELECT * FROM scenarios WHERE fy_id = ?${bf.where}${sf.where} ORDER BY stream_id IS NULL, id`,
       fy_id, ...bf.params, ...sf.params
     );
   }
@@ -150,7 +208,7 @@ router.post('/scenarios/ensure', requireWriteAccess, async (req, res) => {
   if (!scenario) {
     db.run('INSERT INTO scenarios (fy_id, name, is_default, branch_id, stream_id) VALUES (?, ?, 1, ?, ?)', fy_id, 'Original Scenario', branchId, streamId);
     scenario = db.get(
-      `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where} ORDER BY branch_id IS NULL, stream_id IS NULL, id`,
+      `SELECT * FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}${sf.where} ORDER BY stream_id IS NULL, id`,
       fy_id, ...bf.params, ...sf.params
     );
   }
