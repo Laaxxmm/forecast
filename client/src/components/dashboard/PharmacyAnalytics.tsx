@@ -468,7 +468,22 @@ function SalesTab({ data, isVisible, search, setSearch, page, setPage, pageSize,
         const cols: Record<number, string> = { 1: '', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6' };
         return (
           <div className={`grid grid-cols-2 md:grid-cols-3 ${cols[visibleCount] || 'lg:grid-cols-6'} gap-4 mb-3`}>
-            {isVisible('pharma_total_sales') && <MiniKPI label="Gross Sales (incl. GST)" sub="Top-line / GST filing" value={formatINR(kpi.totalSales)} icon={TrendingUp} color="teal" />}
+            {isVisible('pharma_total_sales') && (
+              // Headline sales card shows NET of GST so it reads as
+              // P&L revenue (matches Gross Profit / Margin which are
+              // also computed off net sales). Gross sales incl. GST is
+              // still surfaced in the footnote below + the Sales table
+              // for GST-filing reconciliation. Falls back to
+              // (totalSales - totalTax) for legacy responses without
+              // `totalNetSales`.
+              <MiniKPI
+                label="Net Sales (ex-GST)"
+                sub="Top-line revenue"
+                value={formatINR(kpi.totalNetSales ?? Math.max(0, (kpi.totalSales || 0) - (kpi.totalTax || 0)))}
+                icon={TrendingUp}
+                color="teal"
+              />
+            )}
             {isVisible('pharma_total_cogs') && <MiniKPI label="COGS (ex-GST)" sub="Net purchase rate" value={formatINR(kpi.totalCogs)} icon={DollarSign} color="blue" />}
             {isVisible('pharma_total_profit') && <MiniKPI label="Gross Profit" sub="Net Sales − COGS" value={formatINR(kpi.totalGrossProfit ?? kpi.totalProfit)} icon={TrendingUp} color="emerald" />}
             {isVisible('pharma_profit_margin') && <MiniKPI label="Gross Margin %" sub="On Net Sales (ex-GST)" value={`${kpi.grossMarginPct ?? kpi.profitMargin}%`} icon={BarChart3} color="purple" />}
@@ -478,12 +493,14 @@ function SalesTab({ data, isVisible, search, setSearch, page, setPage, pageSize,
         );
       })()}
 
-      {/* Profit math footnote — explains the GST-inclusive vs ex-GST split and
-          surfaces the sanity-check identity (reported − correct ≡ tax collected). */}
+      {/* Profit math footnote — explains the GST-inclusive vs ex-GST split.
+          Headline card now shows Net Sales (ex-GST), so the footnote
+          surfaces Gross Sales (for GST-filing reconciliation) plus the
+          sanity-check identity (reported − correct ≡ tax collected). */}
       {anyCardVisible && kpi && (
         <div className="text-[11px] text-theme-faint mb-6 px-3 py-2 rounded-lg border border-dark-400/20 bg-dark-700/30 leading-relaxed">
-          <span className="font-medium text-theme-secondary">Net Sales (ex-GST):</span>{' '}
-          {formatINR(kpi.totalNetSales ?? Math.max(0, (kpi.totalSales || 0) - (kpi.totalTax || 0)))}
+          <span className="font-medium text-theme-secondary">Gross Sales (incl. GST · for filing):</span>{' '}
+          {formatINR(kpi.totalSales || 0)}
           {' · '}
           <span className="font-medium text-theme-secondary">GST collected (govt liability, not income):</span>{' '}
           {formatINR(kpi.totalTax || 0)}
