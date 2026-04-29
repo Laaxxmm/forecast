@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { X, Download, Calendar, CalendarDays, CalendarRange } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -30,6 +30,16 @@ interface Props {
   onClose: () => void;
   data: InsightsData;
   clientName?: string;
+  branchName?: string;
+  streamName?: string;
+}
+
+/** Holds the client logo as an in-memory PNG data URL plus its aspect ratio
+ *  (width / height). The data URL is what jspdf's addImage accepts. We
+ *  always normalise to PNG via canvas so SVG/JPEG/WEBP all just work. */
+interface LogoState {
+  dataUrl: string;
+  aspect: number;
 }
 
 type ReportVariant = 'daily' | 'weekly' | 'monthly';
@@ -73,6 +83,32 @@ function pctChange(cur: number, prev: number): string {
   const delta = ((cur - prev) / prev) * 100;
   const sign = delta >= 0 ? '+' : '';
   return `${sign}${delta.toFixed(1)}%`;
+}
+
+/** Build the footer label rendered at the bottom of every page. Includes
+ *  client + branch + stream so a printed copy is unambiguous about which
+ *  organisation / location / line of business it pertains to. */
+function footerLabel(
+  reportType: string,
+  monthLabel: string,
+  clientName: string,
+  branchName: string,
+  streamName: string,
+): string {
+  const parts: string[] = [reportType, monthLabel];
+  if (clientName) parts.push(clientName);
+  if (branchName) parts.push(branchName);
+  if (streamName) parts.push(streamName);
+  return parts.map(p => safeText(p)).join('  |  ');
+}
+
+/** Build a filesystem-safe filename. `{ReportType}_{YYYY-MM}[_branch][_extra].pdf` */
+function filename(prefix: string, month: string, branchName: string, extra?: string): string {
+  const branchTag = branchName
+    ? `_${branchName.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`
+    : '';
+  const extraTag = extra ? `_${extra}` : '';
+  return `${prefix}_${month}${branchTag}${extraTag}.pdf`;
 }
 
 function prettyDate(d: string): string {
@@ -529,32 +565,83 @@ function drawInlineBarPaced(
 
 /* ──────── Page chrome ──────── */
 
-function addHeader(doc: jsPDF, title: string, subtitle: string, clientName: string) {
+/** Draw the teal title bar that crowns every report's first page.
+ *
+ *  Layout, left → right:
+ *    • Logo box (when supplied) — 22mm tall, width by aspect, capped at 36mm
+ *    • Title (large bold) and subtitle, anchored to the right edge of the logo
+ *    • Right rail: company name (bold), branch · stream context, generated date
+ *
+ *  When `logo` is null the layout collapses gracefully and the title sits at
+ *  x=14 like before, so reports for clients without a logo still look right.
+ */
+function addHeader(
+  doc: jsPDF,
+  title: string,
+  subtitle: string,
+  clientName: string,
+  branchName: string,
+  streamName: string,
+  logo: LogoState | null,
+) {
   const pageW = doc.internal.pageSize.getWidth();
   doc.setFillColor(...PRIMARY);
   doc.rect(0, 0, pageW, 34, 'F');
   doc.setFillColor(...PRIMARY_DARK);
   doc.rect(0, 34, pageW, 2, 'F');
 
+  // ── Logo (left) ──
+  let titleX = 14;
+  if (logo && logo.dataUrl) {
+    const logoH = 22;
+    const aspect = logo.aspect && isFinite(logo.aspect) && logo.aspect > 0 ? logo.aspect : 1;
+    // Cap width so very-wide logos don't crowd the title; floor so very-tall
+    // logos keep some presence. Height stays at 22mm so the logo always sits
+    // visually centred inside the 34mm bar.
+    const logoW = Math.max(8, Math.min(36, logoH * aspect));
+    try {
+      doc.addImage(logo.dataUrl, 'PNG', 14, 6, logoW, logoH, undefined, 'FAST');
+      titleX = 14 + logoW + 5;
+    } catch {
+      // ignore; fall through to a text-only header
+    }
+  }
+
+  // ── Title + subtitle ──
   doc.setTextColor(255, 255, 255);
-  doc.setFontSize(19);
+  doc.setFontSize(18);
   doc.setFont('helvetica', 'bold');
-  doc.text(title, 14, 15);
+  doc.text(title, titleX, 15);
 
-  doc.setFontSize(10);
+  doc.setFontSize(9.5);
   doc.setFont('helvetica', 'normal');
-  doc.text(subtitle, 14, 24);
+  doc.text(subtitle, titleX, 23);
 
+  // ── Right rail: company name, branch · stream, generated timestamp ──
   if (clientName) {
     doc.setFontSize(11);
     doc.setFont('helvetica', 'bold');
-    doc.text(clientName, pageW - 14, 15, { align: 'right' });
+    doc.setTextColor(255, 255, 255);
+    doc.text(safeText(clientName), pageW - 14, 13, { align: 'right' });
   }
+
+  const ctxParts: string[] = [];
+  if (branchName) ctxParts.push(safeText(branchName));
+  if (streamName) ctxParts.push(safeText(streamName));
+  if (ctxParts.length) {
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    // Slightly muted teal-on-teal so the company name stays visually dominant
+    doc.setTextColor(220, 245, 235);
+    doc.text(ctxParts.join('  ·  '), pageW - 14, 21, { align: 'right' });
+  }
+
   doc.setFontSize(8);
   doc.setFont('helvetica', 'normal');
+  doc.setTextColor(220, 245, 235);
   doc.text(
     `Generated ${new Date().toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}`,
-    pageW - 14, 24, { align: 'right' }
+    pageW - 14, 28, { align: 'right' }
   );
 }
 
@@ -878,9 +965,17 @@ function buildNarrative(data: InsightsData, variant: ReportVariant): InsightNarr
 type WoWRow = { label: string; cur: string; prev: string; pct: number };
 
 /** Initialise page chrome: grey bg + teal header + white panel below header. */
-function drawFirstPageChrome(doc: jsPDF, title: string, subtitle: string, clientName: string): number {
+function drawFirstPageChrome(
+  doc: jsPDF,
+  title: string,
+  subtitle: string,
+  clientName: string,
+  branchName: string,
+  streamName: string,
+  logo: LogoState | null,
+): number {
   drawPageBg(doc);
-  addHeader(doc, title, subtitle, clientName);
+  addHeader(doc, title, subtitle, clientName, branchName, streamName, logo);
   const pw = doc.internal.pageSize.getWidth();
   const ph = doc.internal.pageSize.getHeight();
   drawCard(doc, 8, 40, pw - 16, ph - 54);
@@ -1300,7 +1395,13 @@ function drawDailyTrendBlock(
 
 /* ──────── Daily PDF ──────── */
 
-function generateDailyPDF(data: InsightsData, clientName: string) {
+function generateDailyPDF(
+  data: InsightsData,
+  clientName: string,
+  branchName: string,
+  streamName: string,
+  logo: LogoState | null,
+) {
   const doc = new jsPDF({ orientation: 'portrait', format: 'a4', unit: 'mm' });
   const pageW = doc.internal.pageSize.getWidth();
   const INNER_X = 14;
@@ -1313,7 +1414,10 @@ function generateDailyPDF(data: InsightsData, clientName: string) {
     doc,
     'Daily Operational Insight',
     `${data.monthLabel}  |  Day ${data.daysElapsed} of ${data.daysInMonth}  |  ${data.daysRemaining} days remaining`,
-    clientName
+    clientName,
+    branchName,
+    streamName,
+    logo,
   );
 
   const narrative = buildNarrative(data, 'daily');
@@ -1447,13 +1551,19 @@ function generateDailyPDF(data: InsightsData, clientName: string) {
   // ── Actions ──
   y = drawActionsBlock(doc, "Today's Actions", narrative.actions, y, INNER_X, INNER_W);
 
-  addFooter(doc, `Daily Insight  |  ${data.monthLabel}  |  ${clientName}`);
-  doc.save(`Daily_Insight_${data.month}_${latestDate || 'today'}.pdf`);
+  addFooter(doc, footerLabel('Daily Insight', data.monthLabel, clientName, branchName, streamName));
+  doc.save(filename('Daily_Insight', data.month, branchName, latestDate || 'today'));
 }
 
 /* ──────── Weekly PDF ──────── */
 
-function generateWeeklyPDF(data: InsightsData, clientName: string) {
+function generateWeeklyPDF(
+  data: InsightsData,
+  clientName: string,
+  branchName: string,
+  streamName: string,
+  logo: LogoState | null,
+) {
   const doc = new jsPDF({ orientation: 'portrait', format: 'a4', unit: 'mm' });
   const pageW = doc.internal.pageSize.getWidth();
   const INNER_X = 14;
@@ -1464,7 +1574,10 @@ function generateWeeklyPDF(data: InsightsData, clientName: string) {
     doc,
     'Weekly Operational Insight',
     `${data.monthLabel}  |  Day ${data.daysElapsed} of ${data.daysInMonth}  |  ${data.daysRemaining} days remaining`,
-    clientName
+    clientName,
+    branchName,
+    streamName,
+    logo,
   );
 
   const narrative = buildNarrative(data, 'weekly');
@@ -1494,13 +1607,19 @@ function generateWeeklyPDF(data: InsightsData, clientName: string) {
   // ── Actions ──
   y = drawActionsBlock(doc, 'Focus Areas for Next Week', narrative.actions, y, INNER_X, INNER_W);
 
-  addFooter(doc, `Weekly Insight  |  ${data.monthLabel}  |  ${clientName}`);
-  doc.save(`Weekly_Insight_${data.month}.pdf`);
+  addFooter(doc, footerLabel('Weekly Insight', data.monthLabel, clientName, branchName, streamName));
+  doc.save(filename('Weekly_Insight', data.month, branchName));
 }
 
 /* ──────── Monthly PDF ──────── */
 
-function generateMonthlyPDF(data: InsightsData, clientName: string) {
+function generateMonthlyPDF(
+  data: InsightsData,
+  clientName: string,
+  branchName: string,
+  streamName: string,
+  logo: LogoState | null,
+) {
   const doc = new jsPDF({ orientation: 'portrait', format: 'a4', unit: 'mm' });
   const pageW = doc.internal.pageSize.getWidth();
   const INNER_X = 14;
@@ -1511,7 +1630,10 @@ function generateMonthlyPDF(data: InsightsData, clientName: string) {
     doc,
     'Monthly / MTD Operational Insight',
     `${data.monthLabel}  |  Day ${data.daysElapsed} of ${data.daysInMonth}  |  ${data.daysRemaining} days remaining`,
-    clientName
+    clientName,
+    branchName,
+    streamName,
+    logo,
   );
 
   const narrative = buildNarrative(data, 'monthly');
@@ -1541,22 +1663,80 @@ function generateMonthlyPDF(data: InsightsData, clientName: string) {
   // ── Management Actions ──
   y = drawActionsBlock(doc, 'Management Actions to Achieve Monthly Target', narrative.actions, y, INNER_X, INNER_W);
 
-  addFooter(doc, `Monthly Insight  |  ${data.monthLabel}  |  ${clientName}`);
-  doc.save(`Monthly_Insight_${data.month}.pdf`);
+  addFooter(doc, footerLabel('Monthly Insight', data.monthLabel, clientName, branchName, streamName));
+  doc.save(filename('Monthly_Insight', data.month, branchName));
 }
 
 /* ──────── Component ──────── */
 
-export default function InsightDownloadPanel({ open, onClose, data, clientName = '' }: Props) {
+export default function InsightDownloadPanel({
+  open, onClose, data,
+  clientName = '', branchName = '', streamName = '',
+}: Props) {
   const [variant, setVariant] = useState<ReportVariant>('monthly');
   const [generating, setGenerating] = useState(false);
+  const [logo, setLogo] = useState<LogoState | null>(null);
+
+  // Load the client logo when the panel opens. The logo lives at
+  // `/api/logos/clients/{slug}.{ext}` (same pattern Sidebar uses) — we try a
+  // handful of common extensions, the first one that 200s wins.
+  //
+  // We render the image to an offscreen <canvas> and serialise it as PNG
+  // before passing to jspdf. Two reasons:
+  //   1. jspdf's addImage doesn't natively understand SVG; rasterising via
+  //      canvas converts it for free (the browser handles the vector → bitmap
+  //      step).
+  //   2. Some clients upload JPEG / WEBP and listing every encoder in jspdf
+  //      is fiddly. Normalising to PNG keeps the PDF code path uniform.
+  //
+  // If no logo is found we leave `logo` as null and the header collapses
+  // gracefully to its text-only layout.
+  useEffect(() => {
+    if (!open) return;
+    const slug = typeof window !== 'undefined' ? localStorage.getItem('client_slug') : null;
+    if (!slug) return;
+
+    let cancelled = false;
+    (async () => {
+      for (const ext of ['png', 'jpg', 'jpeg', 'webp', 'svg']) {
+        const url = `/api/logos/clients/${slug}.${ext}`;
+        try {
+          const head = await fetch(url, { method: 'HEAD' });
+          if (!head.ok) continue;
+
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          await new Promise<void>((resolve, reject) => {
+            img.onload = () => resolve();
+            img.onerror = (e) => reject(e);
+            img.src = url;
+          });
+
+          const w = img.naturalWidth || img.width || 256;
+          const h = img.naturalHeight || img.height || 256;
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return;
+          ctx.drawImage(img, 0, 0, w, h);
+          const dataUrl = canvas.toDataURL('image/png');
+          if (!cancelled) setLogo({ dataUrl, aspect: w / h });
+          return;
+        } catch {
+          // try next extension
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [open]);
 
   const handleDownload = async () => {
     setGenerating(true);
     try {
-      if (variant === 'daily') generateDailyPDF(data, clientName);
-      else if (variant === 'weekly') generateWeeklyPDF(data, clientName);
-      else generateMonthlyPDF(data, clientName);
+      if (variant === 'daily') generateDailyPDF(data, clientName, branchName, streamName, logo);
+      else if (variant === 'weekly') generateWeeklyPDF(data, clientName, branchName, streamName, logo);
+      else generateMonthlyPDF(data, clientName, branchName, streamName, logo);
       setTimeout(() => { setGenerating(false); onClose(); }, 400);
     } catch (err) {
       console.error('PDF generation error:', err);

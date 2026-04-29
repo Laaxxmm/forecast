@@ -124,6 +124,8 @@ export default function OperationalInsightsPage() {
   const [loading, setLoading] = useState(true);
   const [downloadOpen, setDownloadOpen] = useState(false);
   const clientName = typeof window !== 'undefined' ? (localStorage.getItem('client_name') || '') : '';
+  const branchName = typeof window !== 'undefined' ? (localStorage.getItem('branch_name') || '') : '';
+  const streamName = typeof window !== 'undefined' ? (localStorage.getItem('stream_name') || '') : '';
 
   useEffect(() => {
     api.get('/dashboard/operational-insights')
@@ -193,6 +195,8 @@ export default function OperationalInsightsPage() {
         onClose={() => setDownloadOpen(false)}
         data={data}
         clientName={clientName}
+        branchName={branchName}
+        streamName={streamName}
       />
 
       {/* Combined Overview Bar */}
