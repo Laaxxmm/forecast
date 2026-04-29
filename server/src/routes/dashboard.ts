@@ -122,18 +122,28 @@ router.get('/overview', async (req, res) => {
   // This handles cases where the auto-sync didn't run or data was lost
   if (totalRevenue === 0) {
     // Build a map of stream name → raw table for known integrations
+    // Per-stream revenue source. `amountCol` is interpolated into a
+    // `SUM(${amountCol})` SQL fragment so it can be either a column
+    // name or a column expression. We use an expression for pharmacy
+    // to subtract GST (sales_amount is gross-incl-tax in the source
+    // table) — the Actuals page shows top-line *revenue*, which on
+    // P&L is net of indirect tax. Clinic's `item_price` is already
+    // ex-GST (Healthplix exports tax separately and consult fees
+    // typically aren't taxed); turia's `total_amount` is left as-is.
     const streamSourceMap: Record<string, { table: string; amountCol: string; monthCol: string }> = {};
     for (const stream of clientStreams) {
       const nameLower = stream.name.toLowerCase();
       if (nameLower.includes('clinic') || nameLower.includes('health')) {
         streamSourceMap[stream.id] = { table: 'clinic_actuals', amountCol: 'item_price', monthCol: 'bill_month' };
       } else if (nameLower.includes('pharma')) {
-        streamSourceMap[stream.id] = { table: 'pharmacy_sales_actuals', amountCol: 'sales_amount', monthCol: 'bill_month' };
+        streamSourceMap[stream.id] = { table: 'pharmacy_sales_actuals', amountCol: '(sales_amount - COALESCE(sales_tax, 0))', monthCol: 'bill_month' };
       } else if (nameLower.includes('consult') || nameLower.includes('turia')) {
         streamSourceMap[stream.id] = { table: 'turia_invoices', amountCol: 'total_amount', monthCol: 'invoice_month' };
       }
     }
-    // Fallback for no-stream clients
+    // Fallback for no-stream clients. Pharmacy total is ex-GST to
+    // match the per-stream revenue semantic (P&L top-line = net of
+    // indirect tax).
     if (clientStreams.length === 0) {
       try {
         const clinicTotal = db.get(
@@ -141,7 +151,7 @@ router.get('/overview', async (req, res) => {
           startMonth, endMonth, ...bf.params
         );
         const pharmaTotal = db.get(
-          `SELECT COALESCE(SUM(sales_amount), 0) as total FROM pharmacy_sales_actuals WHERE bill_month >= ? AND bill_month <= ?${bf.where}`,
+          `SELECT COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as total FROM pharmacy_sales_actuals WHERE bill_month >= ? AND bill_month <= ?${bf.where}`,
           startMonth, endMonth, ...bf.params
         );
         totalRevenue = (clinicTotal?.total || 0) + (pharmaTotal?.total || 0);
@@ -1155,7 +1165,7 @@ router.get('/operational-insights', async (req, res) => {
     } else if (isPharmacy) {
       const r = db.get(
         `SELECT COUNT(DISTINCT bill_no) as txns,
-                COALESCE(SUM(sales_amount), 0) as revenue,
+                COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as revenue,
                 COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as netSales,
                 COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)), 0) as profit,
                 COALESCE(SUM(purchase_amount), 0) as cogs
@@ -1181,7 +1191,7 @@ router.get('/operational-insights', async (req, res) => {
       lastMonthMtdPatients = r?.patients || 0;
     } else if (isPharmacy) {
       const r = db.get(
-        `SELECT COALESCE(SUM(sales_amount), 0) as revenue,
+        `SELECT COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as revenue,
                 COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)), 0) as profit
          FROM pharmacy_sales_actuals WHERE bill_month = ? AND CAST(SUBSTR(bill_date, 9, 2) AS INTEGER) <= ?${bf.where}`,
         lastMonth, lastMonthCutoffDay, ...bf.params
@@ -1212,7 +1222,7 @@ router.get('/operational-insights', async (req, res) => {
       // Weekly profit is recomputed Gross Profit (sales - tax - cogs).
       const tw = db.get(
         `SELECT COUNT(DISTINCT bill_no) as txns,
-                COALESCE(SUM(sales_amount), 0) as revenue,
+                COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as revenue,
                 COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)), 0) as profit
          FROM pharmacy_sales_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where}`,
         thisMondayStr, todayStr, ...bf.params
@@ -1221,7 +1231,7 @@ router.get('/operational-insights', async (req, res) => {
 
       const lw = db.get(
         `SELECT COUNT(DISTINCT bill_no) as txns,
-                COALESCE(SUM(sales_amount), 0) as revenue,
+                COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as revenue,
                 COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)), 0) as profit
          FROM pharmacy_sales_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where}`,
         lastMondayStr, lastSundayStr, ...bf.params
@@ -1241,7 +1251,7 @@ router.get('/operational-insights', async (req, res) => {
       // Daily profit is recomputed Gross Profit (sales - tax - cogs).
       daily = db.all(
         `SELECT bill_date as date, COUNT(DISTINCT bill_no) as transactions,
-                COALESCE(SUM(sales_amount), 0) as revenue,
+                COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as revenue,
                 COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0) - COALESCE(purchase_amount, 0)), 0) as profit
          FROM pharmacy_sales_actuals WHERE bill_month = ?${bf.where} GROUP BY bill_date ORDER BY bill_date`,
         currentMonth, ...bf.params
