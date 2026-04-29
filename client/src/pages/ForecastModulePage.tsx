@@ -13,7 +13,6 @@ import {
   BarChart3, Table2, FileText, Building2, Banknote, ChevronLeft, ChevronRight, Calendar, Printer, FileDown, Settings, TrendingUp
 } from 'lucide-react';
 import DownloadPrintPanel from '../components/forecast/DownloadPrintPanel';
-import { exportAllItemsCSV } from '../components/forecast/csvExport';
 import { buildForecastWorkbook } from '../utils/forecastWorkbook';
 import { canWriteForecast, isSuperAdmin } from '../utils/roles';
 
@@ -317,15 +316,6 @@ export default function ForecastModulePage() {
             <FileDown size={14} />
             <span className="hidden sm:inline">Excel</span>
           </button>
-          <button
-            onClick={() => exportAllItemsCSV(items, allValues, months, viewMode)}
-            className="mt-btn-ghost"
-            style={{ padding: '6px 10px', fontSize: 12 }}
-            title="Download table as CSV (legacy single-sheet export)"
-          >
-            <FileDown size={14} />
-            <span className="hidden sm:inline">CSV</span>
-          </button>
         </div>
       </div>
 
@@ -339,6 +329,7 @@ export default function ForecastModulePage() {
           <Route path="tables/*" element={
             <FinancialTables
               scenario={scenario}
+              fy={selectedFY}
               months={months}
               viewMode={viewMode}
               items={items}

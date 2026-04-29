@@ -2,7 +2,7 @@ import { useState, useMemo, useRef } from 'react';
 import { Plus, GripVertical, ChevronDown, ChevronRight, X, StickyNote } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import api from '../../api/client';
-import { Scenario, ForecastItem, getMonthLabel, formatRs } from '../../pages/ForecastModulePage';
+import { Scenario, ForecastItem, FY, getMonthLabel, formatRs } from '../../pages/ForecastModulePage';
 import ItemEditForm from './ItemEditForm';
 import TypeSelectionScreen from './TypeSelectionScreen';
 import ItemRowMenu from './ItemRowMenu';
@@ -11,6 +11,9 @@ interface Props {
   category: string;
   label: string;
   scenario: Scenario | null;
+  /** Carried for parity with sibling category tabs (Dividends / Assets /
+   *  Financing use it for the per-tab Excel download). Unused here today. */
+  fy: FY | null;
   months: string[];
   viewMode: 'monthly' | 'yearly';
   items: ForecastItem[];

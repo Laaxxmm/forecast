@@ -56,6 +56,12 @@ export interface BuildWorkbookOpts {
   fy: FY | null;
   branchName?: string;
   streamName?: string;
+  /** When set (e.g. 'revenue', 'personnel'), the workbook contains ONLY the
+   *  matching category sheet — no Summary, no other categories. Used by the
+   *  per-tab "Excel" download to export just that one tab. The full `items`
+   *  list is still consumed (so percent-linked decompositions can resolve
+   *  cross-category references), but only one sheet is written. */
+  singleCategory?: string;
 }
 
 /**
@@ -89,13 +95,24 @@ export async function buildForecastWorkbook(opts: BuildWorkbookOpts): Promise<Bl
     { key: 'assets',       label: 'Assets',       sheetName: 'Assets' },
     { key: 'taxes',        label: 'Taxes',        sheetName: 'Taxes' },
     { key: 'dividends',    label: 'Dividends',    sheetName: 'Dividends' },
+    // Financing isn't part of the P&L (loans / investments hit Cash Flow,
+    // not the income statement), so the Summary's P&L formulas don't
+    // reference it. The sheet still exists for the per-tab Excel download.
+    { key: 'financing',    label: 'Financing',    sheetName: 'Financing' },
   ];
+
+  // Single-category mode skips the Summary sheet entirely (the user is
+  // exporting just one tab — there's nothing to summarise across).
+  const isSingleCategory = !!opts.singleCategory;
+  const categoriesToRender = isSingleCategory
+    ? CATEGORIES.filter(c => c.key === opts.singleCategory)
+    : CATEGORIES;
 
   // Build Summary first as a placeholder; we'll fill it after we know each
   // category sheet's Total row position. (exceljs doesn't require us to
   // populate sheets in any particular order — formulas only need the target
   // sheet to exist by save-time.)
-  const summary = wb.addWorksheet('Summary', {
+  const summary = isSingleCategory ? null : wb.addWorksheet('Summary', {
     views: [{ state: 'frozen', xSplit: 1, ySplit: 4 }],
     properties: { tabColor: { argb: COLOR.accent } },
   });
@@ -107,7 +124,7 @@ export async function buildForecastWorkbook(opts: BuildWorkbookOpts): Promise<Bl
   const itemNameById = new Map<number, string>();
   for (const it of opts.items) itemNameById.set(it.id, it.name);
 
-  for (const cat of CATEGORIES) {
+  for (const cat of categoriesToRender) {
     const sheet = wb.addWorksheet(cat.sheetName, {
       views: [{ state: 'frozen', xSplit: 1, ySplit: 4 }],
       properties: { tabColor: { argb: COLOR.accent } },
@@ -129,20 +146,22 @@ export async function buildForecastWorkbook(opts: BuildWorkbookOpts): Promise<Bl
     totalRowByCategory[cat.key] = totalRow;
   }
 
-  renderSummarySheet({
-    sheet: summary,
-    contextLine,
-    months: opts.months,
-    monthLabels,
-    settings: opts.settings,
-    items: opts.items,
-    allValues: opts.allValues,
-    categorySheetNames: CATEGORIES.reduce<Record<string, string>>((acc, c) => {
-      acc[c.key] = c.sheetName;
-      return acc;
-    }, {}),
-    totalRowByCategory,
-  });
+  if (summary) {
+    renderSummarySheet({
+      sheet: summary,
+      contextLine,
+      months: opts.months,
+      monthLabels,
+      settings: opts.settings,
+      items: opts.items,
+      allValues: opts.allValues,
+      categorySheetNames: CATEGORIES.reduce<Record<string, string>>((acc, c) => {
+        acc[c.key] = c.sheetName;
+        return acc;
+      }, {}),
+      totalRowByCategory,
+    });
+  }
 
   const buffer = await wb.xlsx.writeBuffer();
   return new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });

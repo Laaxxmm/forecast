@@ -1,5 +1,5 @@
 import { NavLink, Routes, Route, Navigate } from 'react-router-dom';
-import { Scenario, ForecastItem } from '../../pages/ForecastModulePage';
+import { Scenario, ForecastItem, FY } from '../../pages/ForecastModulePage';
 import CategoryTab from './CategoryTab';
 
 const subTabs = [
@@ -17,6 +17,7 @@ const subTabs = [
 
 interface Props {
   scenario: Scenario | null;
+  fy: FY | null;
   months: string[];
   viewMode: 'monthly' | 'yearly';
   items: ForecastItem[];
@@ -26,7 +27,7 @@ interface Props {
   readOnly?: boolean;
 }
 
-export default function FinancialTables({ scenario, months, viewMode, items, allValues, settings, onReload, readOnly }: Props) {
+export default function FinancialTables({ scenario, fy, months, viewMode, items, allValues, settings, onReload, readOnly }: Props) {
   return (
     <div>
       {/* Sub-tabs */}
@@ -59,6 +60,7 @@ export default function FinancialTables({ scenario, months, viewMode, items, all
                 category={tab.category}
                 label={tab.label}
                 scenario={scenario}
+                fy={fy}
                 months={months}
                 viewMode={viewMode}
                 items={items.filter(i => i.category === tab.category)}

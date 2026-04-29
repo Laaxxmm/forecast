@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { Plus, GripVertical, FileDown, X, StickyNote } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import api from '../../api/client';
-import { Scenario, ForecastItem, getMonthLabel, formatRs } from '../../pages/ForecastModulePage';
+import { Scenario, ForecastItem, FY, getMonthLabel, formatRs } from '../../pages/ForecastModulePage';
 import ItemEditForm from './ItemEditForm';
 import TypeSelectionScreen from './TypeSelectionScreen';
 import PersonnelTab from './PersonnelTab';
@@ -13,13 +13,14 @@ import CashFlowAssumptionsTab from './CashFlowAssumptionsTab';
 import InitialBalancesTab from './InitialBalancesTab';
 import FinancingTab from './FinancingTab';
 import DividendsTab from './DividendsTab';
-import { exportTableCSV } from './csvExport';
+import { buildForecastWorkbook } from '../../utils/forecastWorkbook';
 import ItemRowMenu from './ItemRowMenu';
 
 interface Props {
   category: string;
   label: string;
   scenario: Scenario | null;
+  fy: FY | null;
   months: string[];
   viewMode: 'monthly' | 'yearly';
   items: ForecastItem[];
@@ -98,7 +99,7 @@ const CATEGORY_CONFIG: Record<string, { addLabel: string; itemTypes: { value: st
   },
 };
 
-export default function CategoryTab({ category, label, scenario, months, viewMode, items, allItems, allValues, settings, onReload, readOnly }: Props) {
+export default function CategoryTab({ category, label, scenario, fy, months, viewMode, items, allItems, allValues, settings, onReload, readOnly }: Props) {
   const [editingItem, setEditingItem] = useState<ForecastItem | null>(null);
   const [showTypeSelection, setShowTypeSelection] = useState(false);
   const [showAddType, setShowAddType] = useState(false);
@@ -212,6 +213,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
         category={category}
         label={label}
         scenario={scenario}
+        fy={fy}
         months={months}
         viewMode={viewMode}
         items={items}
@@ -231,6 +233,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
         category={category}
         label={label}
         scenario={scenario}
+        fy={fy}
         months={months}
         viewMode={viewMode}
         items={items}
@@ -250,6 +253,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
         category={category}
         label={label}
         scenario={scenario}
+        fy={fy}
         months={months}
         viewMode={viewMode}
         items={items}
@@ -269,6 +273,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
         category={category}
         label={label}
         scenario={scenario}
+        fy={fy}
         months={months}
         viewMode={viewMode}
         items={items}
@@ -288,6 +293,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
         category={category}
         label={label}
         scenario={scenario}
+        fy={fy}
         months={months}
         viewMode={viewMode}
         items={items}
@@ -306,6 +312,7 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
         category={category}
         label={label}
         scenario={scenario}
+        fy={fy}
         months={months}
         viewMode={viewMode}
         items={items}
@@ -405,12 +412,41 @@ export default function CategoryTab({ category, label, scenario, months, viewMod
         <div className="flex items-center gap-2">
           {items.length > 0 && (
             <button
-              onClick={() => exportTableCSV(items, allValues, months, viewMode, category, label)}
-              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-theme-faint hover:text-theme-secondary hover:bg-dark-500 rounded-lg transition-colors border border-dark-400/50"
-              title="Download table as CSV"
+              onClick={async () => {
+                try {
+                  const branchName = (typeof window !== 'undefined' ? localStorage.getItem('branch_name') : '') || undefined;
+                  const streamName = (typeof window !== 'undefined' ? localStorage.getItem('stream_name') : '') || undefined;
+                  const blob = await buildForecastWorkbook({
+                    items: allItems,
+                    allValues,
+                    months,
+                    settings,
+                    scenario,
+                    fy,
+                    branchName,
+                    streamName,
+                    singleCategory: category,
+                  });
+                  const url = URL.createObjectURL(blob);
+                  const link = document.createElement('a');
+                  link.href = url;
+                  const fyTag = fy?.label ? `_${fy.label.replace(/\s+/g, '_')}` : '';
+                  const branchTag = branchName ? `_${branchName.replace(/\s+/g, '_')}` : '';
+                  const labelTag = label.replace(/\s+/g, '_');
+                  link.download = `Forecast_${labelTag}${fyTag}${branchTag}.xlsx`;
+                  link.click();
+                  URL.revokeObjectURL(url);
+                } catch (e) {
+                  console.error('Forecast XLSX export failed:', e);
+                  alert('Could not generate the Excel workbook. Check the browser console for details.');
+                }
+              }}
+              className="mt-btn-gradient"
+              style={{ padding: '6px 12px', fontSize: 12 }}
+              title={`Download just the ${label} sheet as Excel (linked formulas + calculation method)`}
             >
               <FileDown size={14} />
-              CSV
+              Excel
             </button>
           )}
         {config.addLabel && !readOnly && (

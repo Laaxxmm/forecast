@@ -1,16 +1,17 @@
 import { useState } from 'react';
 import { Plus, GripVertical, FileDown, ChevronDown, ChevronRight, StickyNote } from 'lucide-react';
 import api from '../../api/client';
-import { Scenario, ForecastItem, getMonthLabel, formatRs } from '../../pages/ForecastModulePage';
+import { Scenario, ForecastItem, FY, getMonthLabel, formatRs } from '../../pages/ForecastModulePage';
 import ItemEditForm from './ItemEditForm';
 import AssetCreateModal, { AssetConfig } from './AssetCreateModal';
 import ItemRowMenu from './ItemRowMenu';
-import { exportTableCSV } from './csvExport';
+import { buildForecastWorkbook } from '../../utils/forecastWorkbook';
 
 interface Props {
   category: string;
   label: string;
   scenario: Scenario | null;
+  fy: FY | null;
   months: string[];
   viewMode: 'monthly' | 'yearly';
   items: ForecastItem[];
@@ -21,7 +22,7 @@ interface Props {
   readOnly?: boolean;
 }
 
-export default function AssetsTab({ category, label, scenario, months, viewMode, items, allItems, allValues, settings, onReload, readOnly }: Props) {
+export default function AssetsTab({ category, label, scenario, fy, months, viewMode, items, allItems, allValues, settings, onReload, readOnly }: Props) {
   const [editingItem, setEditingItem] = useState<ForecastItem | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
@@ -256,12 +257,34 @@ export default function AssetsTab({ category, label, scenario, months, viewMode,
                 {Object.values(collapsedSections).filter(Boolean).length >= 2 ? 'Expand all' : 'Collapse all'}
               </button>
               <button
-                onClick={() => exportTableCSV(items, allValues, months, viewMode, category, label)}
-                className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-theme-faint hover:text-theme-secondary hover:bg-dark-500 rounded-lg transition-colors border border-dark-400/50"
-                title="Download table as CSV"
+                onClick={async () => {
+                  try {
+                    const branchName = (typeof window !== 'undefined' ? localStorage.getItem('branch_name') : '') || undefined;
+                    const streamName = (typeof window !== 'undefined' ? localStorage.getItem('stream_name') : '') || undefined;
+                    const blob = await buildForecastWorkbook({
+                      items: allItems, allValues, months, settings, scenario, fy,
+                      branchName, streamName, singleCategory: category,
+                    });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    const fyTag = fy?.label ? `_${fy.label.replace(/\s+/g, '_')}` : '';
+                    const branchTag = branchName ? `_${branchName.replace(/\s+/g, '_')}` : '';
+                    const labelTag = label.replace(/\s+/g, '_');
+                    link.download = `Forecast_${labelTag}${fyTag}${branchTag}.xlsx`;
+                    link.click();
+                    URL.revokeObjectURL(url);
+                  } catch (e) {
+                    console.error('Forecast XLSX export failed:', e);
+                    alert('Could not generate the Excel workbook. Check the browser console for details.');
+                  }
+                }}
+                className="mt-btn-gradient"
+                style={{ padding: '6px 12px', fontSize: 12 }}
+                title={`Download just the ${label} sheet as Excel (linked formulas + calculation method)`}
               >
                 <FileDown size={14} />
-                CSV
+                Excel
               </button>
             </>
           )}

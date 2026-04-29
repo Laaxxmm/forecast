@@ -1,13 +1,15 @@
 import { useState, useMemo } from 'react';
 import { Settings2, ChevronDown, ChevronRight, FileDown } from 'lucide-react';
-import { Scenario, ForecastItem, getMonthLabel, formatRs } from '../../pages/ForecastModulePage';
+import { Scenario, ForecastItem, FY, getMonthLabel, formatRs } from '../../pages/ForecastModulePage';
 import TaxRatesConfig from './TaxRatesConfig';
 import api from '../../api/client';
+import { buildForecastWorkbook } from '../../utils/forecastWorkbook';
 
 interface Props {
   category: string;
   label: string;
   scenario: Scenario | null;
+  fy: FY | null;
   months: string[];
   viewMode: 'monthly' | 'yearly';
   items: ForecastItem[];
@@ -38,7 +40,7 @@ function getDefaultConfig(settings: Record<string, any>): TaxConfig {
   };
 }
 
-export default function TaxesTab({ scenario, months, viewMode, items, allItems, allValues, settings, onReload, readOnly }: Props) {
+export default function TaxesTab({ category, label, scenario, fy, months, viewMode, items, allItems, allValues, settings, onReload, readOnly }: Props) {
   const [showConfig, setShowConfig] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
 
@@ -215,27 +217,34 @@ export default function TaxesTab({ scenario, months, viewMode, items, allItems, 
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => {
-              const csvRows = ['Category,Type,' + months.map(getMonthLabel).join(',') + ',Total'];
-              const addRow = (cat: string, type: string, vals: Record<string, number>) => {
-                const total = months.reduce((s, m) => s + (vals[m] || 0), 0);
-                csvRows.push(`${cat},${type},${months.map(m => vals[m] || 0).join(',')},${total}`);
-              };
-              addRow('Income Taxes', 'Accrued', incomeTaxAccrued);
-              addRow('Income Taxes', 'Paid', incomeTaxPaid);
-              addRow('Sales Taxes', 'Accrued', salesTaxAccrued);
-              addRow('Sales Taxes', 'Paid', salesTaxPaid);
-              const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url; a.download = 'taxes.csv'; a.click();
-              URL.revokeObjectURL(url);
+            onClick={async () => {
+              try {
+                const branchName = (typeof window !== 'undefined' ? localStorage.getItem('branch_name') : '') || undefined;
+                const streamName = (typeof window !== 'undefined' ? localStorage.getItem('stream_name') : '') || undefined;
+                const blob = await buildForecastWorkbook({
+                  items: allItems, allValues, months, settings, scenario, fy,
+                  branchName, streamName, singleCategory: category,
+                });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                const fyTag = fy?.label ? `_${fy.label.replace(/\s+/g, '_')}` : '';
+                const branchTag = branchName ? `_${branchName.replace(/\s+/g, '_')}` : '';
+                const labelTag = (label || 'Taxes').replace(/\s+/g, '_');
+                link.download = `Forecast_${labelTag}${fyTag}${branchTag}.xlsx`;
+                link.click();
+                URL.revokeObjectURL(url);
+              } catch (e) {
+                console.error('Forecast XLSX export failed:', e);
+                alert('Could not generate the Excel workbook. Check the browser console for details.');
+              }
             }}
-            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-theme-faint hover:text-theme-secondary hover:bg-dark-500 rounded-lg transition-colors border border-dark-400/50"
-            title="Download table as CSV"
+            className="mt-btn-gradient"
+            style={{ padding: '6px 12px', fontSize: 12 }}
+            title={`Download just the ${label || 'Taxes'} sheet as Excel (linked formulas + calculation method)`}
           >
             <FileDown size={14} />
-            CSV
+            Excel
           </button>
           {!readOnly && (
             <button
