@@ -3,7 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import api from '../api/client';
-import { formatINR, formatNumber } from '../utils/format';
+import { formatINR, formatNumber, formatCompact } from '../utils/format';
 import {
   Activity, Users, ShoppingBag,
   AlertTriangle, Info, ArrowUp, ArrowDown, Minus, Download,
@@ -550,13 +550,21 @@ function DailyChart({ stream, isClinic }: { stream: StreamData; isClinic: boolea
         </div>
       ) : (
         <ResponsiveContainer width="100%" height={160}>
-          <BarChart data={chartData} margin={{ top: 5, right: 5, bottom: 0, left: -15 }}>
+          <BarChart data={chartData} margin={{ top: 5, right: 5, bottom: 0, left: 0 }}>
             <CartesianGrid
               strokeDasharray="3 3"
               stroke="var(--mt-border)"
             />
             <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--mt-text-faint)' }} />
-            <YAxis tick={{ fontSize: 10, fill: 'var(--mt-text-faint)' }} />
+            {/* Compact axis labels (10k / 1.5L / 1Cr) keep tick text short
+                enough that the labels never clip — the previous full-number
+                rendering ("150000" etc.) was getting chopped at the left
+                edge with a tight margin. */}
+            <YAxis
+              tick={{ fontSize: 10, fill: 'var(--mt-text-faint)' }}
+              tickFormatter={(v: number) => formatCompact(v)}
+              width={42}
+            />
             <Tooltip
               contentStyle={{
                 backgroundColor: 'var(--mt-bg-raised)',
