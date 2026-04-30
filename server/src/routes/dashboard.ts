@@ -58,41 +58,50 @@ router.get('/overview', async (req, res) => {
   const streamDataMap: Record<number, any> = {};
 
   for (const stream of clientStreams) {
-    // Find the best scenario for THIS stream (prefer stream-specific, fall back to default)
-    const scenario = db.get(
+    // Find ALL matching scenarios for this stream. In specific-branch /
+    // single-branch mode this is one row (same as the old `LIMIT 1`
+    // behaviour). In **consolidated** mode each branch contributes its
+    // own scenario, so we sum forecasts across the union via
+    // `scenario_id IN (...)`. Without this the consolidated forecast
+    // total only reflected one branch's plan against all-branch actuals.
+    const scenarios = db.all(
       `SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1
        AND (stream_id = ? OR stream_id IS NULL)${bf.where}
-       ORDER BY CASE WHEN stream_id = ? THEN 0 ELSE 1 END, id LIMIT 1`,
+       ORDER BY CASE WHEN stream_id = ? THEN 0 ELSE 1 END, id`,
       fy.id, stream.id, ...bf.params, stream.id
     );
+    const scenarioIds = scenarios.map((s: any) => s.id);
+    const sIdsPh = scenarioIds.map(() => '?').join(',');
+    const noScenarios = scenarioIds.length === 0;
 
-    const revenue = scenario ? db.get(
+    const revenue = noScenarios ? { total: 0 } : db.get(
       `SELECT COALESCE(SUM(amount), 0) as total
        FROM dashboard_actuals
-       WHERE scenario_id = ? AND category = 'revenue' AND month >= ? AND month <= ?${bf.where}
+       WHERE scenario_id IN (${sIdsPh}) AND category = 'revenue' AND month >= ? AND month <= ?${bf.where}
        AND (stream_id = ? OR stream_id IS NULL)`,
-      scenario.id, startMonth, endMonth, ...bf.params, stream.id
-    ) : { total: 0 };
+      ...scenarioIds, startMonth, endMonth, ...bf.params, stream.id
+    );
 
-    const monthly = scenario ? db.all(
+    const monthly = noScenarios ? [] : db.all(
       `SELECT month, category, COALESCE(SUM(amount), 0) as total
        FROM dashboard_actuals
-       WHERE scenario_id = ? AND month >= ? AND month <= ?${bf.where}
+       WHERE scenario_id IN (${sIdsPh}) AND month >= ? AND month <= ?${bf.where}
        AND (stream_id = ? OR stream_id IS NULL)
        GROUP BY month, category ORDER BY month`,
-      scenario.id, startMonth, endMonth, ...bf.params, stream.id
-    ) : [];
+      ...scenarioIds, startMonth, endMonth, ...bf.params, stream.id
+    );
 
-    // Get forecast revenue for this stream from forecast_values
+    // Forecast revenue for this stream — sum across ALL matching
+    // scenarios so consolidated view reflects every branch's plan.
     let forecastTotal = 0;
-    if (scenario) {
+    if (!noScenarios) {
       const forecast = db.get(
         `SELECT COALESCE(SUM(fv.amount), 0) as total
          FROM forecast_values fv
          JOIN forecast_items fi ON fv.item_id = fi.id
-         WHERE fi.scenario_id = ? AND fi.category = 'revenue'
+         WHERE fi.scenario_id IN (${sIdsPh}) AND fi.category = 'revenue'
            AND fv.month >= ? AND fv.month <= ?`,
-        scenario.id, startMonth, endMonth
+        ...scenarioIds, startMonth, endMonth
       );
       forecastTotal = forecast?.total || 0;
     }
@@ -921,19 +930,25 @@ router.get('/variance', async (req, res) => {
   const startMonth = fy.start_date.slice(0, 7);
   const endMonth = fy.end_date.slice(0, 7);
 
-  // Build budget rows from forecast module (prefer stream-specific scenario)
-  const scenario = db.get(
+  // Build budget rows from forecast module. Fetch ALL matching default
+  // scenarios (one per branch in consolidated mode, one total in
+  // specific-branch / single-branch mode) so the budget table sums
+  // every branch's plan when the user is viewing All Branches.
+  const scenarios = db.all(
     `SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1${bf.where}
-     ORDER BY CASE WHEN stream_id IS NOT NULL THEN 0 ELSE 1 END, id LIMIT 1`,
+     ORDER BY CASE WHEN stream_id IS NOT NULL THEN 0 ELSE 1 END, id`,
     fy_id, ...bf.params
   );
+  const scenarioIds = scenarios.map((s: any) => s.id);
+  const sIdsPh = scenarioIds.map(() => '?').join(',');
+  const hasScenario = scenarioIds.length > 0;
 
   let budgetRows: any[] = [];
 
-  if (scenario) {
+  if (hasScenario) {
     const revenueItems = db.all(
-      "SELECT * FROM forecast_items WHERE scenario_id = ? AND category = 'revenue'",
-      scenario.id
+      `SELECT * FROM forecast_items WHERE scenario_id IN (${sIdsPh}) AND category = 'revenue'`,
+      ...scenarioIds
     );
 
     const months: string[] = [];
@@ -975,15 +990,15 @@ router.get('/variance', async (req, res) => {
     );
   }
 
-  // Get actuals from dashboard_actuals (generic)
+  // Get actuals from dashboard_actuals across all matching scenarios.
   const actualsByMonth: Record<string, number> = {};
-  if (scenario) {
+  if (hasScenario) {
     const actuals = db.all(
       `SELECT month, COALESCE(SUM(amount), 0) as total
        FROM dashboard_actuals
-       WHERE scenario_id = ? AND category = 'revenue' AND month >= ? AND month <= ?${bf.where}${sf.where}
+       WHERE scenario_id IN (${sIdsPh}) AND category = 'revenue' AND month >= ? AND month <= ?${bf.where}${sf.where}
        GROUP BY month`,
-      scenario.id, startMonth, endMonth, ...bf.params, ...sf.params
+      ...scenarioIds, startMonth, endMonth, ...bf.params, ...sf.params
     );
     for (const a of actuals) actualsByMonth[a.month] = a.total;
   }
@@ -1065,13 +1080,21 @@ router.get('/operational-insights', async (req, res) => {
     const isClinic = nameLower.includes('clinic') || nameLower.includes('health');
     const isPharmacy = nameLower.includes('pharma');
 
-    // Rule 4: stream-specific scenario lookup
-    const scenario = db.get(
+    // Stream-specific scenario lookup. In **consolidated** branch mode
+    // we want the union of every branch's scenario for this stream so
+    // the targets sum across branches (matches the actuals which are
+    // already summed via `${bf.where}`). In specific-branch /
+    // single-branch mode this returns one row, so the IN-clause below
+    // is functionally identical to the old `= scenario.id`.
+    const scenarios = db.all(
       `SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1
        AND (stream_id = ? OR stream_id IS NULL)${bf.where}
-       ORDER BY CASE WHEN stream_id = ? THEN 0 ELSE 1 END, id LIMIT 1`,
+       ORDER BY CASE WHEN stream_id = ? THEN 0 ELSE 1 END, id`,
       fy.id, stream.id, ...bf.params, stream.id
     );
+    const scenarioIds = scenarios.map((s: any) => s.id);
+    const sIdsPh = scenarioIds.map(() => '?').join(',');
+    const hasScenario = scenarioIds.length > 0;
 
     // ── Forecast target for current month ──
     let monthlyTarget = 0;
@@ -1083,10 +1106,10 @@ router.get('/operational-insights', async (req, res) => {
       'Diagnostics': { units: 0, revenue: 0 },
       'Other Revenue': { units: 0, revenue: 0 },
     };
-    if (scenario) {
+    if (hasScenario) {
       const revenueItems = db.all(
-        "SELECT * FROM forecast_items WHERE scenario_id = ? AND category = 'revenue'",
-        scenario.id
+        `SELECT * FROM forecast_items WHERE scenario_id IN (${sIdsPh}) AND category = 'revenue'`,
+        ...scenarioIds
       );
       for (const item of revenueItems) {
         const meta = typeof item.meta === 'string' ? JSON.parse(item.meta) : item.meta;
@@ -1120,11 +1143,13 @@ router.get('/operational-insights', async (req, res) => {
     }
 
     // ── Forecast direct_costs target (for Gross Profit / Gross Margin) ──
+    // Sum across all matching scenarios — consolidated mode covers every
+    // branch's cost plan, single-branch covers just that branch's.
     let monthlyCostTarget = 0;
-    if (scenario) {
+    if (hasScenario) {
       const costItems = db.all(
-        "SELECT * FROM forecast_items WHERE scenario_id = ? AND category = 'direct_costs'",
-        scenario.id
+        `SELECT * FROM forecast_items WHERE scenario_id IN (${sIdsPh}) AND category = 'direct_costs'`,
+        ...scenarioIds
       );
       for (const item of costItems) {
         const meta = typeof item.meta === 'string' ? JSON.parse(item.meta) : item.meta;
