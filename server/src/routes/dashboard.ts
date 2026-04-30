@@ -350,11 +350,19 @@ router.get('/clinic-analytics', async (req, res) => {
   // `totalUnique` for the standalone "Unique Patients" card.
   const totalUnique = patients.length;
 
-  // Build per-order department sets, then bucket. One query, JS-side
-  // aggregation — mirrors the patient-set approach above and avoids
-  // multiple round-trips.
+  // Per-order aggregation. We pull patient_id + bill_date alongside the
+  // department set so we can detect walk-ins ACROSS orders for the same
+  // (patient, day) — Healthplix in this tenant gives each service its
+  // own `order_number`, so an in-order check `deptSet.has(LAB) &&
+  // !deptSet.has(APPT)` is always true (no order ever combines depts)
+  // and would incorrectly classify every lab encounter as a walk-in.
+  // The fix: a lab encounter is a "walk-in" iff that patient had no
+  // APPOINTMENT order on the same bill_date.
   const orders = db.all(
-    `SELECT order_number, GROUP_CONCAT(DISTINCT department) as departments
+    `SELECT order_number,
+            COALESCE(NULLIF(patient_id, ''), patient_name) as patient_key,
+            MIN(bill_date) as bill_date,
+            GROUP_CONCAT(DISTINCT department) as departments
        FROM clinic_actuals
       WHERE bill_month >= ? AND bill_month <= ?
         AND order_number IS NOT NULL AND order_number != ''${bf.where}
@@ -362,14 +370,29 @@ router.get('/clinic-analytics', async (req, res) => {
     startMonth, endMonth, ...bf.params
   );
   const orderDeptSets = orders.map((o: any) => ({
+    patientKey: o.patient_key,
+    billDate: o.bill_date,
     deptSet: new Set((o.departments || '').split(',').map((d: string) => d.trim()).filter(Boolean)),
   }));
+
+  // Build the set of (patient, date) keys that have an APPOINTMENT order.
+  // A lab/other order is "direct walk-in" iff its (patient, date) is NOT
+  // in this set — i.e. that patient came in for lab/other without
+  // booking a doctor consult on the same day.
+  const apptKeysSet = new Set<string>();
+  for (const o of orderDeptSets) {
+    if (o.deptSet.has(APPT) && o.patientKey && o.billDate) {
+      apptKeysSet.add(`${o.patientKey}|${o.billDate}`);
+    }
+  }
+  const isWalkin = (o: typeof orderDeptSets[number]) =>
+    o.patientKey && o.billDate && !apptKeysSet.has(`${o.patientKey}|${o.billDate}`);
 
   const apptPatients      = orderDeptSets.filter((o: any) => o.deptSet.has(APPT)).length;
   const labPatients       = orderDeptSets.filter((o: any) => o.deptSet.has(LAB)).length;
   const otherPatients     = orderDeptSets.filter((o: any) => o.deptSet.has(OTHER)).length;
-  const directLabWalkins  = orderDeptSets.filter((o: any) => o.deptSet.has(LAB)   && !o.deptSet.has(APPT)).length;
-  const directOtherWalkins = orderDeptSets.filter((o: any) => o.deptSet.has(OTHER) && !o.deptSet.has(APPT)).length;
+  const directLabWalkins  = orderDeptSets.filter((o: any) => o.deptSet.has(LAB)   && isWalkin(o)).length;
+  const directOtherWalkins = orderDeptSets.filter((o: any) => o.deptSet.has(OTHER) && isWalkin(o)).length;
 
   // Repeat-traffic aggregates derived from the patient-level query
   // (already has per-patient `visits` = COUNT(DISTINCT order_number)).
