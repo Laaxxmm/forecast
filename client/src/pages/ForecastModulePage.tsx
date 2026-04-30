@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Routes, Route, NavLink, useNavigate, Navigate } from 'react-router-dom';
 import api from '../api/client';
 import ForecastOverview from '../components/forecast/ForecastOverview';
@@ -156,6 +156,55 @@ export default function ForecastModulePage() {
   }, [scenario]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Merge items with the same (category, name) into one row, summing
+  // their per-month values. This is a no-op for single-branch /
+  // specific-branch views (one scenario, one item per name), so the
+  // function runs unconditionally without affecting non-consolidated
+  // modes. In a consolidated/All-Branches view each branch contributes
+  // its own scenario's items — same name appearing N times — and this
+  // collapses them into a single row with summed amounts so the user
+  // sees one "Consultation Revenue" row instead of six.
+  //
+  // Merged rows get a synthetic negative `id` to avoid colliding with
+  // real ids; consolidated mode is read-only so no edit / save call
+  // ever sees these synthetic ids.
+  const { displayItems, displayAllValues } = useMemo(() => {
+    if (items.length === 0) return { displayItems: items, displayAllValues: allValues };
+
+    const groups = new Map<string, ForecastItem[]>();
+    for (const it of items) {
+      const key = `${it.category}::${it.name}`;
+      const arr = groups.get(key);
+      if (arr) arr.push(it); else groups.set(key, [it]);
+    }
+
+    // Fast path: every (category, name) had exactly one item — nothing
+    // to merge, return originals so referential equality holds and
+    // memo dependencies upstream don't churn.
+    let needsMerge = false;
+    for (const arr of groups.values()) { if (arr.length > 1) { needsMerge = true; break; } }
+    if (!needsMerge) return { displayItems: items, displayAllValues: allValues };
+
+    const merged: ForecastItem[] = [];
+    const mergedValues: Record<number, Record<string, number>> = { ...allValues };
+    let syntheticId = -1000000;
+    for (const arr of groups.values()) {
+      if (arr.length === 1) { merged.push(arr[0]); continue; }
+      const id = syntheticId--;
+      // Inherit metadata from the first item (sort_order, item_type,
+      // entry_mode, etc.). Sort_order is consistent enough across
+      // branches in practice; if it isn't, a v2 could pick MIN.
+      merged.push({ ...arr[0], id });
+      const summed: Record<string, number> = {};
+      for (const it of arr) {
+        const vals = allValues[it.id] || {};
+        for (const m of Object.keys(vals)) summed[m] = (summed[m] || 0) + (vals[m] || 0);
+      }
+      mergedValues[id] = summed;
+    }
+    return { displayItems: merged, displayAllValues: mergedValues };
+  }, [items, allValues]);
 
   // Detect orphan (NULL-branch) scenarios for the recovery banner.
   // Skipped for single-branch tenants (no leak risk) and for read-only
@@ -342,7 +391,11 @@ export default function ForecastModulePage() {
                 const branchName = (typeof window !== 'undefined' ? localStorage.getItem('branch_name') : '') || undefined;
                 const streamName = (typeof window !== 'undefined' ? localStorage.getItem('stream_name') : '') || undefined;
                 const blob = await buildForecastWorkbook({
-                  items, allValues, months, settings, scenario, fy: selectedFY, branchName, streamName,
+                  // Pass merged view so the Excel reflects what's on
+                  // screen (one row per item-name in consolidated mode,
+                  // unchanged otherwise — see displayItems memo).
+                  items: displayItems, allValues: displayAllValues,
+                  months, settings, scenario, fy: selectedFY, branchName, streamName,
                 });
                 const url = URL.createObjectURL(blob);
                 const link = document.createElement('a');
@@ -403,12 +456,19 @@ export default function ForecastModulePage() {
         </div>
       )}
 
-      {/* Route Content */}
+      {/* Route Content. Children consume `displayItems` / `displayAllValues`
+          which are merged-by-(category,name) in consolidated/All-Branches
+          mode and unchanged in single-branch / specific-branch mode (the
+          memo's fast-path returns the originals). FinancingEditor stays
+          on the raw `items` because it edits a specific item by id and
+          synthetic merged ids would 404 — though FinancingEditor only
+          renders inside the Balance Sheet flow which is read-only in
+          consolidated mode anyway. */}
       <div className="mt-4 md:mt-6">
         <Routes>
           <Route index element={<Navigate to="tables" replace />} />
           <Route path="overview" element={
-            <ForecastOverview items={items} allValues={allValues} months={months} settings={settings} scenario={scenario} />
+            <ForecastOverview items={displayItems} allValues={displayAllValues} months={months} settings={settings} scenario={scenario} />
           } />
           <Route path="tables/*" element={
             <FinancialTables
@@ -416,24 +476,24 @@ export default function ForecastModulePage() {
               fy={selectedFY}
               months={months}
               viewMode={viewMode}
-              items={items}
-              allValues={allValues}
+              items={displayItems}
+              allValues={displayAllValues}
               settings={settings}
               onReload={loadData}
               readOnly={readOnly}
             />
           } />
           <Route path="pnl" element={
-            <ProfitAndLoss items={items} allValues={allValues} months={months} viewMode={viewMode} settings={settings} scenario={scenario} onReload={loadData} readOnly={readOnly} />
+            <ProfitAndLoss items={displayItems} allValues={displayAllValues} months={months} viewMode={viewMode} settings={settings} scenario={scenario} onReload={loadData} readOnly={readOnly} />
           } />
           <Route path="balance-sheet" element={
-            <BalanceSheet items={items} allValues={allValues} months={months} viewMode={viewMode} settings={settings} scenario={scenario} onReload={loadData} readOnly={readOnly} />
+            <BalanceSheet items={displayItems} allValues={displayAllValues} months={months} viewMode={viewMode} settings={settings} scenario={scenario} onReload={loadData} readOnly={readOnly} />
           } />
           <Route path="balance-sheet/financing/:itemId/:finType" element={
             <FinancingEditor items={items} allValues={allValues} months={months} scenario={scenario} onReload={loadData} />
           } />
           <Route path="cash-flow" element={
-            <CashFlowReport items={items} allValues={allValues} months={months} viewMode={viewMode} settings={settings} scenario={scenario} onReload={loadData} readOnly={readOnly} />
+            <CashFlowReport items={displayItems} allValues={displayAllValues} months={months} viewMode={viewMode} settings={settings} scenario={scenario} onReload={loadData} readOnly={readOnly} />
           } />
           <Route path="budget-vs-actual" element={
             <BudgetVsActualReport scenario={scenario} viewMode={viewMode} />
@@ -444,12 +504,14 @@ export default function ForecastModulePage() {
         </Routes>
       </div>
 
-      {/* Download & Print Panel */}
+      {/* Download & Print Panel — uses merged view so any download from
+          here matches what's on screen (one row per item-name in
+          consolidated mode). */}
       <DownloadPrintPanel
         open={showDownloadPanel}
         onClose={() => setShowDownloadPanel(false)}
-        items={items}
-        allValues={allValues}
+        items={displayItems}
+        allValues={displayAllValues}
         months={months}
         settings={settings}
         scenarioName={scenario?.name || 'Forecast'}
