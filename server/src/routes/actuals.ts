@@ -265,6 +265,28 @@ router.get('/orphans', async (req, res) => {
   res.json({ scopeRequired: true, totalRows, counts });
 });
 
+/** Wipe the dashboard_actuals rollup table entirely. Used when the rollup
+ *  has drifted from the raw clinic_actuals / pharmacy_sales_actuals tables
+ *  (e.g. accumulated duplicates from multiple sync passes, stale rows from
+ *  removed scenarios). After wipe, GET /dashboard/overview's primary query
+ *  returns 0 totalRevenue and the streamSourceMap fallback reads from the
+ *  raw tables — same source as /operational-insights, so Actuals + Insights
+ *  reconcile. The rollup will rebuild automatically on the next import or
+ *  auto-sync. Admin / super_admin only. */
+router.post('/wipe-rollup', async (req, res) => {
+  if (req.userType !== 'super_admin' && req.session?.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin or super_admin role required' });
+  }
+  const db = req.tenantDb!;
+  const before = db.get('SELECT COUNT(*) as n FROM dashboard_actuals');
+  const result = db.run('DELETE FROM dashboard_actuals');
+  res.json({
+    rowsDeleted: result.changes,
+    rowsBefore: before?.n || 0,
+    note: 'Rollup wiped. Actuals page will now read directly from raw tables (matches Insights). Will rebuild on next import / auto-sync.',
+  });
+});
+
 /** Hard-delete every NULL-branch actuals row across all four tables.
  *  Use this when the orphan rows are confirmed junk (leaked legacy
  *  data) and you don't want them in the database at all. Destructive,
