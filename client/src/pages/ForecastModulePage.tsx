@@ -86,12 +86,25 @@ export default function ForecastModulePage() {
   const navigate = useNavigate();
 
   // Role-based access: admin + operational_head + super_admin can edit forecast.
-  // Accountants and legacy `user` role are read-only. Consolidated view stays
-  // super_admin-only because it spans branches (OH is branch-scoped).
+  // Accountants and legacy `user` role are read-only. Consolidated views are
+  // read-only for everyone — both axes:
+  //   • stream-axis: when no specific stream is selected, items are merged
+  //     across per-stream scenarios. Edits would be ambiguous (which stream
+  //     scenario does the change belong to?).
+  //   • branch-axis: when a multi-branch tenant has "All Branches" selected
+  //     (no branch_id in localStorage), items are merged across per-branch
+  //     scenarios and edits would have no branch context to write back to.
+  // The user explicitly asked for All-Branches forecast to be view-only
+  // — edits should happen in the specific branch's forecast page only.
   const isAllStreams = !localStorage.getItem('stream_id');
   const streamName = localStorage.getItem('stream_name');
   const [isConsolidated, setIsConsolidated] = useState(false);
-  const readOnly = !canWriteForecast() || (isConsolidated && !isSuperAdmin());
+  const isMultiBranchAllView = typeof window !== 'undefined'
+    && localStorage.getItem('is_multi_branch') === '1'
+    && !localStorage.getItem('branch_id');
+  const readOnly = !canWriteForecast()
+    || isConsolidated
+    || isMultiBranchAllView;
 
   useEffect(() => {
     api.get('/settings/fy').then(res => {
@@ -490,7 +503,7 @@ export default function ForecastModulePage() {
             <BalanceSheet items={displayItems} allValues={displayAllValues} months={months} viewMode={viewMode} settings={settings} scenario={scenario} onReload={loadData} readOnly={readOnly} />
           } />
           <Route path="balance-sheet/financing/:itemId/:finType" element={
-            <FinancingEditor items={items} allValues={allValues} months={months} scenario={scenario} onReload={loadData} />
+            <FinancingEditor items={displayItems} allValues={displayAllValues} months={months} scenario={scenario} onReload={loadData} />
           } />
           <Route path="cash-flow" element={
             <CashFlowReport items={displayItems} allValues={displayAllValues} months={months} viewMode={viewMode} settings={settings} scenario={scenario} onReload={loadData} readOnly={readOnly} />
