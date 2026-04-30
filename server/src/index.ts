@@ -476,8 +476,15 @@ async function start() {
 
   // NOTE: One-time forecast migration (magna_tracker.db -> magnacode.db) completed. Code removed — flag 'forecast_migrate_v1' in app_settings.
 
-  // 2. Initialize existing client databases (ensure schemas + seed data are up to date)
-  const clients = platformDb.all('SELECT slug, name FROM clients WHERE is_active = 1');
+  // 2. Initialize existing client databases (ensure schemas + seed data are up to date).
+  // We pull is_multi_branch alongside slug + name so the dashboard_actuals
+  // bootstrap below can skip the company-level auto-sync for multi-branch
+  // tenants — those need per-branch rows with branch_id set, which the
+  // dedicated /api/import + /api/sync handlers produce. The company-level
+  // bootstrap inserts NULL-branch rows that show up as orphans every time
+  // the server restarts after a wipe/delete, which is what the recurring
+  // orphan-actuals banner has been signalling.
+  const clients = platformDb.all('SELECT slug, name, is_multi_branch FROM clients WHERE is_active = 1');
   for (const client of clients) {
     try {
       const clientDb = await getClientHelper(client.slug);
@@ -499,8 +506,16 @@ async function start() {
           console.log(`  Auto-created default scenario for FY ${activeFy.id}`);
         }
 
-        // Auto-sync imported data to dashboard_actuals if empty
-        const scenario = clientDb.get('SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1', activeFy.id);
+        // Auto-sync imported data to dashboard_actuals if empty.
+        // SKIPPED for multi-branch tenants: the INSERTs in this block omit
+        // branch_id, so they'd produce NULL-branch rollup rows that the
+        // strict-isolation read path then hides as orphans. Multi-branch
+        // tenants get their rollup populated by the per-branch import /
+        // sync handlers (routes/import.ts, routes/sync.ts) which DO set
+        // branch_id correctly. Single-branch tenants still benefit from
+        // this fast path — branch_id = NULL is the correct value for
+        // them since they have no branches.
+        const scenario = (client.is_multi_branch ? null : clientDb.get('SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1', activeFy.id));
         const fy = clientDb.get('SELECT * FROM financial_years WHERE id = ?', activeFy.id);
         if (scenario && fy) {
           const actualsCount = clientDb.get('SELECT COUNT(*) as n FROM dashboard_actuals WHERE scenario_id = ?', scenario.id);
