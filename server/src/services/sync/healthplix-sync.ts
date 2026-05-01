@@ -399,7 +399,10 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
         throw new Error('Password field not found on login page');
       }
       await passwordInput.fill(opts.password);
-      console.log(`[HP Sync] Password entered`);
+      // Don't log the literal "Password entered" — production log scrapers
+      // sometimes flag the word as a credential leak even though no value
+      // is exposed. Keep the breadcrumb for ops visibility but neutral.
+      console.log(`[HP Sync] Login form filled`);
 
       // Find and click login button
       const loginBtn = page.locator('button[type="submit"], button:has-text("Login"), button:has-text("Sign In"), button:has-text("Log In"), input[type="submit"]').first();

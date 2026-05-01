@@ -307,8 +307,10 @@ router.get('/clinic-analytics', async (req, res) => {
     `SELECT COUNT(*) as n FROM clinic_actuals WHERE bill_month >= ? AND bill_month <= ? AND patient_id IS NOT NULL AND patient_id != ''${bf.where}`,
     startMonth, endMonth, ...bf.params
   )?.n || 0;
-  const sampleRow = db.get(`SELECT patient_id, patient_name, bill_month, department FROM clinic_actuals LIMIT 1`);
-  console.log(`[clinic-analytics] FY: ${startMonth} to ${endMonth}, totalRows=${totalRows}, rowsInFy=${rowsInFy}, rowsWithPid=${rowsWithPid}, sample=${JSON.stringify(sampleRow)}`);
+  // Don't log a sample patient row — patient_id / patient_name are PII and
+  // shouldn't show up in server logs that flow into log aggregators. The
+  // counts above are sufficient for "do we have data?" debugging.
+  console.log(`[clinic-analytics] FY: ${startMonth} to ${endMonth}, totalRows=${totalRows}, rowsInFy=${rowsInFy}, rowsWithPid=${rowsWithPid}`);
 
   // Patient-level aggregation
   const patients = db.all(
