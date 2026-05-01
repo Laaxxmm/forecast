@@ -347,8 +347,21 @@ router.get('/clinic-analytics', async (req, res) => {
     },
     departmentOverlap: { in1: 0, in2: 0, in3: 0 },
     combinations: [],
-    revenueByDeptCount: { '1': 0, '2': 0, '3+': 0 },
-    patientFlow: [],
+    // Array of { deptCount, patients, totalRevenue, avgRevenue } —
+    // client calls .map on it (line 86 in ClinicAnalytics).
+    revenueByDeptCount: [
+      { deptCount: 1, patients: 0, totalRevenue: 0, avgRevenue: 0 },
+      { deptCount: 2, patients: 0, totalRevenue: 0, avgRevenue: 0 },
+      { deptCount: 3, patients: 0, totalRevenue: 0, avgRevenue: 0 },
+    ],
+    // Object with cross-sell counts/revenue — client reads
+    // patientFlow.totalAppointment, .crossToOther, etc. (line 292+).
+    patientFlow: {
+      totalAppointment: 0, totalAppointmentRevenue: 0,
+      crossToOther: 0, crossToLab: 0, crossToBoth: 0, apptOnly: 0,
+      crossToOtherRevenue: 0, crossToLabRevenue: 0,
+      crossToBothRevenue: 0, apptOnlyRevenue: 0,
+    },
     crossSellFunnel: { totalAppointment: 0, crossToOther: 0, crossToLab: 0, crossToBoth: 0, apptOnly: 0 },
     doctorCrossSell: [],
     patientTable: [],
