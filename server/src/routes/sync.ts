@@ -477,7 +477,11 @@ router.post('/oneglance', requireRole('admin', 'operational_head'), requireInteg
           activeScenario.id, ...bf.params
         );
         const pharmaMonthly = db.all(
-          `SELECT bill_month as month, COALESCE(SUM(sales_amount), 0) as revenue,
+          // Pharmacy revenue is rolled up ex-GST so the rollup matches
+          // the P&L semantic shown on the Actuals / Insights pages
+          // (sales_amount is gross from OneGlance; subtract sales_tax).
+          `SELECT bill_month as month,
+                  COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as revenue,
                   COALESCE(SUM(purchase_amount), 0) as cogs
            FROM pharmacy_sales_actuals
            WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where}

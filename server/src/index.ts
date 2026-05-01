@@ -577,26 +577,27 @@ async function start() {
         }
       }
 
-      // ── Per-branch dashboard_actuals rebuild (one-time reconciliation) ──
-      // The previous UNIQUE constraint on dashboard_actuals didn't include
-      // branch_id, so multi-branch clients ended up with per-(scenario,cat,
-      // item,month) rollup rows that belonged to whichever branch last
-      // synced — other branches' rollups were silently overwritten. The
-      // schema migration above fixes the constraint; this block rebuilds
-      // the auto-synced rollup rows from the (still-intact) source tables
-      // so existing data shows up correctly for every branch.
+      // ── Per-branch dashboard_actuals rebuild (every boot) ──
+      // Originally a one-time flag-gated migration, now unconditional.
+      // The flag-gated version was insufficient: every wipe-rollup or
+      // orphan-delete clears dashboard_actuals, and after the bootstrap
+      // auto-sync was disabled for multi-branch tenants (commit 48e5a06)
+      // nothing else refills the rollup until each branch independently
+      // re-imports — so All-Branches totals showed only one branch's
+      // numbers. Running this idempotent (delete-then-insert) rebuild on
+      // every boot keeps dashboard_actuals in lockstep with the raw
+      // tables across server restarts, including after manual wipes.
       //
-      // Scope: only the rows that are auto-populated by import/sync — Clinic
-      // Revenue, Pharmacy Revenue, Pharmacy COGS, Consultancy Revenue.
-      // Manually-entered rows (everything else) are left alone.
+      // Scope: only the rows that are auto-populated by import/sync —
+      // Clinic Revenue, Pharmacy Revenue, Pharmacy COGS. Manually-entered
+      // rows (any other item_name) are left alone — the DELETEs below are
+      // scoped to specific item_name strings.
       //
-      // Flag: dashboard_actuals_branch_rebuild_v1 in app_settings.
+      // Cost: linear in distinct (branch, month) pairs — small, runs
+      // once per boot, fine.
       try {
         const clientDb = await getClientHelper(client.slug);
-        const already = clientDb.get(
-          "SELECT value FROM app_settings WHERE key = 'dashboard_actuals_branch_rebuild_v1'"
-        );
-        if (!already) {
+        {
           const platformDb2 = await getPlatformHelper();
           const clientRow = platformDb2.get('SELECT id FROM clients WHERE slug = ?', client.slug);
           const clinicStream = clientRow ? platformDb2.get(
@@ -645,7 +646,12 @@ async function start() {
             }
           }
 
-          // Pharmacy Revenue + COGS — per (branch_id, month) from pharmacy_sales_actuals
+          // Pharmacy Revenue + COGS — per (branch_id, month) from
+          // pharmacy_sales_actuals. Pharmacy revenue is stored ex-GST
+          // (sales_amount - sales_tax) to match the P&L semantic the
+          // dashboard / insights pages display. Without this subtraction
+          // the rollup would hold gross sales while the raw-table
+          // fallback shows net, and the two paths would disagree.
           if (pharmaScenario) {
             clientDb.run(
               `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Pharmacy Revenue'`,
@@ -657,7 +663,7 @@ async function start() {
             );
             const rows = clientDb.all(
               `SELECT branch_id, bill_month as month,
-                      COALESCE(SUM(sales_amount), 0) as revenue,
+                      COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as revenue,
                       COALESCE(SUM(purchase_amount), 0) as cogs
                FROM pharmacy_sales_actuals
                WHERE bill_month IS NOT NULL AND bill_month != ''
@@ -683,10 +689,12 @@ async function start() {
             }
           }
 
-          clientDb.run(
-            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('dashboard_actuals_branch_rebuild_v1', '1')"
-          );
-          console.log(`  [branch-rebuild] "${client.slug}": rebuilt ${rebuilt} dashboard_actuals rows from source tables`);
+          // (No flag-set: this rebuild now runs unconditionally on every
+          // boot. The legacy `dashboard_actuals_branch_rebuild_v1` flag in
+          // app_settings is harmless if present and is ignored.)
+          if (rebuilt > 0) {
+            console.log(`  [branch-rebuild] "${client.slug}": rebuilt ${rebuilt} dashboard_actuals rows from source tables`);
+          }
         }
       } catch (e) {
         console.error(`  [branch-rebuild] "${client.slug}" failed:`, (e as Error).message);

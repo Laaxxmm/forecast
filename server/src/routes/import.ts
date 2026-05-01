@@ -187,7 +187,10 @@ router.post('/oneglance-sales', requireRole('admin', 'operational_head'), requir
         activeScenario.id, ...bf.params
       );
       const pharmaMonthly = db.all(
-        `SELECT bill_month as month, COALESCE(SUM(sales_amount), 0) as total
+        // Roll up ex-GST so dashboard_actuals matches the P&L semantic
+        // (sales_amount is gross-incl-GST in pharmacy_sales_actuals).
+        `SELECT bill_month as month,
+                COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as total
          FROM pharmacy_sales_actuals WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where} GROUP BY bill_month`,
         ...bf.params
       );
@@ -431,10 +434,12 @@ router.delete('/:id', requireRole('admin', 'operational_head'), async (req, res)
       );
     }
 
-    // Re-sync Pharmacy Revenue from remaining data
+    // Re-sync Pharmacy Revenue from remaining data — ex-GST so the
+    // rollup matches the P&L semantic shown on the dashboard.
     const pharmaStreamId = await resolveStreamId(req, 'pharmacy');
     const pharmaMonthly = db.all(
-      `SELECT bill_month as month, COALESCE(SUM(sales_amount), 0) as total
+      `SELECT bill_month as month,
+              COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as total
        FROM pharmacy_sales_actuals WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where} GROUP BY bill_month`,
       ...bf.params
     );
