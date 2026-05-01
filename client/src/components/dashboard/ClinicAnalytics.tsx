@@ -127,8 +127,12 @@ export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: Cli
       {anyCardVisible && (() => {
         const visibleCount = ['total_unique_patients', 'appointment_patients', 'lab_test_patients', 'other_services_patients', 'direct_lab_walkins', 'direct_other_walkins', 'repeat_visits'].filter(isVisible).length;
         const lgColsClass: Record<number, string> = { 1: '', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6', 7: 'lg:grid-cols-7' };
+        // At md breakpoint use a 4-col layout. The previous 3-col grid
+        // produced an awkward 3+3+1 split when all 7 cards were shown
+        // (last row had a single lonely card). 4-cols gives 4+3, which
+        // packs the cards more evenly.
         return (
-        <div className={`grid grid-cols-3 md:grid-cols-3 ${lgColsClass[visibleCount] || 'lg:grid-cols-7'} gap-2.5 mb-4`}>
+        <div className={`grid grid-cols-3 md:grid-cols-4 ${lgColsClass[visibleCount] || 'lg:grid-cols-7'} gap-2.5 mb-4`}>
           {isVisible('total_unique_patients') && (
             <MiniKPI label="Unique Patients" value={formatNumber(kpi.totalUnique)} icon={Users} color="teal" />
           )}
@@ -153,7 +157,7 @@ export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: Cli
               value={formatNumber(kpi.repeatVisits || 0)}
               icon={Repeat}
               color="teal"
-              sub={`${formatNumber(kpi.repeatPatients || 0)} patients returned`}
+              sub={`${formatNumber(kpi.repeatPatients || 0)} patient${(kpi.repeatPatients || 0) === 1 ? '' : 's'} returned`}
             />
           )}
         </div>

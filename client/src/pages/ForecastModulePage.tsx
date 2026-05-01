@@ -285,6 +285,19 @@ export default function ForecastModulePage() {
             {isConsolidated && (
               <span className="mt-pill mt-pill--warn">Consolidated View (Read-only)</span>
             )}
+            {/* Multi-branch + no branch picked = "All Branches" view.
+                Even before the consolidated fetch resolves, edits should
+                be visually disabled so the user knows to switch branches
+                to make changes. The same flag drives the actual disable
+                via `readOnly`. */}
+            {isMultiBranchAllView && !isConsolidated && (
+              <span
+                className="mt-pill mt-pill--warn"
+                title="Switch to a specific branch to edit. The All-Branches view is read-only — it merges every branch's plan."
+              >
+                All Branches (Read-only)
+              </span>
+            )}
             {streamName && !isAllStreams && (
               <span className="mt-pill mt-pill--success">{streamName}</span>
             )}
@@ -297,7 +310,11 @@ export default function ForecastModulePage() {
               <Printer size={15} />
               <span className="hidden lg:inline">Print</span>
             </button>
-            {!isConsolidated && <>
+            {/* Hide the scenario picker in any read-only consolidated mode.
+                In branch-consolidated mode (multi-branch + no branch picked),
+                each branch contributes its own scenario; picking one doesn't
+                map to a single editable plan. */}
+            {!isConsolidated && !isMultiBranchAllView && <>
             <div style={{ height: 24, width: 1, background: 'var(--mt-border)' }} />
             <select
               data-tour="scenario-select"
@@ -450,7 +467,7 @@ export default function ForecastModulePage() {
                 {orphanInfo.scenarioCount} forecast scenario{orphanInfo.scenarioCount === 1 ? '' : 's'} not tied to any branch
               </div>
               <div style={{ color: 'var(--mt-text-muted)', marginTop: 2 }}>
-                {orphanInfo.itemCount} line item{orphanInfo.itemCount === 1 ? '' : 's'} are hidden from every branch's view because they were created without a branch context.
+                {orphanInfo.itemCount} line item{orphanInfo.itemCount === 1 ? '' : 's'} {orphanInfo.itemCount === 1 ? 'is' : 'are'} hidden from every branch's view because they were created without a branch context.
                 Move them into the current branch to make them visible here.
               </div>
             </div>
