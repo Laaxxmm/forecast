@@ -1005,12 +1005,16 @@ router.get('/variance', async (req, res) => {
     }
   }
 
-  // Fallback to old budgets table
+  // Fallback to old budgets table. The legacy `budgets` table has no
+  // `branch_id` column (it predates multi-branch), so we can't filter
+  // by branch here without throwing. Treat its rows as tenant-wide —
+  // they only show up in clients that haven't migrated to the forecast
+  // module yet.
   if (budgetRows.length === 0) {
     budgetRows = db.all(
       `SELECT b.*, d.name as dept_name FROM budgets b LEFT JOIN departments d ON b.department_id = d.id
-       WHERE b.fy_id = ?${bf.where} ORDER BY b.month`,
-      fy_id, ...bf.params
+       WHERE b.fy_id = ? ORDER BY b.month`,
+      fy_id
     );
   }
 
@@ -1435,31 +1439,36 @@ router.get('/operational-insights', async (req, res) => {
     combinedTargetRevenue += monthlyTarget;
 
     // ── Action items ──
-    if (rag === 'RED' && monthlyTarget > 0) {
-      const gap = monthlyTarget - mtdRevenue;
-      actions.push({ severity: 'RED', stream: stream.name, message: `${stream.name} revenue is ${Math.round(pctOfTarget)}% of target. Need ₹${Math.round(requiredRate).toLocaleString('en-IN')}/day to recover (gap: ₹${Math.round(gap).toLocaleString('en-IN')})` });
-    }
-    if (lastWeek.revenue > 0 && thisWeek.revenue > 0) {
-      const wowChange = ((thisWeek.revenue - lastWeek.revenue) / lastWeek.revenue) * 100;
-      if (wowChange < -15) {
-        actions.push({ severity: 'AMBER', stream: stream.name, message: `${stream.name} revenue dropped ${Math.abs(Math.round(wowChange))}% vs last week` });
+    // Only generate live actions for the current month. For historical
+    // periods, "Need ₹X/day to recover" or "no patients this week" is
+    // moot — the period is closed and acting on it is meaningless.
+    if (isLiveMonth) {
+      if (rag === 'RED' && monthlyTarget > 0) {
+        const gap = monthlyTarget - mtdRevenue;
+        actions.push({ severity: 'RED', stream: stream.name, message: `${stream.name} revenue is ${Math.round(pctOfTarget)}% of target. Need ₹${Math.round(requiredRate).toLocaleString('en-IN')}/day to recover (gap: ₹${Math.round(gap).toLocaleString('en-IN')})` });
       }
-    }
+      if (lastWeek.revenue > 0 && thisWeek.revenue > 0) {
+        const wowChange = ((thisWeek.revenue - lastWeek.revenue) / lastWeek.revenue) * 100;
+        if (wowChange < -15) {
+          actions.push({ severity: 'AMBER', stream: stream.name, message: `${stream.name} revenue dropped ${Math.abs(Math.round(wowChange))}% vs last week` });
+        }
+      }
 
-    // Check departments with zero activity (clinic only)
-    if (isClinic) {
-      const activeDepts = db.all(
-        `SELECT DISTINCT department FROM clinic_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where} AND department IS NOT NULL AND department != ''`,
-        thisMondayStr, todayStr, ...bf.params
-      );
-      const allDepts = db.all(
-        `SELECT DISTINCT department FROM clinic_actuals WHERE bill_month = ?${bf.where} AND department IS NOT NULL AND department != ''`,
-        lastMonth, ...bf.params
-      );
-      const activeSet = new Set(activeDepts.map((d: any) => d.department));
-      for (const dept of allDepts) {
-        if (!activeSet.has(dept.department)) {
-          actions.push({ severity: 'INFO', stream: stream.name, message: `${dept.department}: no patients this week` });
+      // Check departments with zero activity (clinic only)
+      if (isClinic) {
+        const activeDepts = db.all(
+          `SELECT DISTINCT department FROM clinic_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where} AND department IS NOT NULL AND department != ''`,
+          thisMondayStr, todayStr, ...bf.params
+        );
+        const allDepts = db.all(
+          `SELECT DISTINCT department FROM clinic_actuals WHERE bill_month = ?${bf.where} AND department IS NOT NULL AND department != ''`,
+          lastMonth, ...bf.params
+        );
+        const activeSet = new Set(activeDepts.map((d: any) => d.department));
+        for (const dept of allDepts) {
+          if (!activeSet.has(dept.department)) {
+            actions.push({ severity: 'INFO', stream: stream.name, message: `${dept.department}: no patients this week` });
+          }
         }
       }
     }
@@ -1475,9 +1484,15 @@ router.get('/operational-insights', async (req, res) => {
   const combinedPct = combinedTargetRevenue > 0 ? (combinedProjected / combinedTargetRevenue) * 100 : 0;
   const combinedRag = combinedTargetRevenue === 0 ? 'GREY' : combinedPct >= 95 ? 'GREEN' : combinedPct >= 80 ? 'AMBER' : 'RED';
 
+  // Build monthLabel from `currentMonth` not `now` so when the user is
+  // viewing a past month the label says e.g. "April 2026" instead of
+  // today's month. cmYear/cmMonth come from currentMonth at the top
+  // of the handler.
+  const monthLabelDate = new Date(cmYear, cmMonth - 1, 1);
+
   res.json({
     month: currentMonth,
-    monthLabel: now.toLocaleString('en-IN', { month: 'long', year: 'numeric' }),
+    monthLabel: monthLabelDate.toLocaleString('en-IN', { month: 'long', year: 'numeric' }),
     daysElapsed, daysInMonth, daysRemaining,
     streams: streamsResult,
     combined: {

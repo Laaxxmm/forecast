@@ -159,7 +159,11 @@ export default function OperationalInsightsPage() {
       .catch(() => setLoading(false));
   }, [selectedMonth]);
 
-  if (loading) return (
+  // First-load only: no data yet at all → centered spinner. After the
+  // first load, switching months keeps the existing header + selector
+  // mounted (see below) so the page doesn't blank out — the prior data
+  // stays on screen during the brief refetch instead.
+  if (loading && !data) return (
     <div className="flex items-center justify-center py-20">
       <div
         className="w-6 h-6 rounded-full animate-spin"
@@ -180,6 +184,14 @@ export default function OperationalInsightsPage() {
   const { streams, combined, actions, daysElapsed, daysInMonth, daysRemaining } = data;
   const dailyTargetLine = combined.targetRevenue > 0 ? Math.round(combined.targetRevenue / daysInMonth) : 0;
   const ragTone = RAG_TONE[combined.rag] || RAG_TONE.GREY;
+  // A past month is one whose `daysRemaining === 0` AND it isn't the
+  // currently-running month. The server sends daysRemaining=0 for past
+  // months even when daysElapsed === daysInMonth, so this is a safe test.
+  const todayMonthStr = (() => {
+    const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`;
+  })();
+  const isClosedPeriod = data.month !== todayMonthStr && daysRemaining === 0;
 
   return (
     <div className="p-4 md:p-6 space-y-5 max-w-[1400px] mx-auto animate-fade-in">
@@ -194,7 +206,9 @@ export default function OperationalInsightsPage() {
             Operational Insights
           </h1>
           <p className="text-xs mt-0.5" style={{ color: 'var(--mt-text-muted)' }}>
-            {data.monthLabel} &middot; Day {daysElapsed} of {daysInMonth} &middot; {daysRemaining} days remaining
+            {isClosedPeriod
+              ? `${data.monthLabel} · Closed period · Final values`
+              : `${data.monthLabel} · Day ${daysElapsed} of ${daysInMonth} · ${daysRemaining} days remaining`}
           </p>
         </div>
         <div className="flex items-center gap-2">
