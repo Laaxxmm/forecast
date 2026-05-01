@@ -235,8 +235,17 @@ export default function ImportPage() {
 
   const navigateMonth = (dir: -1 | 1) => {
     const [y, m] = trackerMonth.split('-').map(Number);
-    const d = new Date(y, m - 1 + dir, 1);
-    setTrackerMonth(d.toISOString().slice(0, 7));
+    // Compute the new year/month with plain integer math instead of
+    // round-tripping through `new Date(...).toISOString()`. The old code
+    // built a *local-time* Date (April 1 IST), then `toISOString()`
+    // converted to UTC, landing on March 31 — so the month string
+    // sliced off as "2026-03" instead of "2026-04". Anyone in a
+    // negative-offset timezone (UTC+anything) hit this on every back
+    // click. Pure arithmetic on (y,m) avoids the Date entirely.
+    const totalMonths = y * 12 + (m - 1) + dir;
+    const ny = Math.floor(totalMonths / 12);
+    const nm = (totalMonths % 12) + 1;
+    setTrackerMonth(`${ny}-${String(nm).padStart(2, '0')}`);
   };
 
   const loadHistory = useCallback(() => {
