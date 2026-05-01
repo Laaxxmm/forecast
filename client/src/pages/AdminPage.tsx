@@ -1376,6 +1376,7 @@ function ModulesSection({ slug, modules, onReload }: {
     { key: 'litigation_tool', name: 'Litigation Tool', desc: 'Track notices and prepare legal responses', icon: '⚖️' },
     { key: 'user_analysis', name: 'User Analysis', desc: 'Allow regular users to view the Analysis page', icon: '📊' },
     { key: 'user_insights', name: 'User Insights', desc: 'Allow regular users to view the Insights page', icon: '📈' },
+    { key: 'user_scenario_analysis', name: 'Scenario Analysis', desc: 'Side-by-side comparison, what-if sliders, and scenario reports', icon: '🧪' },
   ];
 
   return (

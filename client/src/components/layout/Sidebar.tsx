@@ -3,7 +3,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, TrendingUp, Upload, Settings, LogOut, BarChart3, Building2, ArrowLeftRight,
   MapPin, ChevronDown, Sun, Moon, ArrowRight, Activity, PieChart,
-  Pin, PinOff, X, Table, CalendarCheck, ClipboardList,
+  Pin, PinOff, X, Table, CalendarCheck, ClipboardList, GitCompare,
 } from 'lucide-react';
 import api from '../../api/client';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -15,6 +15,7 @@ const forecastLinks = [
   { to: '/forecast', icon: TrendingUp, label: 'Forecast', clientAdminOnly: false, requiresModule: '' },
   { to: '/analysis', icon: BarChart3, label: 'Analysis', clientAdminOnly: false, requiresModule: 'user_analysis' },
   { to: '/insights', icon: Activity, label: 'Insights', clientAdminOnly: false, requiresModule: 'user_insights' },
+  { to: '/scenario-analysis', icon: GitCompare, label: 'Scenarios', clientAdminOnly: false, requiresModule: 'user_scenario_analysis' },
   { to: '/revenue-sharing', icon: PieChart, label: 'Rev. Sharing', clientAdminOnly: false, requiresModule: '' },
 ];
 

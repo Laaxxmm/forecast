@@ -97,6 +97,187 @@ router.post('/scenarios', requireWriteAccess, async (req, res) => {
   res.json(created);
 });
 
+// === Rename a scenario ============================================
+router.put('/scenarios/:id', requireWriteAccess, async (req, res) => {
+  const db = req.tenantDb!;
+  const id = requireInt(req.params.id, 'id');
+  const name = requireString(req.body.name, 'name', 200);
+  const bf = branchFilter(req, { strict: true });
+  const sf = streamFilter(req);
+  const scenario = db.get(
+    `SELECT * FROM scenarios WHERE id = ?${bf.where}${sf.where}`,
+    id, ...bf.params, ...sf.params
+  );
+  if (!scenario) return res.status(404).json({ error: 'Scenario not found' });
+  db.run('UPDATE scenarios SET name = ? WHERE id = ?', name, id);
+  res.json(db.get('SELECT * FROM scenarios WHERE id = ?', id));
+});
+
+// === Duplicate a scenario =========================================
+// Deep-copies the scenario row plus all forecast_items, forecast_values, and
+// forecast_settings under it. Two-pass copy of items so parent_id references
+// point at the new ids. The new scenario is always is_default = 0.
+router.post('/scenarios/:id/duplicate', requireWriteAccess, async (req, res) => {
+  const db = req.tenantDb!;
+  const id = requireInt(req.params.id, 'id');
+  const name = requireString(req.body.name, 'name', 200);
+  const bf = branchFilter(req, { strict: true });
+  const sf = streamFilter(req);
+  const source = db.get(
+    `SELECT * FROM scenarios WHERE id = ?${bf.where}${sf.where}`,
+    id, ...bf.params, ...sf.params
+  );
+  if (!source) return res.status(404).json({ error: 'Scenario not found' });
+
+  db.beginBatch();
+  try {
+    const insRes = db.run(
+      'INSERT INTO scenarios (fy_id, name, is_default, branch_id, stream_id) VALUES (?, ?, 0, ?, ?)',
+      source.fy_id, name, source.branch_id, source.stream_id
+    );
+    const newScenarioId = insRes.lastInsertRowid;
+
+    // Pass 1: copy items, building oldId -> newId map. Insert with parent_id = NULL
+    // so that we never reference an old parent that lives on the source scenario.
+    const sourceItems = db.all(
+      'SELECT * FROM forecast_items WHERE scenario_id = ? ORDER BY id',
+      id
+    );
+    const idMap: Record<number, number> = {};
+    for (const it of sourceItems) {
+      const r = db.run(
+        `INSERT INTO forecast_items
+           (scenario_id, category, name, item_type, entry_mode, constant_amount,
+            constant_period, start_month, annual_raise_pct, tax_rate_pct,
+            sort_order, parent_id, meta)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+        newScenarioId,
+        it.category, it.name, it.item_type, it.entry_mode, it.constant_amount,
+        it.constant_period, it.start_month, it.annual_raise_pct, it.tax_rate_pct,
+        it.sort_order, it.meta
+      );
+      idMap[it.id] = Number(r.lastInsertRowid);
+    }
+
+    // Pass 2: rewire parent_id to the NEW item ids.
+    for (const it of sourceItems) {
+      if (it.parent_id != null && idMap[it.parent_id] != null) {
+        db.run('UPDATE forecast_items SET parent_id = ? WHERE id = ?', idMap[it.parent_id], idMap[it.id]);
+      }
+    }
+
+    // Copy forecast_values via the id map.
+    if (sourceItems.length > 0) {
+      const sourceItemIds = sourceItems.map((i: any) => i.id);
+      const placeholders = sourceItemIds.map(() => '?').join(',');
+      const vals = db.all(
+        `SELECT item_id, month, amount FROM forecast_values WHERE item_id IN (${placeholders})`,
+        ...sourceItemIds
+      );
+      for (const v of vals) {
+        const newItemId = idMap[v.item_id];
+        if (newItemId == null) continue;
+        db.run(
+          'INSERT INTO forecast_values (item_id, month, amount) VALUES (?, ?, ?)',
+          newItemId, v.month, v.amount
+        );
+      }
+    }
+
+    // Copy forecast_settings (scenario-scoped, no item dependency).
+    const settings = db.all('SELECT setting_key, setting_value FROM forecast_settings WHERE scenario_id = ?', id);
+    for (const s of settings) {
+      db.run(
+        'INSERT INTO forecast_settings (scenario_id, setting_key, setting_value) VALUES (?, ?, ?)',
+        newScenarioId, s.setting_key, s.setting_value
+      );
+    }
+
+    db.endBatch();
+    const created = db.get('SELECT * FROM scenarios WHERE id = ?', newScenarioId);
+    res.json(created);
+  } catch (err: any) {
+    db.rollbackBatch();
+    console.error('[scenarios/duplicate] failed:', err);
+    res.status(500).json({ error: 'Duplicate failed: ' + (err?.message || 'unknown') });
+  }
+});
+
+// === Promote a scenario to default within its (fy, branch, stream) =======
+router.put('/scenarios/:id/set-default', requireWriteAccess, async (req, res) => {
+  const db = req.tenantDb!;
+  const id = requireInt(req.params.id, 'id');
+  const bf = branchFilter(req, { strict: true });
+  const sf = streamFilter(req);
+  const scenario = db.get(
+    `SELECT * FROM scenarios WHERE id = ?${bf.where}${sf.where}`,
+    id, ...bf.params, ...sf.params
+  );
+  if (!scenario) return res.status(404).json({ error: 'Scenario not found' });
+
+  db.beginBatch();
+  try {
+    // Clear default for every scenario sharing this (fy, branch, stream) scope.
+    db.run(
+      `UPDATE scenarios SET is_default = 0
+        WHERE fy_id = ?${bf.where}${sf.where}`,
+      scenario.fy_id, ...bf.params, ...sf.params
+    );
+    db.run('UPDATE scenarios SET is_default = 1 WHERE id = ?', id);
+    db.endBatch();
+    res.json({ ok: true });
+  } catch (err: any) {
+    db.rollbackBatch();
+    console.error('[scenarios/set-default] failed:', err);
+    res.status(500).json({ error: 'Set default failed: ' + (err?.message || 'unknown') });
+  }
+});
+
+// === Delete a scenario ============================================
+// Cascades through forecast_items / forecast_values / forecast_settings /
+// dashboard_actuals. Refuses to delete the only scenario in a (fy, branch,
+// stream) scope. If the deleted row was is_default, the oldest remaining
+// scenario in the same scope is promoted.
+router.delete('/scenarios/:id', requireWriteAccess, async (req, res) => {
+  const db = req.tenantDb!;
+  const id = requireInt(req.params.id, 'id');
+  const bf = branchFilter(req, { strict: true });
+  const sf = streamFilter(req);
+  const scenario = db.get(
+    `SELECT * FROM scenarios WHERE id = ?${bf.where}${sf.where}`,
+    id, ...bf.params, ...sf.params
+  );
+  if (!scenario) return res.status(404).json({ error: 'Scenario not found' });
+
+  // Don't strand the scope — block deleting the only scenario for it.
+  const siblings = db.all(
+    `SELECT id FROM scenarios WHERE fy_id = ? AND id != ?${bf.where}${sf.where}`,
+    scenario.fy_id, id, ...bf.params, ...sf.params
+  );
+  if (siblings.length === 0) {
+    return res.status(400).json({ error: 'Cannot delete the only scenario in this branch & stream. Create another first.' });
+  }
+
+  db.beginBatch();
+  try {
+    db.run('DELETE FROM scenarios WHERE id = ?', id);
+    // Promote a replacement default if we just removed the previous one.
+    if (scenario.is_default) {
+      const promote = db.get(
+        `SELECT id FROM scenarios WHERE fy_id = ?${bf.where}${sf.where} ORDER BY id LIMIT 1`,
+        scenario.fy_id, ...bf.params, ...sf.params
+      );
+      if (promote) db.run('UPDATE scenarios SET is_default = 1 WHERE id = ?', promote.id);
+    }
+    db.endBatch();
+    res.json({ ok: true });
+  } catch (err: any) {
+    db.rollbackBatch();
+    console.error('[scenarios/delete] failed:', err);
+    res.status(500).json({ error: 'Delete failed: ' + (err?.message || 'unknown') });
+  }
+});
+
 // === ORPHAN SCENARIO RECOVERY ===
 //
 // Strict branch isolation hides any scenarios with `branch_id IS NULL`. Most

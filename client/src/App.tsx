@@ -20,6 +20,7 @@ import AdminPage from './pages/AdminPage';
 import ModuleSelectPage from './pages/ModuleSelectPage';
 import OperationalInsightsPage from './pages/OperationalInsightsPage';
 import RevenueSharingPage from './pages/RevenueSharingPage';
+import ScenarioAnalysisPage from './pages/ScenarioAnalysisPage';
 import { canSeeVcfo } from './utils/roles';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -122,6 +123,7 @@ export default function App() {
           <Route path="/forecast/*" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><ForecastModulePage /></ModuleRoute></ClientRoute>} />
           <Route path="/analysis/*" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><UserModuleRoute moduleKey="user_analysis"><DashboardModulePage /></UserModuleRoute></ModuleRoute></ClientRoute>} />
           <Route path="/insights" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><UserModuleRoute moduleKey="user_insights"><OperationalInsightsPage /></UserModuleRoute></ModuleRoute></ClientRoute>} />
+          <Route path="/scenario-analysis/*" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><UserModuleRoute moduleKey="user_scenario_analysis"><ScenarioAnalysisPage /></UserModuleRoute></ModuleRoute></ClientRoute>} />
           <Route path="/revenue-sharing" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><RevenueSharingPage /></ModuleRoute></ClientRoute>} />
           <Route path="/import" element={<ClientRoute><ClientAdminRoute><ModuleRoute moduleKey="forecast_ops"><ImportPage /></ModuleRoute></ClientAdminRoute></ClientRoute>} />
           <Route path="/stream/:streamId" element={<ClientRoute><ModuleRoute moduleKey="forecast_ops"><StreamDetailPage /></ModuleRoute></ClientRoute>} />

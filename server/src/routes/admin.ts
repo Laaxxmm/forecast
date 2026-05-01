@@ -188,6 +188,7 @@ router.post('/clients', async (req: Request, res: Response) => {
   db.run('INSERT INTO client_modules (client_id, module_key, is_enabled) VALUES (?, ?, ?)', [clientId, 'litigation_tool', 0]);
   db.run('INSERT INTO client_modules (client_id, module_key, is_enabled) VALUES (?, ?, ?)', [clientId, 'user_analysis', 1]);
   db.run('INSERT INTO client_modules (client_id, module_key, is_enabled) VALUES (?, ?, ?)', [clientId, 'user_insights', 1]);
+  db.run('INSERT INTO client_modules (client_id, module_key, is_enabled) VALUES (?, ?, ?)', [clientId, 'user_scenario_analysis', 0]);
 
   // Assign team members to this client
   const teamMemberIds: number[] = req.body.team_member_ids || [];
@@ -310,6 +311,7 @@ router.get('/clients/:slug/modules', async (req: Request, res: Response) => {
     { key: 'litigation_tool', enabled: 0 },
     { key: 'user_analysis', enabled: 1 },
     { key: 'user_insights', enabled: 1 },
+    { key: 'user_scenario_analysis', enabled: 0 },
   ];
   for (const m of defaultModules) {
     db.run(
@@ -329,7 +331,7 @@ router.put('/clients/:slug/modules/:moduleKey', async (req: Request, res: Respon
 
   const { is_enabled } = req.body;
   const moduleKey = req.params.moduleKey as string;
-  const validModules = ['forecast_ops', 'vcfo_portal', 'audit_view', 'litigation_tool', 'user_analysis', 'user_insights'];
+  const validModules = ['forecast_ops', 'vcfo_portal', 'audit_view', 'litigation_tool', 'user_analysis', 'user_insights', 'user_scenario_analysis'];
   if (!validModules.includes(moduleKey)) {
     return res.status(400).json({ error: 'Invalid module key' });
   }
