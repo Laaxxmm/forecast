@@ -1060,24 +1060,52 @@ router.get('/operational-insights', async (req, res) => {
     req.clientId
   );
 
-  // Date calculations
+  // Date calculations. The endpoint accepts an optional ?month=YYYY-MM
+  // query param so the user can view a past month's snapshot. When
+  // omitted (or invalid) it falls back to today's month — preserving the
+  // existing live-current-month behaviour.
+  //
+  // For PAST months we treat the period as complete: daysElapsed =
+  // daysInMonth, daysRemaining = 0. The week-anchor moves to the last
+  // day of the selected month so "this week vs last week" reflects the
+  // final two weeks of that month rather than today's calendar week.
+  // For the LIVE current month we use today's date as the anchor (same
+  // behaviour as before).
   const now = new Date();
-  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const dayOfMonth = now.getDate();
+  const todayMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const monthParam = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month)
+    ? req.query.month
+    : null;
+  const currentMonth = monthParam || todayMonth;
+
+  const [cmYear, cmMonth] = currentMonth.split('-').map(Number);
+  const daysInMonth = new Date(cmYear, cmMonth, 0).getDate();
+  const isLiveMonth = currentMonth === todayMonth;
+  // For live month → today's day; past month → end-of-month;
+  // future month → not started (0).
+  const dayOfMonth = isLiveMonth
+    ? now.getDate()
+    : (currentMonth < todayMonth ? daysInMonth : 0);
   const daysElapsed = dayOfMonth;
-  const daysRemaining = daysInMonth - dayOfMonth;
+  const daysRemaining = Math.max(0, daysInMonth - dayOfMonth);
 
-  // Last month for trend comparison (same # of days elapsed)
-  const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  // Last month for trend comparison (the calendar month before
+  // `currentMonth`, regardless of whether `currentMonth` is live or
+  // historical). cmMonth is 1-12; subtracting 2 from it as a Date arg
+  // gives the previous month.
+  const lastMonthDate = new Date(cmYear, cmMonth - 2, 1);
   const lastMonth = `${lastMonthDate.getFullYear()}-${String(lastMonthDate.getMonth() + 1).padStart(2, '0')}`;
-  const lastMonthCutoffDay = Math.min(dayOfMonth, new Date(lastMonthDate.getFullYear(), lastMonthDate.getMonth() + 1, 0).getDate());
+  const lastMonthDaysInMonth = new Date(lastMonthDate.getFullYear(), lastMonthDate.getMonth() + 1, 0).getDate();
+  const lastMonthCutoffDay = Math.min(dayOfMonth, lastMonthDaysInMonth);
 
-  // Week boundaries (Monday-based)
-  const todayDay = now.getDay(); // 0=Sun
-  const mondayOffset = todayDay === 0 ? 6 : todayDay - 1;
-  const thisMonday = new Date(now);
-  thisMonday.setDate(now.getDate() - mondayOffset);
+  // Week boundaries (Monday-based). Anchor moves to the last day of the
+  // selected month for past views so "this week" = last calendar week
+  // of the selected month rather than today's week.
+  const weekAnchor = isLiveMonth ? now : new Date(cmYear, cmMonth - 1, daysInMonth);
+  const anchorDay = weekAnchor.getDay(); // 0=Sun
+  const mondayOffset = anchorDay === 0 ? 6 : anchorDay - 1;
+  const thisMonday = new Date(weekAnchor);
+  thisMonday.setDate(weekAnchor.getDate() - mondayOffset);
   const lastSunday = new Date(thisMonday);
   lastSunday.setDate(thisMonday.getDate() - 1);
   const lastMonday = new Date(lastSunday);
@@ -1085,7 +1113,7 @@ router.get('/operational-insights', async (req, res) => {
 
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
   const thisMondayStr = fmt(thisMonday);
-  const todayStr = fmt(now);
+  const todayStr = fmt(weekAnchor);
   const lastMondayStr = fmt(lastMonday);
   const lastSundayStr = fmt(lastSunday);
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
@@ -127,11 +127,37 @@ export default function OperationalInsightsPage() {
   const branchName = typeof window !== 'undefined' ? (localStorage.getItem('branch_name') || '') : '';
   const branchState = typeof window !== 'undefined' ? (localStorage.getItem('branch_state') || '') : '';
 
+  // Period selector — single-month options (the page is structured around
+  // one month's MTD, so multi-month ranges don't fit). Default to live
+  // current month; users can switch to past months to view historical
+  // snapshots. We generate the last 12 months + current month locally
+  // (no FY round-trip needed) since the endpoint doesn't care about FY
+  // boundaries — it just takes a `month=YYYY-MM` query param.
+  const monthOptions = useMemo(() => {
+    const now = new Date();
+    const todayMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const opts: { value: string; label: string }[] = [];
+    for (let i = 0; i <= 12; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const monthLabel = `${names[d.getMonth()]} '${String(d.getFullYear()).slice(-2)}`;
+      const label = value === todayMonth
+        ? `Current month (${monthLabel})`
+        : (i === 1 ? `Last month (${monthLabel})` : monthLabel);
+      opts.push({ value, label });
+    }
+    return opts;
+  }, []);
+
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => monthOptions[0].value);
+
   useEffect(() => {
-    api.get('/dashboard/operational-insights')
+    setLoading(true);
+    api.get('/dashboard/operational-insights', { params: { month: selectedMonth } })
       .then(r => { setData(r.data); setLoading(false); })
       .catch(() => setLoading(false));
-  }, []);
+  }, [selectedMonth]);
 
   if (loading) return (
     <div className="flex items-center justify-center py-20">
@@ -172,6 +198,24 @@ export default function OperationalInsightsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Period selector — pick which month's MTD snapshot to view.
+              Defaults to current month (live data). Past months are shown
+              as fully-complete (Day N of N · 0 days remaining). */}
+          <select
+            value={selectedMonth}
+            onChange={(e) => setSelectedMonth(e.target.value)}
+            className="text-sm rounded-lg px-3 py-1.5 cursor-pointer"
+            style={{
+              background: 'var(--mt-bg-raised)',
+              color: 'var(--mt-text-heading)',
+              border: '1px solid var(--mt-border)',
+            }}
+            title="Switch the period under review"
+          >
+            {monthOptions.map(o => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
           <DownloadButton onClick={() => setDownloadOpen(true)} />
           <div
             className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold"
