@@ -29,11 +29,21 @@ export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: Cli
     if (startMonth) params.startMonth = startMonth;
     if (endMonth) params.endMonth = endMonth;
 
+    // Abort the previous request when the user switches month before the
+    // first response lands. Without this, a slow April fetch could resolve
+    // *after* the user picked May, overwriting the May data with April's
+    // — visible as a brief flash of stale numbers.
+    const ctl = new AbortController();
     setLoading(true);
-    api.get('/dashboard/clinic-analytics', { params }).then(res => {
+    api.get('/dashboard/clinic-analytics', { params, signal: ctl.signal }).then(res => {
+      if (ctl.signal.aborted) return;
       setData(res.data);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(() => {
+      if (ctl.signal.aborted) return;
+      setLoading(false);
+    });
+    return () => ctl.abort();
   }, [startMonth, endMonth]);
 
   const patientTable = data?.patientTable || [];

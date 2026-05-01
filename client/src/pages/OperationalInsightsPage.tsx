@@ -153,10 +153,22 @@ export default function OperationalInsightsPage() {
   const [selectedMonth, setSelectedMonth] = useState<string>(() => monthOptions[0].value);
 
   useEffect(() => {
+    // Abort the previous month's request when the user picks a new month
+    // before the prior fetch lands. A slow April response arriving after
+    // the user picked May would otherwise overwrite May with April's
+    // data, briefly showing wrong numbers.
+    const ctl = new AbortController();
     setLoading(true);
-    api.get('/dashboard/operational-insights', { params: { month: selectedMonth } })
-      .then(r => { setData(r.data); setLoading(false); })
-      .catch(() => setLoading(false));
+    api.get('/dashboard/operational-insights', { params: { month: selectedMonth }, signal: ctl.signal })
+      .then(r => {
+        if (ctl.signal.aborted) return;
+        setData(r.data); setLoading(false);
+      })
+      .catch(() => {
+        if (ctl.signal.aborted) return;
+        setLoading(false);
+      });
+    return () => ctl.abort();
   }, [selectedMonth]);
 
   // First-load only: no data yet at all → centered spinner. After the
