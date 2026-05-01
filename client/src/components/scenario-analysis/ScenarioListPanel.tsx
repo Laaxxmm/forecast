@@ -259,9 +259,18 @@ export default function ScenarioListPanel({ disabled, fy, scenarios, onReload }:
                           <button
                             onClick={() => handleDelete(s)}
                             className="mt-btn-ghost"
-                            style={{ padding: '4px 8px', fontSize: 12, color: '#ef4444' }}
+                            style={{
+                              padding: '4px 8px',
+                              fontSize: 12,
+                              color: '#ef4444',
+                              // A subtle red-tinted border telegraphs the
+                              // destructive action without shouting. Pure
+                              // red with no border read as "just a coloured
+                              // icon" and was easy to miss as a button.
+                              borderColor: 'color-mix(in srgb, #ef4444 30%, transparent)',
+                            }}
                             disabled={busy}
-                            title="Delete"
+                            title="Delete scenario — removes its items, values, and linked actuals. Cannot be undone."
                           >
                             <Trash2 size={13} />
                           </button>

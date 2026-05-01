@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import DownloadPrintPanel from '../components/forecast/DownloadPrintPanel';
 import { buildForecastWorkbook } from '../utils/forecastWorkbook';
-import { canWriteForecast, isSuperAdmin } from '../utils/roles';
+import { canWriteForecast, isSuperAdmin, isClientAdmin } from '../utils/roles';
 
 export interface FY { id: number; label: string; start_date: string; end_date: string; is_active: number; }
 export interface Scenario { id: number; fy_id: number; name: string; is_default: number; }
@@ -258,6 +258,29 @@ export default function ForecastModulePage() {
     }
   };
 
+  // Hard-delete the orphan scenarios. Used when the rows are unwanted
+  // noise rather than something to recover (e.g. test data, abandoned
+  // pre-multi-branch experiments). Admin-only — gated server-side too.
+  const handleDeleteOrphans = async () => {
+    const ok = window.confirm(
+      `Permanently delete ${orphanInfo?.scenarioCount} forecast scenario(s) ` +
+      `(${orphanInfo?.itemCount} line items)?\n\n` +
+      `This removes the data from the database. ` +
+      `Use "Move into <branch>" if you want to keep it but assign it to a branch.\n\n` +
+      `This cannot be undone.`
+    );
+    if (!ok) return;
+    setMigrating(true);
+    try {
+      await api.post('/forecast-module/scenarios/delete-orphans');
+      setOrphanInfo({ scenarioCount: 0, itemCount: 0 });
+      window.location.reload();
+    } catch (e: any) {
+      alert(`Delete failed: ${e?.response?.data?.error || e.message || 'unknown error'}`);
+      setMigrating(false);
+    }
+  };
+
   const months = selectedFY ? getFYMonths(selectedFY.start_date) : [];
   const currentYear = selectedFY ? parseInt(selectedFY.start_date.slice(0, 4)) : 2026;
 
@@ -472,6 +495,28 @@ export default function ForecastModulePage() {
               </div>
             </div>
           </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+          {/* Admin-only hard-delete. For the common case (legitimate data
+              created without a branch), the user clicks Move; if the rows
+              are noise/abandoned the admin clicks Delete. We only render
+              Delete for admins to keep the destructive option out of
+              op_head's reach in the UI — server enforces the same. */}
+          {(isSuperAdmin() || isClientAdmin()) && (
+            <button
+              onClick={handleDeleteOrphans}
+              disabled={migrating}
+              className="mt-btn-ghost whitespace-nowrap"
+              style={{
+                padding: '8px 14px',
+                fontSize: 13,
+                color: '#ef4444',
+                borderColor: 'color-mix(in srgb, #ef4444 35%, transparent)',
+              }}
+              title="Permanently delete the orphan scenarios. Use this only if the data is unwanted noise."
+            >
+              Delete
+            </button>
+          )}
           <button
             onClick={handleMigrateOrphans}
             disabled={migrating}
@@ -483,6 +528,7 @@ export default function ForecastModulePage() {
               ? 'Moving…'
               : `Move into ${localStorage.getItem('branch_name') || 'current branch'}`}
           </button>
+          </div>
         </div>
       )}
 

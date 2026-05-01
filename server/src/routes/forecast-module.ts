@@ -418,6 +418,47 @@ router.post('/scenarios/migrate-orphans', async (req, res) => {
   });
 });
 
+/** Delete every NULL-branch ("orphan") scenario and its forecast_items /
+ *  forecast_values. Use only when the orphan rows are unwanted noise —
+ *  most tenants want to migrate, not delete. Mirrors POST
+ *  /actuals/delete-orphans. Admin-only and irreversible. */
+router.post('/scenarios/delete-orphans', async (req, res) => {
+  if (req.userType !== 'super_admin' && req.session?.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  const db = req.tenantDb!;
+  const orphanIds = db.all(
+    'SELECT id FROM scenarios WHERE branch_id IS NULL'
+  ).map((r: any) => r.id);
+  if (orphanIds.length === 0) {
+    return res.json({ deletedScenarios: 0, deletedItems: 0, deletedValues: 0 });
+  }
+  const ph = orphanIds.map(() => '?').join(',');
+  const itemRow = db.get(
+    `SELECT COUNT(*) as n FROM forecast_items WHERE scenario_id IN (${ph})`,
+    ...orphanIds
+  );
+  // forecast_values FK-cascades on forecast_items, so deleting items is
+  // enough; for the response total we count first.
+  const valueRow = db.get(
+    `SELECT COUNT(*) as n FROM forecast_values
+       WHERE item_id IN (SELECT id FROM forecast_items WHERE scenario_id IN (${ph}))`,
+    ...orphanIds
+  );
+  db.run(
+    `DELETE FROM forecast_values
+       WHERE item_id IN (SELECT id FROM forecast_items WHERE scenario_id IN (${ph}))`,
+    ...orphanIds
+  );
+  db.run(`DELETE FROM forecast_items WHERE scenario_id IN (${ph})`, ...orphanIds);
+  const result = db.run(`DELETE FROM scenarios WHERE id IN (${ph})`, ...orphanIds);
+  res.json({
+    deletedScenarios: result.changes,
+    deletedItems: itemRow?.n || 0,
+    deletedValues: valueRow?.n || 0,
+  });
+});
+
 router.post('/scenarios/ensure', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
   if (!req.body.fy_id) return res.status(400).json({ error: 'fy_id required' });
