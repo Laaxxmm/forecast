@@ -375,6 +375,11 @@ async function downloadStockReport(
   if (!saved) {
     console.log('[oneglance-sync] Strategy 2: scraping table in chunks...');
     progress(opts, 'stock', 'Extracting table data...', 82);
+    // Snapshot the page state BEFORE the heavy evaluate so we can see
+    // what crashed if it does. Strategy 1 already failed by this point;
+    // a second screenshot post-crash is impossible because the tab is
+    // dead, so capture preemptively.
+    await debugScreenshot(page, '15-pre-strategy2').catch(() => {});
 
     // Get headers + row count first (lightweight)
     const tableInfo = await page.evaluate(() => {
@@ -388,34 +393,58 @@ async function downloadStockReport(
       const table = tables[bestTable];
       const headerRow = table.querySelector('thead tr') || table.querySelector('tr');
       const headers: string[] = [];
-      headerRow?.querySelectorAll('th, td').forEach(c => headers.push((c as HTMLElement).innerText?.trim() || ''));
+      // textContent (not innerText) — innerText forces layout reflow and
+      // is fine for the small header row but matters massively in the
+      // chunk loop below where it ran 600K times.
+      headerRow?.querySelectorAll('th, td').forEach(c => headers.push((c?.textContent || '').trim()));
       return { headers, totalRows: bestCount, tableIdx: bestTable };
     });
 
     if (tableInfo.totalRows > 0) {
-      const CHUNK = 2000;
+      // Smaller chunk + textContent + post-chunk yield. The previous
+      // 2000-row chunks with innerText ran 40K reflow-inducing calls
+      // per evaluate, holding ~2MB of intermediate strings, on top of
+      // the 30K-row DOM already loaded. Renderer ran out of memory →
+      // "Target crashed" mid-evaluate. 500 rows × textContent is ~10x
+      // less memory pressure per evaluate, and the 50ms gap between
+      // chunks lets the renderer GC.
+      const CHUNK = 500;
       const csvLines: string[] = [];
       if (tableInfo.headers.length > 0) csvLines.push(tableInfo.headers.join(','));
 
       for (let offset = 0; offset < tableInfo.totalRows; offset += CHUNK) {
-        const chunk = await page.evaluate(({ idx, start, size }) => {
-          const table = document.querySelectorAll('table')[idx];
-          const tbody = table.querySelector('tbody') || table;
-          const rows = tbody.querySelectorAll('tr');
-          const startIdx = start + (table.querySelector('thead') ? 0 : (start === 0 ? 1 : 0));
-          const lines: string[] = [];
-          for (let i = startIdx; i < Math.min(startIdx + size, rows.length); i++) {
-            const cells: string[] = [];
-            rows[i].querySelectorAll('td, th').forEach(td => {
-              let t = (td as HTMLElement).innerText?.trim() || '';
-              if (t.includes(',') || t.includes('"') || t.includes('\n')) t = '"' + t.replace(/"/g, '""') + '"';
-              cells.push(t);
-            });
-            if (cells.some(c => c.length > 0)) lines.push(cells.join(','));
-          }
-          return lines;
-        }, { idx: tableInfo.tableIdx, start: offset, size: CHUNK });
-        csvLines.push(...chunk);
+        try {
+          const chunk = await page.evaluate(({ idx, start, size }) => {
+            const table = document.querySelectorAll('table')[idx];
+            const tbody = table.querySelector('tbody') || table;
+            const rows = tbody.querySelectorAll('tr');
+            const startIdx = start + (table.querySelector('thead') ? 0 : (start === 0 ? 1 : 0));
+            const lines: string[] = [];
+            for (let i = startIdx; i < Math.min(startIdx + size, rows.length); i++) {
+              const cells: string[] = [];
+              rows[i].querySelectorAll('td, th').forEach(td => {
+                // textContent is layout-free — no reflow per cell.
+                let t = (td?.textContent || '').trim();
+                if (t.includes(',') || t.includes('"') || t.includes('\n')) t = '"' + t.replace(/"/g, '""') + '"';
+                cells.push(t);
+              });
+              if (cells.some(c => c.length > 0)) lines.push(cells.join(','));
+            }
+            return lines;
+          }, { idx: tableInfo.tableIdx, start: offset, size: CHUNK });
+          csvLines.push(...chunk);
+        } catch (err: any) {
+          // If the renderer crashed mid-chunk, we lose everything;
+          // surface a clearer error so the user knows where it died.
+          console.log(`[oneglance-sync] Strategy 2 chunk ${offset}/${tableInfo.totalRows} crashed:`, err?.message || err);
+          throw new Error(
+            `Stock report renderer crashed at row ~${offset}/${tableInfo.totalRows}. ` +
+            `OneGlance loaded too many rows for the browser to scrape. ` +
+            `Try a narrower date range or use the "Download CSV" button on OneGlance directly.`
+          );
+        }
+        // Yield between chunks to let the renderer GC.
+        await page.waitForTimeout(50);
       }
 
       if (csvLines.length > 1) {
@@ -427,7 +456,7 @@ async function downloadStockReport(
   }
 
   if (!saved) {
-    await debugScreenshot(page, '16-FAILED');
+    await debugScreenshot(page, '16-FAILED').catch(() => {});
     throw new Error(`Stock CSV failed: tables=${pageInfo.tableCount} csvBtn=${pageInfo.hasCsvBtn} url=${pageInfo.url}`);
   }
 
