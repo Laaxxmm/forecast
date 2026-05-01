@@ -72,17 +72,17 @@ api.interceptors.response.use(
       if (res.data.enabledIntegrations) {
         localStorage.setItem('enabled_integrations', JSON.stringify(res.data.enabledIntegrations));
       }
-      // Store streams — and auto-select the first stream if none is already
-      // chosen, so the forecast module doesn't land in the "no stream" path
-      // which returns empty data.
+      // Store streams. Clear any persisted stream selection from a previous
+      // session — login defaults to "All" so the Actuals page lands on
+      // the combined view (clinic + pharma) rather than auto-jumping to
+      // whichever stream the user last clicked. The forecast module
+      // handles the no-stream case as its consolidated All-Streams view,
+      // so this doesn't break anything downstream.
       if (res.data.streams) {
         localStorage.setItem('streams', JSON.stringify(res.data.streams));
-        if (!localStorage.getItem('stream_id') && res.data.streams.length > 0) {
-          const first = res.data.streams[0];
-          localStorage.setItem('stream_id', String(first.id));
-          localStorage.setItem('stream_name', first.name);
-        }
       }
+      localStorage.removeItem('stream_id');
+      localStorage.removeItem('stream_name');
       if (res.data.streamAccess) {
         localStorage.setItem('stream_access', JSON.stringify(res.data.streamAccess));
       }
