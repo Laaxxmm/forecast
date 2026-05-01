@@ -299,33 +299,41 @@ async function downloadStockReport(
   const filePath = path.join(downloadDir, filename);
   let saved = false;
 
-  // Quick diagnostics (lightweight — no row counting to avoid iterating 30K DOM nodes)
-  const pageInfo = await page.evaluate(() => {
-    const tables = document.querySelectorAll('table');
-    const hasCsvBtn = !!document.querySelector('button.uti_btn');
-    return { tableCount: tables.length, hasCsvBtn, url: location.href };
-  });
+  // Quick diagnostics (lightweight — no row counting to avoid iterating 30K DOM nodes).
+  // Wrapped in try/catch because even a tiny evaluate can crash if the
+  // renderer is already memory-pressured from the 50K-row table render.
+  let pageInfo: { tableCount: number; hasCsvBtn: boolean; url: string };
+  try {
+    pageInfo = await page.evaluate(() => {
+      const tables = document.querySelectorAll('table');
+      const hasCsvBtn = !!document.querySelector('button.uti_btn');
+      return { tableCount: tables.length, hasCsvBtn, url: location.href };
+    });
+  } catch (err: any) {
+    await debugScreenshot(page, '13-pageinfo-crash').catch(() => {});
+    throw new Error(
+      `Stock report renderer crashed before scrape could start. ` +
+      `The branch's inventory is too large to scrape via the browser. ` +
+      `Try downloading the CSV manually from OneGlance and uploading it. ` +
+      `(${err?.message || err})`
+    );
+  }
   console.log('[oneglance-sync] Stock page:', JSON.stringify(pageInfo));
 
   // ── Strategy 1: Click CSV button + wait for download (low memory) ──
-  // Prefer this over table scraping — the CSV file is ~4MB vs 30K DOM nodes in memory
+  // Two capture paths only:
+  //   1. Browser download event (when OneGlance triggers a real <a download>)
+  //   2. HTTP response listener (when OneGlance returns CSV as a response)
+  //
+  // The previous third path — `URL.createObjectURL` override + FileReader —
+  // was actively causing renderer crashes on large branches. The FileReader
+  // held the full CSV as a string in window.__capturedCSV, and reading that
+  // back through `page.evaluate()` serialized the entire string across CDP,
+  // putting the CSV in memory ~3x at peak (blob + reader-string + CDP copy)
+  // on top of the 50K-row DOM. That tipped renderers OOM.
   if (pageInfo.hasCsvBtn) {
     console.log('[oneglance-sync] Strategy 1: click CSV + download...');
     progress(opts, 'stock', 'Downloading stock CSV...', 82);
-
-    // Intercept blob creation (OneGlance generates CSV client-side)
-    await page.evaluate(() => {
-      (window as any).__capturedCSV = null;
-      const orig = URL.createObjectURL.bind(URL);
-      URL.createObjectURL = function(obj: Blob | MediaSource) {
-        if (obj instanceof Blob) {
-          const r = new FileReader();
-          r.onload = () => { if (r.result) (window as any).__capturedCSV = r.result; };
-          r.readAsText(obj);
-        }
-        return orig(obj);
-      };
-    });
 
     let capturedCSV: string | null = null;
     const respListener = async (resp: any) => {
@@ -352,16 +360,11 @@ async function downloadStockReport(
       new Promise<null>(r => setTimeout(() => r(null), 30_000)),
     ]);
 
-    const blobCSV = await page.evaluate(() => (window as any).__capturedCSV).catch(() => null);
     page.off('response', respListener);
 
     if (dlResult === 'download') {
       saved = true;
       console.log('[oneglance-sync] Strategy 1 succeeded via download event');
-    } else if (blobCSV && String(blobCSV).length > 50) {
-      fs.writeFileSync(filePath, String(blobCSV), 'utf-8');
-      saved = true;
-      console.log('[oneglance-sync] Strategy 1 succeeded via JS blob interception');
     } else if (capturedCSV) {
       fs.writeFileSync(filePath, capturedCSV, 'utf-8');
       saved = true;
@@ -381,24 +384,37 @@ async function downloadStockReport(
     // dead, so capture preemptively.
     await debugScreenshot(page, '15-pre-strategy2').catch(() => {});
 
-    // Get headers + row count first (lightweight)
-    const tableInfo = await page.evaluate(() => {
-      const tables = document.querySelectorAll('table');
-      let bestTable = -1, bestCount = 0;
-      tables.forEach((t, i) => {
-        const rows = (t.querySelector('tbody') || t).querySelectorAll('tr').length;
-        if (rows > bestCount) { bestTable = i; bestCount = rows; }
+    // Get headers + row count first (lightweight). Wrapped because counting
+    // tr.length on a 50K-row tbody can itself crash an already-pressed
+    // renderer on the largest branches.
+    let tableInfo: { headers: string[]; totalRows: number; tableIdx: number };
+    try {
+      tableInfo = await page.evaluate(() => {
+        const tables = document.querySelectorAll('table');
+        let bestTable = -1, bestCount = 0;
+        tables.forEach((t, i) => {
+          const rows = (t.querySelector('tbody') || t).querySelectorAll('tr').length;
+          if (rows > bestCount) { bestTable = i; bestCount = rows; }
+        });
+        if (bestTable < 0) return { headers: [] as string[], totalRows: 0, tableIdx: -1 };
+        const table = tables[bestTable];
+        const headerRow = table.querySelector('thead tr') || table.querySelector('tr');
+        const headers: string[] = [];
+        // textContent (not innerText) — innerText forces layout reflow and
+        // is fine for the small header row but matters massively in the
+        // chunk loop below where it ran 600K times.
+        headerRow?.querySelectorAll('th, td').forEach(c => headers.push((c?.textContent || '').trim()));
+        return { headers, totalRows: bestCount, tableIdx: bestTable };
       });
-      if (bestTable < 0) return { headers: [] as string[], totalRows: 0, tableIdx: -1 };
-      const table = tables[bestTable];
-      const headerRow = table.querySelector('thead tr') || table.querySelector('tr');
-      const headers: string[] = [];
-      // textContent (not innerText) — innerText forces layout reflow and
-      // is fine for the small header row but matters massively in the
-      // chunk loop below where it ran 600K times.
-      headerRow?.querySelectorAll('th, td').forEach(c => headers.push((c?.textContent || '').trim()));
-      return { headers, totalRows: bestCount, tableIdx: bestTable };
-    });
+    } catch (err: any) {
+      await debugScreenshot(page, '14-tableinfo-crash').catch(() => {});
+      throw new Error(
+        `Stock report renderer crashed while counting rows. ` +
+        `The branch's inventory exceeds what the browser can handle. ` +
+        `Try downloading the CSV manually from OneGlance and uploading it. ` +
+        `(${err?.message || err})`
+      );
+    }
 
     if (tableInfo.totalRows > 0) {
       // Smaller chunk + textContent + post-chunk yield. The previous
