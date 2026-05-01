@@ -180,8 +180,15 @@ async function selectDateInCalendar(
   await page.waitForTimeout(500);
 
   // Try to navigate to the correct month/year
-  // Healthplix may use different calendar implementations, so try multiple strategies
-  const maxAttempts = 36; // max 3 years of navigation
+  // Healthplix may use different calendar implementations, so try multiple strategies.
+  //
+  // Cap attempts at 14: 12 months covers a full year of navigation; 2 extra
+  // gives slack for a sluggish header update. If we're somehow >14 months
+  // off, our selectors are wrong, not the calendar — fail fast and let
+  // the day-click fallback or the outer error handler take over.
+  const maxAttempts = 14;
+  let prevHeader = '';
+  let stuckClicks = 0; // consecutive nav clicks that didn't change the header
   for (let i = 0; i < maxAttempts; i++) {
     // Read the current month/year displayed in the calendar header.
     // We route through `body` so the same call works for both Page and FrameLocator scopes.
@@ -212,6 +219,21 @@ async function selectDateInCalendar(
       break;
     }
 
+    // Detect a no-op nav click — if the header didn't change after our last
+    // click, the click went nowhere (selector mismatch, button disabled,
+    // event swallowed, etc.). Bail after 2 consecutive stuck clicks rather
+    // than burning the rest of the loop.
+    if (i > 0 && headerText === prevHeader) {
+      stuckClicks++;
+      if (stuckClicks >= 2) {
+        console.log(`[HP Sync] Calendar nav clicks not advancing header (still "${headerText}"); bailing out`);
+        break;
+      }
+    } else {
+      stuckClicks = 0;
+    }
+    prevHeader = headerText;
+
     // Parse current month/year from header
     const monthMatch = headerText.match(/(January|February|March|April|May|June|July|August|September|October|November|December)/i);
     const yearMatch = headerText.match(/\d{4}/);
@@ -239,9 +261,13 @@ async function selectDateInCalendar(
       if (navCount > 0) {
         await navBtn.click().catch(() => {});
       } else {
+        console.log(`[HP Sync] No nav button matched (going ${goingBack ? 'back' : 'forward'} from ${headerText}); bailing out`);
         break;
       }
-      await page.waitForTimeout(300);
+      // 500ms gives the picker time to re-render the new month before we
+      // re-read the header. 300ms was occasionally too tight on slower
+      // connections / under load and we'd misread the pre-click month.
+      await page.waitForTimeout(500);
     } else {
       break;
     }
@@ -509,7 +535,8 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
 
     // One retry on transient Playwright timeouts (page may have been mid-render).
     // We do NOT retry on "Couldn't find" errors — those mean Healthplix UI changed
-    // and a retry won't help.
+    // and a retry won't help. On any failure we save a debug screenshot first
+    // so we can diagnose the page state without the user having to repro.
     const setDateWithRetry = async (
       kind: 'from' | 'to',
       target: { year: number; month: number; day: number },
@@ -520,10 +547,16 @@ export async function syncHealthplix(opts: SyncOptions): Promise<SyncResult> {
         const msg: string = err?.message || '';
         const isTransient =
           /Timeout \d+ms exceeded/.test(msg) && !/Couldn't find the/.test(msg);
+        await saveDebugScreenshot(`date-${kind}-${isTransient ? 'transient' : 'fatal'}`);
         if (!isTransient) throw err;
         console.log(`[HP Sync] Transient timeout on ${kind} date, retrying once...`);
         await page.waitForTimeout(2000);
-        await setOneDate(kind, target);
+        try {
+          await setOneDate(kind, target);
+        } catch (err2: any) {
+          await saveDebugScreenshot(`date-${kind}-retry-failed`);
+          throw err2;
+        }
       }
     };
 
