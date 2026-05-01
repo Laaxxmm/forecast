@@ -609,24 +609,58 @@ async function start() {
             clientRow.id
           ) : null;
 
-          // Pick the scenario tied to each stream (fall back to default).
-          const pickScenario = (streamId: number | null) => clientDb.get(
-            `SELECT s.id FROM scenarios s JOIN financial_years fy ON s.fy_id = fy.id
-             WHERE fy.is_active = 1 AND (s.stream_id = ? OR s.is_default = 1)
-             ORDER BY CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id LIMIT 1`,
-            streamId, streamId
-          );
-          const clinicScenario = pickScenario(clinicStream?.id || null);
-          const pharmaScenario = pickScenario(pharmaStream?.id || null);
+          // Build (branch_id → scenario_id) maps per stream. Multi-branch
+          // tenants have one default scenario per branch per stream; we
+          // need to route each branch's rollup rows to ITS scenario.
+          // Previously this used a global LIMIT 1 lookup which collapsed
+          // every branch's rollup under one scenario_id, leaving other
+          // branches' dashboards reading empty (audit Critical #1).
+          //
+          // Single-branch tenants have one row keyed under 'null' (their
+          // scenarios have branch_id IS NULL). The grouped rebuild
+          // queries below produce r.branch_id = null for those rows,
+          // matched here via the same 'null' key.
+          const buildScenarioMap = (streamId: number | null): Map<string, number> => {
+            const rows = clientDb.all(
+              `SELECT s.branch_id, s.id FROM scenarios s
+               JOIN financial_years fy ON s.fy_id = fy.id
+               WHERE fy.is_active = 1 AND s.is_default = 1
+                 AND (s.stream_id = ? OR s.stream_id IS NULL)
+               ORDER BY s.branch_id, CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id`,
+              streamId, streamId
+            );
+            const map = new Map<string, number>();
+            for (const r of rows) {
+              const key = String(r.branch_id ?? 'null');
+              // First match wins per branch — ORDER BY puts stream-specific
+              // before NULL-stream, lowest id first.
+              if (!map.has(key)) map.set(key, r.id);
+            }
+            return map;
+          };
+
+          const clinicScenarios = buildScenarioMap(clinicStream?.id || null);
+          const pharmaScenarios = buildScenarioMap(pharmaStream?.id || null);
+
+          // Wipe stale rollup rows across ALL scenarios for the given
+          // category + item_name. Without this, a previously-rolled-up
+          // (branch, month) that no longer has any source rows would
+          // leave its old rollup value in place.
+          const wipeRollup = (scenarioIds: number[], category: string, itemName: string) => {
+            if (scenarioIds.length === 0) return;
+            const ph = scenarioIds.map(() => '?').join(',');
+            clientDb.run(
+              `DELETE FROM dashboard_actuals WHERE scenario_id IN (${ph}) AND category = ? AND item_name = ?`,
+              ...scenarioIds, category, itemName
+            );
+          };
 
           let rebuilt = 0;
 
-          // Clinic Revenue — per (branch_id, month) from clinic_actuals
-          if (clinicScenario) {
-            clientDb.run(
-              `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Clinic Revenue'`,
-              clinicScenario.id
-            );
+          // Clinic Revenue — per (branch_id, month) from clinic_actuals.
+          // Each row gets routed to its branch's scenario via the map.
+          if (clinicScenarios.size > 0) {
+            wipeRollup(Array.from(clinicScenarios.values()), 'revenue', 'Clinic Revenue');
             const rows = clientDb.all(
               `SELECT branch_id, bill_month as month, COALESCE(SUM(item_price), 0) as total
                FROM clinic_actuals
@@ -635,12 +669,14 @@ async function start() {
             );
             for (const r of rows) {
               if (!r.month) continue;
+              const scenarioId = clinicScenarios.get(String(r.branch_id ?? 'null'));
+              if (!scenarioId) continue;  // No scenario for this branch — skip
               clientDb.run(
                 `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
                  VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, ?, datetime('now'))
                  ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
                  DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
-                clinicScenario.id, r.month, r.total, r.branch_id, clinicStream?.id || null
+                scenarioId, r.month, r.total, r.branch_id, clinicStream?.id || null
               );
               rebuilt++;
             }
@@ -648,19 +684,10 @@ async function start() {
 
           // Pharmacy Revenue + COGS — per (branch_id, month) from
           // pharmacy_sales_actuals. Pharmacy revenue is stored ex-GST
-          // (sales_amount - sales_tax) to match the P&L semantic the
-          // dashboard / insights pages display. Without this subtraction
-          // the rollup would hold gross sales while the raw-table
-          // fallback shows net, and the two paths would disagree.
-          if (pharmaScenario) {
-            clientDb.run(
-              `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Pharmacy Revenue'`,
-              pharmaScenario.id
-            );
-            clientDb.run(
-              `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'direct_costs' AND item_name = 'Pharmacy COGS'`,
-              pharmaScenario.id
-            );
+          // (sales_amount - sales_tax) to match the P&L semantic.
+          if (pharmaScenarios.size > 0) {
+            wipeRollup(Array.from(pharmaScenarios.values()), 'revenue', 'Pharmacy Revenue');
+            wipeRollup(Array.from(pharmaScenarios.values()), 'direct_costs', 'Pharmacy COGS');
             const rows = clientDb.all(
               `SELECT branch_id, bill_month as month,
                       COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as revenue,
@@ -671,19 +698,21 @@ async function start() {
             );
             for (const r of rows) {
               if (!r.month) continue;
+              const scenarioId = pharmaScenarios.get(String(r.branch_id ?? 'null'));
+              if (!scenarioId) continue;
               clientDb.run(
                 `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
                  VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?, ?, datetime('now'))
                  ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
                  DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
-                pharmaScenario.id, r.month, r.revenue, r.branch_id, pharmaStream?.id || null
+                scenarioId, r.month, r.revenue, r.branch_id, pharmaStream?.id || null
               );
               clientDb.run(
                 `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
                  VALUES (?, 'direct_costs', 'Pharmacy COGS', ?, ?, ?, ?, datetime('now'))
                  ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
                  DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
-                pharmaScenario.id, r.month, r.cogs, r.branch_id, pharmaStream?.id || null
+                scenarioId, r.month, r.cogs, r.branch_id, pharmaStream?.id || null
               );
               rebuilt += 2;
             }

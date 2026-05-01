@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { branchFilter, streamFilter } from '../utils/branch.js';
-import { findActiveScenarioForStream } from '../utils/scenarios.js';
 import { requireRole } from '../middleware/auth.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
 
@@ -1529,9 +1528,34 @@ router.post('/resync-actuals', requireRole('admin'), async (req, res) => {
 
   const result: Record<string, any> = {};
 
-  // Helper: rebuild one item_name from one source table for one scenario.
+  // Per-stream (branch_id → scenario_id) map. Each branch's rollup rows
+  // need to land under THAT branch's scenario, not under whichever
+  // scenario findActiveScenarioForStream picks first. Without this fix
+  // (audit Critical #2) the helper used `req.branchId` (null in
+  // consolidated mode) for the INSERT branch_id, wiping per-branch rows
+  // and replacing them with a single NULL-branch rollup that strict
+  // isolation then hides — every branch's dashboard goes blank.
+  const buildScenarioMap = (streamId: number): Map<string, number> => {
+    const rows = db.all(
+      `SELECT s.branch_id, s.id FROM scenarios s
+       JOIN financial_years fy ON s.fy_id = fy.id
+       WHERE fy.is_active = 1 AND s.is_default = 1
+         AND (s.stream_id = ? OR s.stream_id IS NULL)${bf.where}
+       ORDER BY s.branch_id, CASE WHEN s.stream_id = ? THEN 0 ELSE 1 END, s.id`,
+      streamId, ...bf.params, streamId
+    );
+    const map = new Map<string, number>();
+    for (const r of rows) {
+      const key = String(r.branch_id ?? 'null');
+      if (!map.has(key)) map.set(key, r.id);
+    }
+    return map;
+  };
+
+  // Helper: rebuild one item_name from one source table, routing per
+  // (branch, month) row to its branch's scenario via the map.
   const rebuildItem = (
-    scenarioId: number,
+    scenarioMap: Map<string, number>,
     streamId: number,
     itemName: string,
     category: string,
@@ -1539,58 +1563,65 @@ router.post('/resync-actuals', requireRole('admin'), async (req, res) => {
     amountCol: string,
     monthCol: string,
   ): { months: number; total: number } => {
-    // Step 2: clear any existing rows for this item across ALL scenarios
-    // within the branch context — the bug we're repairing left orphans
-    // under the wrong scenario_id.
+    if (scenarioMap.size === 0) return { months: 0, total: 0 };
+    // Wipe stale rows across every scenario in the map for this item.
+    const scenarioIds = Array.from(scenarioMap.values());
+    const ph = scenarioIds.map(() => '?').join(',');
     db.run(
-      `DELETE FROM dashboard_actuals WHERE category = ? AND item_name = ?${bf.where}`,
-      category, itemName, ...bf.params
+      `DELETE FROM dashboard_actuals WHERE scenario_id IN (${ph}) AND category = ? AND item_name = ?`,
+      ...scenarioIds, category, itemName
     );
-    // Step 3: re-aggregate from the source table.
+    // Aggregate per (branch_id, month) from raw — this preserves the
+    // branch dimension so each row lands under the right scenario.
     const monthly = db.all(
-      `SELECT ${monthCol} as month, COALESCE(SUM(${amountCol}), 0) as total
+      `SELECT branch_id, ${monthCol} as month, COALESCE(SUM(${amountCol}), 0) as total
        FROM ${table} WHERE ${monthCol} IS NOT NULL AND ${monthCol} != ''${bf.where}
-       GROUP BY ${monthCol}`,
+       GROUP BY branch_id, ${monthCol}`,
       ...bf.params
     );
     let totalSum = 0;
-    const branchId = (req as any).branchId || null;
+    let monthsCount = 0;
     for (const row of monthly) {
       if (!row.month) continue;
+      const scenarioId = scenarioMap.get(String(row.branch_id ?? 'null'));
+      if (!scenarioId) continue;  // No scenario for this branch — skip
       db.run(
         `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
          ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
          DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
-        scenarioId, category, itemName, row.month, row.total, branchId, streamId
+        scenarioId, category, itemName, row.month, row.total, row.branch_id, streamId
       );
       totalSum += row.total;
+      monthsCount++;
     }
-    return { months: monthly.length, total: totalSum };
+    return { months: monthsCount, total: totalSum };
   };
 
   for (const stream of streams) {
     const nameLower = stream.name.toLowerCase();
-    const scenario = findActiveScenarioForStream(db, req, stream.id);
-    if (!scenario) {
-      result[stream.name] = { skipped: 'no canonical scenario' };
+    const scenarioMap = buildScenarioMap(stream.id);
+    if (scenarioMap.size === 0) {
+      result[stream.name] = { skipped: 'no scenarios for this stream in the current branch context' };
       continue;
     }
     try {
       if (nameLower.includes('clinic') || nameLower.includes('health')) {
-        const r = rebuildItem(scenario.id, stream.id, 'Clinic Revenue', 'revenue',
+        const r = rebuildItem(scenarioMap, stream.id, 'Clinic Revenue', 'revenue',
           'clinic_actuals', 'item_price', 'bill_month');
-        result[stream.name] = { scenario: scenario.id, ...r };
+        result[stream.name] = { scenarios: Array.from(scenarioMap.values()), ...r };
       } else if (nameLower.includes('pharma')) {
-        const rev = rebuildItem(scenario.id, stream.id, 'Pharmacy Revenue', 'revenue',
-          'pharmacy_sales_actuals', 'sales_amount', 'bill_month');
-        const cogs = rebuildItem(scenario.id, stream.id, 'Pharmacy COGS', 'direct_costs',
+        // Pharmacy revenue is rolled up ex-GST so the rollup matches the
+        // P&L semantic shown on the dashboard / insights pages.
+        const rev = rebuildItem(scenarioMap, stream.id, 'Pharmacy Revenue', 'revenue',
+          'pharmacy_sales_actuals', 'sales_amount - COALESCE(sales_tax, 0)', 'bill_month');
+        const cogs = rebuildItem(scenarioMap, stream.id, 'Pharmacy COGS', 'direct_costs',
           'pharmacy_sales_actuals', 'purchase_amount', 'bill_month');
-        result[stream.name] = { scenario: scenario.id, revenue: rev, cogs };
+        result[stream.name] = { scenarios: Array.from(scenarioMap.values()), revenue: rev, cogs };
       } else if (nameLower.includes('consult') || nameLower.includes('turia')) {
-        const r = rebuildItem(scenario.id, stream.id, 'Consultancy Revenue', 'revenue',
+        const r = rebuildItem(scenarioMap, stream.id, 'Consultancy Revenue', 'revenue',
           'turia_invoices', 'total_amount', 'invoice_month');
-        result[stream.name] = { scenario: scenario.id, ...r };
+        result[stream.name] = { scenarios: Array.from(scenarioMap.values()), ...r };
       } else {
         result[stream.name] = { skipped: 'no known source table' };
       }

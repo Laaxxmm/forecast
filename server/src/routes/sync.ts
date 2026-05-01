@@ -793,12 +793,15 @@ router.post('/turia', requireRole('admin', 'operational_head'), requireIntegrati
     ) : null;
     const consultStreamId = consultStream?.id || null;
     // Canonical scenario helper — same scenario the dashboard read picks.
-    let activeScenario: { id: number; name?: string } | null =
+    // No fallback: a previous "last-ditch" `SELECT id, name FROM scenarios
+    // WHERE is_default = 1 LIMIT 1` (no fy / branch / stream filter)
+    // happily returned the wrong branch's scenario for multi-branch
+    // tenants — Turia rows would land under branch A while branch B
+    // owned the actuals (audit Critical #5). Better to skip the rollup
+    // entirely if no proper scenario exists; admin can retry after
+    // creating one via the Forecast page.
+    const activeScenario: { id: number; name?: string } | null =
       findActiveScenarioForStream(db, req, consultStreamId);
-    if (!activeScenario) {
-      // Last-ditch fallback for tenants with no per-stream scenario set up yet.
-      activeScenario = db.get('SELECT id, name FROM scenarios WHERE is_default = 1 LIMIT 1');
-    }
 
     if (activeScenario) {
       console.log(`Turia: Using scenario ${activeScenario.id} (${activeScenario.name}) for dashboard_actuals`);
