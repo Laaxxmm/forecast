@@ -602,11 +602,18 @@ router.post('/oneglance', requireRole('admin', 'operational_head'), requireInteg
       // Keep file for download from Import History
     }
 
+    // Compose the final message. When stock failed but sales/purchase
+    // succeeded (partial-success path for huge-inventory branches), surface
+    // the stock failure as a warning rather than swallowing it — the user
+    // needs to know to upload the stock CSV manually.
+    const partialStockWarning = result.stockError
+      ? ` · Stock report skipped (${result.stockError}). Download the stock CSV manually from OneGlance and upload via Import Data → Upload File.`
+      : '';
     ogState.progress = {
       step: 'complete',
-      message: `Sync completed — ${totalRows} rows imported`,
+      message: `Sync completed — ${totalRows} rows imported${partialStockWarning}`,
       pct: 100,
-      result: { totalRows },
+      result: { totalRows, stockError: result.stockError || null },
     };
   } catch (err: any) {
     console.error('[oneglance-sync] Error:', err.message || err);

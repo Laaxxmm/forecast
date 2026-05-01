@@ -15,6 +15,11 @@ export interface OneglanceSyncResult {
   salesFile?: { filePath: string; filename: string };
   purchaseFile?: { filePath: string; filename: string };
   stockFile?: { filePath: string; filename: string };
+  // Partial-success: when stock fails (commonly "renderer crashed" on
+  // huge-inventory branches), sales+purchase still complete and we
+  // surface stock's failure as a warning instead of nuking the whole
+  // sync. Empty when stock succeeded or wasn't requested.
+  stockError?: string;
 }
 
 const TIMEOUT = 45_000;
@@ -713,13 +718,33 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
       const stockPage = await context.newPage();
 
       const stockTimeout = 60_000;
-      const stockResult = await Promise.race([
-        downloadStockReport(stockPage, context, opts, downloadDir),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Stock report download timed out after ${stockTimeout / 1000}s`)), stockTimeout)
-        ),
-      ]);
-      result.stockFile = stockResult;
+      // Catch stock-only failures so sales+purchase don't get rolled back.
+      // Big-inventory branches (e.g. Ashok Nagar) crash the renderer at the
+      // counting-rows step; we now surface that as a partial-success warning
+      // and let the caller import sales+purchase normally. The user can then
+      // download the stock CSV manually from OneGlance and upload it via
+      // Import Data → Upload File.
+      //
+      // Note: when reportType === 'stock' (user explicitly chose stock-only),
+      // a stock failure IS the whole sync's failure — re-throw in that case.
+      try {
+        const stockResult = await Promise.race([
+          downloadStockReport(stockPage, context, opts, downloadDir),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Stock report download timed out after ${stockTimeout / 1000}s`)), stockTimeout)
+          ),
+        ]);
+        result.stockFile = stockResult;
+      } catch (stockErr: any) {
+        const errMsg = stockErr?.message || String(stockErr);
+        if (opts.reportType === 'stock') {
+          // User asked for stock-only — propagate the failure.
+          await stockPage.close().catch(() => {});
+          throw stockErr;
+        }
+        console.log(`[oneglance-sync] Stock failed but sales/purchase succeeded:`, errMsg);
+        result.stockError = errMsg;
+      }
       await stockPage.close().catch(() => {});
     }
 
