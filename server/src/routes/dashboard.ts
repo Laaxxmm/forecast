@@ -330,7 +330,29 @@ router.get('/clinic-analytics', async (req, res) => {
   );
 
   console.log(`[clinic-analytics] patients found: ${patients.length}`);
-  if (patients.length === 0) return res.json({ hasData: false });
+  // Empty period (no patient rows yet for this branch+month) — return a
+  // zeroed-but-structured response instead of `hasData: false`. The
+  // client's cards then render with 0 values + an "import data" hint
+  // rather than blanking out the page entirely. The previous behaviour
+  // made it look like the system was broken on the first day of a new
+  // month before any imports had run.
+  if (patients.length === 0) return res.json({
+    hasData: true,
+    isEmpty: true,
+    kpi: {
+      totalUnique: 0,
+      apptPatients: 0, labPatients: 0, otherPatients: 0,
+      directLabWalkins: 0, directOtherWalkins: 0,
+      totalVisits: 0, repeatVisits: 0, repeatPatients: 0,
+    },
+    departmentOverlap: { in1: 0, in2: 0, in3: 0 },
+    combinations: [],
+    revenueByDeptCount: { '1': 0, '2': 0, '3+': 0 },
+    patientFlow: [],
+    crossSellFunnel: { totalAppointment: 0, crossToOther: 0, crossToLab: 0, crossToBoth: 0, apptOnly: 0 },
+    doctorCrossSell: [],
+    patientTable: [],
+  });
 
   // Department sets per patient
   const deptSets = patients.map((p: any) => ({

@@ -109,6 +109,13 @@ export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: Cli
   const totalPages = Math.ceil(filteredPatients.length / PAGE_SIZE);
   const pagePatients = filteredPatients.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
+  // Server flags `isEmpty: true` when the table is healthy but no rows
+  // exist for the selected period+branch (e.g. early in a new month
+  // before the first import). We still render the KPI cards (they show
+  // 0s) so the user sees structure rather than a blank page, plus a
+  // discreet hint about the empty state.
+  const isEmpty = !!data?.isEmpty;
+
   return (
     <div className="mt-5">
       <div className="flex items-center gap-2 mb-3">
@@ -116,6 +123,20 @@ export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: Cli
         <h2 className="text-base font-bold text-theme-heading">Clinic Analytics</h2>
         <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-teal-500/10 text-teal-400">Healthplix</span>
       </div>
+
+      {isEmpty && (
+        <div
+          className="mb-3 px-3 py-2 rounded-lg text-xs"
+          style={{
+            background: 'color-mix(in srgb, var(--mt-accent) 8%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--mt-accent) 25%, transparent)',
+            color: 'var(--mt-text-muted)',
+          }}
+        >
+          No clinic data imported for this period yet — cards will populate as
+          you import. For the forecast-vs-actual view, see the Insights page.
+        </div>
+      )}
 
       {/* Section A — Visit Count KPI Cards.
           Bucket cards (Appointment / Lab Test / Other Services / Direct
@@ -164,8 +185,11 @@ export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: Cli
         );
       })()}
 
-      {/* All Charts — single 2-column grid */}
-      {anyChartVisible && (
+      {/* All Charts — single 2-column grid. Hidden in the empty-period
+          state because charts (sankey, donut, overlap bars) have no
+          meaningful zero rendering — the KPI cards above already cover
+          the "everything is 0" message. */}
+      {!isEmpty && anyChartVisible && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
           {isVisible('department_overlap') && (
             <div className="card p-3">
