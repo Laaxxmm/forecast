@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { validatePassword, isClientRole, CLIENT_ROLES } from '../middleware/auth.js';
@@ -49,6 +49,19 @@ async function requireClientAssignment(req: Request, res: Response, clientSlug: 
   if (!assignment) { res.status(403).json({ error: 'Not assigned to this client' }); return false; }
   return true;
 }
+
+// Gate every `/clients/:slug/*` and `/logo/client/:slug` route through
+// `requireClientAssignment`. Before this, only `GET /clients/:slug`
+// (line 89) bothered to check assignment — every write endpoint
+// underneath was reachable by any authenticated team member regardless
+// of which clients they were actually assigned to. router.param fires
+// before the route handler, so 403/404 responses come back without
+// touching the per-route logic. Owner/super-admin bypass is preserved
+// inside the helper.
+router.param('slug', async (req: Request, res: Response, next: NextFunction, slug: string) => {
+  if (!(await requireClientAssignment(req, res, slug))) return;
+  next();
+});
 
 // ─── Industry Templates ────────────────────────────────────────────────────
 

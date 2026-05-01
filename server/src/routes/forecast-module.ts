@@ -13,6 +13,91 @@ function requireWriteAccess(req: Request, res: Response, next: NextFunction) {
   return res.status(403).json({ error: 'Write access requires admin or operational_head role' });
 }
 
+/** Verify that a scenario belongs to a branch the caller can write to.
+ *  Sends a 403/404 response and returns false on failure; returns true on
+ *  success. Admins + super_admins can write to any scenario in the tenant.
+ *  Op-heads must have the scenario's branch_id in req.allowedBranchIds.
+ *  NULL-branch (tenant-wide) scenarios are admin-only — op-heads can't
+ *  silently absorb tenant-level forecasts.
+ *
+ *  This closes audit Critical #3 / Security #2: previously every
+ *  forecast write endpoint trusted the caller-supplied scenario_id /
+ *  item_id, so an op-head for branch A could mutate branch B's plan by
+ *  guessing or enumerating ids. */
+function verifyScenarioAccess(
+  req: Request,
+  res: Response,
+  scenarioId: number,
+): { ok: true; scenario: any } | { ok: false } {
+  const db = req.tenantDb!;
+  const scenario = db.get('SELECT id, branch_id FROM scenarios WHERE id = ?', scenarioId);
+  if (!scenario) {
+    res.status(404).json({ error: 'Scenario not found' });
+    return { ok: false };
+  }
+  if (req.userType === 'super_admin' || req.session?.role === 'admin') {
+    return { ok: true, scenario };
+  }
+  if (scenario.branch_id == null) {
+    res.status(403).json({ error: 'Tenant-wide scenarios can only be modified by admins' });
+    return { ok: false };
+  }
+  if (!req.allowedBranchIds?.includes(scenario.branch_id)) {
+    res.status(403).json({ error: 'Cannot modify a scenario in a branch you do not own' });
+    return { ok: false };
+  }
+  return { ok: true, scenario };
+}
+
+/** Same check as verifyScenarioAccess but starting from a forecast_items
+ *  id — joins to scenarios to read branch_id. */
+function verifyItemAccess(
+  req: Request,
+  res: Response,
+  itemId: number,
+): { ok: true; item: any; scenario: any } | { ok: false } {
+  const db = req.tenantDb!;
+  const item = db.get(
+    `SELECT fi.id, fi.scenario_id, s.branch_id
+       FROM forecast_items fi
+       JOIN scenarios s ON fi.scenario_id = s.id
+      WHERE fi.id = ?`,
+    itemId
+  );
+  if (!item) {
+    res.status(404).json({ error: 'Item not found' });
+    return { ok: false };
+  }
+  if (req.userType === 'super_admin' || req.session?.role === 'admin') {
+    return { ok: true, item, scenario: { id: item.scenario_id, branch_id: item.branch_id } };
+  }
+  if (item.branch_id == null) {
+    res.status(403).json({ error: 'Tenant-wide items can only be modified by admins' });
+    return { ok: false };
+  }
+  if (!req.allowedBranchIds?.includes(item.branch_id)) {
+    res.status(403).json({ error: 'Cannot modify an item in a branch you do not own' });
+    return { ok: false };
+  }
+  return { ok: true, item, scenario: { id: item.scenario_id, branch_id: item.branch_id } };
+}
+
+/** Silent boolean ownership check — same auth rules as verifyItemAccess
+ *  but no side-effect (no response sent). Used by batch endpoints where
+ *  we want to silently filter out unauthorised ids rather than 403 the
+ *  whole request. */
+function canWriteItem(req: Request, itemId: number): boolean {
+  const db = req.tenantDb!;
+  const row = db.get(
+    `SELECT s.branch_id FROM forecast_items fi JOIN scenarios s ON fi.scenario_id = s.id WHERE fi.id = ?`,
+    itemId
+  );
+  if (!row) return false;
+  if (req.userType === 'super_admin' || req.session?.role === 'admin') return true;
+  if (row.branch_id == null) return false;  // tenant-wide → admin only
+  return !!req.allowedBranchIds?.includes(row.branch_id);
+}
+
 // === CONSOLIDATED VIEW (All Streams) ===
 router.get('/consolidated', async (req, res) => {
   const db = req.tenantDb!;
@@ -310,21 +395,19 @@ router.get('/scenarios/orphans', async (req, res) => {
 /** Reassign every NULL-branch scenario to `targetBranchId`. After running
  *  this, the rows show up in the target branch's view and in no other
  *  branch's. Idempotent — calling it again with no NULL-branch rows is a
- *  no-op that returns `{ migratedScenarios: 0 }`. Admin-only. */
-router.post('/scenarios/migrate-orphans', requireWriteAccess, async (req, res) => {
+ *  no-op that returns `{ migratedScenarios: 0 }`.
+ *
+ *  Admin-only — even with the per-branch ownership check, an op_head
+ *  running this absorbs every tenant-wide legacy scenario (pre
+ *  multi-branch) into their branch. That's a tenant-level migration
+ *  decision, not a branch-level operation. Matches the gate on
+ *  /actuals/migrate-orphans. */
+router.post('/scenarios/migrate-orphans', async (req, res) => {
+  if (req.userType !== 'super_admin' && req.session?.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
   const db = req.tenantDb!;
   const targetBranchId = requireInt(req.body.targetBranchId, 'targetBranchId');
-
-  // Verify the target is a branch the caller is actually allowed to write to
-  // — otherwise an op-head for branch A could silently hijack the tenant's
-  // company-level data into A. Super admins and tenant admins skip this check
-  // (they can write to every branch).
-  const isPrivileged = req.userType === 'super_admin' || req.session?.role === 'admin';
-  if (!isPrivileged) {
-    if (!req.allowedBranchIds?.includes(targetBranchId)) {
-      return res.status(403).json({ error: 'Cannot migrate orphans to a branch you do not own' });
-    }
-  }
 
   const before = db.get('SELECT COUNT(*) as n FROM scenarios WHERE branch_id IS NULL');
   const result = db.run('UPDATE scenarios SET branch_id = ? WHERE branch_id IS NULL', targetBranchId);
@@ -419,6 +502,8 @@ router.get('/items', async (req, res) => {
 router.post('/items', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
   const scenario_id = requireInt(req.body.scenario_id, 'scenario_id');
+  const access = verifyScenarioAccess(req, res, scenario_id);
+  if (!access.ok) return;
   const category = requireString(req.body.category, 'category', 100);
   const name = requireString(req.body.name, 'name', 200);
   const { item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta } = req.body;
@@ -444,15 +529,26 @@ router.post('/items', requireWriteAccess, async (req, res) => {
 router.put('/items/reorder', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
   const { items } = req.body; // [{id, sort_order}]
+  if (!Array.isArray(items)) return res.status(400).json({ error: 'items array required' });
+  // Silently skip ids the caller doesn't own — don't 403 the whole batch
+  // on one stale id. canWriteItem is the side-effect-free variant of
+  // verifyItemAccess.
+  let updated = 0;
   for (const item of items) {
-    db.run('UPDATE forecast_items SET sort_order = ? WHERE id = ?', item.sort_order, item.id);
+    const id = Number(item.id);
+    if (!Number.isFinite(id)) continue;
+    if (!canWriteItem(req, id)) continue;
+    db.run('UPDATE forecast_items SET sort_order = ? WHERE id = ?', item.sort_order, id);
+    updated++;
   }
-  res.json({ ok: true });
+  res.json({ ok: true, updated });
 });
 
 router.put('/items/:id', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
   const id = requireInt(req.params.id, 'id');
+  const access = verifyItemAccess(req, res, id);
+  if (!access.ok) return;
   const { item_type, entry_mode, constant_amount, constant_period, start_month, annual_raise_pct, tax_rate_pct, sort_order, parent_id, meta } = req.body;
   const name = req.body.name !== undefined ? requireString(req.body.name, 'name', 200) : undefined;
   const category = req.body.category !== undefined ? requireString(req.body.category, 'category', 100) : undefined;
@@ -483,9 +579,9 @@ router.put('/items/:id', requireWriteAccess, async (req, res) => {
 router.delete('/items/:id', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
   const id = requireInt(req.params.id, 'id');
-  // Verify item belongs to a scenario accessible by this tenant
-  const item = db.get('SELECT fi.id FROM forecast_items fi JOIN scenarios s ON fi.scenario_id = s.id WHERE fi.id = ?', id);
-  if (!item) return res.status(404).json({ error: 'Item not found' });
+  // Branch ownership check — see verifyItemAccess docs.
+  const access = verifyItemAccess(req, res, id);
+  if (!access.ok) return;
   db.run('DELETE FROM forecast_items WHERE id = ?', id);
   res.json({ ok: true });
 });
@@ -515,6 +611,8 @@ router.post('/values', requireWriteAccess, async (req, res) => {
   const { values } = req.body; // values: [{month, amount}]
   if (!req.body.item_id || !values?.length) return res.status(400).json({ error: 'item_id and values required' });
   const item_id = requireInt(req.body.item_id, 'item_id');
+  const access = verifyItemAccess(req, res, item_id);
+  if (!access.ok) return;
 
   // Validate each entry
   for (let i = 0; i < values.length; i++) {
@@ -553,28 +651,43 @@ router.post('/values/bulk', requireWriteAccess, async (req, res) => {
     requireNumber(entries[i].amount ?? 0, `entries[${i}].amount`);
   }
 
+  // If a single item_id was passed at the top level, gate on it. Otherwise
+  // each entry brings its own item_id; we filter per-entry in the loop.
+  if (item_id != null) {
+    const access = verifyItemAccess(req, res, item_id);
+    if (!access.ok) return;
+  }
+
   db.beginBatch();
+  let written = 0;
   try {
     for (const e of entries) {
       const effectiveItemId = e.item_id || item_id;
       if (!effectiveItemId) continue;
+      // Per-entry ownership check (silent skip — see canWriteItem docs).
+      // For the single-item case the top-level check already passed, so
+      // the per-item check here is a fast lookup that would also pass.
+      if (!canWriteItem(req, effectiveItemId)) continue;
       const existing = db.get('SELECT id FROM forecast_values WHERE item_id = ? AND month = ?', effectiveItemId, e.month);
       if (existing) {
         db.run('UPDATE forecast_values SET amount = ? WHERE id = ?', e.amount || 0, existing.id);
       } else {
         db.run('INSERT INTO forecast_values (item_id, month, amount) VALUES (?, ?, ?)', effectiveItemId, e.month, e.amount || 0);
       }
+      written++;
     }
     db.endBatch();
   } catch (e) { db.rollbackBatch(); throw e; }
 
-  res.json({ ok: true, count: entries.length });
+  res.json({ ok: true, count: written });
 });
 
 // === AUTO-GENERATE VALUES from constant settings ===
 router.post('/items/:id/generate', requireWriteAccess, async (req, res) => {
   const db = req.tenantDb!;
   const id = requireInt(req.params.id, 'id');
+  const access = verifyItemAccess(req, res, id);
+  if (!access.ok) return;
   const { months } = req.body; // array of month strings to generate for
   const item = db.get('SELECT * FROM forecast_items WHERE id = ?', id);
   if (!item) return res.status(404).json({ error: 'Item not found' });
@@ -633,6 +746,8 @@ router.post('/settings', requireWriteAccess, async (req, res) => {
   const { settings } = req.body; // settings: {key: value, ...}
   if (!req.body.scenario_id || !settings) return res.status(400).json({ error: 'scenario_id and settings required' });
   const scenario_id = requireInt(req.body.scenario_id, 'scenario_id');
+  const access = verifyScenarioAccess(req, res, scenario_id);
+  if (!access.ok) return;
 
   for (const [key, value] of Object.entries(settings)) {
     const val = typeof value === 'string' ? value : JSON.stringify(value);

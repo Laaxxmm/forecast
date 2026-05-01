@@ -313,22 +313,22 @@ router.post('/delete-orphans', async (req, res) => {
 });
 
 /** Reassign every NULL-branch actuals row to `targetBranchId`. After this
- *  the rows show up only on the target branch's view. Idempotent. Admin /
- *  super_admin can target any branch; ops_head must target a branch they
- *  own (mirrors the forecast orphan-migration auth check). */
+ *  the rows show up only on the target branch's view. Idempotent.
+ *
+ *  Admin-only — even with the "must own targetBranchId" guard, an
+ *  op_head running this would unilaterally claim every tenant-wide
+ *  legacy row as their branch's data (pre-multi-branch tenants store
+ *  the entire company in NULL-branch rows). That's a tenant-level
+ *  migration decision, not a branch-level operation. The forecast
+ *  equivalent at /forecast-module/migrate-orphans should be tightened
+ *  to match. */
 router.post('/migrate-orphans', async (req, res) => {
-  // Same auth gate as the forecast version. Op-heads should not be able
-  // to silently absorb the tenant's company-level data into their branch.
-  if (req.userType !== 'super_admin' && req.session?.role !== 'admin' && req.session?.role !== 'operational_head') {
-    return res.status(403).json({ error: 'Write access required' });
+  if (req.userType !== 'super_admin' && req.session?.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
   }
   const targetBranchId = Number(req.body?.targetBranchId);
   if (!Number.isFinite(targetBranchId) || targetBranchId <= 0) {
     return res.status(400).json({ error: 'targetBranchId required (positive integer)' });
-  }
-  const isPrivileged = req.userType === 'super_admin' || req.session?.role === 'admin';
-  if (!isPrivileged && !req.allowedBranchIds?.includes(targetBranchId)) {
-    return res.status(403).json({ error: 'Cannot migrate orphans to a branch you do not own' });
   }
 
   const db = req.tenantDb!;

@@ -117,7 +117,13 @@ router.get('/summary', async (req, res) => {
 // Auto-populate revenue actuals from integration-specific tables
 // into dashboard_actuals for the given scenario.
 // Uses stream names from business_streams config instead of hardcoded values.
-router.post('/sync-from-imports', async (req, res) => {
+//
+// Gated on admin / operational_head — this endpoint mutates the rollup
+// table (dashboard_actuals) and was previously open to any
+// authenticated user including read-only viewers, who could trigger a
+// rebuild that briefly emptied actuals during the upsert window. The
+// matching `/bulk` route at line 39 already has the same gate.
+router.post('/sync-from-imports', requireRole('admin', 'operational_head'), async (req, res) => {
   try {
     const db = req.tenantDb!;
     if (!req.body.scenario_id) return res.status(400).json({ error: 'scenario_id required' });
