@@ -99,7 +99,9 @@ router.post('/healthplix', requireRole('admin', 'operational_head'), requireInte
     // Auto-sync clinic revenue to dashboard_actuals for active scenario.
     // Use the canonical helper so we write to the SAME scenario the
     // dashboard's read path picks (is_default=1 + branch-filtered).
-    const bf = branchFilter(req);
+    // Strict: don't re-aggregate NULL-branch legacy rows under the
+    // active branch — that's a migration decision, not an import effect.
+    const bf = branchFilter(req, { strict: true });
     const clinicStreamId = await resolveStreamId(req, 'clinic');
     const activeScenario = findActiveScenarioForStream(db, req, clinicStreamId);
     if (activeScenario) {
@@ -178,7 +180,8 @@ router.post('/oneglance-sales', requireRole('admin', 'operational_head'), requir
 
     // Auto-sync pharmacy sales revenue to dashboard_actuals for active scenario.
     // Use the canonical helper — see clinic auto-sync above for context.
-    const bf = branchFilter(req);
+    // Strict: NULL-branch legacy rows are excluded from the rebuild.
+    const bf = branchFilter(req, { strict: true });
     const pharmaStreamId = await resolveStreamId(req, 'pharmacy');
     const activeScenario = findActiveScenarioForStream(db, req, pharmaStreamId);
     if (activeScenario) {
@@ -351,7 +354,8 @@ router.post('/turia', requireRole('admin', 'operational_head'), requireIntegrati
     } catch (e) { db.rollbackBatch(); throw e; }
 
     // Auto-sync consultancy revenue to dashboard_actuals — canonical scenario helper.
-    const bf = branchFilter(req);
+    // Strict: NULL-branch legacy rows excluded from the rebuild.
+    const bf = branchFilter(req, { strict: true });
     const consultStreamId = await resolveStreamId(req, 'consultancy');
     const activeScenario = findActiveScenarioForStream(db, req, consultStreamId);
     if (activeScenario) {
@@ -387,13 +391,17 @@ router.post('/turia', requireRole('admin', 'operational_head'), requireIntegrati
 
 router.get('/history', async (req, res) => {
   const db = req.tenantDb!;
-  const bf = branchFilter(req);
+  // Strict: branch users see only their branch's import logs. NULL-branch
+  // legacy logs from the pre-multi-branch era stay hidden until reassigned.
+  const bf = branchFilter(req, { strict: true });
   res.json(db.all(`SELECT * FROM import_logs WHERE 1=1${bf.where} ORDER BY created_at DESC`, ...bf.params));
 });
 
 router.delete('/:id', requireRole('admin', 'operational_head'), async (req, res) => {
   const db = req.tenantDb!;
-  const bf = branchFilter(req);
+  // Strict: rebuild only the caller's branch rows. NULL-branch legacy
+  // rows are not re-absorbed during the post-delete re-sync.
+  const bf = branchFilter(req, { strict: true });
 
   // Delete source rows for this import
   db.run('DELETE FROM clinic_actuals WHERE import_id = ?', req.params.id);
@@ -489,7 +497,8 @@ router.delete('/:id', requireRole('admin', 'operational_head'), async (req, res)
 
 router.get('/sync-tracker', async (req, res) => {
   const db = req.tenantDb!;
-  const bf = branchFilter(req);
+  // Strict: each branch's tracker reflects only its own coverage.
+  const bf = branchFilter(req, { strict: true });
   const now = new Date();
   const monthParam = (req.query.month as string) || now.toISOString().slice(0, 7);
   const [yr, mo] = monthParam.split('-').map(Number);
@@ -613,7 +622,8 @@ router.get('/export/:source', async (req, res) => {
   const { from, to } = req.query as { from?: string; to?: string };
   if (!from || !to) return res.status(400).json({ error: 'from and to query params required' });
 
-  const bf = branchFilter(req);
+  // Strict: branch users export only their branch's rows.
+  const bf = branchFilter(req, { strict: true });
 
   try {
     let rows: any[] = [];

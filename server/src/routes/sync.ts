@@ -220,7 +220,9 @@ router.post('/healthplix', requireRole('admin', 'operational_head'), requireInte
     }
 
     // Auto-sync actuals to dashboard for the active scenario
-    const bf = branchFilter(req);
+    // Strict: NULL-branch legacy rows are not re-aggregated under the
+    // active branch during the post-import rebuild.
+    const bf = branchFilter(req, { strict: true });
     const platformDb = await getPlatformHelper();
     const clinicStream = req.clientId ? platformDb.get(
       "SELECT id FROM business_streams WHERE client_id = ? AND (LOWER(name) LIKE '%clinic%' OR LOWER(name) LIKE '%health%') AND is_active = 1 LIMIT 1",
@@ -455,7 +457,8 @@ router.post('/oneglance', requireRole('admin', 'operational_head'), requireInteg
       totalRows += rows.length;
 
       // Auto-sync pharmacy revenue to dashboard_actuals (branch-scoped)
-      const bf = branchFilter(req);
+      // Strict: NULL-branch legacy rows excluded from the rebuild.
+      const bf = branchFilter(req, { strict: true });
       // Look up the pharmacy stream_id to tag dashboard entries
       const platformDb = await getPlatformHelper();
       const pharmaStream = req.clientId ? platformDb.get(
@@ -785,7 +788,8 @@ router.post('/turia', requireRole('admin', 'operational_head'), requireIntegrati
     } catch (e) { db.rollbackBatch(); throw e; }
 
     // Auto-sync consultancy revenue to dashboard_actuals
-    const bf = branchFilter(req);
+    // Strict: NULL-branch legacy rows excluded from the rebuild.
+    const bf = branchFilter(req, { strict: true });
     const platformDb = await getPlatformHelper();
     const consultStream = req.clientId ? platformDb.get(
       "SELECT id FROM business_streams WHERE client_id = ? AND (LOWER(name) LIKE '%consult%' OR LOWER(name) LIKE '%turia%') AND is_active = 1 LIMIT 1",
