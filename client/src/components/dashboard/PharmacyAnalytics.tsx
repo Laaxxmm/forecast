@@ -2527,16 +2527,24 @@ function CrossTab({ data, isVisible, startMonth, endMonth }: {
             </div>
           </div>
 
-          <div style={{ tableLayout: 'fixed' }}>
-            <div className="grid grid-cols-[24%_12%_12%_12%_10%_10%_10%_10%] gap-2 px-2 pb-2 text-[11px] uppercase tracking-[0.5px] text-theme-faint border-b" style={{ borderColor: 'var(--mt-border)' }}>
-              <span>Drug</span>
-              <span className="text-right">Bought</span>
-              <span className="text-right">Stock</span>
-              <span className="text-right">Sold</span>
-              <span className="text-right">P-margin</span>
-              <span className="text-right">S-margin</span>
-              <span className="text-right">Sell-thru</span>
-              <span className="text-right">Status</span>
+          {/* Horizontal scroll wrapper. The 8-column table needs ~880px to
+              breathe; below that the user gets a horizontal scroll inside
+              the card instead of clipped pills or column collisions. The
+              footer counter + legend stay outside the wrapper so they
+              always read at the card's natural width. */}
+          <div style={{ overflowX: 'auto' }}>
+            <div
+              className="grid grid-cols-[minmax(220px,2.4fr)_minmax(90px,1fr)_minmax(90px,1fr)_minmax(90px,1fr)_minmax(80px,0.9fr)_minmax(80px,0.9fr)_minmax(90px,1fr)_minmax(90px,1fr)] gap-2 pb-2 text-[11px] uppercase tracking-[0.5px] text-theme-faint border-b"
+              style={{ borderColor: 'var(--mt-border)', minWidth: 880 }}
+            >
+              <span style={{ paddingLeft: 6, paddingRight: 6 }}>Drug</span>
+              <span style={{ paddingLeft: 6, paddingRight: 6 }} className="text-right">Bought</span>
+              <span style={{ paddingLeft: 6, paddingRight: 6 }} className="text-right">Stock</span>
+              <span style={{ paddingLeft: 6, paddingRight: 6 }} className="text-right">Sold</span>
+              <span style={{ paddingLeft: 6, paddingRight: 6 }} className="text-right">P-margin</span>
+              <span style={{ paddingLeft: 6, paddingRight: 6 }} className="text-right">S-margin</span>
+              <span style={{ paddingLeft: 6, paddingRight: 6 }} className="text-right">Sell-thru</span>
+              <span style={{ paddingLeft: 6, paddingRight: 18 }} className="text-right">Status</span>
             </div>
             {masterVisible.map((r, i) => {
               const rowBg =
@@ -2548,24 +2556,25 @@ function CrossTab({ data, isVisible, startMonth, endMonth }: {
               return (
                 <div
                   key={i}
-                  className="grid grid-cols-[24%_12%_12%_12%_10%_10%_10%_10%] gap-2 px-2 py-2 items-center text-[12px]"
+                  className="grid grid-cols-[minmax(220px,2.4fr)_minmax(90px,1fr)_minmax(90px,1fr)_minmax(90px,1fr)_minmax(80px,0.9fr)_minmax(80px,0.9fr)_minmax(90px,1fr)_minmax(90px,1fr)] gap-2 py-2 items-center text-[12px]"
                   style={{
                     borderTop: i === 0 ? 'none' : '0.5px solid var(--mt-border)',
                     background: rowBg,
+                    minWidth: 880,
                   }}
                 >
-                  <span className="text-theme-heading truncate" title={r.name}>{r.name}</span>
-                  <span className="text-right text-theme-secondary">{formatINR(r.bought)}</span>
-                  <span className="text-right text-theme-secondary">{formatINR(r.stockValue)}</span>
-                  <span className="text-right text-theme-secondary">{formatINR(r.sold)}</span>
-                  <span className="text-right text-theme-secondary">{r.pMargin.toFixed(1)}%</span>
-                  <span className={`text-right ${r.sMargin < 5 && r.sold > 0 ? 'font-medium text-rose-700 dark:text-rose-300' : 'text-theme-secondary'}`}>
+                  <span style={{ paddingLeft: 6, paddingRight: 6 }} className="text-theme-heading truncate" title={r.name}>{r.name}</span>
+                  <span style={{ paddingLeft: 6, paddingRight: 6 }} className="text-right text-theme-secondary">{formatINR(r.bought)}</span>
+                  <span style={{ paddingLeft: 6, paddingRight: 6 }} className="text-right text-theme-secondary">{formatINR(r.stockValue)}</span>
+                  <span style={{ paddingLeft: 6, paddingRight: 6 }} className="text-right text-theme-secondary">{formatINR(r.sold)}</span>
+                  <span style={{ paddingLeft: 6, paddingRight: 6 }} className="text-right text-theme-secondary">{r.pMargin.toFixed(1)}%</span>
+                  <span style={{ paddingLeft: 6, paddingRight: 6 }} className={`text-right ${r.sMargin < 5 && r.sold > 0 ? 'font-medium text-rose-700 dark:text-rose-300' : 'text-theme-secondary'}`}>
                     {r.sMargin.toFixed(1)}%
                   </span>
-                  <span className="text-right text-theme-secondary">
+                  <span style={{ paddingLeft: 6, paddingRight: 6 }} className="text-right text-theme-secondary">
                     {r.sellThruPct === 999 ? '—' : `${r.sellThruPct > 999 ? '999+' : r.sellThruPct.toFixed(0)}%`}
                   </span>
-                  <span className={`text-right text-[10px] font-medium ${s.text}`}>{s.label}</span>
+                  <span style={{ paddingLeft: 6, paddingRight: 18 }} className={`text-right text-[10px] font-medium ${s.text}`}>{s.label}</span>
                 </div>
               );
             })}

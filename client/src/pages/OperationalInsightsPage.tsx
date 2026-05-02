@@ -490,55 +490,61 @@ function ProgressCard({ earned, target, projected, earnedPct, elapsedPct, projec
           {formatINR(earned)} / {formatINR(target)}
         </p>
       </div>
-      {/* Bar with two markers — Today (black) + Projected end (amber) */}
-      <div className="relative" style={{ paddingTop: 26, paddingBottom: 26 }}>
-        {/* Today marker label (above the bar) */}
-        <div
-          className="absolute"
-          style={{
-            top: 0,
-            left: `${elapsedClamp}%`,
-            transform: 'translateX(-50%)',
-            fontSize: 10,
-            color: 'var(--mt-text-secondary)',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          Today ({elapsedClamp.toFixed(0)}%)
-        </div>
-        {/* The bar itself */}
-        <div className="relative h-[20px] rounded-full overflow-hidden" style={{ background: 'var(--mt-bg-muted)' }}>
-          {/* Earned fill */}
-          <div
-            className="absolute inset-y-0 left-0 rounded-full"
-            style={{ width: `${earnedClamp}%`, background: '#1D9E75' }}
-          />
-          {/* Today vertical line (black, solid) */}
-          <div
-            className="absolute top-0 bottom-0"
-            style={{ left: `${elapsedClamp}%`, width: 2, background: 'var(--mt-text-heading)' }}
-          />
-          {/* Projected end vertical line (amber, solid) */}
-          <div
-            className="absolute top-0 bottom-0"
-            style={{ left: `${projClamp}%`, width: 2, background: '#BA7517' }}
-          />
-        </div>
-        {/* Projected end label (below the bar) */}
-        <div
-          className="absolute"
-          style={{
-            bottom: 0,
-            left: `${projClamp}%`,
-            transform: 'translateX(-50%)',
-            fontSize: 10,
-            color: '#BA7517',
-            whiteSpace: 'nowrap',
-            fontWeight: 500,
-          }}
-        >
-          Projected end ({projClamp.toFixed(0)}%)
-        </div>
+      {/* Bar with two markers — Today (black) + Projected end (amber).
+          Label positions are clamped at the edges so the text never spills
+          off the card: at <=5% the label anchors left, at >=95% it anchors
+          right (translateX(-100%)), otherwise it stays centred under the
+          marker line. */}
+      <div className="relative" style={{ paddingTop: 28, paddingBottom: 28 }}>
+        {(() => {
+          // Helper: pick the right transform + textAlign based on position.
+          // At extremes we drop the centring so the label stays inside the
+          // card; the 4-6px vertical gap to the marker line is achieved
+          // with the paddingTop/paddingBottom on this wrapper.
+          const labelStyle = (pct: number, baseColor: string, weight: number, anchor: 'top' | 'bottom') => {
+            const style: React.CSSProperties = {
+              position: 'absolute',
+              left: `${pct}%`,
+              fontSize: 10,
+              color: baseColor,
+              whiteSpace: 'nowrap',
+              fontWeight: weight,
+            };
+            if (anchor === 'top') style.top = 0; else style.bottom = 0;
+            if (pct <= 5)        { style.transform = 'none';                style.textAlign = 'left'; }
+            else if (pct >= 95)  { style.transform = 'translateX(-100%)';   style.textAlign = 'right'; }
+            else                 { style.transform = 'translateX(-50%)';    style.textAlign = 'center'; }
+            return style;
+          };
+          return (
+            <>
+              <div style={labelStyle(elapsedClamp, 'var(--mt-text-secondary)', 400, 'top')}>
+                Today ({elapsedClamp.toFixed(0)}%)
+              </div>
+              {/* The bar itself */}
+              <div className="relative h-[20px] rounded-full overflow-hidden" style={{ background: 'var(--mt-bg-muted)' }}>
+                {/* Earned fill */}
+                <div
+                  className="absolute inset-y-0 left-0 rounded-full"
+                  style={{ width: `${earnedClamp}%`, background: '#1D9E75' }}
+                />
+                {/* Today vertical line (black, solid) */}
+                <div
+                  className="absolute top-0 bottom-0"
+                  style={{ left: `${elapsedClamp}%`, width: 2, background: 'var(--mt-text-heading)' }}
+                />
+                {/* Projected end vertical line (amber, solid) */}
+                <div
+                  className="absolute top-0 bottom-0"
+                  style={{ left: `${projClamp}%`, width: 2, background: '#BA7517' }}
+                />
+              </div>
+              <div style={labelStyle(projClamp, '#BA7517', 500, 'bottom')}>
+                Projected end ({projClamp.toFixed(0)}%)
+              </div>
+            </>
+          );
+        })()}
       </div>
       {/* Inline legend */}
       <div className="flex flex-wrap gap-x-5 gap-y-1 mt-1 text-[11px]" style={{ color: 'var(--mt-text-faint)' }}>
