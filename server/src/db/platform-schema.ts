@@ -332,18 +332,21 @@ export function initializePlatformSchema(db: DbHelper) {
       const isPharma = nameLower.includes('pharma');
       if (isPharma) {
         // ── Purchase KPI Cards ──
-        seedVis(c.id, sid, 'cards', 'pharma_total_purchase', 'Total Purchase Value', 0,
-          'Sum of all purchase values from OneGlance purchase reports', source);
-        seedVis(c.id, sid, 'cards', 'pharma_total_invoices', 'Total Invoices', 1,
-          'Count of distinct purchase invoices', source);
-        seedVis(c.id, sid, 'cards', 'pharma_unique_stockists', 'Unique Stockists', 2,
-          'Number of distinct stockist/distributors', source);
-        seedVis(c.id, sid, 'cards', 'pharma_unique_products', 'Unique Products', 3,
-          'Number of distinct drugs/products purchased', source);
-        seedVis(c.id, sid, 'cards', 'pharma_total_free_qty', 'Free Qty Received', 4,
-          'Total free quantity received from stockists', source);
-        seedVis(c.id, sid, 'cards', 'pharma_total_tax', 'Total Tax', 5,
-          'Total purchase tax amount', source);
+        // Layout: 5 tinted KPI cards. The "Total Tax" toggle no longer renders
+        // its own card — it now controls the "incl. ₹X tax" sub-line shown
+        // under "Total purchase".
+        seedVis(c.id, sid, 'cards', 'pharma_total_purchase', 'Total Purchase', 0,
+          'Sum of all purchase values from OneGlance purchase reports. Sub-line shows tax when "Total Tax" is also enabled.', source);
+        seedVis(c.id, sid, 'cards', 'pharma_total_invoices', 'Invoices', 1,
+          'Count of distinct purchase invoices. Sub-line shows average invoice value (total purchase ÷ invoice count).', source);
+        seedVis(c.id, sid, 'cards', 'pharma_unique_stockists', 'Stockists', 2,
+          'Number of distinct stockist/distributors (active suppliers).', source);
+        seedVis(c.id, sid, 'cards', 'pharma_unique_products', 'Products', 3,
+          'Number of distinct drugs/products purchased (unique SKUs).', source);
+        seedVis(c.id, sid, 'cards', 'pharma_total_free_qty', 'Free Quantity', 4,
+          'Total free units received this period. Sub-line shows how many stockists provided free goods.', source);
+        seedVis(c.id, sid, 'cards', 'pharma_total_tax', 'Tax sub-line on Total Purchase', 5,
+          'Toggles the "incl. ₹X tax" annotation under the Total Purchase card. No standalone tax card is rendered.', source);
 
         // ── Sales KPI Cards ──
         seedVis(c.id, sid, 'cards', 'pharma_total_sales', 'Total Sales', 6,
@@ -376,18 +379,23 @@ export function initializePlatformSchema(db: DbHelper) {
           'Sell-through rate, purchased-not-sold, sold-not-purchased counts', source);
 
         // ── Purchase Charts ──
+        // The Purchases tab consolidates the old six charts into three cards:
+        //   • Sourcing card — driven by `pharma_top_stockists` + `pharma_top_manufacturers`
+        //   • Free-quantity callout banner — driven by `pharma_free_qty_analysis`
+        //   • Top products card — driven by `pharma_top_purchase_products` + `pharma_profit_margin_dist`
+        // The monthly trend only renders when the period spans 3+ months.
         seedVis(c.id, sid, 'charts', 'pharma_monthly_purchase_trend', 'Monthly Purchase Trend', 1,
-          'Bar chart showing gross and net purchase values per month', source);
-        seedVis(c.id, sid, 'charts', 'pharma_top_stockists', 'Top Stockists', 2,
-          'Horizontal bar chart of top 10 stockists by purchase value', source);
-        seedVis(c.id, sid, 'charts', 'pharma_top_manufacturers', 'Top Manufacturers', 3,
-          'Horizontal bar chart of top 10 manufacturers by purchase value', source);
-        seedVis(c.id, sid, 'charts', 'pharma_top_purchase_products', 'Top Purchase Products', 4,
-          'Top 15 products by purchase value with progress bars', source);
-        seedVis(c.id, sid, 'charts', 'pharma_profit_margin_dist', 'Profit Margin Distribution', 5,
-          'Donut chart showing product count by expected profit margin bracket', source);
-        seedVis(c.id, sid, 'charts', 'pharma_free_qty_analysis', 'Free Quantity Analysis', 6,
-          'Stockists providing free goods with percentage of batch', source);
+          'Bar chart of gross and net purchase per month. Only renders when the selected period spans 3+ months — single-month periods hide the chart automatically.', source);
+        seedVis(c.id, sid, 'charts', 'pharma_top_stockists', 'Stockists list (Sourcing card)', 2,
+          'Stockist list inside the "Where the money is going" sourcing card with progress bars and free-qty annotations.', source);
+        seedVis(c.id, sid, 'charts', 'pharma_top_manufacturers', 'Manufacturers list (Sourcing card)', 3,
+          'Top manufacturers list inside the "Where the money is going" sourcing card. Top 5 visible by default with a "view all" toggle.', source);
+        seedVis(c.id, sid, 'charts', 'pharma_top_purchase_products', 'Top Products list', 4,
+          'Top products inside the "Top products by purchase value" card, with margin pill per row.', source);
+        seedVis(c.id, sid, 'charts', 'pharma_profit_margin_dist', 'Margin Distribution Bar', 5,
+          'Horizontal stacked bar above the products list, showing margin-bracket split across all products.', source);
+        seedVis(c.id, sid, 'charts', 'pharma_free_qty_analysis', 'Free Quantity Callout', 6,
+          'Soft-green banner under the sourcing card surfacing total rupee value of free goods received and the top stockist providing them.', source);
 
         // ── Sales Charts ──
         seedVis(c.id, sid, 'charts', 'pharma_monthly_sales_trend', 'Monthly Sales Trend', 7,
@@ -417,12 +425,69 @@ export function initializePlatformSchema(db: DbHelper) {
 
         // ── Tables ──
         seedVis(c.id, sid, 'tables', 'pharma_purchase_table', 'Purchase Details Table', 0,
-          'Searchable table: Invoice, Date, Stockist, Drug, Batch Qty, Free, MRP, Purchase Value, Tax, Margin%. Paginated.', source);
+          'Searchable table: Invoice, Date, Stockist, Drug, Batch Qty, Purchase Value, Tax, Margin. Free-qty rows are tinted green; rows are paginated at 10.', source);
         seedVis(c.id, sid, 'tables', 'pharma_sales_table', 'Sales Details Table', 1,
           'Searchable table: Bill, Date, Patient, Drug, Qty, Sales, COGS, Profit, Referred By. Paginated.', source);
         seedVis(c.id, sid, 'tables', 'pharma_stock_table', 'Stock Details Table', 2,
           'Searchable table: Drug, Batch, Received, Expiry, Avl Qty, Strips, Purchase Price, Stock Value. Paginated.', source);
       }
     }
+  }
+
+  // ── Pharmacy Purchases tab — May 2026 redesign label refresh ────────────
+  // seedVis() above uses INSERT OR IGNORE and so will not update labels or
+  // descriptions on rows that already exist for legacy clients. The
+  // dashboard customiser reads element_label + description directly from
+  // these rows, so we reconcile them here. Idempotent — safe to re-run.
+  const PHARMA_PURCHASE_LABEL_REFRESH: Array<[string, string, string]> = [
+    ['pharma_total_purchase',
+      'Total Purchase',
+      'Sum of all purchase values from OneGlance purchase reports. Sub-line shows tax when "Total Tax" is also enabled.'],
+    ['pharma_total_invoices',
+      'Invoices',
+      'Count of distinct purchase invoices. Sub-line shows average invoice value (total purchase ÷ invoice count).'],
+    ['pharma_unique_stockists',
+      'Stockists',
+      'Number of distinct stockist/distributors (active suppliers).'],
+    ['pharma_unique_products',
+      'Products',
+      'Number of distinct drugs/products purchased (unique SKUs).'],
+    ['pharma_total_free_qty',
+      'Free Quantity',
+      'Total free units received this period. Sub-line shows how many stockists provided free goods.'],
+    ['pharma_total_tax',
+      'Tax sub-line on Total Purchase',
+      'Toggles the "incl. ₹X tax" annotation under the Total Purchase card. No standalone tax card is rendered.'],
+    ['pharma_monthly_purchase_trend',
+      'Monthly Purchase Trend',
+      'Bar chart of gross and net purchase per month. Only renders when the selected period spans 3+ months — single-month periods hide the chart automatically.'],
+    ['pharma_top_stockists',
+      'Stockists list (Sourcing card)',
+      'Stockist list inside the "Where the money is going" sourcing card with progress bars and free-qty annotations.'],
+    ['pharma_top_manufacturers',
+      'Manufacturers list (Sourcing card)',
+      'Top manufacturers list inside the "Where the money is going" sourcing card. Top 5 visible by default with a "view all" toggle.'],
+    ['pharma_top_purchase_products',
+      'Top Products list',
+      'Top products inside the "Top products by purchase value" card, with margin pill per row.'],
+    ['pharma_profit_margin_dist',
+      'Margin Distribution Bar',
+      'Horizontal stacked bar above the products list, showing margin-bracket split across all products.'],
+    ['pharma_free_qty_analysis',
+      'Free Quantity Callout',
+      'Soft-green banner under the sourcing card surfacing total rupee value of free goods received and the top stockist providing them.'],
+    ['pharma_purchase_table',
+      'Purchase Details Table',
+      'Searchable table: Invoice, Date, Stockist, Drug, Batch Qty, Purchase Value, Tax, Margin. Free-qty rows are tinted green; rows are paginated at 10.'],
+  ];
+  for (const [key, label, desc] of PHARMA_PURCHASE_LABEL_REFRESH) {
+    try {
+      db.run(
+        `UPDATE dashboard_chart_visibility
+            SET element_label = ?, description = ?
+          WHERE element_key = ?`,
+        label, desc, key,
+      );
+    } catch { /* table missing on a freshly created DB — seedVis already covers it */ }
   }
 }

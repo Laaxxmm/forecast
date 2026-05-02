@@ -214,207 +214,520 @@ async function exportFromDb(source: string, columns: any[], filename: string, fy
   } catch { alert('Download failed'); }
 }
 
-function PurchasesTab({ data, isVisible, search, setSearch, page, setPage, pageSize, fyStart, fyEnd }: TabProps) {
+// ── Purchases-tab visual primitives ──────────────────────────────────────────
+//
+// These live next to PurchasesTab (and not in components/common) because
+// they encode tab-specific design choices: a 5-card tinted KPI strip with
+// same-ramp text, a margin pill with a fixed bracket→colour mapping, and a
+// margin-bracket progress bar that has to use the same palette as the pills.
+// If/when Sales & Profit, Stock & Expiry, or Cross-Report adopt the same
+// language we can lift these into common; until then they belong here so the
+// shared MiniKPI used by the other tabs stays untouched.
+
+type PurchaseTone = 'green' | 'blue' | 'purple' | 'amber' | 'coral';
+
+// Soft tint backgrounds + same-ramp dark text. Each tone exposes:
+//   bg     — card fill (alpha tint, works in both light + dark themes)
+//   border — soft outline matching the tint
+//   label  — top label colour (dark stop in light, mid stop in dark)
+//   value  — main number colour (darkest stop in light, lightest dark-mode stop)
+//   sub    — sub-line colour (slightly muted version of label)
+const PURCHASE_TONES: Record<PurchaseTone, { bg: string; border: string; label: string; value: string; sub: string }> = {
+  green:  { bg: 'bg-emerald-500/10', border: 'border-emerald-500/15', label: 'text-emerald-700 dark:text-emerald-400', value: 'text-emerald-900 dark:text-emerald-300', sub: 'text-emerald-700/70 dark:text-emerald-400/70' },
+  blue:   { bg: 'bg-blue-500/10',    border: 'border-blue-500/15',    label: 'text-blue-700 dark:text-blue-400',       value: 'text-blue-900 dark:text-blue-300',       sub: 'text-blue-700/70 dark:text-blue-400/70' },
+  purple: { bg: 'bg-purple-500/10',  border: 'border-purple-500/15',  label: 'text-purple-700 dark:text-purple-400',   value: 'text-purple-900 dark:text-purple-300',   sub: 'text-purple-700/70 dark:text-purple-400/70' },
+  amber:  { bg: 'bg-amber-500/10',   border: 'border-amber-500/15',   label: 'text-amber-800 dark:text-amber-400',     value: 'text-amber-900 dark:text-amber-300',     sub: 'text-amber-800/70 dark:text-amber-400/70' },
+  coral:  { bg: 'bg-rose-500/10',    border: 'border-rose-500/15',    label: 'text-rose-700 dark:text-rose-400',       value: 'text-rose-900 dark:text-rose-300',       sub: 'text-rose-700/70 dark:text-rose-400/70' },
+};
+
+function PurchaseKPI({ tone, label, value, sub }: { tone: PurchaseTone; label: string; value: string; sub?: string }) {
+  const t = PURCHASE_TONES[tone];
+  return (
+    <div className={`rounded-xl border p-3 ${t.bg} ${t.border}`}>
+      <p className={`text-[11px] font-medium ${t.label}`}>{label}</p>
+      <p className={`text-xl font-medium mt-1 ${t.value}`}>{value}</p>
+      {sub && <p className={`text-[11px] mt-1 ${t.sub}`}>{sub}</p>}
+    </div>
+  );
+}
+
+// DB returns range strings with hyphens; render uses en-dash for typography.
+const RANGE_DISPLAY: Record<string, string> = {
+  'Loss': 'Loss', '0-10%': '0–10%', '10-20%': '10–20%',
+  '20-30%': '20–30%', '30-50%': '30–50%', '50%+': '50%+',
+  'Unknown': 'Unknown',
+};
+
+// Bar segment colours — saturated stops since segments may be narrow.
+// 20–30% is the dark-blue from the spec, 10–20% is teal-green, 50%+ is purple.
+const RANGE_BAR_COLOR: Record<string, string> = {
+  'Loss': '#dc2626', '0-10%': '#ea580c', '10-20%': '#059669',
+  '20-30%': '#1d4ed8', '30-50%': '#0891b2', '50%+': '#7c3aed',
+  'Unknown': '#64748b',
+};
+
+// Pill colours for per-product margin badges. Same ramp as the bar segments.
+const RANGE_PILL: Record<string, string> = {
+  'Loss':    'bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20',
+  '0-10%':   'bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/20',
+  '10-20%':  'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20',
+  '20-30%':  'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20',
+  '30-50%':  'bg-cyan-500/10 text-cyan-700 dark:text-cyan-400 border-cyan-500/20',
+  '50%+':    'bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/20',
+  'Unknown': 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20',
+};
+
+function bracketFor(pct: number | null | undefined): string {
+  if (pct == null || isNaN(pct)) return 'Unknown';
+  if (pct < 0) return 'Loss';
+  if (pct < 10) return '0-10%';
+  if (pct < 20) return '10-20%';
+  if (pct < 30) return '20-30%';
+  if (pct < 50) return '30-50%';
+  return '50%+';
+}
+
+function PurchasesTab({ data, isVisible, fyStart, fyEnd }: TabProps) {
   const { kpi, monthlyTrend, topStockists, topManufacturers, topProducts, profitMarginDist, freeQtyAnalysis, table } = data;
+  const [showAllMfg, setShowAllMfg] = useState(false);
+  const [showAllProducts, setShowAllProducts] = useState(false);
 
-  const cardKeys = ['pharma_total_purchase', 'pharma_total_invoices', 'pharma_unique_stockists', 'pharma_unique_products', 'pharma_total_free_qty', 'pharma_total_tax'];
-  const chartKeys = ['pharma_monthly_purchase_trend', 'pharma_top_stockists', 'pharma_top_manufacturers', 'pharma_top_purchase_products', 'pharma_profit_margin_dist', 'pharma_free_qty_analysis'];
-  const anyCardVisible = cardKeys.some(isVisible);
-  const anyChartVisible = chartKeys.some(isVisible);
-  const tableVisible = isVisible('pharma_purchase_table');
+  // ── Visibility gates ─────────────────────────────────────────────────────
+  // Each former visibility key is mapped to its place in the new layout. Old
+  // keys are kept (no schema break) — `pharma_total_tax` now drives the
+  // "incl. ₹X tax" sub-line under Total Purchase rather than its own card.
+  const showTotalPurchase = isVisible('pharma_total_purchase');
+  const showTaxSub        = isVisible('pharma_total_tax');
+  const showInvoices      = isVisible('pharma_total_invoices');
+  const showStockistsKpi  = isVisible('pharma_unique_stockists');
+  const showProductsKpi   = isVisible('pharma_unique_products');
+  const showFreeQtyKpi    = isVisible('pharma_total_free_qty');
+  const showStockistList  = isVisible('pharma_top_stockists');
+  const showMfgList       = isVisible('pharma_top_manufacturers');
+  const showFreeCallout   = isVisible('pharma_free_qty_analysis');
+  const showProductList   = isVisible('pharma_top_purchase_products');
+  const showMarginDist    = isVisible('pharma_profit_margin_dist');
+  const showTrend         = isVisible('pharma_monthly_purchase_trend');
+  const showTable         = isVisible('pharma_purchase_table');
 
-  const filteredTable = useMemo(() => {
-    if (!search || !table) return table || [];
-    const s = search.toLowerCase();
-    return table.filter((r: any) =>
-      (r.drug_name || '').toLowerCase().includes(s) ||
-      (r.stockiest_name || '').toLowerCase().includes(s) ||
-      (r.invoice_no || '').toLowerCase().includes(s)
-    );
-  }, [table, search]);
+  // ── Derived values ───────────────────────────────────────────────────────
+  const trendData = useMemo(
+    () => (monthlyTrend || []).map((m: any) => ({ ...m, label: getMonthLabel(m.month) })),
+    [monthlyTrend],
+  );
+  // Single-month periods make the bar chart look broken (one bar pair filling
+  // the canvas), so the chart is gated to ≥3 months of data even when the
+  // visibility toggle is on.
+  const renderTrend = showTrend && trendData.length >= 3;
 
-  const trendData = monthlyTrend?.map((m: any) => ({ ...m, label: getMonthLabel(m.month) })) || [];
-  const donutData = profitMarginDist?.filter((d: any) => d.count > 0).map((d: any) => ({ name: d.range, value: d.count })) || [];
-  const totalPages = Math.ceil(filteredTable.length / pageSize);
-  const pageRows = filteredTable.slice(page * pageSize, (page + 1) * pageSize);
+  const totalPurchase = Number(kpi?.totalPurchaseValue) || 0;
+  const totalTax = Number(kpi?.totalTax) || 0;
+  const totalInvoices = Number(kpi?.totalInvoices) || 0;
+  const avgInvoiceValue = totalInvoices > 0 ? totalPurchase / totalInvoices : 0;
+  const totalFreeQty = Number(kpi?.totalFreeQty) || 0;
+  const freeStockistCount = (freeQtyAnalysis || []).length;
+
+  // Sourcing card — concentration risk on the top stockist.
+  const totalSourcing = (topStockists || []).reduce((s: number, x: any) => s + (Number(x.value) || 0), 0);
+  const topStockistShare = totalSourcing > 0 && topStockists?.length
+    ? Math.round((Number(topStockists[0].value) / totalSourcing) * 100)
+    : 0;
+  const topStockistName = topStockists?.[0]?.name || '';
+  const stockistCount = topStockists?.length || 0;
+
+  // Free-qty annotation map for stockist rows.
+  const freeQtyByStockist = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const f of freeQtyAnalysis || []) m.set(f.name, Number(f.freeQty) || 0);
+    return m;
+  }, [freeQtyAnalysis]);
+
+  const maxStockistVal = Number(topStockists?.[0]?.value) || 1;
+  const maxMfgVal = Number(topManufacturers?.[0]?.value) || 1;
+  const visibleMfg = showAllMfg ? (topManufacturers || []) : (topManufacturers || []).slice(0, 5);
+
+  // Free-quantity callout — total rupee value of free units (free_qty × unit
+  // purchase rate of that batch), plus the most prominent free-qty line for
+  // the supporting copy.
+  const tableRows: any[] = table || [];
+  const freeRows = tableRows.filter((r: any) => (Number(r.free_qty) || 0) > 0);
+  const totalFreeValue = freeRows.reduce((sum: number, r: any) => {
+    const fq = Number(r.free_qty) || 0;
+    const bq = Number(r.batch_qty) || 0;
+    const pv = Number(r.purchase_value) || 0;
+    if (bq <= 0 || fq <= 0) return sum;
+    return sum + fq * (pv / bq);
+  }, 0);
+  const topFreeRow = freeRows.slice().sort((a: any, b: any) => (Number(b.free_qty) || 0) - (Number(a.free_qty) || 0))[0];
+  const topFreeStockist = (freeQtyAnalysis || [])[0];
+
+  // Per-product margin avg + free-qty totals for the products card and table.
+  const productMargin = useMemo(() => {
+    const acc = new Map<string, { sum: number; n: number }>();
+    for (const r of tableRows) {
+      const p = Number(r.profit_pct);
+      if (r.profit_pct == null || isNaN(p)) continue;
+      const e = acc.get(r.drug_name) || { sum: 0, n: 0 };
+      e.sum += p; e.n++;
+      acc.set(r.drug_name, e);
+    }
+    const out = new Map<string, number>();
+    for (const [k, v] of acc) if (v.n > 0) out.set(k, v.sum / v.n);
+    return out;
+  }, [tableRows]);
+
+  const productFreeQty = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of tableRows) {
+      const fq = Number(r.free_qty) || 0;
+      if (fq > 0) m.set(r.drug_name, (m.get(r.drug_name) || 0) + fq);
+    }
+    return m;
+  }, [tableRows]);
+
+  // Margin distribution segments — non-empty brackets only, normalised pcts.
+  type MarginSegment = { range: string; count: number; pct: number };
+  const marginSegments = useMemo<MarginSegment[]>(() => {
+    const dist = (profitMarginDist || []).filter((b: any) => (Number(b.count) || 0) > 0);
+    const total = dist.reduce((s: number, b: any) => s + (Number(b.count) || 0), 0);
+    return dist.map((b: any) => ({
+      range: String(b.range),
+      count: Number(b.count) || 0,
+      pct: total > 0 ? (Number(b.count) / total) * 100 : 0,
+    }));
+  }, [profitMarginDist]);
+
+  const totalProductCount = Number(kpi?.uniqueProducts) || marginSegments.reduce((s, b) => s + b.count, 0);
+  const visibleProducts = showAllProducts ? (topProducts || []) : (topProducts || []).slice(0, 8);
+  const productCardVisibleCount = visibleProducts.length;
+
+  // Visible KPI count drives the lg grid template.
+  const visibleKPI = [showTotalPurchase, showInvoices, showStockistsKpi, showProductsKpi, showFreeQtyKpi].filter(Boolean).length;
+  const kpiColCls: Record<number, string> = { 1: 'lg:grid-cols-1', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5' };
+
+  const showSourcingCard = (showStockistList && (topStockists?.length || 0) > 0) || (showMfgList && (topManufacturers?.length || 0) > 0);
+  const showProductsCard = ((showProductList && (topProducts?.length || 0) > 0) || (showMarginDist && marginSegments.length > 0));
 
   return (
     <div>
-      {/* KPI Cards */}
-      {anyCardVisible && (() => {
-        const visibleCount = cardKeys.filter(isVisible).length;
-        const cols: Record<number, string> = { 1: '', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6' };
-        return (
-          <div className={`grid grid-cols-2 md:grid-cols-3 ${cols[visibleCount] || 'lg:grid-cols-6'} gap-4 mb-6`}>
-            {isVisible('pharma_total_purchase') && <MiniKPI label="Total Purchase Value" value={formatINR(kpi.totalPurchaseValue)} icon={DollarSign} color="teal" />}
-            {isVisible('pharma_total_invoices') && <MiniKPI label="Total Invoices" value={formatNumber(kpi.totalInvoices)} icon={FileText} color="blue" />}
-            {isVisible('pharma_unique_stockists') && <MiniKPI label="Unique Stockists" value={formatNumber(kpi.uniqueStockists)} icon={Users} color="purple" />}
-            {isVisible('pharma_unique_products') && <MiniKPI label="Unique Products" value={formatNumber(kpi.uniqueProducts)} icon={Package} color="amber" />}
-            {isVisible('pharma_total_free_qty') && <MiniKPI label="Free Qty Received" value={formatNumber(kpi.totalFreeQty)} icon={Gift} color="emerald" />}
-            {isVisible('pharma_total_tax') && <MiniKPI label="Total Tax" value={formatINR(kpi.totalTax)} icon={BarChart3} color="cyan" />}
+      {/* ── KPI strip (5 tinted cards) ─────────────────────────────────── */}
+      {visibleKPI > 0 && (
+        <div className={`grid grid-cols-2 md:grid-cols-3 ${kpiColCls[visibleKPI] || 'lg:grid-cols-5'} gap-4 mb-6`}>
+          {showTotalPurchase && (
+            <PurchaseKPI
+              tone="green"
+              label="Total purchase"
+              value={formatINR(totalPurchase)}
+              sub={showTaxSub && totalTax > 0 ? `incl. ${formatINR(totalTax)} tax` : undefined}
+            />
+          )}
+          {showInvoices && (
+            <PurchaseKPI
+              tone="blue"
+              label="Invoices"
+              value={formatNumber(totalInvoices)}
+              sub={avgInvoiceValue > 0 ? `avg ${formatINR(avgInvoiceValue)}` : undefined}
+            />
+          )}
+          {showStockistsKpi && (
+            <PurchaseKPI
+              tone="purple"
+              label="Stockists"
+              value={formatNumber(Number(kpi?.uniqueStockists) || 0)}
+              sub="active suppliers"
+            />
+          )}
+          {showProductsKpi && (
+            <PurchaseKPI
+              tone="amber"
+              label="Products"
+              value={formatNumber(Number(kpi?.uniqueProducts) || 0)}
+              sub="unique SKUs"
+            />
+          )}
+          {showFreeQtyKpi && (
+            <PurchaseKPI
+              tone="coral"
+              label="Free quantity"
+              value={formatNumber(totalFreeQty)}
+              sub={freeStockistCount > 0
+                ? `from ${freeStockistCount} stockist${freeStockistCount === 1 ? '' : 's'}`
+                : 'none received'}
+            />
+          )}
+        </div>
+      )}
+
+      {/* ── Monthly trend (only when ≥3 months of data) ─────────────────── */}
+      {renderTrend && (
+        <div className="card mb-6">
+          <h3 className="text-base font-medium text-theme-heading mb-1">Monthly purchase trend</h3>
+          <p className="text-[13px] text-theme-faint mb-4">Purchase value and invoice count over time</p>
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={trendData} barGap={2}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+              <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+              <Tooltip formatter={(v: number) => formatINR(v)} contentStyle={CHART_STYLE} />
+              <Legend />
+              <Bar dataKey="purchaseValue" name="Gross Purchase" fill="#3b82f6" radius={[6, 6, 0, 0]} />
+              <Bar dataKey="netPurchase" name="Net Purchase" fill="#10b981" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* ── "Where the money is going" sourcing card ────────────────────── */}
+      {showSourcingCard && (
+        <div className="card mb-6">
+          <h3 className="text-base font-medium text-theme-heading">Where the money is going</h3>
+          <p className="text-[13px] text-theme-faint mt-0.5 mb-1">By purchase value</p>
+          {topStockistName && topStockistShare >= 50 && (
+            <p className="text-[12px] text-amber-700 dark:text-amber-400 mb-5">
+              {topStockistName} accounts for ~{topStockistShare}% of purchases — high concentration risk
+            </p>
+          )}
+          {topStockistName && topStockistShare > 0 && topStockistShare < 50 && (
+            <p className="text-[12px] text-theme-faint mb-5">
+              {topStockistName} leads at ~{topStockistShare}% of purchases
+            </p>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
+            {/* Stockists column */}
+            {showStockistList && (topStockists?.length || 0) > 0 && (
+              <div>
+                <p className="text-[12px] uppercase tracking-[0.5px] text-theme-muted mb-2.5">
+                  STOCKISTS ({stockistCount})
+                </p>
+                <div className="space-y-3">
+                  {topStockists.map((s: any) => {
+                    const pct = totalSourcing > 0 ? (Number(s.value) / totalSourcing) * 100 : 0;
+                    const barWidth = Math.max(2, (Number(s.value) / maxStockistVal) * 100);
+                    const stockistFreeQty = freeQtyByStockist.get(s.name) || 0;
+                    return (
+                      <div key={s.name}>
+                        <div className="flex items-baseline justify-between gap-3 mb-1">
+                          <span className="text-sm font-medium text-theme-primary truncate">{s.name}</span>
+                          <span className="text-sm text-theme-heading shrink-0 tabular-nums">{formatINR(Number(s.value) || 0)}</span>
+                        </div>
+                        <div className="h-[6px] rounded-full bg-blue-500/10 overflow-hidden">
+                          <div className="h-full bg-blue-500/70 rounded-full" style={{ width: `${barWidth}%` }} />
+                        </div>
+                        <div className="flex justify-between mt-1 text-[11px] text-theme-faint">
+                          <span>{Math.round(pct)}% of total</span>
+                          {stockistFreeQty > 0 && (
+                            <span className="text-emerald-700 dark:text-emerald-400">+{formatNumber(stockistFreeQty)} free qty</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Manufacturers column */}
+            {showMfgList && (topManufacturers?.length || 0) > 0 && (
+              <div>
+                <p className="text-[12px] uppercase tracking-[0.5px] text-theme-muted mb-2.5">
+                  TOP MANUFACTURERS
+                </p>
+                <div className="space-y-3">
+                  {visibleMfg.map((m: any) => {
+                    const barWidth = Math.max(2, (Number(m.value) / maxMfgVal) * 100);
+                    return (
+                      <div key={m.name}>
+                        <div className="flex items-baseline justify-between gap-3 mb-1">
+                          <span className="text-sm font-medium text-theme-primary truncate">{m.name}</span>
+                          <span className="text-sm text-theme-heading shrink-0 tabular-nums">{formatINR(Number(m.value) || 0)}</span>
+                        </div>
+                        <div className="h-[5px] rounded-full bg-purple-500/10 overflow-hidden">
+                          <div className="h-full bg-purple-500/70 rounded-full" style={{ width: `${barWidth}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {(topManufacturers?.length || 0) > 5 && (
+                  <button
+                    onClick={() => setShowAllMfg(v => !v)}
+                    className="mt-3 text-[12px] text-theme-faint hover:text-theme-secondary transition-colors"
+                  >
+                    {showAllMfg
+                      ? 'Show fewer'
+                      : `+ ${topManufacturers.length - 5} more · view all`}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
-        );
-      })()}
+        </div>
+      )}
 
-      {/* Charts */}
-      {anyChartVisible && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
-          {/* Monthly Purchase Trend */}
-          {isVisible('pharma_monthly_purchase_trend') && trendData.length > 0 && (
-            <div className="card lg:col-span-2">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Monthly Purchase Trend</h3>
-              <p className="text-xs text-theme-faint mb-4">Purchase value and invoice count over time</p>
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={trendData} barGap={2}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" vertical={false} />
-                  <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <Tooltip formatter={(v: number) => formatINR(v)} contentStyle={CHART_STYLE} />
-                  <Legend />
-                  <Bar dataKey="purchaseValue" name="Gross Purchase" fill="#3b82f6" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="netPurchase" name="Net Purchase" fill="#10b981" radius={[6, 6, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+      {/* ── Free-quantity callout banner ────────────────────────────────── */}
+      {showFreeCallout && topFreeStockist && (
+        <div
+          className="flex items-center justify-between gap-4 mb-6 px-5 py-4 rounded-xl border bg-emerald-500/10 border-emerald-500/15"
+        >
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-emerald-900 dark:text-emerald-200">
+              Free quantity recovered: {formatINR(Math.round(totalFreeValue))} in value
+            </p>
+            <p className="text-[12px] text-emerald-700/80 dark:text-emerald-400/80 mt-1 truncate">
+              {topFreeStockist.name} provided {formatNumber(Number(topFreeStockist.freeQty) || 0)} free unit
+              {Number(topFreeStockist.freeQty) === 1 ? '' : 's'}
+              {' '}({Number(topFreeStockist.freePct) || 0}% of batch)
+              {topFreeRow?.drug_name ? ` on ${topFreeRow.drug_name}` : ''} — keep negotiating
+            </p>
+          </div>
+          <p className="text-2xl font-medium text-emerald-900 dark:text-emerald-200 shrink-0 tabular-nums">
+            {Number(topFreeStockist.freePct) || 0}%
+          </p>
+        </div>
+      )}
+
+      {/* ── "Top products by purchase value" card ───────────────────────── */}
+      {showProductsCard && (
+        <div className="card mb-6">
+          <div className="flex items-start justify-between gap-3 mb-1">
+            <div>
+              <h3 className="text-base font-medium text-theme-heading">Top products by purchase value</h3>
+              <p className="text-[13px] text-theme-faint mt-0.5">Margin bracket shown alongside each product</p>
+            </div>
+            {showProductList && (topProducts?.length || 0) > 0 && (
+              <p className="text-[12px] text-theme-faint shrink-0">
+                Showing {productCardVisibleCount} of {totalProductCount || (topProducts?.length || 0)}
+              </p>
+            )}
+          </div>
+
+          {/* Margin distribution stacked bar */}
+          {showMarginDist && marginSegments.length > 0 && (
+            <div className="mt-5 mb-5">
+              <p className="text-[11px] text-theme-faint mb-1.5">
+                Margin distribution across {totalProductCount || marginSegments.reduce((s, b) => s + b.count, 0)} products
+              </p>
+              <div className="flex h-[22px] rounded-md overflow-hidden">
+                {marginSegments.map((seg, i) => (
+                  <div
+                    key={seg.range}
+                    title={`${RANGE_DISPLAY[seg.range] || seg.range}: ${seg.count} products (${Math.round(seg.pct)}%)`}
+                    className="flex items-center justify-center text-[11px] font-medium text-white whitespace-nowrap overflow-hidden"
+                    style={{
+                      width: `${seg.pct}%`,
+                      backgroundColor: RANGE_BAR_COLOR[seg.range] || '#64748b',
+                      borderRight: i < marginSegments.length - 1 ? '1px solid rgba(255,255,255,0.6)' : undefined,
+                    }}
+                  >
+                    {seg.pct >= 8 ? `${RANGE_DISPLAY[seg.range] || seg.range} · ${Math.round(seg.pct)}%` : ''}
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2.5 text-[11px] text-theme-faint">
+                {marginSegments.map(seg => (
+                  <span key={seg.range} className="inline-flex items-center gap-1.5">
+                    <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: RANGE_BAR_COLOR[seg.range] || '#64748b' }} />
+                    {RANGE_DISPLAY[seg.range] || seg.range}
+                  </span>
+                ))}
+              </div>
             </div>
           )}
 
-          {/* Top Stockists */}
-          {isVisible('pharma_top_stockists') && topStockists?.length > 0 && (
-            <div className="card">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Top Stockists</h3>
-              <p className="text-xs text-theme-faint mb-4">By purchase value</p>
-              <ResponsiveContainer width="100%" height={Math.max(200, topStockists.length * 32)}>
-                <BarChart data={topStockists} layout="vertical" barGap={2}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" horizontal={false} />
-                  <XAxis type="number" tickFormatter={v => `${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={140} axisLine={false} tickLine={false} />
-                  <Tooltip formatter={(v: number) => formatINR(v)} contentStyle={CHART_STYLE} />
-                  <Bar dataKey="value" fill="#3b82f6" radius={[0, 6, 6, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-
-          {/* Top Manufacturers */}
-          {isVisible('pharma_top_manufacturers') && topManufacturers?.length > 0 && (
-            <div className="card">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Top Manufacturers</h3>
-              <p className="text-xs text-theme-faint mb-4">By purchase value</p>
-              <ResponsiveContainer width="100%" height={Math.max(200, topManufacturers.length * 32)}>
-                <BarChart data={topManufacturers} layout="vertical" barGap={2}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" horizontal={false} />
-                  <XAxis type="number" tickFormatter={v => `${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={140} axisLine={false} tickLine={false} />
-                  <Tooltip formatter={(v: number) => formatINR(v)} contentStyle={CHART_STYLE} />
-                  <Bar dataKey="value" fill="#8b5cf6" radius={[0, 6, 6, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-
-          {/* Top Products */}
-          {isVisible('pharma_top_purchase_products') && topProducts?.length > 0 && (
-            <div className="card">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Top Products by Purchase</h3>
-              <p className="text-xs text-theme-faint mb-4">Highest value purchases</p>
-              <div className="space-y-2 max-h-[350px] overflow-y-auto pr-2">
-                {topProducts.map((p: any, i: number) => {
-                  const maxVal = topProducts[0]?.value || 1;
-                  const width = Math.max(4, (p.value / maxVal) * 100);
+          {/* Product table inside the card */}
+          {showProductList && (topProducts?.length || 0) > 0 && (
+            <div>
+              <div className="grid grid-cols-[1fr_auto_auto] gap-x-4 px-1 pb-2 text-[11px] uppercase tracking-[0.5px] text-theme-muted border-b border-dark-400/20">
+                <span>Product</span>
+                <span className="text-right">Purchase value</span>
+                <span className="text-right">Margin</span>
+              </div>
+              <div className="divide-y divide-dark-400/10">
+                {visibleProducts.map((p: any) => {
+                  const fq = productFreeQty.get(p.name) || 0;
+                  const margin = productMargin.get(p.name);
+                  const bracket = bracketFor(margin);
                   return (
-                    <div key={i}>
-                      <div className="flex justify-between text-xs mb-1">
-                        <span className="text-theme-secondary truncate mr-2">{p.name}</span>
-                        <span className="text-theme-heading font-medium shrink-0">{formatINR(p.value)}</span>
-                      </div>
-                      <div className="h-5 rounded-md overflow-hidden bg-dark-600">
-                        <div className="h-full rounded-md" style={{ width: `${width}%`, backgroundColor: COLORS[i % COLORS.length] }} />
-                      </div>
+                    <div key={p.name} className="grid grid-cols-[1fr_auto_auto] gap-x-4 items-center px-1 py-2.5 text-sm">
+                      <span className="text-theme-primary truncate">
+                        {p.name}
+                        {fq > 0 && (
+                          <span className="ml-1.5 text-[11px] text-emerald-700 dark:text-emerald-400">+{formatNumber(fq)} free</span>
+                        )}
+                      </span>
+                      <span className="text-theme-heading text-right tabular-nums">{formatINR(Number(p.value) || 0)}</span>
+                      <span className="text-right">
+                        {margin == null ? (
+                          <span className="text-theme-faint text-[11px]">—</span>
+                        ) : (
+                          <span className={`inline-block px-2 py-0.5 rounded-md text-[11px] border ${RANGE_PILL[bracket]}`}>
+                            {margin.toFixed(1)}%
+                          </span>
+                        )}
+                      </span>
                     </div>
                   );
                 })}
               </div>
-            </div>
-          )}
-
-          {/* Profit Margin Distribution */}
-          {isVisible('pharma_profit_margin_dist') && donutData.length > 0 && (
-            <div className="card">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Expected Profit Margin Distribution</h3>
-              <p className="text-xs text-theme-faint mb-4">Product count by margin bracket</p>
-              <ResponsiveContainer width="100%" height={250}>
-                <PieChart>
-                  <Pie data={donutData} cx="50%" cy="50%" innerRadius={55} outerRadius={90} dataKey="value" strokeWidth={0}
-                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
-                    {donutData.map((_: any, i: number) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                  </Pie>
-                  <Tooltip contentStyle={CHART_STYLE} />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-
-          {/* Free Qty Analysis */}
-          {isVisible('pharma_free_qty_analysis') && freeQtyAnalysis?.length > 0 && (
-            <div className="card">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Free Quantity Analysis</h3>
-              <p className="text-xs text-theme-faint mb-4">Stockists providing free goods</p>
-              <div className="space-y-2 max-h-[350px] overflow-y-auto pr-2">
-                {freeQtyAnalysis.map((s: any, i: number) => (
-                  <div key={i} className="flex items-center justify-between bg-dark-600/50 rounded-lg px-3 py-2">
-                    <span className="text-xs text-theme-secondary truncate mr-2">{s.name}</span>
-                    <div className="flex items-center gap-3 shrink-0">
-                      <span className="text-xs text-emerald-400 font-medium">{formatNumber(s.freeQty)} free</span>
-                      <span className="text-[10px] text-theme-faint">({s.freePct}% of batch)</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              {(topProducts?.length || 0) > 8 && (
+                <button
+                  onClick={() => setShowAllProducts(v => !v)}
+                  className="mt-3 text-[12px] text-theme-faint hover:text-theme-secondary transition-colors"
+                >
+                  {showAllProducts
+                    ? 'Show fewer'
+                    : `+ ${(topProducts?.length || 0) - 8} more · view all`}
+                </button>
+              )}
             </div>
           )}
         </div>
       )}
 
-      {/* Purchase Table */}
-      {tableVisible && table?.length > 0 && (() => {
-        // Pre-compute Free Qty flag so the row tint hook + render hook can share it.
-        const enriched = table.map((r: any) => ({
+      {/* ── Purchase details table ──────────────────────────────────────── */}
+      {showTable && tableRows.length > 0 && (() => {
+        const enriched = tableRows.map((r: any) => ({
           ...r,
           _hasFreeQty: (Number(r.free_qty) || 0) > 0,
         }));
         const cols: ColumnDef<typeof enriched[number]>[] = [
           { key: 'invoice_no', header: 'Invoice', cellClassName: 'font-mono text-xs', width: 'max-w-[110px]' },
           { key: 'invoice_date', header: 'Date', type: 'date' },
-          { key: 'stockiest_name', header: 'Stockist', cellClassName: 'truncate max-w-[120px]' },
-          { key: 'drug_name', header: 'Drug', cellClassName: 'truncate max-w-[160px]', render: (r) => (
+          { key: 'stockiest_name', header: 'Stockist', cellClassName: 'truncate max-w-[140px]' },
+          { key: 'drug_name', header: 'Drug', cellClassName: 'truncate max-w-[200px]', render: (r) => (
             <>
               {r.drug_name}
               {r._hasFreeQty && (
-                <span title={`Received ${r.free_qty} free unit(s). COGS doesn't credit free qty — gross profit on sales from this batch is slightly understated.`}
-                  className="ml-1.5 inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 align-middle">
-                  <Gift size={9} /> +{r.free_qty}
+                <span title={`Received ${r.free_qty} free unit(s) on this batch.`}
+                  className="ml-1.5 text-[11px] text-emerald-700 dark:text-emerald-400 align-middle">
+                  +{r.free_qty} free
                 </span>
               )}
             </>
           ) },
           { key: 'batch_qty', header: 'Batch Qty', type: 'number', format: 'number' },
-          { key: 'free_qty', header: 'Free', type: 'number', render: r => (
-            <span className="text-emerald-400">{r.free_qty || '-'}</span>
-          ) },
-          { key: 'mrp', header: 'MRP', type: 'number', format: 'currency' },
           { key: 'purchase_value', header: 'Purchase Val', type: 'number', format: 'currency' },
           { key: 'tax_amount', header: 'Tax', type: 'number', format: 'currency' },
-          { key: 'profit_pct', header: 'Margin %', type: 'number', accessor: r => r.profit_pct,
-            render: r => <span className={r.profit_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}>
-              {r.profit_pct != null ? `${r.profit_pct.toFixed(1)}%` : '-'}
-            </span> },
+          { key: 'profit_pct', header: 'Margin', type: 'number', accessor: r => r.profit_pct,
+            render: (r) => {
+              if (r.profit_pct == null) return <span className="text-theme-faint">—</span>;
+              const bracket = bracketFor(Number(r.profit_pct));
+              return (
+                <span className={`inline-block px-2 py-0.5 rounded-md text-[11px] border ${RANGE_PILL[bracket]}`}>
+                  {Number(r.profit_pct).toFixed(1)}%
+                </span>
+              );
+            } },
         ];
         return (
           <div className="card mb-6">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="text-sm font-semibold text-theme-heading">Purchase Details</h3>
-                <p className="text-xs text-theme-faint">{formatNumber(table.length)} records</p>
+                <h3 className="text-base font-medium text-theme-heading">Purchase details</h3>
+                <p className="text-[13px] text-theme-faint">
+                  {formatNumber(tableRows.length)} line item{tableRows.length === 1 ? '' : 's'}
+                  {totalInvoices > 0 ? ` across ${formatNumber(totalInvoices)} invoice${totalInvoices === 1 ? '' : 's'}` : ''}
+                </p>
               </div>
               <button onClick={() => exportFromDb('pharma-purchase', PHARMA_PURCHASE_EXPORT_COLUMNS, 'Purchase_Details', fyStart, fyEnd)}
                 className="btn btn-sm btn-ghost flex items-center gap-1.5 text-xs text-theme-faint hover:text-accent-500" title="Download XLSX">
@@ -424,9 +737,9 @@ function PurchasesTab({ data, isVisible, search, setSearch, page, setPage, pageS
             <DataTable
               columns={cols}
               rows={enriched}
-              pageSize={50}
+              pageSize={10}
               searchPlaceholder="Search drug, stockist, invoice..."
-              rowClassName={r => r._hasFreeQty ? 'bg-emerald-500/5' : ''}
+              rowClassName={r => r._hasFreeQty ? 'bg-emerald-500/10' : ''}
             />
           </div>
         );
