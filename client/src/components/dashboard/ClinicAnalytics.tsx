@@ -1,15 +1,8 @@
-import { useEffect, useState, useMemo } from 'react';
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ResponsiveContainer, PieChart, Pie, Cell,
-} from 'recharts';
+import { useEffect, useState } from 'react';
 import api from '../../api/client';
 import { formatINR, formatNumber } from '../../utils/format';
-import { Users, Stethoscope, FlaskConical, Activity, ArrowRight, Repeat, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Users, Stethoscope, FlaskConical, Activity, Repeat } from 'lucide-react';
 import DataTable, { type ColumnDef } from '../common/DataTable';
-
-const COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#06b6d4'];
-const CHART_STYLE = { backgroundColor: '#14141f', border: '1px solid #2a2a3d', borderRadius: '8px', fontSize: '11px' };
 
 interface ClinicAnalyticsProps {
   isVisible: (key: string) => boolean;
@@ -20,9 +13,6 @@ interface ClinicAnalyticsProps {
 export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: ClinicAnalyticsProps) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(0);
-  const PAGE_SIZE = 50;
 
   useEffect(() => {
     const params: Record<string, string> = {};
@@ -47,14 +37,6 @@ export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: Cli
   }, [startMonth, endMonth]);
 
   const patientTable = data?.patientTable || [];
-  const filteredPatients = useMemo(() => {
-    if (!search) return patientTable;
-    const s = search.toLowerCase();
-    return patientTable.filter((p: any) =>
-      (p.patient_name || '').toLowerCase().includes(s) ||
-      (p.patient_id || '').toLowerCase().includes(s)
-    );
-  }, [patientTable, search]);
 
   if (loading) return (
     <div className="text-center py-6">
@@ -64,50 +46,82 @@ export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: Cli
 
   if (!data?.hasData) return null;
 
-  const { kpi, departmentOverlap, combinations, revenueByDeptCount, patientFlow, crossSellFunnel, doctorCrossSell } = data;
+  const { kpi, departmentOverlap, revenueByDeptCount, patientFlow, doctorCrossSell } = data;
 
-  const anyCardVisible = ['total_unique_patients', 'appointment_patients', 'lab_test_patients', 'other_services_patients', 'direct_lab_walkins', 'direct_other_walkins', 'repeat_visits'].some(isVisible);
-  const anyChartVisible = ['department_overlap', 'patient_dept_donut', 'dept_combination_bars', 'revenue_per_patient', 'patient_flow_sankey', 'cross_sell_funnel', 'doctor_cross_sell_rate', 'doctor_stacked_bar'].some(isVisible);
-  const tableVisible = isVisible('patient_summary_table');
+  const VOLUME_KEYS = ['total_unique_patients', 'appointment_patients', 'lab_test_patients', 'other_services_patients', 'walkins_repeat'];
+  const VALUE_KEYS  = ['total_revenue', 'revenue_per_patient_kpi', 'cross_sell_rate', 'multi_dept_share'];
+  const CHART_KEYS  = ['cross_sell_hero', 'appointment_flow', 'doctor_performance'];
+  const anyVolumeVisible = VOLUME_KEYS.some(isVisible);
+  const anyValueVisible  = VALUE_KEYS.some(isVisible);
+  const anyChartVisible  = CHART_KEYS.some(isVisible);
+  const tableVisible     = isVisible('patient_summary_table');
 
-  if (!anyCardVisible && !anyChartVisible && !tableVisible) return null;
+  if (!anyVolumeVisible && !anyValueVisible && !anyChartVisible && !tableVisible) return null;
 
-  // Prepare chart data
-  const overlapData = [
-    { name: '1 Dept', count: departmentOverlap.in1 },
-    { name: '2 Depts', count: departmentOverlap.in2 },
-    { name: '3 Depts', count: departmentOverlap.in3 },
+  // ── Derived metrics ────────────────────────────────────────────────────
+  // All numbers come from the existing /dashboard/clinic-analytics payload.
+  // We compute on the client so we don't need to extend the API.
+
+  // Total Revenue across all patients in the period (sum of paid amounts).
+  const totalRevenue = patientTable.reduce(
+    (s: number, p: any) => s + (p.total_paid || 0),
+    0,
+  );
+  const revenuePerPatient = kpi.totalUnique > 0 ? totalRevenue / kpi.totalUnique : 0;
+
+  // Cross-Sell Rate is per-appointment-patient: of all patients who booked
+  // an appointment, how many also touched another department. The four
+  // patientFlow partitions (crossToOther / crossToLab / crossToBoth /
+  // apptOnly) are mutually exclusive and sum to the appointment patient
+  // count, so we re-derive that count here rather than reusing
+  // kpi.apptPatients (which is encounter-level, not patient-level).
+  const apptPatientCount =
+    (patientFlow.crossToOther || 0) +
+    (patientFlow.crossToLab || 0) +
+    (patientFlow.crossToBoth || 0) +
+    (patientFlow.apptOnly || 0);
+  const crossSoldCount =
+    (patientFlow.crossToOther || 0) +
+    (patientFlow.crossToLab || 0) +
+    (patientFlow.crossToBoth || 0);
+  const crossSellRate = apptPatientCount > 0 ? (crossSoldCount / apptPatientCount) * 100 : 0;
+
+  const multiDeptCount = (departmentOverlap.in2 || 0) + (departmentOverlap.in3 || 0);
+  const multiDeptShare = kpi.totalUnique > 0 ? (multiDeptCount / kpi.totalUnique) * 100 : 0;
+
+  const totalWalkins = (kpi.directLabWalkins || 0) + (kpi.directOtherWalkins || 0);
+
+  const crossSellRevenue =
+    (patientFlow.crossToOtherRevenue || 0) +
+    (patientFlow.crossToLabRevenue || 0) +
+    (patientFlow.crossToBothRevenue || 0);
+  const apptOnlyRevenue = patientFlow.apptOnlyRevenue || 0;
+  const apptRevenueTotal = crossSellRevenue + apptOnlyRevenue;
+  const crossSellRevPct = apptRevenueTotal > 0
+    ? Math.round((crossSellRevenue / apptRevenueTotal) * 100)
+    : 0;
+
+  // Hero card tile data: avg revenue per dept-count bucket. The API
+  // already gives us deptCount / patients / avgRevenue per bucket.
+  const heroTiles = [1, 2, 3].map(n => {
+    const row = (revenueByDeptCount as any[]).find(r => r.deptCount === n);
+    return {
+      deptCount: n,
+      patients: row?.patients ?? 0,
+      avgRevenue: Math.round(row?.avgRevenue ?? 0),
+    };
+  });
+  const heroBaseAvg = heroTiles[0].avgRevenue || 1;
+  const heroMaxAvg = Math.max(heroBaseAvg, heroTiles[1].avgRevenue, heroTiles[2].avgRevenue, 1);
+  const heroMaxMultiplier = (heroMaxAvg / heroBaseAvg).toFixed(1);
+
+  // Appointment-flow rows for the left column of the merged flow card.
+  const flowRows = [
+    { label: 'Appointment only',    value: patientFlow.apptOnly     || 0, color: 'rgb(100 116 139)' /* slate-500 */ },
+    { label: '+ Lab tests',         value: patientFlow.crossToLab   || 0, color: 'rgb(167 139 250)' /* violet-400 */ },
+    { label: '+ Lab + Other',       value: patientFlow.crossToBoth  || 0, color: 'rgb(124 58 237)'  /* violet-600 */ },
+    { label: '+ Other services',    value: patientFlow.crossToOther || 0, color: 'rgb(59 130 246)'  /* blue-500 */ },
   ];
-
-  const donutData = overlapData.map(d => ({ name: d.name, value: d.count }));
-
-  const comboData = combinations.map((c: any) => ({ name: c.combo, count: c.count }));
-
-  const revCompareData = revenueByDeptCount.map((r: any) => ({
-    name: r.deptCount === 1 ? 'Single Dept' : r.deptCount === 2 ? '2 Depts' : '3 Depts',
-    avgRevenue: Math.round(r.avgRevenue),
-    patients: r.patients,
-  }));
-  const baseAvg = revCompareData[0]?.avgRevenue || 1;
-
-  const funnelData = [
-    { name: 'Total Appointment', value: crossSellFunnel.totalAppointment, pct: 100 },
-    { name: 'Cross → Other', value: crossSellFunnel.crossToOther, pct: crossSellFunnel.totalAppointment > 0 ? (crossSellFunnel.crossToOther / crossSellFunnel.totalAppointment * 100) : 0 },
-    { name: 'Cross → Lab', value: crossSellFunnel.crossToLab, pct: crossSellFunnel.totalAppointment > 0 ? (crossSellFunnel.crossToLab / crossSellFunnel.totalAppointment * 100) : 0 },
-    { name: 'Cross → Both', value: crossSellFunnel.crossToBoth, pct: crossSellFunnel.totalAppointment > 0 ? (crossSellFunnel.crossToBoth / crossSellFunnel.totalAppointment * 100) : 0 },
-    { name: 'Appointment Only', value: crossSellFunnel.apptOnly, pct: crossSellFunnel.totalAppointment > 0 ? (crossSellFunnel.apptOnly / crossSellFunnel.totalAppointment * 100) : 0 },
-  ];
-
-  const doctorStackedData = doctorCrossSell.map((d: any) => ({
-    name: d.doctor.length > 15 ? d.doctor.slice(0, 15) + '...' : d.doctor,
-    fullName: d.doctor,
-    crossSold: d.crossSold,
-    apptOnly: d.apptOnly,
-    rate: d.crossSellRate,
-  }));
-
-  const totalPages = Math.ceil(filteredPatients.length / PAGE_SIZE);
-  const pagePatients = filteredPatients.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   // Server flags `isEmpty: true` when the table is healthy but no rows
   // exist for the selected period+branch (e.g. early in a new month
@@ -116,11 +130,20 @@ export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: Cli
   // discreet hint about the empty state.
   const isEmpty = !!data?.isEmpty;
 
+  // Tile palette for the "Why cross-sell matters" hero card. Tints stay
+  // light, text uses the dark stop of the same ramp so contrast holds in
+  // both themes via the `text-{color}-700` token mapped through CSS vars.
+  const heroTileStyles = [
+    { bg: 'rgb(148 163 184 / 0.12)', border: 'rgb(148 163 184 / 0.30)', barText: 'rgb(71 85 105)',  bar: 'rgb(100 116 139)', text: 'rgb(71 85 105)'  },
+    { bg: 'rgb(59 130 246 / 0.10)',  border: 'rgb(59 130 246 / 0.25)',  barText: 'rgb(29 78 216)',   bar: 'rgb(37 99 235)',  text: 'rgb(29 78 216)'  },
+    { bg: 'rgb(139 92 246 / 0.10)',  border: 'rgb(139 92 246 / 0.25)',  barText: 'rgb(91 33 182)',   bar: 'rgb(124 58 237)', text: 'rgb(91 33 182)'  },
+  ];
+
   return (
     <div className="mt-5">
       <div className="flex items-center gap-2 mb-3">
         <Stethoscope size={16} className="text-teal-400" />
-        <h2 className="text-base font-bold text-theme-heading">Clinic Analytics</h2>
+        <h2 className="text-base font-medium text-theme-heading">Clinic Analytics</h2>
         <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-teal-500/10 text-teal-400">Healthplix</span>
       </div>
 
@@ -138,144 +161,119 @@ export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: Cli
         </div>
       )}
 
-      {/* Section A — Visit Count KPI Cards.
-          Bucket cards (Appointment / Lab Test / Other Services / Direct
-          walk-ins) count ENCOUNTERS (distinct order_numbers), not unique
-          patients — so a patient with two appointments shows as 2. The
-          first card stays unique-patient counted ("Unique Patients") to
-          give ops a true headcount alongside the visit-count cards.
-          The trailing "Repeat Visits" card surfaces returning traffic. */}
-      {anyCardVisible && (() => {
-        const visibleCount = ['total_unique_patients', 'appointment_patients', 'lab_test_patients', 'other_services_patients', 'direct_lab_walkins', 'direct_other_walkins', 'repeat_visits'].filter(isVisible).length;
-        const lgColsClass: Record<number, string> = { 1: '', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6', 7: 'lg:grid-cols-7' };
-        // At md breakpoint use a 4-col layout. The previous 3-col grid
-        // produced an awkward 3+3+1 split when all 7 cards were shown
-        // (last row had a single lonely card). 4-cols gives 4+3, which
-        // packs the cards more evenly.
+      {/* ── Volume row ───────────────────────────────────────────────
+          Operational counts. The "Walk-ins · Repeat" card consolidates
+          three former cards (Direct Lab Walk-ins, Direct Other
+          Walk-ins, Repeat Visits) so the row stays at five tiles. */}
+      {anyVolumeVisible && (() => {
+        const visibleCount = VOLUME_KEYS.filter(isVisible).length;
+        const lgColsClass: Record<number, string> = { 1: '', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5' };
         return (
-        <div className={`grid grid-cols-3 md:grid-cols-4 ${lgColsClass[visibleCount] || 'lg:grid-cols-7'} gap-2.5 mb-4`}>
-          {isVisible('total_unique_patients') && (
-            <MiniKPI label="Unique Patients" value={formatNumber(kpi.totalUnique)} icon={Users} color="teal" />
-          )}
-          {isVisible('appointment_patients') && (
-            <MiniKPI label="Appointment" value={formatNumber(kpi.apptPatients)} icon={Stethoscope} color="blue" />
-          )}
-          {isVisible('lab_test_patients') && (
-            <MiniKPI label="Lab Test" value={formatNumber(kpi.labPatients)} icon={FlaskConical} color="purple" />
-          )}
-          {isVisible('other_services_patients') && (
-            <MiniKPI label="Other Services" value={formatNumber(kpi.otherPatients)} icon={Activity} color="amber" />
-          )}
-          {isVisible('direct_lab_walkins') && (
-            <MiniKPI label="Direct Lab Walk-ins" value={formatNumber(kpi.directLabWalkins)} icon={ArrowRight} color="purple" sub="No appointment" />
-          )}
-          {isVisible('direct_other_walkins') && (
-            <MiniKPI label="Direct Other Walk-ins" value={formatNumber(kpi.directOtherWalkins)} icon={ArrowRight} color="amber" sub="No appointment" />
-          )}
-          {isVisible('repeat_visits') && (
-            <MiniKPI
-              label="Repeat Visits"
-              value={formatNumber(kpi.repeatVisits || 0)}
-              icon={Repeat}
-              color="teal"
-              sub={`${formatNumber(kpi.repeatPatients || 0)} patient${(kpi.repeatPatients || 0) === 1 ? '' : 's'} returned`}
-            />
-          )}
-        </div>
+          <div className="mb-4">
+            <p className="mb-1.5 text-[12px] uppercase tracking-[0.5px] text-theme-faint">Volume</p>
+            <div className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 ${lgColsClass[visibleCount] || 'lg:grid-cols-5'} gap-2.5`}>
+              {isVisible('total_unique_patients') && (
+                <MiniKPI label="Unique Patients" value={formatNumber(kpi.totalUnique)} icon={Users} color="teal" />
+              )}
+              {isVisible('appointment_patients') && (
+                <MiniKPI label="Appointments" value={formatNumber(kpi.apptPatients)} icon={Stethoscope} color="blue" />
+              )}
+              {isVisible('lab_test_patients') && (
+                <MiniKPI label="Lab Tests" value={formatNumber(kpi.labPatients)} icon={FlaskConical} color="purple" />
+              )}
+              {isVisible('other_services_patients') && (
+                <MiniKPI label="Other Services" value={formatNumber(kpi.otherPatients)} icon={Activity} color="amber" />
+              )}
+              {isVisible('walkins_repeat') && (
+                <MiniKPI
+                  label="Walk-ins · Repeat"
+                  value={`${formatNumber(totalWalkins)} / ${formatNumber(kpi.repeatVisits || 0)}`}
+                  icon={Repeat}
+                  color="teal"
+                  sub={`${formatNumber(kpi.repeatPatients || 0)} returned`}
+                />
+              )}
+            </div>
+          </div>
         );
       })()}
 
-      {/* All Charts — single 2-column grid. Hidden in the empty-period
-          state because charts (sankey, donut, overlap bars) have no
-          meaningful zero rendering — the KPI cards above already cover
-          the "everything is 0" message. */}
+      {/* ── Value row ────────────────────────────────────────────────
+          Financial outcomes. Neutral surface (no tint) to visually
+          contrast with the Volume row above. */}
+      {anyValueVisible && (() => {
+        const visibleCount = VALUE_KEYS.filter(isVisible).length;
+        const lgColsClass: Record<number, string> = { 1: '', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4' };
+        return (
+          <div className="mb-4">
+            <p className="mb-1.5 text-[12px] uppercase tracking-[0.5px] text-theme-faint">Value</p>
+            <div className={`grid grid-cols-2 md:grid-cols-2 ${lgColsClass[visibleCount] || 'lg:grid-cols-4'} gap-2.5`}>
+              {isVisible('total_revenue') && (
+                <ValueKPI label="Total Revenue" value={formatINR(totalRevenue)} sub={`${formatNumber(kpi.totalUnique)} patients`} />
+              )}
+              {isVisible('revenue_per_patient_kpi') && (
+                <ValueKPI label="Revenue / Patient" value={formatINR(Math.round(revenuePerPatient))} sub="Average across all patients" />
+              )}
+              {isVisible('cross_sell_rate') && (
+                <ValueKPI
+                  label="Cross-Sell Rate"
+                  value={`${crossSellRate.toFixed(0)}%`}
+                  sub={`${formatNumber(crossSoldCount)} of ${formatNumber(apptPatientCount)} appt patients`}
+                />
+              )}
+              {isVisible('multi_dept_share') && (
+                <ValueKPI
+                  label="Multi-Dept Share"
+                  value={`${multiDeptShare.toFixed(0)}%`}
+                  sub={`${formatNumber(multiDeptCount)} of ${formatNumber(kpi.totalUnique)} patients`}
+                />
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Insight cards ────────────────────────────────────────────
+          Three consolidated cards replace the eight legacy chart cards.
+          Hidden in the empty-period state because tile bars and flow
+          rows have nothing meaningful to render at zero. */}
       {!isEmpty && anyChartVisible && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
-          {isVisible('department_overlap') && (
-            <div className="card p-3">
-              <h3 className="text-xs font-semibold text-theme-heading mb-0.5">Department Overlap</h3>
-              <p className="text-[10px] text-theme-faint mb-2">Patients by departments visited</p>
-              <ResponsiveContainer width="100%" height={190}>
-                <BarChart data={overlapData} barGap={4}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" vertical={false} />
-                  <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <Tooltip contentStyle={CHART_STYLE} />
-                  <Bar dataKey="count" fill="#10b981" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-          {isVisible('patient_dept_donut') && (
-            <div className="card p-3">
-              <h3 className="text-xs font-semibold text-theme-heading mb-0.5">Patient Department Split</h3>
-              <p className="text-[10px] text-theme-faint mb-2">By departments touched</p>
-              <ResponsiveContainer width="100%" height={180}>
-                <PieChart>
-                  <Pie data={donutData} cx="50%" cy="50%" innerRadius={45} outerRadius={75} dataKey="value" strokeWidth={0}
-                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
-                    {donutData.map((_: any, i: number) => <Cell key={i} fill={COLORS[i]} />)}
-                  </Pie>
-                  <Tooltip contentStyle={CHART_STYLE} />
-                </PieChart>
-              </ResponsiveContainer>
-              <p className="text-center text-sm font-bold text-theme-heading -mt-1">{formatNumber(kpi.totalUnique)} patients</p>
-            </div>
-          )}
-          {isVisible('dept_combination_bars') && (
-            <div className="card p-3">
-              <h3 className="text-xs font-semibold text-theme-heading mb-0.5">Department Combinations</h3>
-              <p className="text-[10px] text-theme-faint mb-2">Patient count by combination</p>
-              <ResponsiveContainer width="100%" height={Math.max(160, comboData.length * 32)}>
-                <BarChart data={comboData} layout="vertical" barGap={2}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" horizontal={false} />
-                  <XAxis type="number" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <YAxis type="category" dataKey="name" tick={{ fontSize: 9, fill: '#64748b' }} width={150} axisLine={false} tickLine={false} />
-                  <Tooltip contentStyle={CHART_STYLE} />
-                  <Bar dataKey="count" fill="#3b82f6" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-          {isVisible('revenue_per_patient') && (
-            <div className="card p-3">
-              <h3 className="text-xs font-semibold text-theme-heading mb-0.5">Revenue Per Patient</h3>
-              <p className="text-[10px] text-theme-faint mb-2">Average: single vs multi-department</p>
-              <ResponsiveContainer width="100%" height={190}>
-                <BarChart data={revCompareData} barGap={4}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" vertical={false} />
-                  <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <YAxis tickFormatter={v => formatINR(v)} tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <Tooltip formatter={(v: number) => formatINR(v)} contentStyle={CHART_STYLE} />
-                  <Bar dataKey="avgRevenue" name="Avg Revenue" fill="#8b5cf6" radius={[4, 4, 0, 0]}
-                    label={({ x, y, width, value }: any) => {
-                      const mult = baseAvg > 0 ? (value / baseAvg).toFixed(1) : '1.0';
-                      return mult !== '1.0' ? (
-                        <text x={x + width / 2} y={y - 6} textAnchor="middle" fill="#f59e0b" fontSize={10} fontWeight="bold">{mult}x</text>
-                      ) : <></>;
-                    }}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-          {isVisible('cross_sell_funnel') && (
-            <div className="card p-3">
-              <h3 className="text-xs font-semibold text-theme-heading mb-0.5">Cross-Sell Funnel</h3>
-              <p className="text-[10px] text-theme-faint mb-2">From appointment patients to other services</p>
-              <div className="space-y-1.5">
-                {funnelData.map((item, i) => {
-                  const maxVal = funnelData[0].value || 1;
-                  const width = Math.max(8, (item.value / maxVal) * 100);
-                  const colors = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#64748b'];
+        <div className="grid grid-cols-1 gap-3 mb-4">
+
+          {/* Why cross-sell matters — replaces department_overlap,
+              patient_dept_donut, dept_combination_bars,
+              revenue_per_patient. */}
+          {isVisible('cross_sell_hero') && (
+            <div className="rounded-xl p-5" style={{ background: 'var(--mt-bg-raised)', border: '0.5px solid var(--mt-border)' }}>
+              <h3 className="text-base font-medium text-theme-heading">Why cross-sell matters</h3>
+              <p className="text-[13px] text-theme-secondary mt-0.5">Revenue lift per patient</p>
+              <p className="text-[13px] text-theme-faint mt-1">
+                3-department patients are worth {heroMaxMultiplier}× a single-department patient.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+                {heroTiles.map((tile, i) => {
+                  const style = heroTileStyles[i];
+                  const mult = heroBaseAvg > 0 ? (tile.avgRevenue / heroBaseAvg).toFixed(1) : '1.0';
+                  const widthPct = heroMaxAvg > 0 ? Math.max(8, (tile.avgRevenue / heroMaxAvg) * 100) : 0;
+                  const heading = `${tile.deptCount} ${tile.deptCount === 1 ? 'Department' : 'Departments'} · ${mult}×`;
                   return (
-                    <div key={i}>
-                      <div className="flex justify-between text-[11px] mb-0.5">
-                        <span className="text-theme-secondary">{item.name}</span>
-                        <span className="text-theme-heading font-medium">{formatNumber(item.value)} ({item.pct.toFixed(1)}%)</span>
-                      </div>
-                      <div className="h-5 rounded-md overflow-hidden bg-dark-600">
-                        <div className="h-full rounded-md transition-all" style={{ width: `${width}%`, backgroundColor: colors[i] }} />
+                    <div
+                      key={i}
+                      className="rounded-xl p-4"
+                      style={{ background: style.bg, border: `0.5px solid ${style.border}` }}
+                    >
+                      <p className="text-[12px] font-medium uppercase tracking-[0.5px]" style={{ color: style.text }}>
+                        {heading}
+                      </p>
+                      <p className="text-xl font-medium mt-2" style={{ color: style.text }}>{formatINR(tile.avgRevenue)}</p>
+                      <p className="text-[12px] mt-0.5" style={{ color: style.text, opacity: 0.75 }}>
+                        {formatNumber(tile.patients)} patient{tile.patients === 1 ? '' : 's'}
+                      </p>
+                      <div className="h-1.5 rounded-full mt-3" style={{ background: 'rgb(0 0 0 / 0.05)' }}>
+                        <div
+                          className="h-full rounded-full"
+                          style={{ width: `${widthPct}%`, background: style.bar }}
+                        />
                       </div>
                     </div>
                   );
@@ -283,108 +281,154 @@ export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: Cli
               </div>
             </div>
           )}
-          {isVisible('patient_flow_sankey') && (
-            <div className="card p-3">
-              <h3 className="text-xs font-semibold text-theme-heading mb-0.5">Patient Flow from Appointments</h3>
-              <p className="text-[10px] text-theme-faint mb-2">Where appointment patients go next</p>
-              <div className="flex items-center gap-3">
-                <div className="flex-1 text-center">
-                  <div className="text-xl font-bold text-teal-400">{formatNumber(patientFlow.totalAppointment)}</div>
-                  <div className="text-[10px] text-theme-faint mt-0.5">Appointment Patients</div>
-                  {patientFlow.totalAppointmentRevenue > 0 && (
-                    <div className="text-[10px] text-teal-400/70 mt-0.5">{formatINR(patientFlow.totalAppointmentRevenue)}</div>
-                  )}
-                </div>
-                <ArrowRight className="text-theme-faint shrink-0" size={16} />
-                <div className="flex-1 space-y-1.5">
-                  {[
-                    { label: 'Other Services', value: patientFlow.crossToOther, revenue: patientFlow.crossToOtherRevenue, color: 'text-blue-400' },
-                    { label: 'Lab Tests', value: patientFlow.crossToLab, revenue: patientFlow.crossToLabRevenue, color: 'text-purple-400' },
-                    { label: 'Both Lab + Other', value: patientFlow.crossToBoth, revenue: patientFlow.crossToBothRevenue, color: 'text-amber-400' },
-                    { label: 'Appointment Only', value: patientFlow.apptOnly, revenue: patientFlow.apptOnlyRevenue, color: 'text-theme-faint' },
-                  ].map((f, i) => (
-                    <div key={i} className="flex items-center justify-between bg-dark-600/50 rounded-md px-2.5 py-1.5">
-                      <span className={`text-[10px] font-medium ${f.color}`}>{f.label}</span>
-                      <div className="text-right">
-                        <span className="text-xs font-bold text-theme-heading">{formatNumber(f.value)}</span>
-                        {f.revenue > 0 && <div className="text-[9px] text-theme-muted">{formatINR(f.revenue)}</div>}
+
+          {/* Where appointment patients went next — replaces
+              cross_sell_funnel + patient_flow_sankey. */}
+          {isVisible('appointment_flow') && (
+            <div className="rounded-xl p-5" style={{ background: 'var(--mt-bg-raised)', border: '0.5px solid var(--mt-border)' }}>
+              <h3 className="text-base font-medium text-theme-heading">Where appointment patients went next</h3>
+              <p className="text-[13px] text-theme-secondary mt-0.5">
+                {formatNumber(apptPatientCount)} patient{apptPatientCount === 1 ? '' : 's'} started with an appointment
+              </p>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-4">
+                <div className="space-y-2.5">
+                  {flowRows.map((row, i) => {
+                    const pct = apptPatientCount > 0 ? (row.value / apptPatientCount) * 100 : 0;
+                    const widthPct = Math.max(2, pct);
+                    return (
+                      <div key={i}>
+                        <div className="flex justify-between text-[13px] mb-1">
+                          <span className="text-theme-secondary">{row.label}</span>
+                          <span className="text-theme-heading font-medium">
+                            {formatNumber(row.value)} <span className="text-theme-faint font-normal">({pct.toFixed(0)}%)</span>
+                          </span>
+                        </div>
+                        <div className="h-2 rounded-full" style={{ background: 'rgb(0 0 0 / 0.06)' }}>
+                          <div className="h-full rounded-full" style={{ width: `${widthPct}%`, background: row.color }} />
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
+                </div>
+                <div
+                  className="rounded-xl p-4 self-start"
+                  style={{ background: 'rgb(148 163 184 / 0.10)', border: '0.5px solid var(--mt-border)' }}
+                >
+                  <div>
+                    <p className="text-[12px] uppercase tracking-[0.5px] text-theme-faint">Cross-sell revenue</p>
+                    <p className="text-lg font-medium text-theme-heading mt-0.5">{formatINR(crossSellRevenue)}</p>
+                  </div>
+                  <div className="mt-3">
+                    <p className="text-[12px] uppercase tracking-[0.5px] text-theme-faint">Appointment-only revenue</p>
+                    <p className="text-lg font-medium text-theme-heading mt-0.5">{formatINR(apptOnlyRevenue)}</p>
+                  </div>
+                  <p className="text-[12px] text-theme-faint mt-3">
+                    {crossSellRevPct}% of revenue is from cross-sold patients
+                  </p>
                 </div>
               </div>
             </div>
           )}
-          {isVisible('doctor_cross_sell_rate') && doctorCrossSell.length > 0 && (
-            <div className="card p-3">
-              <h3 className="text-xs font-semibold text-theme-heading mb-0.5">Doctor Cross-Sell Rate</h3>
-              <p className="text-[10px] text-theme-faint mb-2">Cross-sell % per doctor, by patient count</p>
-              <div className="space-y-1.5 max-h-[280px] overflow-y-auto pr-1">
+
+          {/* Doctor performance — replaces doctor_cross_sell_rate +
+              doctor_stacked_bar. */}
+          {isVisible('doctor_performance') && doctorCrossSell.length > 0 && (
+            <div className="rounded-xl p-5" style={{ background: 'var(--mt-bg-raised)', border: '0.5px solid var(--mt-border)' }}>
+              <h3 className="text-base font-medium text-theme-heading">Doctor performance</h3>
+              <p className="text-[13px] text-theme-secondary mt-0.5">Cross-sold vs appointment-only patients</p>
+              <div className="flex items-center gap-3 mt-2 text-[12px] text-theme-faint">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#10b981' }} />
+                  Cross-sold
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#475569' }} />
+                  Appointment only
+                </span>
+              </div>
+              <div className="hidden md:grid grid-cols-[1fr_140px_1.4fr] gap-4 mt-4 px-2 text-[12px] uppercase tracking-[0.5px] text-theme-faint">
+                <span>Doctor</span>
+                <span>Cross-sell rate</span>
+                <span>Patient mix</span>
+              </div>
+              <div className="mt-2 max-h-[420px] overflow-y-auto">
                 {doctorCrossSell.map((d: any, i: number) => {
-                  const rate = d.crossSellRate;
-                  const barColor = rate >= 50 ? '#10b981' : rate >= 25 ? '#f59e0b' : '#ef4444';
+                  const total = d.totalPatients || 0;
+                  const csPct = total > 0 ? (d.crossSold / total) * 100 : 0;
+                  const aoPct = total > 0 ? (d.apptOnly / total) * 100 : 0;
+                  const rate = d.crossSellRate || 0;
+                  const isZero = rate === 0;
+                  const name = d.doctor.length > 28 ? d.doctor.slice(0, 28) + '…' : d.doctor;
                   return (
-                    <div key={i}>
-                      <div className="flex justify-between text-[11px] mb-0.5">
-                        <span className="text-theme-secondary truncate mr-2">{d.doctor}</span>
-                        <span className="text-theme-heading font-medium shrink-0">{rate.toFixed(0)}% ({d.crossSold}/{d.totalPatients})</span>
-                      </div>
-                      <div className="h-4 rounded-md overflow-hidden bg-dark-600">
-                        <div className="h-full rounded-md" style={{ width: `${Math.max(2, rate)}%`, backgroundColor: barColor }} />
+                    <div
+                      key={i}
+                      className="grid grid-cols-1 md:grid-cols-[1fr_140px_1.4fr] gap-4 items-center px-2 py-2.5"
+                      style={{ borderTop: i === 0 ? 'none' : '0.5px solid var(--mt-border)' }}
+                    >
+                      <span className="text-[13px] text-theme-heading truncate" title={d.doctor}>{name}</span>
+                      <span className="text-[13px]">
+                        <span className={`font-medium ${isZero ? 'text-red-400' : 'text-theme-heading'}`}>
+                          {rate.toFixed(0)}%
+                        </span>{' '}
+                        <span className="text-theme-faint">({d.crossSold}/{total})</span>
+                      </span>
+                      <div className="h-2.5 rounded-full overflow-hidden flex" style={{ background: 'rgb(0 0 0 / 0.06)' }}>
+                        <div className="h-full" style={{ width: `${csPct}%`, background: '#10b981' }} />
+                        <div className="h-full" style={{ width: `${aoPct}%`, background: '#475569' }} />
                       </div>
                     </div>
                   );
                 })}
               </div>
-            </div>
-          )}
-          {isVisible('doctor_stacked_bar') && doctorCrossSell.length > 0 && (
-            <div className="card p-3">
-              <h3 className="text-xs font-semibold text-theme-heading mb-0.5">Doctor Cross-Sell Breakdown</h3>
-              <p className="text-[10px] text-theme-faint mb-2">Cross-sold vs appointment-only per doctor</p>
-              <ResponsiveContainer width="100%" height={Math.max(200, doctorStackedData.length * 28)}>
-                <BarChart data={doctorStackedData} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" horizontal={false} />
-                  <XAxis type="number" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <YAxis type="category" dataKey="name" tick={{ fontSize: 9, fill: '#64748b' }} width={100} axisLine={false} tickLine={false} />
-                  <Tooltip contentStyle={CHART_STYLE} />
-                  <Legend wrapperStyle={{ fontSize: '10px' }} />
-                  <Bar dataKey="crossSold" name="Cross-sold" stackId="a" fill="#10b981" radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="apptOnly" name="Appt Only" stackId="a" fill="#475569" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
             </div>
           )}
         </div>
       )}
 
-      {/* Section E — Patient Summary Table */}
+      {/* ── Top patients by revenue ──────────────────────────────────
+          Sorted by paid amount descending; pageSize=5 keeps the card
+          short by default. DataTable's built-in search filters across
+          all 51 rows when the user types. */}
       {tableVisible && patientTable.length > 0 && (() => {
         const cols: ColumnDef<any>[] = [
           { key: 'patient_id', header: 'ID', cellClassName: 'font-mono text-[10px]' },
           { key: 'patient_name', header: 'Name' },
-          { key: 'departments', header: 'Departments', sortable: false, render: p => (
-            <div className="flex gap-1 flex-wrap">
-              {(p.departments || '').split(',').filter((d: string) => d.trim()).map((d: string, j: number) => (
-                <span key={j} className="text-[9px] px-1.5 py-0.5 rounded-full bg-dark-500 text-theme-faint">{d.trim()}</span>
-              ))}
-            </div>
-          ) },
+          { key: 'departments', header: 'Departments', sortable: false, render: (p: any) => {
+            const map: Record<string, string> = {
+              'APPOINTMENT': 'Appt',
+              'LAB TEST': 'Lab',
+              'OTHER SERVICES': 'Other',
+            };
+            const labels = (p.departments || '')
+              .split(',')
+              .map((d: string) => map[d.trim().toUpperCase()] || d.trim())
+              .filter(Boolean);
+            return <span className="text-[12px] text-theme-faint">{labels.join(' · ')}</span>;
+          } },
           { key: 'total_billed', header: 'Billed', type: 'number', format: 'currency' },
           { key: 'total_paid', header: 'Paid', type: 'number', format: 'currency' },
           { key: 'total_discount', header: 'Discount', type: 'number', format: 'currency' },
           { key: 'visits', header: 'Visits', type: 'number', format: 'number' },
         ];
         return (
-          <div className="card p-3 mb-4">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-semibold text-theme-heading">Patient Summary</h3>
-              <p className="text-[10px] text-theme-faint">{formatNumber(patientTable.length)} patients</p>
+          <div
+            className="rounded-xl p-5 mb-4"
+            style={{ background: 'var(--mt-bg-raised)', border: '0.5px solid var(--mt-border)' }}
+          >
+            <div className="flex items-end justify-between mb-3 gap-3">
+              <div>
+                <h3 className="text-base font-medium text-theme-heading">Top patients by revenue</h3>
+                <p className="text-[13px] text-theme-secondary mt-0.5">Search the full list below</p>
+              </div>
+              <p className="text-[13px] text-theme-faint shrink-0">
+                Showing {Math.min(5, patientTable.length)} of {formatNumber(patientTable.length)}
+              </p>
             </div>
             <DataTable
               columns={cols}
               rows={patientTable}
-              pageSize={50}
+              pageSize={5}
+              defaultSort={{ key: 'total_paid', dir: 'desc' }}
               density="compact"
               searchPlaceholder="Search patient, ID, department..."
             />
@@ -395,6 +439,7 @@ export default function ClinicAnalytics({ isVisible, startMonth, endMonth }: Cli
   );
 }
 
+/** Soft pastel-tinted KPI tile used for the Volume row. */
 function MiniKPI({ label, value, icon: Icon, color, sub }: { label: string; value: string; icon: any; color: string; sub?: string }) {
   const colorMap: Record<string, string> = {
     teal: 'bg-teal-500/10 text-teal-400 border-teal-500/20',
@@ -404,11 +449,27 @@ function MiniKPI({ label, value, icon: Icon, color, sub }: { label: string; valu
   };
   const c = colorMap[color] || colorMap.teal;
   return (
-    <div className={`rounded-lg border p-2.5 ${c.split(' ').slice(2).join(' ')} ${c.split(' ')[0]}`}>
+    <div className={`rounded-xl border p-3 ${c.split(' ').slice(2).join(' ')} ${c.split(' ')[0]}`}>
       <Icon size={14} className={c.split(' ')[1]} />
-      <p className="text-base font-bold text-theme-heading mt-1">{value}</p>
-      <p className="text-[10px] text-theme-faint leading-tight">{label}</p>
-      {sub && <p className="text-[9px] text-theme-faint">{sub}</p>}
+      <p className="text-base font-medium text-theme-heading mt-1">{value}</p>
+      <p className="text-[12px] text-theme-faint leading-tight mt-0.5">{label}</p>
+      {sub && <p className="text-[11px] text-theme-faint mt-0.5">{sub}</p>}
+    </div>
+  );
+}
+
+/** Neutral-surface KPI tile used for the Value row. No background tint
+ *  — the row reads as financial outcomes, distinct from the colourful
+ *  Volume row above. */
+function ValueKPI({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div
+      className="rounded-xl p-3"
+      style={{ background: 'var(--mt-bg-raised)', border: '0.5px solid var(--mt-border)' }}
+    >
+      <p className="text-[12px] uppercase tracking-[0.5px] text-theme-faint">{label}</p>
+      <p className="text-lg font-medium text-theme-heading mt-1">{value}</p>
+      {sub && <p className="text-[11px] text-theme-faint mt-0.5">{sub}</p>}
     </div>
   );
 }

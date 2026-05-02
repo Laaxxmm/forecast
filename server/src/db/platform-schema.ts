@@ -259,11 +259,21 @@ export function initializePlatformSchema(db: DbHelper) {
     });
   }
 
-  // Backfill dashboard_chart_visibility for existing clients
+  // Backfill / refresh dashboard_chart_visibility for existing clients.
+  // Upsert on (client_id, scope, section, element_key): if a row already
+  // exists we update label/description/sort_order/source so renames in
+  // the seed flow through to existing tenants on next boot, but we
+  // deliberately preserve `is_visible` so the admin's manual toggles
+  // aren't reset every restart.
   const seedVis = (clientId: number, scope: string, section: string, key: string, label: string, order: number, desc = '', source = '') => {
     db.run(
-      `INSERT OR IGNORE INTO dashboard_chart_visibility (client_id, scope, section, element_key, element_label, sort_order, description, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO dashboard_chart_visibility (client_id, scope, section, element_key, element_label, sort_order, description, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(client_id, scope, section, element_key) DO UPDATE SET
+         element_label = excluded.element_label,
+         sort_order = excluded.sort_order,
+         description = excluded.description,
+         source = excluded.source`,
       [clientId, scope, section, key, label, order, desc, source]
     );
   };
@@ -285,47 +295,61 @@ export function initializePlatformSchema(db: DbHelper) {
       // Common: stream in trend chart
       seedVis(c.id, sid, 'charts', 'stream_in_trend', `${s.name} in Trend Chart`, 0, `Whether ${s.name} appears as a bar in the Monthly Revenue Trend chart`, source);
 
-      // Clinic-specific items (Healthplix data)
+      // Clinic-specific items (Healthplix data).
+      // The /actuals dashboard was redesigned to consolidate 7 KPI cards
+      // and 8 chart cards into a tighter set: 5 Volume + 4 Value KPIs,
+      // 3 consolidated chart cards, and 1 table. We delete the legacy
+      // toggle rows on each boot so the admin dashboard customiser
+      // stays in sync with what the page actually renders. Idempotent:
+      // re-runs are no-ops because the rows are already gone.
       if (isClinic) {
-        // ── KPI Cards ──
-        seedVis(c.id, sid, 'cards', 'total_unique_patients', 'Total Unique Patients', 0,
-          'Count of distinct patients across all departments (Appointment, Lab Test, Other Services)', source);
-        seedVis(c.id, sid, 'cards', 'appointment_patients', 'Appointment Patients', 1,
-          'Number of patients who had at least one appointment visit', source);
-        seedVis(c.id, sid, 'cards', 'lab_test_patients', 'Lab Test Patients', 2,
-          'Number of patients who had at least one lab test', source);
-        seedVis(c.id, sid, 'cards', 'other_services_patients', 'Other Services Patients', 3,
-          'Number of patients who used other services (non-appointment, non-lab)', source);
-        seedVis(c.id, sid, 'cards', 'direct_lab_walkins', 'Direct Lab Walk-ins', 4,
-          'Patients who had lab tests but never an appointment — potential referral or walk-in tracking', source);
-        seedVis(c.id, sid, 'cards', 'direct_other_walkins', 'Direct Other Services Walk-ins', 5,
-          'Patients who had other services but never an appointment — helps track non-doctor revenue sources', source);
+        const DEPRECATED_CLINIC_KEYS = [
+          'direct_lab_walkins', 'direct_other_walkins', 'repeat_visits',
+          'department_overlap', 'patient_dept_donut', 'dept_combination_bars',
+          'revenue_per_patient', 'cross_sell_funnel', 'patient_flow_sankey',
+          'doctor_cross_sell_rate', 'doctor_stacked_bar',
+        ];
+        for (const k of DEPRECATED_CLINIC_KEYS) {
+          db.run(
+            `DELETE FROM dashboard_chart_visibility
+              WHERE client_id = ? AND scope = ? AND element_key = ?`,
+            [c.id, sid, k]
+          );
+        }
 
-        // ── Charts: Section A — Patient Counts ──
-        seedVis(c.id, sid, 'charts', 'department_overlap', 'Department Overlap', 1,
-          'Grouped bar chart showing how many patients appear in exactly 1, 2, or all 3 departments with combination labels', source);
+        // ── KPI Cards: Volume row ──
+        seedVis(c.id, sid, 'cards', 'total_unique_patients', 'Unique Patients', 0,
+          'Distinct patients across all departments', source);
+        seedVis(c.id, sid, 'cards', 'appointment_patients', 'Appointments', 1,
+          'Encounter count for appointment visits', source);
+        seedVis(c.id, sid, 'cards', 'lab_test_patients', 'Lab Tests', 2,
+          'Encounter count for lab tests', source);
+        seedVis(c.id, sid, 'cards', 'other_services_patients', 'Other Services', 3,
+          'Encounter count for other services', source);
+        seedVis(c.id, sid, 'cards', 'walkins_repeat', 'Walk-ins · Repeat', 4,
+          'Combined direct walk-ins (lab + other) alongside repeat-visit count', source);
 
-        // ── Charts: Section B — Multi-Revenue Stream ──
-        seedVis(c.id, sid, 'charts', 'patient_dept_donut', 'Patient Department Split', 2,
-          'Donut chart splitting patients by number of departments touched (1 vs 2 vs 3) with total in center', source);
-        seedVis(c.id, sid, 'charts', 'dept_combination_bars', 'Department Combinations', 3,
-          'Horizontal bar chart showing all department combination breakdowns (e.g. "Appointment Only", "Appointment + Lab Test") with patient counts', source);
-        seedVis(c.id, sid, 'charts', 'revenue_per_patient', 'Revenue Per Patient Comparison', 4,
-          'Average revenue per patient: single-department vs multi-department vs all-three, with multiplier annotations (e.g. "3x")', source);
-        seedVis(c.id, sid, 'charts', 'patient_flow_sankey', 'Patient Flow Analysis', 5,
-          'Flow visualization showing patient journey from Appointment to Lab Test, Other Services, Both, or None — reveals cross-sell patterns', source);
+        // ── KPI Cards: Value row ──
+        seedVis(c.id, sid, 'cards', 'total_revenue', 'Total Revenue', 5,
+          'Sum of paid amount across all patients in the period', source);
+        seedVis(c.id, sid, 'cards', 'revenue_per_patient_kpi', 'Revenue per Patient', 6,
+          'Total revenue divided by unique patients', source);
+        seedVis(c.id, sid, 'cards', 'cross_sell_rate', 'Cross-Sell Rate', 7,
+          'Appointment patients with cross-sell divided by all appointment patients', source);
+        seedVis(c.id, sid, 'cards', 'multi_dept_share', 'Multi-Dept Share', 8,
+          'Share of patients who visited 2 or more departments', source);
 
-        // ── Charts: Section C — Cross-Sell Analysis ──
-        seedVis(c.id, sid, 'charts', 'cross_sell_funnel', 'Cross-Sell Funnel', 6,
-          'Funnel from total appointment patients through cross-sell stages: to Other Services, Lab Tests, Both, or Appointment Only', source);
-        seedVis(c.id, sid, 'charts', 'doctor_cross_sell_rate', 'Doctor Cross-Sell Rate', 7,
-          'Per-doctor cross-sell percentage bar chart, sorted descending, color-coded green (high) to red (low)', source);
-        seedVis(c.id, sid, 'charts', 'doctor_stacked_bar', 'Doctor Cross-Sell Breakdown', 8,
-          'Stacked bar per doctor: cross-sold patients (green) vs appointment-only patients (gray) with percentage labels', source);
+        // ── Charts (consolidated) ──
+        seedVis(c.id, sid, 'charts', 'cross_sell_hero', 'Why cross-sell matters', 1,
+          'Hero card showing average revenue per patient by departments visited (1 / 2 / 3 Depts) with multipliers', source);
+        seedVis(c.id, sid, 'charts', 'appointment_flow', 'Where appointment patients went next', 2,
+          'Cross-sell breakdown for appointment patients (Appt only / + Lab / + Lab + Other / + Other) with revenue split', source);
+        seedVis(c.id, sid, 'charts', 'doctor_performance', 'Doctor performance', 3,
+          'Per-doctor cross-sell rate plus patient mix (cross-sold vs appointment-only) on a single row', source);
 
         // ── Tables ──
-        seedVis(c.id, sid, 'tables', 'patient_summary_table', 'Patient Summary Table', 0,
-          'Sortable, searchable table: Patient ID, Name, Departments Used, Total Billed, Total Paid, Discount, Number of Visits. Paginated at 50 rows.', source);
+        seedVis(c.id, sid, 'tables', 'patient_summary_table', 'Top patients by revenue', 0,
+          'Top 5 patients sorted by paid amount with full search across all patients', source);
       }
 
       // Pharmacy-specific items (OneGlance data)
