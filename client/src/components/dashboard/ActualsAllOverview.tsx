@@ -430,11 +430,18 @@ export default function ActualsAllOverview({ data, historical, clinic, pharma, i
     const year = Number(yStr), monthNum = Number(mStr);
     const daysInMonth = Number(insights.daysInMonth);
     const daysElapsed = Number(insights.daysElapsed) || 0;
+    const daysRemaining = Number(insights.daysRemaining) || 0;
     if (!year || !monthNum || !daysInMonth) return null;
-    const series: { day: number; date: string; revenue: number; isFuture: boolean }[] = [];
+    const series: { day: number; date: string; revenue: number; isFuture: boolean; isToday: boolean }[] = [];
     for (let d = 1; d <= daysInMonth; d++) {
       const date = `${year}-${String(monthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      series.push({ day: d, date, revenue: byDate.get(date) || 0, isFuture: d > daysElapsed });
+      const isFuture = d > daysElapsed;
+      // Today = the live current day. For closed past months
+      // (daysRemaining === 0) we never flag a day as today, so the
+      // hatched pattern reserved for partial data doesn't bleed onto
+      // historical periods accessed via the period selector.
+      const isToday = !isFuture && d === daysElapsed && daysRemaining > 0;
+      series.push({ day: d, date, revenue: byDate.get(date) || 0, isFuture, isToday });
     }
     const target = Number(insights.combined?.targetRevenue) || 0;
     const projected = Number(insights.combined?.projectedRevenue) || 0;
@@ -1122,7 +1129,7 @@ function RevenueMixDonut({ clinic, pharma, total }: { clinic: number; pharma: nu
 // ─── Daily revenue this month ──────────────────────────────────────────────
 
 function DailyRevenueChart({ series, dailyTarget, daysInMonth, daysElapsed, monthLabel, projected }: {
-  series: { day: number; date: string; revenue: number; isFuture: boolean }[];
+  series: { day: number; date: string; revenue: number; isFuture: boolean; isToday: boolean }[];
   dailyTarget: number;
   daysInMonth: number;
   daysElapsed: number;
@@ -1133,6 +1140,7 @@ function DailyRevenueChart({ series, dailyTarget, daysInMonth, daysElapsed, mont
     day: String(d.day),
     revenue: d.revenue,
     isFuture: d.isFuture,
+    isToday: d.isToday,
   }));
   // Future days render as low-opacity grey ghosts. We give them a small
   // placeholder height (10% of the largest actual bar) so the chart
@@ -1145,6 +1153,7 @@ function DailyRevenueChart({ series, dailyTarget, daysInMonth, daysElapsed, mont
     ...d,
     revenue: d.isFuture ? ghostHeight : d.revenue,
   }));
+  const hasToday = renderData.some(d => d.isToday);
   return (
     <div
       className="rounded-xl"
@@ -1158,11 +1167,26 @@ function DailyRevenueChart({ series, dailyTarget, daysInMonth, daysElapsed, mont
         Daily revenue · this month
       </h3>
       <p className="text-[12px] mt-0.5" style={{ color: 'var(--mt-text-faint)' }}>
-        Day {daysElapsed} of {daysInMonth}{projected > 0 ? ` · projected ${formatINR(Math.round(projected))}` : ''}
+        Day {daysElapsed} of {daysInMonth}{hasToday ? ' · in progress' : ''}{projected > 0 ? ` · projected ${formatINR(Math.round(projected))}` : ''}
       </p>
       <div className="mt-3" style={{ position: 'relative' }}>
         <ResponsiveContainer width="100%" height={110}>
           <BarChart data={renderData} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+            {/* In-progress hatched pattern. Defined inside the SVG via
+                Recharts' direct child <defs> so the url(#…) reference
+                from the Cell fill resolves within the same document. */}
+            <defs>
+              <pattern
+                id="aao-ip-stripe-green"
+                patternUnits="userSpaceOnUse"
+                width="8"
+                height="8"
+                patternTransform="rotate(45)"
+              >
+                <rect width="8" height="8" fill="#1D9E75" fillOpacity="0.35" />
+                <rect width="4" height="8" fill="#1D9E75" />
+              </pattern>
+            </defs>
             <XAxis dataKey="day" hide />
             <YAxis hide domain={[0, 'dataMax']} />
             <Tooltip
@@ -1174,11 +1198,14 @@ function DailyRevenueChart({ series, dailyTarget, daysInMonth, daysElapsed, mont
                 boxShadow: 'var(--mt-shadow-pop)',
               }}
               labelFormatter={(label) => `Day ${label}`}
-              formatter={(_v: number, _name, props: any) =>
-                props.payload?.isFuture
-                  ? ['Future day', 'Day']
-                  : [formatINR(props.payload.revenue || 0), 'Revenue']
-              }
+              formatter={(_v: number, _name, props: any) => {
+                const p = props.payload;
+                if (p?.isFuture) return ['Future day', 'Day'];
+                if (p?.isToday) {
+                  return [`${formatINR(p.revenue || 0)} · day in progress, final after 11 PM sync`, 'Revenue'];
+                }
+                return [formatINR(p?.revenue || 0), 'Revenue'];
+              }}
             />
             {dailyTarget > 0 && (
               <ReferenceLine
@@ -1199,7 +1226,7 @@ function DailyRevenueChart({ series, dailyTarget, daysInMonth, daysElapsed, mont
               {renderData.map((d, i) => (
                 <Cell
                   key={i}
-                  fill={d.isFuture ? '#B4B2A9' : '#1D9E75'}
+                  fill={d.isFuture ? '#B4B2A9' : d.isToday ? 'url(#aao-ip-stripe-green)' : '#1D9E75'}
                   fillOpacity={d.isFuture ? 0.25 : 1}
                 />
               ))}

@@ -181,3 +181,84 @@ The new dropdown on the homepage already calls the same `selectStream`
 helper (which writes to the same localStorage keys), so existing sidebar
 pills and the new dropdown stay in sync until the sidebar version is
 removed.
+
+---
+
+## 5. `last_synced_at` field for the SyncIndicator
+
+**Severity:** non-blocking; the indicator works today via a client-side
+fallback that derives the synced-through date from per-stream daily data.
+
+### What ships today
+[`client/src/components/common/SyncIndicator.tsx`](client/src/components/common/SyncIndicator.tsx)
+shows "Synced through [date]" in the page header on the homepage and the
+Operational Insights page. When no explicit `syncedThrough` date is
+passed, the component scans the operational-insights `streams[].daily[]`
+arrays and picks the most recent date with non-zero data that is
+strictly before today.
+
+This works but has two caveats:
+
+1. The "synced through" date is inferred from data presence, not from a
+   sync timestamp. A day with genuinely zero revenue would be skipped,
+   and the indicator would point to the day before.
+2. The "stale" threshold (more than one day before today) is a heuristic
+   — the actual sync schedule is "each night around 11 PM", and we don't
+   have visibility into when the last sync attempt actually ran.
+
+### Suggested server change
+Add a `last_synced_at` ISO timestamp to the `/dashboard/operational-
+insights` response (and ideally `/dashboard/overview` too, so the
+homepage doesn't have to depend on the insights call):
+
+```jsonc
+{
+  "last_synced_at": "2026-05-02T23:14:08+05:30",
+  "...": "..."
+}
+```
+
+The value should be the timestamp of the most recent successful sync
+that wrote rows for the current month. Either drawn from a per-tenant
+sync-log table or computed from `MAX(updated_at)` on the relevant
+actuals tables.
+
+### How to wire it on the client
+Once the field is present:
+
+1. In [`client/src/pages/DashboardPage.tsx`](client/src/pages/DashboardPage.tsx)
+   and [`client/src/pages/OperationalInsightsPage.tsx`](client/src/pages/OperationalInsightsPage.tsx),
+   pass `<SyncIndicator syncedThrough={new Date(data.last_synced_at)} />`
+   instead of relying on the streams-based fallback.
+2. Drop the `computeSyncedThrough` helper from
+   [`client/src/components/common/SyncIndicator.tsx`](client/src/components/common/SyncIndicator.tsx)
+   since no caller will need it anymore.
+3. Tighten the "stale" threshold to use the timestamp's wall-clock age
+   (e.g., > 26 hours since last sync = stale) instead of a calendar-day
+   approximation.
+
+---
+
+## 6. Partial-day footnote on the Daily Insight PDF
+
+**Severity:** soft; the PDF generator was extended in another stream
+([`client/src/components/dashboard/InsightDownloadPanel.tsx`](client/src/components/dashboard/InsightDownloadPanel.tsx))
+and isn't owned by this branch.
+
+### The ask
+Per the dashboard sync-indicator brief: when the Daily Insight PDF is
+generated mid-day (i.e., before the night's 11 PM sync), the report
+should include a footnote under the comparison tables:
+
+> \*Today's values are partial — final updates at 11 PM.
+
+When generated after the night sync (today is fully synced), no
+footnote is needed.
+
+### Where to add it
+[`client/src/components/dashboard/InsightDownloadPanel.tsx`](client/src/components/dashboard/InsightDownloadPanel.tsx)
+owns the PDF generation flow. The condition for "today is in progress"
+mirrors the SyncIndicator's logic: today's date isn't covered by the
+synced-through timestamp. If `last_synced_at` (above) lands first, this
+becomes a one-line check; otherwise the PDF generator can run the same
+streams-based fallback used by `SyncIndicator`.

@@ -4,6 +4,7 @@ import ClinicAnalytics from '../components/dashboard/ClinicAnalytics';
 import PharmacyAnalytics from '../components/dashboard/PharmacyAnalytics';
 import ActualsAllOverview from '../components/dashboard/ActualsAllOverview';
 import { buildPeriodOptions } from '../components/dashboard/dashboardUtils';
+import SyncIndicator from '../components/common/SyncIndicator';
 import { Activity, ChevronLeft } from 'lucide-react';
 
 export default function DashboardPage() {
@@ -333,6 +334,16 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Sync indicator only shown for the live current month — past
+              months are fully closed and the "synced through" framing
+              would be confusing. Operational-insights handler returns
+              daysRemaining > 0 only when the data context is live.
+              Note: the stream dropdown was retired from this header in
+              the upstream pass — stream switching now lives in the
+              "Back to all" breadcrumb at the top of sub-views. */}
+          {insightsData?.daysRemaining > 0 && (
+            <SyncIndicator streams={insightsData.streams || []} />
+          )}
           {periodOptions.length > 0 && (
             <select
               data-tour="period-filter"

@@ -33,6 +33,7 @@ import api from '../api/client';
 import { formatINR, formatNumber, formatCompact } from '../utils/format';
 import { Activity, Download } from 'lucide-react';
 import InsightDownloadPanel from '../components/dashboard/InsightDownloadPanel';
+import SyncIndicator from '../components/common/SyncIndicator';
 
 // ─── Types (server contract) ─────────────────────────────────────────────────
 
@@ -270,7 +271,10 @@ export default function OperationalInsightsPage() {
   const totalRevenueCards = allRevenueCards.length;
 
   // ── Combined daily progression (clinic + pharmacy summed per day) ──────
-  type DayPoint = { day: number; date: string; revenue: number; isFuture: boolean };
+  // `isToday` flags the live current day so the chart can render its bar
+  // with the in-progress hatched pattern. Only fires for live months —
+  // past months have daysRemaining === 0 and no day is in progress.
+  type DayPoint = { day: number; date: string; revenue: number; isFuture: boolean; isToday: boolean };
   const dailyMap = new Map<string, number>();
   for (const s of streams) {
     for (const d of s.daily) {
@@ -282,11 +286,15 @@ export default function OperationalInsightsPage() {
   for (let d = 1; d <= daysInMonth; d++) {
     const date = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     const isFuture = d > daysElapsed;
+    // Today = the most-recent past-or-current day on a live month. For
+    // closed periods (daysRemaining === 0) we never flag a day as today.
+    const isToday = !isFuture && d === daysElapsed && daysRemaining > 0;
     dailyProgression.push({
       day: d,
       date,
       revenue: dailyMap.get(date) || 0,
       isFuture,
+      isToday,
     });
   }
 
@@ -302,10 +310,15 @@ export default function OperationalInsightsPage() {
           <p className="text-[13px] mt-0.5" style={{ color: 'var(--mt-text-muted)' }}>
             {isClosedPeriod
               ? `${data.monthLabel} · Closed period · Final values`
-              : `${data.monthLabel} · Day ${daysElapsed} of ${daysInMonth} · ${daysRemaining} days remaining · ${Math.round(elapsedPct)}% of month elapsed`}
+              : `${data.monthLabel} · Day ${daysElapsed} of ${daysInMonth}${daysRemaining > 0 ? ' · in progress' : ''} · ${daysRemaining} days remaining · ${Math.round(elapsedPct)}% of month elapsed`}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Sync indicator — only meaningful for live month data; for
+              closed periods every day is finalised. */}
+          {daysRemaining > 0 && (
+            <SyncIndicator streams={data.streams} />
+          )}
           <select
             value={selectedMonth}
             onChange={(e) => setSelectedMonth(e.target.value)}
@@ -390,6 +403,7 @@ export default function OperationalInsightsPage() {
           earnedPct={earnedPct}
           elapsedPct={elapsedPct}
           projectedPct={projectedAttainmentPct}
+          dayInProgress={daysRemaining > 0}
         />
       )}
 
@@ -464,13 +478,17 @@ function SummaryKpi({ tone, label, value, sub }: {
 
 // ─── Combined Revenue Progress ─────────────────────────────────────────────
 
-function ProgressCard({ earned, target, projected, earnedPct, elapsedPct, projectedPct: projPct }: {
+function ProgressCard({ earned, target, projected, earnedPct, elapsedPct, projectedPct: projPct, dayInProgress }: {
   earned: number;
   target: number;
   projected: number;
   earnedPct: number;
   elapsedPct: number;
   projectedPct: number;
+  /** When today is the live current day — adds an "in progress" tag to
+   *  the Today marker label so the user knows that position is the
+   *  partial day-so-far, not a finalised mid-month checkpoint. */
+  dayInProgress: boolean;
 }) {
   const earnedClamp = Math.min(100, Math.max(0, earnedPct));
   const elapsedClamp = Math.min(100, Math.max(0, elapsedPct));
@@ -519,7 +537,7 @@ function ProgressCard({ earned, target, projected, earnedPct, elapsedPct, projec
           return (
             <>
               <div style={labelStyle(elapsedClamp, 'var(--mt-text-secondary)', 400, 'top')}>
-                Today ({elapsedClamp.toFixed(0)}%)
+                Today ({elapsedClamp.toFixed(0)}%){dayInProgress ? ' · in progress' : ''}
               </div>
               {/* The bar itself */}
               <div className="relative h-[20px] rounded-full overflow-hidden" style={{ background: 'var(--mt-bg-muted)' }}>
@@ -1046,7 +1064,7 @@ function RecoveryLevers({ streams, clinicData, pharmaData, gap, daysRemaining, h
 // ─── Daily progression chart ───────────────────────────────────────────────
 
 function DailyProgressionChart({ dailyProgression, dailyNeed, monthLabel, year, month, daysInMonth }: {
-  dailyProgression: { day: number; date: string; revenue: number; isFuture: boolean }[];
+  dailyProgression: { day: number; date: string; revenue: number; isFuture: boolean; isToday: boolean }[];
   dailyNeed: number;
   monthLabel: string;
   year: number;
@@ -1057,17 +1075,23 @@ function DailyProgressionChart({ dailyProgression, dailyNeed, monthLabel, year, 
   // bars (consistent placeholder height) while completed days render as
   // their actual revenue. Recharts can't conditionally style cells based
   // on data alone, so the actual coloring is done via <Cell> below.
+  // Today (the live current day) carries `isToday` so the bar can render
+  // with the in-progress hatched pattern, plus an asterisk on the X-axis
+  // tick to flag it.
   const chartData = dailyProgression.map(d => ({
     day: String(d.day),
     revenue: d.revenue,
     isFuture: d.isFuture,
+    isToday: d.isToday,
   }));
+  const todayDayLabel = chartData.find(d => d.isToday)?.day;
 
-  // Show every 5th tick + day 1 + last day, to avoid label crowding on
-  // narrow viewports.
+  // Show every 5th tick + day 1 + last day + today, to avoid label
+  // crowding on narrow viewports while still flagging today.
   const tickInterval = (idx: number) => {
     if (idx === 0) return true;
     if (idx === daysInMonth - 1) return true;
+    if (chartData[idx]?.isToday) return true;
     return idx % 5 === 0;
   };
 
@@ -1091,12 +1115,42 @@ function DailyProgressionChart({ dailyProgression, dailyNeed, monthLabel, year, 
       <div className="mt-4">
         <ResponsiveContainer width="100%" height={200}>
           <BarChart data={chartData} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+            {/* In-progress hatched pattern. Defined inside the SVG via
+                Recharts' direct child <defs> so the url(#…) reference
+                from the Cell fill resolves within the same document. */}
+            <defs>
+              <pattern
+                id="ip-stripe-green"
+                patternUnits="userSpaceOnUse"
+                width="8"
+                height="8"
+                patternTransform="rotate(45)"
+              >
+                <rect width="8" height="8" fill="#1D9E75" fillOpacity="0.35" />
+                <rect width="4" height="8" fill="#1D9E75" />
+              </pattern>
+            </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--mt-border)" vertical={false} />
             <XAxis
               dataKey="day"
-              tick={{ fontSize: 10, fill: 'var(--mt-text-faint)' }}
+              tick={(props: any) => {
+                const { x, y, payload, index } = props;
+                if (!tickInterval(index)) return <text x={x} y={y} />;
+                const isToday = chartData[index]?.isToday;
+                return (
+                  <text
+                    x={x}
+                    y={y + 12}
+                    textAnchor="middle"
+                    fontSize={10}
+                    fill={isToday ? 'var(--mt-text-secondary)' : 'var(--mt-text-faint)'}
+                    fontWeight={isToday ? 500 : 400}
+                  >
+                    {payload.value}{isToday ? '*' : ''}
+                  </text>
+                );
+              }}
               interval={0}
-              tickFormatter={(_, idx) => tickInterval(idx) ? String(_) : ''}
               axisLine={false}
               tickLine={false}
             />
@@ -1116,11 +1170,14 @@ function DailyProgressionChart({ dailyProgression, dailyNeed, monthLabel, year, 
                 boxShadow: 'var(--mt-shadow-pop)',
               }}
               labelFormatter={(label) => `${monthLabel.split(' ')[0]} ${label}`}
-              formatter={(value: number, _name, props: any) =>
-                props.payload?.isFuture
-                  ? ['Future day', 'Day']
-                  : [formatINR(value), 'Revenue']
-              }
+              formatter={(value: number, _name, props: any) => {
+                const p = props.payload;
+                if (p?.isFuture) return ['Future day', 'Day'];
+                if (p?.isToday) {
+                  return [`${formatINR(value)} · day in progress, final after 11 PM sync`, 'Revenue'];
+                }
+                return [formatINR(value), 'Revenue'];
+              }}
             />
             {dailyNeed > 0 && (
               <ReferenceLine
@@ -1141,7 +1198,7 @@ function DailyProgressionChart({ dailyProgression, dailyNeed, monthLabel, year, 
               {chartData.map((d, i) => (
                 <Cell
                   key={i}
-                  fill={d.isFuture ? '#B4B2A9' : '#1D9E75'}
+                  fill={d.isFuture ? '#B4B2A9' : d.isToday ? 'url(#ip-stripe-green)' : '#1D9E75'}
                   fillOpacity={d.isFuture ? 0.3 : 1}
                 />
               ))}
@@ -1152,8 +1209,14 @@ function DailyProgressionChart({ dailyProgression, dailyNeed, monthLabel, year, 
       <div className="flex flex-wrap gap-x-5 gap-y-1 mt-3 text-[11px]" style={{ color: 'var(--mt-text-faint)' }}>
         <span className="inline-flex items-center gap-1.5">
           <span className="inline-block w-3 h-2 rounded-sm" style={{ background: '#1D9E75' }} />
-          Actual
+          Actual (completed days)
         </span>
+        {todayDayLabel != null && (
+          <span className="inline-flex items-center gap-1.5">
+            <HatchedSwatch color="#1D9E75" />
+            In progress (today, partial)
+          </span>
+        )}
         <span className="inline-flex items-center gap-1.5">
           <span className="inline-block w-3 h-2 rounded-sm" style={{ background: '#B4B2A9', opacity: 0.45 }} />
           Future days
@@ -1170,6 +1233,24 @@ function DailyProgressionChart({ dailyProgression, dailyNeed, monthLabel, year, 
           future use if we cross-fade between months. */}
       <span className="hidden">{year}-{month}</span>
     </div>
+  );
+}
+
+// Tiny SVG swatch that mirrors the in-progress hatched pattern used in
+// the chart. Inline so legends elsewhere can paste the same swatch
+// without mounting an extra Recharts SVG.
+function HatchedSwatch({ color }: { color: string }) {
+  const id = `hs-${color.replace('#', '')}`;
+  return (
+    <svg width="12" height="8" aria-hidden="true">
+      <defs>
+        <pattern id={id} patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+          <rect width="6" height="6" fill={color} fillOpacity="0.35" />
+          <rect width="3" height="6" fill={color} />
+        </pattern>
+      </defs>
+      <rect width="12" height="8" rx="1" fill={`url(#${id})`} />
+    </svg>
   );
 }
 
