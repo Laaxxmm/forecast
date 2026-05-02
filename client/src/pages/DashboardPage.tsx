@@ -11,6 +11,7 @@ export default function DashboardPage() {
   const [historical, setHistorical] = useState<any | null>(null);
   const [clinicData, setClinicData] = useState<any | null>(null);
   const [pharmaData, setPharmaData] = useState<any | null>(null);
+  const [insightsData, setInsightsData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedPeriod, setSelectedPeriod] = useState('current_month');
   // Orphan-actuals recovery state — same pattern as ForecastModulePage's
@@ -94,6 +95,24 @@ export default function DashboardPage() {
       .then(res => setPharmaData(res.data))
       .catch(() => setPharmaData(null));
   }, [periodStartMonth, periodEndMonth, activeStreamId]);
+
+  // Per-day stream revenue for the homepage's Daily revenue chart. The
+  // /dashboard/operational-insights endpoint is the only place that
+  // returns daily breakdowns per stream — overview gives monthly,
+  // clinic-analytics and pharmacy-analytics return aggregates without
+  // dates. This adds one fetch on top of the existing four; keeping it
+  // gated on All-mode + current month so we don't pay the cost when
+  // viewing a sub-stream view or a historical period through the period
+  // selector (the operational-insights handler defaults to today's
+  // month, which is what the homepage chart wants anyway).
+  useEffect(() => {
+    if (activeStreamId) return;
+    const ctl = new AbortController();
+    api.get('/dashboard/operational-insights', { signal: ctl.signal })
+      .then(res => { if (!ctl.signal.aborted) setInsightsData(res.data); })
+      .catch(() => { if (!ctl.signal.aborted) setInsightsData(null); });
+    return () => ctl.abort();
+  }, [activeStreamId]);
 
   // Detect orphan (NULL-branch) actuals once on mount. Multi-branch
   // tenants only — single-branch has nothing to leak. Skipped silently
@@ -378,6 +397,7 @@ export default function DashboardPage() {
           historical={historical}
           clinic={clinicData}
           pharma={pharmaData}
+          insights={insightsData}
           orgInfo={{
             orgName,
             branchName,

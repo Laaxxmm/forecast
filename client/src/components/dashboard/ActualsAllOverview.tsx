@@ -27,6 +27,10 @@ import {
   ArrowUpRight, AlertTriangle, TrendingUp, TrendingDown,
   Minus, ChevronRight,
 } from 'lucide-react';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, ReferenceLine, Cell, PieChart, Pie,
+} from 'recharts';
 import { formatINR, formatNumber, formatCompact, getMonthLabel } from '../../utils/format';
 
 // Feature flag for the forecast advisory banner. Flip to false once the
@@ -96,13 +100,14 @@ interface Props {
   historical: any | null;    // /dashboard/overview spanning ≥6 months for trend + MoM
   clinic: any | null;        // /dashboard/clinic-analytics — for quick view + cross-sell alert
   pharma: any | null;        // /dashboard/pharmacy-analytics — for quick view + 4 pharmacy alerts
+  insights: any | null;      // /dashboard/operational-insights — per-day stream revenue for the daily chart
   orgInfo: OrgInfo;
   selectStream: (id: string | null, name: string) => void;
 }
 
 // ─── Main render ────────────────────────────────────────────────────────────
 
-export default function ActualsAllOverview({ data, historical, clinic, pharma, selectStream }: Props) {
+export default function ActualsAllOverview({ data, historical, clinic, pharma, insights, selectStream }: Props) {
   const navigate = useNavigate();
   const streams: any[] = data?.streams || [];
 
@@ -404,266 +409,209 @@ export default function ActualsAllOverview({ data, historical, clinic, pharma, s
     return (Number(expired?.value) || 0) + (Number(critical?.value) || 0);
   })();
 
-  // ─── Render ───────────────────────────────────────────────────────────────
+  // ─── Daily revenue chart data (from operational-insights) ────────────────
+  // /dashboard/operational-insights returns one `daily` array per stream
+  // with per-day revenue for the current month. We sum across streams to
+  // get a single combined-revenue series, then pad to the full month so
+  // the chart always shows all days (past = solid, future = ghost). The
+  // brief explicitly asks for past-vs-future visual distinction.
+  const dailyRevenueChart = useMemo(() => {
+    const rows = insights?.streams || [];
+    if (!rows.length || !insights?.daysInMonth) return null;
+    const byDate = new Map<string, number>();
+    for (const s of rows) {
+      for (const d of s.daily || []) {
+        const date = String(d.date || '');
+        if (!date) continue;
+        byDate.set(date, (byDate.get(date) || 0) + (Number(d.revenue) || 0));
+      }
+    }
+    const monthKey = String(insights.month || '');
+    const [yStr, mStr] = monthKey.split('-');
+    const year = Number(yStr), monthNum = Number(mStr);
+    const daysInMonth = Number(insights.daysInMonth);
+    const daysElapsed = Number(insights.daysElapsed) || 0;
+    if (!year || !monthNum || !daysInMonth) return null;
+    const series: { day: number; date: string; revenue: number; isFuture: boolean }[] = [];
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = `${year}-${String(monthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      series.push({ day: d, date, revenue: byDate.get(date) || 0, isFuture: d > daysElapsed });
+    }
+    const target = Number(insights.combined?.targetRevenue) || 0;
+    const projected = Number(insights.combined?.projectedRevenue) || 0;
+    const dailyTarget = target > 0 ? Math.round(target / daysInMonth) : 0;
+    return {
+      series, dailyTarget, daysInMonth, daysElapsed,
+      monthLabel: getMonthLabel(monthKey),
+      projected,
+    };
+  }, [insights]);
+
+  // ─── Render — 2-column grid (main + sticky sidebar) ──────────────────────
   return (
-    <>
-      {/* ── 3-card KPI strip ─────────────────────────────────────────────── */}
-      <div data-tour="kpi-cards" className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
-        <KpiCard
-          label="TOTAL REVENUE"
-          value={formatINR(totalRevenue)}
-          delta={totalDelta}
-          prevValue={prevTotal}
-          rightSubText={prevTotal != null && prevTotal > 0 ? `${totalRevenue - prevTotal >= 0 ? '+' : ''}${formatINR(totalRevenue - prevTotal)}` : null}
-          footerLabel={totalForecast > 0 ? `Forecast: ${formatINR(totalForecast)} (${isSingleMonth ? 'monthly' : 'period'})` : null}
-          footerDelta={totalForecast > 0 ? pct(totalRevenue - totalForecast, totalForecast) : null}
-        />
-        <KpiCard
-          label="CLINIC"
-          value={formatINR(clinicRevenue)}
-          delta={clinicDelta}
-          prevValue={prevClinic}
-          rightSubText={totalRevenue > 0 ? `${pct(clinicRevenue, totalRevenue).toFixed(1)}% of total` : null}
-          footerLabel={
-            clinicPatientCount != null
-              ? `${formatNumber(clinicPatientCount)} patient${clinicPatientCount === 1 ? '' : 's'}${clinicCrossSellPct != null ? ` · ${clinicCrossSellPct.toFixed(0)}% cross-sell` : ''}`
-              : null
-          }
-          footerLink={clinicStream ? () => selectStream(String(clinicStream.id), clinicStream.name) : null}
-          footerLinkLabel="view"
-        />
-        <KpiCard
-          label="PHARMACY"
-          value={formatINR(pharmaRevenue)}
-          delta={pharmaDelta}
-          prevValue={prevPharma}
-          rightSubText={totalRevenue > 0 ? `${pct(pharmaRevenue, totalRevenue).toFixed(1)}% of total` : null}
-          footerLabel={
-            pharmaBills != null
-              ? `${formatNumber(pharmaBills)} bill${pharmaBills === 1 ? '' : 's'}${pharmaMargin != null ? ` · ${pharmaMargin.toFixed(1)}% margin` : ''}`
-              : null
-          }
-          footerLink={pharmaStream ? () => selectStream(String(pharmaStream.id), pharmaStream.name) : null}
-          footerLinkLabel="view"
-        />
-      </div>
-
-      {/* ── Forecast advisory banner ─────────────────────────────────────── */}
-      {SHOW_FORECAST_ADVISORY && totalForecast > 0 && (
-        <div
-          className="mb-6 px-3 py-2 rounded-md text-[12px] leading-relaxed"
-          style={{
-            background: 'color-mix(in srgb, #f59e0b 12%, transparent)',
-            color: '#633806',
-          }}
-        >
-          <span style={{ color: '#b45309', marginRight: 6 }}>⚠</span>
-          Forecast comparison may be miscalibrated — the annual forecast value appears to be compared against the monthly actual,
-          producing the large negative delta shown above. Use month-over-month deltas as the primary signal until forecast logic is reviewed.
+    <div
+      className="grid gap-4 grid-cols-1 lg:[grid-template-columns:1fr_320px]"
+    >
+      {/* ── Main column ─────────────────────────────────────────────────── */}
+      <div className="min-w-0">
+        {/* KPI strip — kept exactly as-is from the previous redesign. */}
+        <div data-tour="kpi-cards" className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
+          <KpiCard
+            label="TOTAL REVENUE"
+            value={formatINR(totalRevenue)}
+            delta={totalDelta}
+            prevValue={prevTotal}
+            rightSubText={prevTotal != null && prevTotal > 0 ? `${totalRevenue - prevTotal >= 0 ? '+' : ''}${formatINR(totalRevenue - prevTotal)}` : null}
+            footerLabel={totalForecast > 0 ? `Forecast: ${formatINR(totalForecast)} (${isSingleMonth ? 'monthly' : 'period'})` : null}
+            footerDelta={totalForecast > 0 ? pct(totalRevenue - totalForecast, totalForecast) : null}
+          />
+          <KpiCard
+            label="CLINIC"
+            value={formatINR(clinicRevenue)}
+            delta={clinicDelta}
+            prevValue={prevClinic}
+            rightSubText={totalRevenue > 0 ? `${pct(clinicRevenue, totalRevenue).toFixed(1)}% of total` : null}
+            footerLabel={
+              clinicPatientCount != null
+                ? `${formatNumber(clinicPatientCount)} patient${clinicPatientCount === 1 ? '' : 's'}${clinicCrossSellPct != null ? ` · ${clinicCrossSellPct.toFixed(0)}% cross-sell` : ''}`
+                : null
+            }
+            footerLink={clinicStream ? () => selectStream(String(clinicStream.id), clinicStream.name) : null}
+            footerLinkLabel="view"
+          />
+          <KpiCard
+            label="PHARMACY"
+            value={formatINR(pharmaRevenue)}
+            delta={pharmaDelta}
+            prevValue={prevPharma}
+            rightSubText={totalRevenue > 0 ? `${pct(pharmaRevenue, totalRevenue).toFixed(1)}% of total` : null}
+            footerLabel={
+              pharmaBills != null
+                ? `${formatNumber(pharmaBills)} bill${pharmaBills === 1 ? '' : 's'}${pharmaMargin != null ? ` · ${pharmaMargin.toFixed(1)}% margin` : ''}`
+                : null
+            }
+            footerLink={pharmaStream ? () => selectStream(String(pharmaStream.id), pharmaStream.name) : null}
+            footerLinkLabel="view"
+          />
         </div>
-      )}
 
-      {/* ── Alert center ─────────────────────────────────────────────────── */}
-      {alerts.length > 0 && (
-        <div className="mt-card p-5 mb-5">
-          <div className="flex items-start justify-between gap-3 mb-3">
-            <div>
-              <h3 className="text-base font-medium" style={{ color: 'var(--mt-text-heading)' }}>
-                Things that need your attention
-              </h3>
-              <p className="text-[13px] mt-0.5" style={{ color: 'var(--mt-text-faint)' }}>
-                Top insights from across pharmacy, clinic and stock — click to investigate
-              </p>
-            </div>
-            <p className="text-[12px] shrink-0" style={{ color: 'var(--mt-text-faint)' }}>
-              {alerts.length} alert{alerts.length === 1 ? '' : 's'} · sorted by impact
-            </p>
-          </div>
-          <div className="flex flex-col gap-2">
-            {alerts.slice(0, 5).map(a => <AlertRow key={a.key} alert={a} />)}
-          </div>
-          {alerts.length > 5 && (
-            <p className="mt-3 text-[12px]" style={{ color: 'var(--mt-text-faint)' }}>
-              + {alerts.length - 5} more alert{alerts.length - 5 === 1 ? '' : 's'}
-            </p>
+        {/* 6-month stacked bar trend — full width of main column. Hides
+            entirely when fewer than 3 months of history exist; the old
+            "trend appears at 3+ months" placeholder is intentionally
+            gone (it ate prime real estate for a non-actionable hint). */}
+        {showTrend && (
+          <RevenueTrendChart
+            trendData={trendData}
+            currentMonth={currentMonth}
+            insight={trendInsight}
+          />
+        )}
+
+        {/* Revenue mix donut + Daily revenue this month (side-by-side). */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
+          <RevenueMixDonut
+            clinic={clinicRevenue}
+            pharma={pharmaRevenue}
+            total={totalRevenue}
+          />
+          {dailyRevenueChart && dailyRevenueChart.daysElapsed >= 2 && (
+            <DailyRevenueChart
+              series={dailyRevenueChart.series}
+              dailyTarget={dailyRevenueChart.dailyTarget}
+              daysInMonth={dailyRevenueChart.daysInMonth}
+              daysElapsed={dailyRevenueChart.daysElapsed}
+              monthLabel={dailyRevenueChart.monthLabel}
+              projected={dailyRevenueChart.projected}
+            />
           )}
         </div>
-      )}
 
-      {/* ── 6-month mini-bar trend ───────────────────────────────────────── */}
-      {showTrend ? (
-        <div className="mt-card p-5 mb-5">
-          <div className="flex items-start justify-between gap-3 mb-1">
-            <div>
-              <h3 className="text-base font-medium" style={{ color: 'var(--mt-text-heading)' }}>
-                6-month revenue trend
-              </h3>
-              <p className="text-[13px] mt-0.5" style={{ color: 'var(--mt-text-faint)' }}>Clinic + Pharmacy</p>
-            </div>
-            {trendInsight && (
-              <p className="text-[12px] shrink-0 max-w-[55%] text-right" style={{ color: 'var(--mt-text-secondary)' }}>
-                {trendInsight}
-              </p>
+        {/* Quick view cards — kept exactly as-is. */}
+        {(clinic?.hasData || pharma?.hasData) && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-5">
+            {clinic?.hasData && (
+              <QuickViewCard
+                title="Clinic this month"
+                onView={clinicStream ? () => selectStream(String(clinicStream.id), clinicStream.name) : undefined}
+                metrics={[
+                  { label: 'Patients', value: clinicPatientCount != null ? formatNumber(clinicPatientCount) : '—' },
+                  { label: 'Cross-sell rate', value: clinicCrossSellPct != null ? `${clinicCrossSellPct.toFixed(1)}%` : '—' },
+                  {
+                    label: 'Top doctor',
+                    value: topDoctor?.doctor || topDoctor?.name || '—',
+                    sub: topDoctor && topDoctor.crossSellPct != null ? `${Number(topDoctor.crossSellPct).toFixed(0)}% cross-sell` : undefined,
+                    subTone: 'positive',
+                  },
+                  {
+                    label: '3-dept patients',
+                    value: threeDeptPatients ? formatNumber(threeDeptPatients.count) : '—',
+                    sub: threeDeptPatients?.multiplier ? `@${threeDeptPatients.multiplier.toFixed(1)}×` : undefined,
+                  },
+                ]}
+              />
+            )}
+            {pharma?.hasData && (
+              <QuickViewCard
+                title="Pharmacy this month"
+                onView={pharmaStream ? () => selectStream(String(pharmaStream.id), pharmaStream.name) : undefined}
+                metrics={[
+                  { label: 'Bills', value: pharmaBills != null ? formatNumber(pharmaBills) : '—' },
+                  { label: 'Gross margin', value: pharmaMargin != null ? `${pharmaMargin.toFixed(1)}%` : '—' },
+                  {
+                    label: 'Top SKU',
+                    value: topSku?.name || '—',
+                    sub: topSku ? `${formatINR(topSku.sales)}${topSku.margin != null ? ` · ${topSku.margin.toFixed(1)}%` : ''}` : undefined,
+                    subTone: topSku?.margin != null && topSku.margin < 5 ? 'danger' : undefined,
+                    subWarn: topSku?.margin != null && topSku.margin < 5,
+                  },
+                  {
+                    label: 'Stock at risk',
+                    value: stockAtRisk > 0 ? formatINR(Math.round(stockAtRisk)) : '—',
+                    valueTone: stockAtRisk > 0 ? 'danger' : undefined,
+                  },
+                ]}
+              />
             )}
           </div>
-          <div className="grid grid-cols-6 gap-2 mt-5">
-            {trendData.map((d) => {
-              const fillRatio = d.total / trendMaxTotal;
-              const containerHeight = 100;
-              const barHeight = Math.max(4, fillRatio * containerHeight);
-              const clinicH = d.total > 0 ? (d.clinic / d.total) * barHeight : 0;
-              const pharmaH = d.total > 0 ? (d.pharma / d.total) * barHeight : 0;
-              const isCurrent = d.month === currentMonth;
-              return (
-                <div key={d.month} className="flex flex-col items-center">
-                  <div
-                    className="w-full flex flex-col-reverse"
-                    style={{ height: containerHeight, gap: 2 }}
-                  >
-                    {clinicH > 0 && (
-                      <div
-                        style={{
-                          height: clinicH,
-                          background: '#185FA5',
-                          borderRadius: pharmaH > 0 ? 0 : '2px 2px 0 0',
-                        }}
-                        title={`Clinic ${formatINR(Math.round(d.clinic))}`}
-                      />
-                    )}
-                    {pharmaH > 0 && (
-                      <div
-                        style={{
-                          height: pharmaH,
-                          background: '#7F77DD',
-                          borderRadius: '2px 2px 0 0',
-                        }}
-                        title={`Pharmacy ${formatINR(Math.round(d.pharma))}`}
-                      />
-                    )}
-                  </div>
-                  <p
-                    className="text-[11px] mt-2"
-                    style={{
-                      color: 'var(--mt-text-secondary)',
-                      fontWeight: isCurrent ? 500 : 400,
-                    }}
-                  >
-                    {getMonthLabel(d.month)}
-                  </p>
-                  <p className="text-[10px]" style={{ color: 'var(--mt-text-faint)' }}>
-                    {d.total > 0 ? formatCompactInr(d.total) : '—'}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-          <div className="flex gap-4 mt-4 text-[11px]" style={{ color: 'var(--mt-text-secondary)' }}>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#185FA5' }} />
-              Clinic
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#7F77DD' }} />
-              Pharmacy
-            </span>
-          </div>
-        </div>
-      ) : (
+        )}
+
+        {/* Dig deeper footer — kept inside main column. */}
         <div
-          className="mb-5 px-4 py-3 rounded-lg text-[12px]"
-          style={{
-            background: 'var(--mt-bg-muted)',
-            color: 'var(--mt-text-faint)',
-          }}
+          className="rounded-xl px-5 py-4"
+          style={{ background: 'var(--mt-bg-muted)', border: '1px solid var(--mt-border)' }}
         >
-          Trend will appear once 3+ months of history are available.
-        </div>
-      )}
-
-      {/* ── Side-by-side Quick view cards ────────────────────────────────── */}
-      {(clinic?.hasData || pharma?.hasData) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-5">
-          {clinic?.hasData && (
-            <QuickViewCard
-              title="Clinic this month"
-              onView={clinicStream ? () => selectStream(String(clinicStream.id), clinicStream.name) : undefined}
-              metrics={[
-                {
-                  label: 'Patients',
-                  value: clinicPatientCount != null ? formatNumber(clinicPatientCount) : '—',
-                },
-                {
-                  label: 'Cross-sell rate',
-                  value: clinicCrossSellPct != null ? `${clinicCrossSellPct.toFixed(1)}%` : '—',
-                },
-                {
-                  label: 'Top doctor',
-                  value: topDoctor?.doctor || topDoctor?.name || '—',
-                  sub: topDoctor && topDoctor.crossSellPct != null
-                    ? `${Number(topDoctor.crossSellPct).toFixed(0)}% cross-sell`
-                    : undefined,
-                  subTone: 'positive',
-                },
-                {
-                  label: '3-dept patients',
-                  value: threeDeptPatients ? formatNumber(threeDeptPatients.count) : '—',
-                  sub: threeDeptPatients?.multiplier
-                    ? `@${threeDeptPatients.multiplier.toFixed(1)}×`
-                    : undefined,
-                },
-              ]}
-            />
-          )}
-          {pharma?.hasData && (
-            <QuickViewCard
-              title="Pharmacy this month"
-              onView={pharmaStream ? () => selectStream(String(pharmaStream.id), pharmaStream.name) : undefined}
-              metrics={[
-                {
-                  label: 'Bills',
-                  value: pharmaBills != null ? formatNumber(pharmaBills) : '—',
-                },
-                {
-                  label: 'Gross margin',
-                  value: pharmaMargin != null ? `${pharmaMargin.toFixed(1)}%` : '—',
-                },
-                {
-                  label: 'Top SKU',
-                  value: topSku?.name || '—',
-                  sub: topSku
-                    ? `${formatINR(topSku.sales)}${topSku.margin != null ? ` · ${topSku.margin.toFixed(1)}%` : ''}`
-                    : undefined,
-                  subTone: topSku?.margin != null && topSku.margin < 5 ? 'danger' : undefined,
-                  subWarn: topSku?.margin != null && topSku.margin < 5,
-                },
-                {
-                  label: 'Stock at risk',
-                  value: stockAtRisk > 0 ? formatINR(Math.round(stockAtRisk)) : '—',
-                  valueTone: stockAtRisk > 0 ? 'danger' : undefined,
-                },
-              ]}
-            />
-          )}
-        </div>
-      )}
-
-      {/* ── "Dig deeper" footer nav ──────────────────────────────────────── */}
-      <div
-        className="rounded-xl px-5 py-4"
-        style={{
-          background: 'var(--mt-bg-muted)',
-          border: '1px solid var(--mt-border)',
-        }}
-      >
-        <p className="text-[13px] mb-3" style={{ color: 'var(--mt-text-secondary)' }}>Dig deeper</p>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-          <DigDeeperTile title="Forecast"  desc="Set targets, track variance" onClick={() => navigate('/forecast')} />
-          <DigDeeperTile title="Analysis"  desc="Trends, breakdowns"          onClick={() => navigate('/analysis')} />
-          <DigDeeperTile title="Insights"  desc="Anomaly detection"           onClick={() => navigate('/insights')} />
-          <DigDeeperTile title="Scenarios" desc="What-if modeling"            onClick={() => navigate('/scenarios')} />
+          <p className="text-[13px] mb-3" style={{ color: 'var(--mt-text-secondary)' }}>Dig deeper</p>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+            <DigDeeperTile title="Forecast"  desc="Set targets, track variance" onClick={() => navigate('/forecast')} />
+            <DigDeeperTile title="Analysis"  desc="Trends, breakdowns"          onClick={() => navigate('/analysis')} />
+            <DigDeeperTile title="Insights"  desc="Anomaly detection"           onClick={() => navigate('/insights')} />
+            <DigDeeperTile title="Scenarios" desc="What-if modeling"            onClick={() => navigate('/scenarios')} />
+          </div>
         </div>
       </div>
-    </>
+
+      {/* ── Right sidebar (sticky alerts + forecast advisory) ───────────── */}
+      <div className="min-w-0">
+        <div className="lg:sticky lg:top-4 flex flex-col gap-3">
+          <AlertsSidebarCard alerts={alerts} />
+          {SHOW_FORECAST_ADVISORY && totalForecast > 0 && (
+            <div
+              className="rounded-md text-[11px] leading-relaxed"
+              style={{
+                background: '#FAEEDA',
+                color: '#633806',
+                border: '1px solid rgba(99,56,6,0.18)',
+                padding: '10px 12px',
+              }}
+            >
+              <span style={{ color: '#b45309', marginRight: 6 }}>⚠</span>
+              Forecast comparison may be miscalibrated — annual forecast appears compared against monthly actual.
+              Use month-over-month deltas as the primary signal until the forecast logic is reviewed.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -897,6 +845,408 @@ function DigDeeperTile({ title, desc, onClick }: { title: string; desc: string; 
       </div>
       <p className="text-[11px] mt-0.5" style={{ color: 'var(--mt-text-faint)' }}>{desc}</p>
     </button>
+  );
+}
+
+// ─── Sidebar alerts card (sticky, scrollable list) ─────────────────────────
+//
+// Replaces the full-width Alert Center block in the previous redesign.
+// Same alert objects + AlertRow internals — just wrapped in a card with
+// header (title + count pill + "sorted by impact" sub) and footer
+// ("auto-refreshes" line + view-all). The card is sticky inside the
+// right column of the page-level grid so it stays visible while the
+// main column scrolls.
+
+type SidebarAlert = {
+  key: string;
+  severity: 'critical' | 'watch' | 'opportunity';
+  title: string;
+  detail: string;
+  drillLabel: string;
+  onClick: () => void;
+};
+
+function AlertsSidebarCard({ alerts }: { alerts: SidebarAlert[] }) {
+  const visible = alerts.slice(0, 8); // brief caps at 8 visible
+  const count = alerts.length;
+  const hasAlerts = count > 0;
+  return (
+    <div
+      className="rounded-xl flex flex-col"
+      style={{
+        background: 'var(--mt-bg-surface)',
+        border: '1px solid var(--mt-border)',
+      }}
+    >
+      {/* Header */}
+      <div
+        className="flex items-start justify-between gap-2"
+        style={{ padding: 16, borderBottom: '1px solid var(--mt-border)' }}
+      >
+        <div>
+          <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--mt-text-heading)' }}>
+            Things that need attention
+          </p>
+          <p className="text-[11px] mt-0.5" style={{ color: 'var(--mt-text-faint)' }}>
+            Sorted by impact
+          </p>
+        </div>
+        <span
+          className="rounded-md text-[11px] tabular-nums shrink-0"
+          style={{
+            background: hasAlerts ? '#FCEBEB' : 'var(--mt-bg-muted)',
+            color: hasAlerts ? '#501313' : 'var(--mt-text-faint)',
+            padding: '2px 8px',
+            fontWeight: 500,
+          }}
+        >
+          {count}
+        </span>
+      </div>
+
+      {/* Scrollable list */}
+      <div
+        className="flex flex-col gap-2"
+        style={{ padding: 12, maxHeight: 600, overflowY: 'auto' }}
+      >
+        {hasAlerts ? (
+          visible.map(a => <SidebarAlertRow key={a.key} alert={a} />)
+        ) : (
+          <p className="text-[12px] text-center py-4" style={{ color: 'var(--mt-text-faint)' }}>
+            All clear — nothing demanding attention right now.
+          </p>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div
+        className="flex items-center justify-between gap-2 text-[11px]"
+        style={{ padding: '10px 16px', borderTop: '1px solid var(--mt-border)' }}
+      >
+        {/* No client-side refresh timestamp tracked yet — surface the
+            background-refresh cadence instead. The page reloads via the
+            normal page-level data fetches; alerts are recomputed from
+            the same data so they're as fresh as the rest of the page. */}
+        <span style={{ color: 'var(--mt-text-faint)' }}>Auto-refreshes with page</span>
+        <span style={{ color: '#185FA5', cursor: 'default' }} title="Full alerts page coming soon">
+          View all <ArrowUpRight size={10} className="inline align-text-top" />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// Each alert row inside the sidebar list. Uses a 3px coloured left
+// border + tinted background per severity, matching the brief.
+function SidebarAlertRow({ alert }: { alert: SidebarAlert }) {
+  const TONES: Record<SidebarAlert['severity'], { bg: string; border: string; title: string; body: string; link: string }> = {
+    critical:    { bg: '#FCEBEB', border: '#A32D2D', title: '#501313', body: '#A32D2D', link: '#A32D2D' },
+    watch:       { bg: '#FAEEDA', border: '#BA7517', title: '#412402', body: '#854F0B', link: '#854F0B' },
+    opportunity: { bg: '#E6F1FB', border: '#185FA5', title: '#042C53', body: '#0C447C', link: '#185FA5' },
+  };
+  const t = TONES[alert.severity];
+  return (
+    <button
+      onClick={alert.onClick}
+      className="rounded-md text-left transition-shadow"
+      style={{
+        background: t.bg,
+        borderLeft: `3px solid ${t.border}`,
+        padding: 12,
+        cursor: 'pointer',
+      }}
+    >
+      <p className="text-[12px]" style={{ color: t.title, fontWeight: 500, marginBottom: 4 }}>
+        {alert.title}
+      </p>
+      <p className="text-[11px]" style={{ color: t.body, lineHeight: 1.4, marginBottom: 8 }}>
+        {alert.detail}
+      </p>
+      <p className="text-[10px]" style={{ color: t.link, fontWeight: 500 }}>
+        {alert.drillLabel} <ArrowUpRight size={9} className="inline align-text-top" />
+      </p>
+    </button>
+  );
+}
+
+// ─── 6-month stacked-bar revenue trend ─────────────────────────────────────
+
+function RevenueTrendChart({ trendData, currentMonth, insight }: {
+  trendData: { month: string; clinic: number; pharma: number; total: number }[];
+  currentMonth: string | null;
+  insight: string;
+}) {
+  // Recharts stacked bar — clinic first (bottom), pharmacy second (top).
+  // Current-month tick is bolded by overriding the X-axis tick render.
+  const chartData = trendData.map(d => ({
+    label: getMonthLabel(d.month),
+    month: d.month,
+    Clinic: d.clinic,
+    Pharmacy: d.pharma,
+  }));
+  return (
+    <div
+      className="rounded-xl mb-5"
+      style={{
+        background: 'var(--mt-bg-surface)',
+        border: '1px solid var(--mt-border)',
+        padding: '1.25rem',
+      }}
+    >
+      <div className="flex items-start justify-between gap-3 mb-1">
+        <div>
+          <h3 style={{ fontSize: 16, fontWeight: 500, color: 'var(--mt-text-heading)' }}>
+            6-month revenue trend
+          </h3>
+          {insight && (
+            <p className="text-[13px] mt-0.5" style={{ color: 'var(--mt-text-secondary)' }}>{insight}</p>
+          )}
+        </div>
+        <p className="text-[12px] shrink-0" style={{ color: 'var(--mt-text-faint)' }}>
+          Clinic + Pharmacy stacked
+        </p>
+      </div>
+      <div className="mt-4">
+        <ResponsiveContainer width="100%" height={180}>
+          <BarChart data={chartData} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--mt-border)" vertical={false} />
+            <XAxis
+              dataKey="label"
+              tick={(props: any) => {
+                const { x, y, payload } = props;
+                const idx = chartData.findIndex(d => d.label === payload.value);
+                const isCurrent = idx >= 0 && chartData[idx].month === currentMonth;
+                return (
+                  <text
+                    x={x}
+                    y={y + 12}
+                    textAnchor="middle"
+                    fontSize={10}
+                    fontWeight={isCurrent ? 500 : 400}
+                    fill={isCurrent ? '#04342C' : 'var(--mt-text-secondary)'}
+                  >
+                    {payload.value}
+                  </text>
+                );
+              }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <YAxis
+              tick={{ fontSize: 9, fill: 'var(--mt-text-faint)' }}
+              tickFormatter={(v: number) => `₹${formatCompact(v)}`}
+              width={42}
+              axisLine={false}
+              tickLine={false}
+            />
+            <Tooltip
+              contentStyle={{
+                backgroundColor: 'var(--mt-bg-raised)',
+                border: '1px solid var(--mt-border)',
+                borderRadius: '10px',
+                fontSize: '11px',
+                boxShadow: 'var(--mt-shadow-pop)',
+              }}
+              formatter={(v: number) => formatINR(Math.round(v))}
+            />
+            <Bar dataKey="Clinic" stackId="rev" fill="#185FA5" radius={[0, 0, 0, 0]} />
+            <Bar dataKey="Pharmacy" stackId="rev" fill="#7F77DD" radius={[3, 3, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="flex gap-4 mt-3 text-[12px]" style={{ color: 'var(--mt-text-secondary)' }}>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#185FA5' }} />
+          Clinic
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#7F77DD' }} />
+          Pharmacy
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Revenue mix donut ─────────────────────────────────────────────────────
+
+function RevenueMixDonut({ clinic, pharma, total }: { clinic: number; pharma: number; total: number }) {
+  const data = [
+    { name: 'Clinic', value: clinic, color: '#185FA5' },
+    { name: 'Pharmacy', value: pharma, color: '#7F77DD' },
+  ].filter(d => d.value > 0);
+  const clinicPct = total > 0 ? (clinic / total) * 100 : 0;
+  const pharmaPct = total > 0 ? (pharma / total) * 100 : 0;
+  return (
+    <div
+      className="rounded-xl"
+      style={{
+        background: 'var(--mt-bg-surface)',
+        border: '1px solid var(--mt-border)',
+        padding: '1.25rem',
+      }}
+    >
+      <h3 style={{ fontSize: 16, fontWeight: 500, color: 'var(--mt-text-heading)' }}>
+        Revenue mix
+      </h3>
+      <p className="text-[12px] mt-0.5" style={{ color: 'var(--mt-text-faint)' }}>
+        Where this month's {formatINR(total)} came from
+      </p>
+      <div className="flex items-center gap-4 mt-3">
+        {/* Donut chart with center "Total" label. Width and height locked
+            to 110×110 per the brief — the chart fills the same box. */}
+        <div style={{ position: 'relative', width: 110, height: 110, flexShrink: 0 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie
+                data={data.length > 0 ? data : [{ name: 'No data', value: 1, color: '#E5E7EB' }]}
+                cx="50%"
+                cy="50%"
+                innerRadius={36}
+                outerRadius={54}
+                dataKey="value"
+                strokeWidth={0}
+                isAnimationActive={false}
+              >
+                {(data.length > 0 ? data : [{ name: 'No data', value: 1, color: '#E5E7EB' }]).map((d, i) => (
+                  <Cell key={i} fill={d.color} />
+                ))}
+              </Pie>
+            </PieChart>
+          </ResponsiveContainer>
+          {/* Center label — absolutely positioned over the donut hole. */}
+          <div
+            style={{
+              position: 'absolute', inset: 0,
+              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+              pointerEvents: 'none',
+            }}
+          >
+            <span className="text-[10px]" style={{ color: 'var(--mt-text-faint)' }}>Total</span>
+            <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--mt-text-heading)' }}>
+              {`₹${formatCompact(total)}`}
+            </span>
+          </div>
+        </div>
+        {/* Right-side legend — two rows. */}
+        <div className="flex flex-col gap-2 min-w-0 flex-1">
+          <div>
+            <div className="flex items-center gap-1.5">
+              <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#185FA5' }} />
+              <span className="text-[12px]" style={{ color: 'var(--mt-text-secondary)' }}>Clinic</span>
+            </div>
+            <p className="text-[12px] tabular-nums" style={{ color: 'var(--mt-text-heading)', marginLeft: 16 }}>
+              {formatINR(clinic)} <span style={{ color: 'var(--mt-text-faint)' }}>· {clinicPct.toFixed(1)}%</span>
+            </p>
+          </div>
+          <div>
+            <div className="flex items-center gap-1.5">
+              <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: '#7F77DD' }} />
+              <span className="text-[12px]" style={{ color: 'var(--mt-text-secondary)' }}>Pharmacy</span>
+            </div>
+            <p className="text-[12px] tabular-nums" style={{ color: 'var(--mt-text-heading)', marginLeft: 16 }}>
+              {formatINR(pharma)} <span style={{ color: 'var(--mt-text-faint)' }}>· {pharmaPct.toFixed(1)}%</span>
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Daily revenue this month ──────────────────────────────────────────────
+
+function DailyRevenueChart({ series, dailyTarget, daysInMonth, daysElapsed, monthLabel, projected }: {
+  series: { day: number; date: string; revenue: number; isFuture: boolean }[];
+  dailyTarget: number;
+  daysInMonth: number;
+  daysElapsed: number;
+  monthLabel: string;
+  projected: number;
+}) {
+  const chartData = series.map(d => ({
+    day: String(d.day),
+    revenue: d.revenue,
+    isFuture: d.isFuture,
+  }));
+  // Future days render as low-opacity grey ghosts. We give them a small
+  // placeholder height (10% of the largest actual bar) so the chart
+  // doesn't end abruptly at today's date. The brief calls for a
+  // "fixed short height" — using 10% of max keeps it visible without
+  // dominating.
+  const maxActual = Math.max(0, ...series.filter(d => !d.isFuture).map(d => d.revenue));
+  const ghostHeight = maxActual > 0 ? maxActual * 0.1 : (dailyTarget > 0 ? dailyTarget * 0.1 : 0);
+  const renderData = chartData.map(d => ({
+    ...d,
+    revenue: d.isFuture ? ghostHeight : d.revenue,
+  }));
+  return (
+    <div
+      className="rounded-xl"
+      style={{
+        background: 'var(--mt-bg-surface)',
+        border: '1px solid var(--mt-border)',
+        padding: '1.25rem',
+      }}
+    >
+      <h3 style={{ fontSize: 16, fontWeight: 500, color: 'var(--mt-text-heading)' }}>
+        Daily revenue · this month
+      </h3>
+      <p className="text-[12px] mt-0.5" style={{ color: 'var(--mt-text-faint)' }}>
+        Day {daysElapsed} of {daysInMonth}{projected > 0 ? ` · projected ${formatINR(Math.round(projected))}` : ''}
+      </p>
+      <div className="mt-3" style={{ position: 'relative' }}>
+        <ResponsiveContainer width="100%" height={110}>
+          <BarChart data={renderData} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+            <XAxis dataKey="day" hide />
+            <YAxis hide domain={[0, 'dataMax']} />
+            <Tooltip
+              contentStyle={{
+                backgroundColor: 'var(--mt-bg-raised)',
+                border: '1px solid var(--mt-border)',
+                borderRadius: '10px',
+                fontSize: '11px',
+                boxShadow: 'var(--mt-shadow-pop)',
+              }}
+              labelFormatter={(label) => `Day ${label}`}
+              formatter={(_v: number, _name, props: any) =>
+                props.payload?.isFuture
+                  ? ['Future day', 'Day']
+                  : [formatINR(props.payload.revenue || 0), 'Revenue']
+              }
+            />
+            {dailyTarget > 0 && (
+              <ReferenceLine
+                y={dailyTarget}
+                stroke="#BA7517"
+                strokeDasharray="4 4"
+                strokeWidth={2}
+                label={{
+                  value: `Target ₹${formatCompact(dailyTarget)}/d`,
+                  position: 'right',
+                  fill: '#BA7517',
+                  fontSize: 8,
+                  fontWeight: 500,
+                }}
+              />
+            )}
+            <Bar dataKey="revenue" radius={[2, 2, 0, 0]}>
+              {renderData.map((d, i) => (
+                <Cell
+                  key={i}
+                  fill={d.isFuture ? '#B4B2A9' : '#1D9E75'}
+                  fillOpacity={d.isFuture ? 0.25 : 1}
+                />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="flex justify-between mt-2 text-[10px]" style={{ color: 'var(--mt-text-faint)' }}>
+        <span>1 {monthLabel.split('-')[0]}</span>
+        <span>{daysInMonth} {monthLabel.split('-')[0]}</span>
+      </div>
+    </div>
   );
 }
 
