@@ -360,14 +360,18 @@ export function initializePlatformSchema(db: DbHelper) {
         // chart (`pharma_expiry_zones`) in favour of a tighter
         // 4-card strip + alert callout + stacked-bar breakdown.
         // Idempotent: re-runs are no-ops because the rows are gone.
-        const DEPRECATED_PHARMA_STOCK_KEYS = [
-          'pharma_stock_value',   // renamed → pharma_live_stock_value
-          'pharma_stock_skus',    // folded into Live stock value sub-line
-          'pharma_near_expiry',   // replaced by pharma_at_risk_stock
-          'pharma_total_batches', // dropped (was misleading — included expired)
-          'pharma_expiry_zones',  // donut replaced by stacked-bar breakdown card
+        const DEPRECATED_PHARMA_KEYS = [
+          // Stock & Expiry redesign (b3caf10)
+          'pharma_stock_value',         // renamed → pharma_live_stock_value
+          'pharma_stock_skus',          // folded into Live stock value sub-line
+          'pharma_near_expiry',         // replaced by pharma_at_risk_stock
+          'pharma_total_batches',       // dropped (was misleading — included expired)
+          'pharma_expiry_zones',        // donut replaced by stacked-bar breakdown card
+          // Cross-Report redesign
+          'pharma_purchase_vs_sales',   // grouped bar chart removed; replaced by money cycle + master table
+          'pharma_dead_stock',          // flat lists replaced by anomaly-buckets card with three tiles
         ];
-        for (const k of DEPRECATED_PHARMA_STOCK_KEYS) {
+        for (const k of DEPRECATED_PHARMA_KEYS) {
           db.run(
             `DELETE FROM dashboard_chart_visibility
               WHERE client_id = ? AND scope = ? AND element_key = ?`,
@@ -429,8 +433,13 @@ export function initializePlatformSchema(db: DbHelper) {
           'Batch count and value already past expiry — written off, surfaced for data-hygiene visibility.', source);
 
         // ── Cross-Report KPI Cards ──
-        seedVis(c.id, sid, 'cards', 'pharma_cross_kpis', 'Cross-Report KPIs', 17,
-          'Sell-through rate, purchased-not-sold, sold-not-purchased counts', source);
+        // The Cross-Report tab redesign promotes the strip to five
+        // genuinely cross-tab metrics (sell-through, margin retained,
+        // margin leakage, days of cover, dead stock). The KPI block
+        // is still gated by a single visibility key so admins can hide
+        // the whole strip; individual KPIs aren't separately toggleable.
+        seedVis(c.id, sid, 'cards', 'pharma_cross_kpis', 'Cross-Report KPI strip', 17,
+          'Five cross-tab metrics: Sell-through (period), Margin retained, Margin leakage, Stock days of cover, Dead stock.', source);
 
         // ── Purchase Charts ──
         // The Purchases tab consolidates the old six charts into three cards:
@@ -487,10 +496,24 @@ export function initializePlatformSchema(db: DbHelper) {
           'Top 7 products by stock value with earliest-expiry pill colour-coded by safety zone (red/amber/green/blue).', source);
 
         // ── Cross-Report Charts ──
-        seedVis(c.id, sid, 'charts', 'pharma_purchase_vs_sales', 'Purchase vs Sales Comparison', 15,
-          'Side-by-side bar chart comparing purchase and sales values per product', source);
-        seedVis(c.id, sid, 'charts', 'pharma_dead_stock', 'Dead Stock Analysis', 16,
-          'Products purchased but not sold, and products sold from old stock', source);
+        // The redesigned Cross-Report tab drops the grouped bar chart
+        // and the flat dead-stock lists in favour of a margin-leak
+        // hero callout, money-cycle table, days-of-cover card,
+        // anomaly buckets, and a master cross-report table. Stockist
+        // sell-through and the 90-day dead-stock metric render as
+        // backend-required stubs (see CROSS_REPORT_BACKEND.md).
+        seedVis(c.id, sid, 'charts', 'pharma_margin_leak', 'Margin leak callout', 15,
+          'Red callout with embedded mini-table of top 5 SKUs where sale margin drops 10+ pp below purchase margin.', source);
+        seedVis(c.id, sid, 'charts', 'pharma_money_cycle', 'The money cycle', 16,
+          'Top 6 drugs by purchase value with Bought / In stock / Sold / Profit and a status pill (Healthy / Sitting / Leaking / Dead).', source);
+        seedVis(c.id, sid, 'charts', 'pharma_stockist_sellthrough', 'Stockist sell-through', 17,
+          'Per-stockist purchased vs sold with sell-through %. Currently a backend-required stub (needs batch-to-sale lineage).', source);
+        seedVis(c.id, sid, 'charts', 'pharma_days_of_cover', 'Days of cover', 18,
+          'Top fastest-moving drugs with current stock qty, daily sales velocity, and days-left pill (red when ≤ 7).', source);
+        seedVis(c.id, sid, 'charts', 'pharma_anomaly_buckets', 'Anomaly buckets', 19,
+          'Three-tile row: Purchased-not-sold, Sold-from-old-stock, Dead-stock-90d. Third tile is a backend stub.', source);
+        seedVis(c.id, sid, 'charts', 'pharma_product_cross_table', 'Product cross-report table', 20,
+          'Master table: every drug × Bought / Stock / Sold / P-margin / S-margin / Sell-thru / Status, with a status filter dropdown.', source);
 
         // ── Tables ──
         seedVis(c.id, sid, 'tables', 'pharma_purchase_table', 'Purchase Details Table', 0,

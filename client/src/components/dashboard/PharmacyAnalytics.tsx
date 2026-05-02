@@ -141,7 +141,7 @@ export default function PharmacyAnalytics({ isVisible, startMonth, endMonth }: P
         <StockTab data={data.stock} isVisible={isVisible} search={search} setSearch={setSearch} page={page} setPage={setPage} pageSize={PAGE_SIZE} fyStart={data.fyStart} fyEnd={data.fyEnd} />
       )}
       {activeTab === 'cross' && data.crossInsights && (
-        <CrossTab data={data.crossInsights} isVisible={isVisible} />
+        <CrossTab data={data} isVisible={isVisible} startMonth={startMonth} endMonth={endMonth} />
       )}
     </div>
   );
@@ -1958,78 +1958,629 @@ function StockTab({ data, isVisible }: TabProps) {
 
 // ── CROSS-REPORT TAB ─────────────────────────────────────────────────────────
 
-function CrossTab({ data, isVisible }: { data: any; isVisible: (key: string) => boolean }) {
-  const { kpi, topCrossProducts, purchasedNotSold, soldNotPurchased } = data;
+function CrossTab({ data, isVisible, startMonth, endMonth }: {
+  data: any; isVisible: (key: string) => boolean;
+  startMonth?: string | null; endMonth?: string | null;
+}) {
+  const cross     = data.crossInsights || {};
+  const purchases = data.purchases || {};
+  const sales     = data.sales || {};
+  const stock     = data.stock || {};
 
-  const anyVisible = ['pharma_cross_kpis', 'pharma_purchase_vs_sales', 'pharma_dead_stock'].some(isVisible);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'healthy' | 'sitting' | 'leaking' | 'dead'>('all');
+
+  const anyVisible = [
+    'pharma_cross_kpis', 'pharma_margin_leak', 'pharma_money_cycle',
+    'pharma_stockist_sellthrough', 'pharma_days_of_cover',
+    'pharma_anomaly_buckets', 'pharma_product_cross_table',
+  ].some(isVisible);
   if (!anyVisible) return null;
+
+  // ── Period length in days ─────────────────────────────────────────
+  // Used by Days-of-cover and aggregate velocity calculations. Falls
+  // back to 30 if the period selector hasn't supplied months.
+  const periodDays = (() => {
+    if (!startMonth || !endMonth) return 30;
+    const [sy, sm] = startMonth.split('-').map(Number);
+    const [ey, em] = endMonth.split('-').map(Number);
+    if (!sy || !sm || !ey || !em) return 30;
+    const start = new Date(sy, sm - 1, 1);
+    const end = new Date(ey, em, 0); // last day of end month
+    return Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
+  })();
+
+  // ── Per-drug aggregates ───────────────────────────────────────────
+  // The cross payload only carries top-N per-drug rows. To compute
+  // margins and units sold per drug we walk the detail tables that
+  // come back with the same response (purchases.table, sales.table)
+  // and group by drug_name.
+  type Agg = {
+    name: string;
+    bought: number;        // net_purchase_value summed
+    boughtGross: number;   // purchase_value summed (incl. tax)
+    boughtMarginNum: number; // weighted margin numerator
+    boughtMarginDen: number; // weighted margin denominator
+    freeQty: number;
+    sold: number;          // net sales summed (sales_amount − sales_tax)
+    soldGross: number;     // sales_amount summed
+    soldUnits: number;
+    cogs: number;          // purchase_amount summed (from sales.table = cost of sold goods)
+    stockQty: number;
+    stockValue: number;
+    stockistName?: string; // single most-purchased stockist for this drug
+  };
+  const aggByDrug = new Map<string, Agg>();
+  const ensure = (name: string): Agg => {
+    let a = aggByDrug.get(name);
+    if (!a) {
+      a = { name, bought: 0, boughtGross: 0, boughtMarginNum: 0, boughtMarginDen: 0,
+            freeQty: 0, sold: 0, soldGross: 0, soldUnits: 0, cogs: 0,
+            stockQty: 0, stockValue: 0 };
+      aggByDrug.set(name, a);
+    }
+    return a;
+  };
+
+  // Walk purchases.table for per-drug bought / margin / free qty.
+  const stockistByDrug = new Map<string, Map<string, number>>();
+  for (const r of (purchases.table || []) as any[]) {
+    if (!r.drug_name) continue;
+    const a = ensure(r.drug_name);
+    a.bought       += r.net_purchase_value || 0;
+    a.boughtGross  += r.purchase_value || 0;
+    const margin    = r.profit_pct || 0;
+    const weight    = r.net_purchase_value || 0;
+    a.boughtMarginNum += margin * weight;
+    a.boughtMarginDen += weight;
+    a.freeQty      += r.free_qty || 0;
+    if (r.stockiest_name) {
+      let sm = stockistByDrug.get(r.drug_name);
+      if (!sm) { sm = new Map(); stockistByDrug.set(r.drug_name, sm); }
+      sm.set(r.stockiest_name, (sm.get(r.stockiest_name) || 0) + (r.net_purchase_value || 0));
+    }
+  }
+  // Pick the dominant stockist per drug (largest spend share).
+  for (const [drug, sm] of stockistByDrug) {
+    let best = ''; let bestVal = -1;
+    for (const [s, v] of sm) if (v > bestVal) { best = s; bestVal = v; }
+    const a = aggByDrug.get(drug);
+    if (a) a.stockistName = best;
+  }
+
+  // Walk sales.table for per-drug sold / units / cogs.
+  for (const r of (sales.table || []) as any[]) {
+    if (!r.drug_name) continue;
+    const a = ensure(r.drug_name);
+    const tax     = r.sales_tax || 0;
+    const gross   = r.sales_amount || 0;
+    const net     = Math.max(0, gross - tax);
+    a.soldGross += gross;
+    a.sold      += net;
+    a.soldUnits += r.qty || 0;
+    a.cogs      += r.purchase_amount || 0;
+  }
+
+  // Stock totals by drug (use API's per-drug topProducts plus aggregate
+  // unknown remainder is implicitly handled by zero-fill).
+  for (const r of (stock.topProducts || []) as any[]) {
+    if (!r.name) continue;
+    const a = ensure(r.name);
+    a.stockValue = r.value || 0;
+    a.stockQty   = r.qty || 0;
+  }
+
+  // Cross payload provides additional drugs (purchasedNotSold etc.)
+  // even when the detail tables didn't include them — make sure those
+  // appear too with at least bought/sold totals.
+  for (const r of (cross.topCrossProducts || []) as any[]) {
+    if (!r.name) continue;
+    const a = ensure(r.name);
+    if (a.bought === 0) a.bought = r.purchases || 0;
+    if (a.sold   === 0) a.sold   = r.sales || 0;
+    if (a.soldUnits === 0) a.soldUnits = r.salesQty || 0;
+  }
+  for (const r of (cross.purchasedNotSold || []) as any[]) {
+    if (!r.name) continue;
+    const a = ensure(r.name);
+    if (a.bought === 0) a.bought = r.purchases || 0;
+  }
+  for (const r of (cross.soldNotPurchased || []) as any[]) {
+    if (!r.name) continue;
+    const a = ensure(r.name);
+    if (a.sold === 0)      a.sold = r.sales || 0;
+    if (a.soldUnits === 0) a.soldUnits = r.salesQty || 0;
+  }
+
+  // ── Per-drug derived metrics ─────────────────────────────────────
+  type Row = Agg & {
+    pMargin: number;       // purchase margin %
+    sMargin: number;       // sale margin %
+    leakPp: number;        // pp drop
+    lostRupees: number;    // approximate margin lost in rupees
+    sellThruPct: number;   // sold ÷ bought × 100
+    status: 'healthy' | 'sitting' | 'leaking' | 'dead';
+  };
+  const rows: Row[] = [];
+  for (const a of aggByDrug.values()) {
+    const pMargin = a.boughtMarginDen > 0 ? a.boughtMarginNum / a.boughtMarginDen : 0;
+    const sMargin = a.sold > 0 ? Math.max(0, ((a.sold - a.cogs) / a.sold) * 100) : 0;
+    const leakPp  = pMargin - sMargin;
+    const lostRupees = a.sold > 0 && leakPp > 0 ? (leakPp / 100) * a.sold : 0;
+    const sellThruPct = a.bought > 0 ? (a.sold / a.bought) * 100 : (a.sold > 0 ? 999 : 0);
+
+    let status: Row['status'];
+    if (a.bought > 0 && a.sold === 0) status = 'sitting';
+    else if (a.bought === 0 && a.sold === 0 && a.stockValue > 0) status = 'dead';
+    else if (a.sold > 0 && pMargin > 0 && sMargin < 0.5 * pMargin) status = 'leaking';
+    else status = 'healthy';
+
+    rows.push({ ...a, pMargin, sMargin, leakPp, lostRupees, sellThruPct, status });
+  }
+
+  // ── Aggregate KPI values ─────────────────────────────────────────
+  // Sell-through (period): drugs in BOTH purchases and sales this period.
+  const matched = rows.filter(r => r.bought > 0 && r.sold > 0);
+  const matchedBought = matched.reduce((s, r) => s + r.bought, 0);
+  const matchedSold   = matched.reduce((s, r) => s + r.sold,   0);
+  const periodSellThruPct = matchedBought > 0 ? (matchedSold / matchedBought) * 100 : 0;
+
+  // Margin retained: weighted avg sale margin / weighted avg purchase margin.
+  const totalNetSales = sales.kpi?.totalNetSales ?? Math.max(0, (sales.kpi?.totalSales || 0) - (sales.kpi?.totalTax || 0));
+  const aggSaleMarginPct = sales.kpi?.grossMarginPct ?? sales.kpi?.profitMargin ?? 0;
+  const aggPurchaseMarginNum = rows.reduce((s, r) => s + r.boughtMarginNum, 0);
+  const aggPurchaseMarginDen = rows.reduce((s, r) => s + r.boughtMarginDen, 0);
+  const aggPurchaseMarginPct = aggPurchaseMarginDen > 0 ? aggPurchaseMarginNum / aggPurchaseMarginDen : 0;
+  const marginRetainedPct = aggPurchaseMarginPct > 0 ? (aggSaleMarginPct / aggPurchaseMarginPct) * 100 : 0;
+
+  // Margin leakage: SKUs where leak > 5pp; rupee value summed.
+  const leakSkus = rows.filter(r => r.leakPp > 5 && r.sold > 0);
+  const leakRupees = leakSkus.reduce((s, r) => s + r.lostRupees, 0);
+
+  // Aggregate days-of-cover: live stock value ÷ daily sales velocity (₹).
+  const liveStockValue = (stock.expiryZones || []).filter((z: any) => z.name !== 'Expired')
+    .reduce((s: number, z: any) => s + (z.value || 0), 0);
+  const dailySalesValue = totalNetSales / periodDays;
+  const aggDaysOfCover = dailySalesValue > 0 ? Math.floor(liveStockValue / dailySalesValue) : null;
+
+  // ── Margin leak hero — top 5 by lost rupees ─────────────────────
+  const leakTop = [...leakSkus]
+    .filter(r => r.leakPp > 10) // brief: > 10pp threshold for the callout list
+    .sort((a, b) => b.lostRupees - a.lostRupees)
+    .slice(0, 5);
+
+  // ── Money cycle — top 6 by bought ───────────────────────────────
+  const moneyCycle = [...rows]
+    .filter(r => r.bought > 0 || r.sold > 0 || r.stockValue > 0)
+    .sort((a, b) => b.bought - a.bought)
+    .slice(0, 6);
+
+  // ── Days of cover — fastest movers (top 8 ascending) ────────────
+  const daysOfCover = rows
+    .filter(r => r.soldUnits > 0 && r.stockQty > 0)
+    .map(r => {
+      const velocity = r.soldUnits / periodDays;
+      const daysLeft = velocity > 0 ? Math.floor(r.stockQty / velocity) : null;
+      return { ...r, velocity, daysLeft };
+    })
+    .filter(r => r.daysLeft != null)
+    .sort((a, b) => (a.daysLeft as number) - (b.daysLeft as number))
+    .slice(0, 8);
+
+  // ── Anomaly buckets ─────────────────────────────────────────────
+  const purchasedNotSold = (cross.purchasedNotSold || []) as any[];
+  const soldFromOldStock = (cross.soldNotPurchased || []) as any[];
+  const purchasedNotSoldValue = purchasedNotSold.reduce((s, r) => s + (r.purchases || 0), 0);
+  const soldFromOldStockValue = soldFromOldStock.reduce((s, r) => s + (r.sales || 0), 0);
+  const purchasedNotSoldTop = [...purchasedNotSold].sort((a, b) => (b.purchases || 0) - (a.purchases || 0)).slice(0, 2);
+  const soldFromOldStockTop = [...soldFromOldStock].sort((a, b) => (b.sales || 0) - (a.sales || 0)).slice(0, 2);
+
+  // ── Master cross-report — filtered + sorted ─────────────────────
+  const masterAll = [...rows].sort((a, b) => b.bought - a.bought);
+  const masterFiltered = statusFilter === 'all' ? masterAll : masterAll.filter(r => r.status === statusFilter);
+  const masterVisible = masterFiltered.slice(0, 15);
+
+  // ── Pill style helpers ──────────────────────────────────────────
+  const statusStyles: Record<Row['status'], { bg: string; text: string; dot: string; label: string }> = {
+    healthy: { bg: 'rgb(99 153 34 / 0.10)',  text: 'text-emerald-800 dark:text-emerald-200', dot: '#639922', label: 'Healthy' },
+    sitting: { bg: 'rgb(186 117 23 / 0.10)', text: 'text-amber-800 dark:text-amber-200',    dot: '#BA7517', label: 'Sitting' },
+    leaking: { bg: 'rgb(226 75 74 / 0.10)',  text: 'text-rose-800 dark:text-rose-200',      dot: '#E24B4A', label: 'Leaking' },
+    dead:    { bg: 'rgb(100 116 139 / 0.12)', text: 'text-slate-700 dark:text-slate-300',   dot: '#64748b', label: 'Dead' },
+  };
+  const daysOfCoverPill = (days: number | null) => {
+    if (days == null)  return { bg: 'rgb(148 163 184 / 0.15)', text: 'text-slate-700 dark:text-slate-300' };
+    if (days <= 7)     return { bg: 'rgb(226 75 74 / 0.12)',  text: 'text-rose-800 dark:text-rose-200' };
+    if (days <= 14)    return { bg: 'rgb(186 117 23 / 0.12)', text: 'text-amber-800 dark:text-amber-200' };
+    return { bg: 'rgb(99 153 34 / 0.12)', text: 'text-emerald-800 dark:text-emerald-200' };
+  };
 
   return (
     <div>
-      {/* Cross KPI Cards */}
+      {/* ── KPI strip — 5 cross-tab metrics ─────────────────────
+          Drops the original 4 KPIs which were narrow snapshots.
+          The new strip frames the cross-tab story: how much of
+          what we bought has sold, how much margin we kept, where
+          we're leaking, how long current stock lasts, and how
+          much is dead. */}
       {isVisible('pharma_cross_kpis') && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <MiniKPI label="Total Products" value={formatNumber(kpi.totalProducts)} icon={Package} color="teal" />
-          <MiniKPI label="Sell-Through Rate" value={`${kpi.sellThroughRate}%`} icon={TrendingUp} color="blue" sub="Sales / Purchases" />
-          <MiniKPI label="Purchased, Not Sold" value={formatNumber(kpi.purchasedNotSoldCount)} icon={Warehouse} color="amber" sub={formatINR(kpi.purchasedNotSoldValue)} />
-          <MiniKPI label="Sold, Not Purchased" value={formatNumber(kpi.soldNotPurchasedCount)} icon={AlertTriangle} color="rose" sub="May be from old stock" />
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-4">
+          <PurchaseKPI
+            tone="teal"
+            label="Sell-through (period)"
+            value={`${periodSellThruPct.toFixed(0)}%`}
+            sub={`${formatINR(matchedSold)} sold of ${formatINR(matchedBought)} bought`}
+          />
+          <PurchaseKPI
+            tone="blue"
+            label="Margin retained"
+            value={`${marginRetainedPct.toFixed(0)}%`}
+            sub={`${aggSaleMarginPct.toFixed(2)}% sold vs ${aggPurchaseMarginPct.toFixed(2)}% bought`}
+          />
+          <PurchaseKPI
+            tone="coral"
+            label="Margin leakage"
+            value={formatINR(Math.round(leakRupees))}
+            sub={`across ${formatNumber(leakSkus.length)} outlier SKU${leakSkus.length === 1 ? '' : 's'}`}
+          />
+          <PurchaseKPI
+            tone="amber"
+            label="Stock days of cover"
+            value={aggDaysOfCover != null ? `${formatNumber(aggDaysOfCover)} days` : '—'}
+            sub="at current sales pace"
+          />
+          <PurchaseKPI
+            tone="purple"
+            label="Dead stock"
+            value="—"
+            sub="needs 90-day sales lookback"
+          />
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
-        {/* Purchase vs Sales Comparison */}
-        {isVisible('pharma_purchase_vs_sales') && topCrossProducts?.length > 0 && (
-          <div className="card lg:col-span-2">
-            <h3 className="text-sm font-semibold text-theme-heading mb-1">Purchase vs Sales by Product</h3>
-            <p className="text-xs text-theme-faint mb-4">Top products that appear in both purchase and sales data</p>
-            <ResponsiveContainer width="100%" height={Math.max(300, topCrossProducts.length * 30)}>
-              <BarChart data={topCrossProducts.map((p: any) => ({
-                ...p, name: p.name.length > 20 ? p.name.slice(0, 20) + '...' : p.name
-              }))} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" horizontal={false} />
-                <XAxis type="number" tickFormatter={v => `${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={160} axisLine={false} tickLine={false} />
-                <Tooltip formatter={(v: number) => formatINR(v)} contentStyle={CHART_STYLE} />
-                <Legend />
-                <Bar dataKey="purchases" name="Purchases" fill="#3b82f6" radius={[0, 0, 0, 0]} />
-                <Bar dataKey="sales" name="Sales" fill="#10b981" radius={[0, 6, 6, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+      {/* ── Margin leak hero callout ──────────────────────────────
+          The single biggest signal in the redesign: drugs purchased
+          at healthy margins but sold near zero. Hidden when nothing
+          qualifies. */}
+      {isVisible('pharma_margin_leak') && leakTop.length > 0 && (
+        <div
+          className="mb-4 rounded-xl"
+          style={{
+            background: 'rgb(163 45 45 / 0.08)',
+            borderLeft: '4px solid #A32D2D',
+            padding: '1rem 1.25rem',
+          }}
+        >
+          <p className="text-[14px] font-medium text-rose-900 dark:text-rose-200 flex items-center gap-1.5">
+            <AlertTriangle size={14} className="shrink-0" />
+            {formatINR(Math.round(leakTop.reduce((s, r) => s + r.lostRupees, 0)))} in margin leaked across {leakSkus.length} SKU{leakSkus.length === 1 ? '' : 's'} this period
+          </p>
+          <p className="text-[12px] text-rose-800 dark:text-rose-300/90 mt-1.5 leading-relaxed">
+            These products were purchased at healthy margins but sold at near-zero margin. Either MRP needs
+            revision, the source-system has a pricing error, or these are unintentional loss-leaders.
+          </p>
+          <div className="mt-3 rounded-md overflow-hidden" style={{ background: 'rgb(255 255 255 / 0.7)' }}>
+            <div
+              className="grid grid-cols-[1fr_90px_90px_90px_120px] gap-3 px-3 py-2 text-[11px] uppercase tracking-[0.5px]"
+              style={{ background: 'rgb(247 193 193 / 0.7)', color: '#501313' }}
+            >
+              <span>Drug</span>
+              <span className="text-right">Bought at</span>
+              <span className="text-right">Sold at</span>
+              <span className="text-right">Leak</span>
+              <span className="text-right">Lost ₹</span>
+            </div>
+            {leakTop.map((r, i) => (
+              <div
+                key={i}
+                className="grid grid-cols-[1fr_90px_90px_90px_120px] gap-3 px-3 py-2 text-[12px]"
+                style={{ borderTop: i === 0 ? 'none' : '0.5px solid rgb(163 45 45 / 0.15)', color: '#501313' }}
+              >
+                <span className="truncate" title={r.name}>{r.name}</span>
+                <span className="text-right">{r.pMargin.toFixed(1)}%</span>
+                <span className={`text-right ${r.sMargin < 5 ? 'font-medium' : ''}`} style={{ color: r.sMargin < 5 ? '#A32D2D' : undefined }}>
+                  {r.sMargin.toFixed(1)}%
+                </span>
+                <span className="text-right" style={{ color: '#A32D2D' }}>−{r.leakPp.toFixed(1)} pp</span>
+                <span className="text-right font-medium">{formatINR(Math.round(r.lostRupees))}</span>
+              </div>
+            ))}
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Dead Stock — Purchased but not sold */}
-        {isVisible('pharma_dead_stock') && purchasedNotSold?.length > 0 && (
-          <div className="card">
-            <h3 className="text-sm font-semibold text-theme-heading mb-1">Purchased, Not Sold</h3>
-            <p className="text-xs text-theme-faint mb-4">Products with purchases but zero sales this period</p>
-            <div className="space-y-2 max-h-[350px] overflow-y-auto pr-2">
-              {purchasedNotSold.map((p: any, i: number) => (
-                <div key={i} className="flex items-center justify-between bg-dark-600/50 rounded-lg px-3 py-2">
-                  <span className="text-xs text-theme-secondary truncate mr-2">{p.name}</span>
-                  <span className="text-xs text-amber-400 font-medium shrink-0">{formatINR(p.purchases)}</span>
+      {/* ── Money cycle — Bought → In Stock → Sold → Profit ────── */}
+      {isVisible('pharma_money_cycle') && moneyCycle.length > 0 && (
+        <div
+          className="mb-4 rounded-xl p-5"
+          style={{ background: 'var(--mt-bg-raised)', border: '0.5px solid var(--mt-border)' }}
+        >
+          <h3 className="text-base font-medium text-theme-heading">The money cycle — what happens to every rupee bought</h3>
+          <p className="text-[13px] text-theme-secondary mt-0.5">Top 6 by purchase value</p>
+          <p className="text-[13px] text-theme-faint mt-1">Track the supplier → shelf → cash flow per drug.</p>
+
+          <div className="mt-4">
+            <div className="grid grid-cols-[1fr_120px_120px_120px_120px_110px] gap-3 px-2 pb-2 text-[12px] uppercase tracking-[0.5px] text-theme-faint border-b" style={{ borderColor: 'var(--mt-border)' }}>
+              <span>Drug</span>
+              <span className="text-right">Bought</span>
+              <span className="text-right">In stock</span>
+              <span className="text-right">Sold</span>
+              <span className="text-right">Profit</span>
+              <span className="text-right">Cycle</span>
+            </div>
+            {moneyCycle.map((r, i) => {
+              const profit = Math.max(0, r.sold - r.cogs);
+              const profitDanger = r.sold > 0 && profit < 0.01 * r.sold;
+              const s = statusStyles[r.status];
+              return (
+                <div
+                  key={i}
+                  className="grid grid-cols-[1fr_120px_120px_120px_120px_110px] gap-3 px-2 py-2.5 items-center text-[13px]"
+                  style={{ borderTop: i === 0 ? 'none' : '0.5px solid var(--mt-border)' }}
+                >
+                  <span className="text-theme-heading truncate" title={r.name}>{r.name}</span>
+                  <span className="text-right">
+                    <span className="text-theme-heading">{formatINR(r.bought)}</span>
+                    {r.freeQty > 0 && (
+                      <span className="block text-[11px] text-emerald-700 dark:text-emerald-400">+{formatNumber(r.freeQty)} free</span>
+                    )}
+                  </span>
+                  <span className="text-right text-theme-secondary">{formatINR(r.stockValue)}</span>
+                  <span className="text-right text-theme-heading">{formatINR(r.sold)}</span>
+                  <span className={`text-right font-medium ${profitDanger ? 'text-rose-700 dark:text-rose-300' : 'text-theme-heading'}`}>
+                    {formatINR(profit)}
+                  </span>
+                  <span className="text-right">
+                    <span className={`inline-flex items-center gap-1 rounded-md text-[11px] ${s.text}`}
+                          style={{ background: s.bg, padding: '2px 8px' }}>
+                      <span className="inline-block rounded-full" style={{ width: '6px', height: '6px', background: s.dot }} />
+                      {s.label}
+                    </span>
+                  </span>
                 </div>
-              ))}
+              );
+            })}
+          </div>
+
+          <div className="flex flex-wrap gap-3 mt-4 text-[11px] text-theme-faint">
+            {(['healthy', 'sitting', 'leaking', 'dead'] as const).map(k => (
+              <span key={k} className="inline-flex items-center gap-1.5">
+                <span className="inline-block rounded-sm" style={{ width: '8px', height: '8px', background: statusStyles[k].dot }} />
+                <span className="capitalize">{statusStyles[k].label}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Stockist sell-through — backend-blocked stub ─────────
+          Computing this honestly requires batch-to-sale linkage
+          (which stockist's batch was drawn down by which sale).
+          The current schema doesn't track that. Documented in
+          CROSS_REPORT_BACKEND.md. */}
+      {isVisible('pharma_stockist_sellthrough') && (
+        <div
+          className="mb-4 rounded-xl p-5"
+          style={{ background: 'var(--mt-bg-raised)', border: '0.5px solid var(--mt-border)' }}
+        >
+          <h3 className="text-base font-medium text-theme-heading">Which suppliers' stock actually sells</h3>
+          <p className="text-[13px] text-theme-secondary mt-0.5">Sell-through % per stockist</p>
+          <div
+            className="mt-3 rounded-md p-4 text-[13px] text-theme-secondary"
+            style={{ background: 'rgb(148 163 184 / 0.10)', border: '0.5px dashed var(--mt-border)' }}
+          >
+            <p className="font-medium text-theme-heading">Backend join required</p>
+            <p className="mt-1 text-theme-faint">
+              Computing per-stockist sell-through honestly needs a batch-to-sale lineage
+              (which stockist supplied each batch, and which batch each sale drew from).
+              The current schema doesn't track this. See <code className="text-[12px]">CROSS_REPORT_BACKEND.md</code>
+              {' '}for the SQL and endpoint changes needed.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Days of cover — when will I run out? ─────────────────── */}
+      {isVisible('pharma_days_of_cover') && daysOfCover.length > 0 && (
+        <div
+          className="mb-4 rounded-xl p-5"
+          style={{ background: 'var(--mt-bg-raised)', border: '0.5px solid var(--mt-border)' }}
+        >
+          <h3 className="text-base font-medium text-theme-heading">Days of cover — when will I run out?</h3>
+          <p className="text-[13px] text-theme-secondary mt-0.5">Stock ÷ daily sales velocity</p>
+          <p className="text-[13px] text-theme-faint mt-1">Reorder the items in red before they hit zero.</p>
+
+          <div className="mt-4">
+            <div className="grid grid-cols-[1fr_100px_120px_100px] gap-3 px-2 pb-2 text-[12px] uppercase tracking-[0.5px] text-theme-faint border-b" style={{ borderColor: 'var(--mt-border)' }}>
+              <span>Drug</span>
+              <span className="text-right">Stock qty</span>
+              <span className="text-right">Daily sales</span>
+              <span className="text-right">Days left</span>
+            </div>
+            {daysOfCover.map((r, i) => {
+              const days = r.daysLeft as number;
+              const pill = daysOfCoverPill(days);
+              const isUrgent = days <= 7;
+              return (
+                <div
+                  key={i}
+                  className="grid grid-cols-[1fr_100px_120px_100px] gap-3 px-2 py-2.5 items-center text-[13px]"
+                  style={{
+                    borderTop: i === 0 ? 'none' : '0.5px solid var(--mt-border)',
+                    background: isUrgent ? 'rgb(226 75 74 / 0.05)' : undefined,
+                  }}
+                >
+                  <span className="text-theme-heading truncate" title={r.name}>{r.name}</span>
+                  <span className="text-right text-theme-secondary">{formatNumber(r.stockQty)}</span>
+                  <span className="text-right text-theme-secondary">{r.velocity.toFixed(1)} / day</span>
+                  <span className="text-right">
+                    <span className={`inline-flex items-center gap-1 rounded-md text-[11px] ${pill.text}`}
+                          style={{ background: pill.bg, padding: '2px 8px' }}>
+                      {isUrgent && <AlertTriangle size={10} />} {days} day{days === 1 ? '' : 's'}
+                    </span>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── Anomaly buckets ──────────────────────────────────────── */}
+      {isVisible('pharma_anomaly_buckets') && (
+        <div
+          className="mb-4 rounded-xl p-5"
+          style={{ background: 'var(--mt-bg-raised)', border: '0.5px solid var(--mt-border)' }}
+        >
+          <h3 className="text-base font-medium text-theme-heading">Anomaly buckets</h3>
+          <p className="text-[13px] text-theme-secondary mt-0.5">Products that don't follow the normal buy → stock → sell cycle</p>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mt-4">
+            {/* Tile 1: Purchased, not sold (amber) */}
+            <div
+              className="rounded-md p-4"
+              style={{ background: 'rgb(186 117 23 / 0.10)', border: '0.5px solid rgb(186 117 23 / 0.25)' }}
+            >
+              <p className="text-[11px] uppercase tracking-[0.5px] text-amber-800 dark:text-amber-300">Purchased, not sold</p>
+              <p className="text-[18px] font-medium text-amber-900 dark:text-amber-200 mt-1">
+                {formatNumber(purchasedNotSold.length)} SKU{purchasedNotSold.length === 1 ? '' : 's'} · {formatINR(purchasedNotSoldValue)}
+              </p>
+              <p className="text-[12px] text-amber-800 dark:text-amber-300 mt-1">
+                Bought this period, zero sales yet — capital tied up.
+              </p>
+              {purchasedNotSoldTop.length > 0 && (
+                <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-3 pt-3" style={{ borderTop: '0.5px solid rgb(186 117 23 / 0.20)' }}>
+                  <span className="opacity-70">Top:</span>{' '}
+                  {purchasedNotSoldTop.map((p, i) => (
+                    <span key={i}>
+                      {i > 0 ? ' · ' : ''}{p.name} ({formatINR(p.purchases || 0)})
+                    </span>
+                  ))}
+                </p>
+              )}
+            </div>
+
+            {/* Tile 2: Sold from old stock (purple) */}
+            <div
+              className="rounded-md p-4"
+              style={{ background: 'rgb(139 92 246 / 0.10)', border: '0.5px solid rgb(139 92 246 / 0.25)' }}
+            >
+              <p className="text-[11px] uppercase tracking-[0.5px] text-purple-700 dark:text-purple-300">Sold from old stock</p>
+              <p className="text-[18px] font-medium text-purple-900 dark:text-purple-200 mt-1">
+                {formatNumber(soldFromOldStock.length)} SKU{soldFromOldStock.length === 1 ? '' : 's'} · {formatINR(soldFromOldStockValue)}
+              </p>
+              <p className="text-[12px] text-purple-700 dark:text-purple-300 mt-1">
+                Sold this period but no purchase — drawing from prior inventory.
+              </p>
+              {soldFromOldStockTop.length > 0 && (
+                <p className="text-[11px] text-purple-700 dark:text-purple-300 mt-3 pt-3" style={{ borderTop: '0.5px solid rgb(139 92 246 / 0.20)' }}>
+                  <span className="opacity-70">Top:</span>{' '}
+                  {soldFromOldStockTop.map((p, i) => (
+                    <span key={i}>
+                      {i > 0 ? ' · ' : ''}{p.name} ({formatINR(p.sales || 0)})
+                    </span>
+                  ))}
+                </p>
+              )}
+            </div>
+
+            {/* Tile 3: Dead stock — backend-blocked stub */}
+            <div
+              className="rounded-md p-4"
+              style={{ background: 'rgb(226 75 74 / 0.08)', border: '0.5px dashed rgb(226 75 74 / 0.30)' }}
+            >
+              <p className="text-[11px] uppercase tracking-[0.5px] text-rose-800 dark:text-rose-300">Dead stock (no sales 90d)</p>
+              <p className="text-[14px] text-rose-800 dark:text-rose-300 mt-2">Backend join required</p>
+              <p className="text-[12px] text-rose-700 dark:text-rose-300/90 mt-1">
+                Needs a 90-day sales lookback the API doesn't currently expose.
+                See <code className="text-[11px]">CROSS_REPORT_BACKEND.md</code>.
+              </p>
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Sold but not purchased this period */}
-        {isVisible('pharma_dead_stock') && soldNotPurchased?.length > 0 && (
-          <div className="card">
-            <h3 className="text-sm font-semibold text-theme-heading mb-1">Sold, Not Purchased</h3>
-            <p className="text-xs text-theme-faint mb-4">Products sold but not purchased this period (old stock)</p>
-            <div className="space-y-2 max-h-[350px] overflow-y-auto pr-2">
-              {soldNotPurchased.map((p: any, i: number) => (
-                <div key={i} className="flex items-center justify-between bg-dark-600/50 rounded-lg px-3 py-2">
-                  <span className="text-xs text-theme-secondary truncate mr-2">{p.name}</span>
-                  <span className="text-xs text-teal-400 font-medium shrink-0">{formatINR(p.sales)}</span>
-                </div>
-              ))}
+      {/* ── Master product cross-report table ──────────────────── */}
+      {isVisible('pharma_product_cross_table') && masterAll.length > 0 && (
+        <div
+          className="mb-6 rounded-xl p-5"
+          style={{ background: 'var(--mt-bg-raised)', border: '0.5px solid var(--mt-border)' }}
+        >
+          <div className="flex items-end justify-between mb-3 gap-3 flex-wrap">
+            <div>
+              <h3 className="text-base font-medium text-theme-heading">Product cross-report</h3>
+              <p className="text-[13px] text-theme-secondary mt-0.5">
+                {formatNumber(masterFiltered.length)} of {formatNumber(masterAll.length)} products with full purchase × stock × sales view
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <select
+                value={statusFilter}
+                onChange={e => setStatusFilter(e.target.value as any)}
+                className="text-[12px] rounded-md px-2 py-1.5"
+                style={{ background: 'var(--mt-bg-app)', border: '0.5px solid var(--mt-border)', color: 'var(--mt-text)' }}
+              >
+                <option value="all">All statuses</option>
+                <option value="healthy">Healthy</option>
+                <option value="sitting">Sitting</option>
+                <option value="leaking">Leaking</option>
+                <option value="dead">Dead</option>
+              </select>
             </div>
           </div>
-        )}
-      </div>
+
+          <div style={{ tableLayout: 'fixed' }}>
+            <div className="grid grid-cols-[24%_12%_12%_12%_10%_10%_10%_10%] gap-2 px-2 pb-2 text-[11px] uppercase tracking-[0.5px] text-theme-faint border-b" style={{ borderColor: 'var(--mt-border)' }}>
+              <span>Drug</span>
+              <span className="text-right">Bought</span>
+              <span className="text-right">Stock</span>
+              <span className="text-right">Sold</span>
+              <span className="text-right">P-margin</span>
+              <span className="text-right">S-margin</span>
+              <span className="text-right">Sell-thru</span>
+              <span className="text-right">Status</span>
+            </div>
+            {masterVisible.map((r, i) => {
+              const rowBg =
+                r.status === 'leaking' ? 'rgb(226 75 74 / 0.05)' :
+                r.status === 'sitting' ? 'rgb(186 117 23 / 0.05)' :
+                r.status === 'dead'    ? 'rgb(100 116 139 / 0.06)' :
+                undefined;
+              const s = statusStyles[r.status];
+              return (
+                <div
+                  key={i}
+                  className="grid grid-cols-[24%_12%_12%_12%_10%_10%_10%_10%] gap-2 px-2 py-2 items-center text-[12px]"
+                  style={{
+                    borderTop: i === 0 ? 'none' : '0.5px solid var(--mt-border)',
+                    background: rowBg,
+                  }}
+                >
+                  <span className="text-theme-heading truncate" title={r.name}>{r.name}</span>
+                  <span className="text-right text-theme-secondary">{formatINR(r.bought)}</span>
+                  <span className="text-right text-theme-secondary">{formatINR(r.stockValue)}</span>
+                  <span className="text-right text-theme-secondary">{formatINR(r.sold)}</span>
+                  <span className="text-right text-theme-secondary">{r.pMargin.toFixed(1)}%</span>
+                  <span className={`text-right ${r.sMargin < 5 && r.sold > 0 ? 'font-medium text-rose-700 dark:text-rose-300' : 'text-theme-secondary'}`}>
+                    {r.sMargin.toFixed(1)}%
+                  </span>
+                  <span className="text-right text-theme-secondary">
+                    {r.sellThruPct === 999 ? '—' : `${r.sellThruPct > 999 ? '999+' : r.sellThruPct.toFixed(0)}%`}
+                  </span>
+                  <span className={`text-right text-[10px] font-medium ${s.text}`}>{s.label}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          {masterFiltered.length > masterVisible.length && (
+            <p className="mt-3 text-[12px] text-theme-faint">
+              + {masterFiltered.length - masterVisible.length} more row{masterFiltered.length - masterVisible.length === 1 ? '' : 's'}
+            </p>
+          )}
+          <p className="mt-2 text-[11px] text-theme-faint">
+            P-margin = purchase margin · S-margin = sale margin · Sell-through &gt; 100% = drawing from old stock
+          </p>
+        </div>
+      )}
     </div>
   );
 }

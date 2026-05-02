@@ -1697,8 +1697,12 @@ function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[
     pharma_stock_table: 'stock',
     // Cross-Report
     pharma_cross_kpis: 'cross',
-    pharma_purchase_vs_sales: 'cross',
-    pharma_dead_stock: 'cross',
+    pharma_margin_leak: 'cross',
+    pharma_money_cycle: 'cross',
+    pharma_stockist_sellthrough: 'cross',
+    pharma_days_of_cover: 'cross',
+    pharma_anomaly_buckets: 'cross',
+    pharma_product_cross_table: 'cross',
   };
   const isPharmaScope = !!streams.find((s: any) =>
     String(s.id) === activeScope && String(s.name || '').toLowerCase().includes('pharma'),
