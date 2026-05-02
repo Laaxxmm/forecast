@@ -31,10 +31,7 @@ import {
 } from 'recharts';
 import api from '../api/client';
 import { formatINR, formatNumber, formatCompact } from '../utils/format';
-import {
-  Activity, Users, ShoppingBag,
-  ArrowUp, ArrowDown, Minus, Download,
-} from 'lucide-react';
+import { Activity, Download } from 'lucide-react';
 import InsightDownloadPanel from '../components/dashboard/InsightDownloadPanel';
 
 // ─── Types (server contract) ─────────────────────────────────────────────────
@@ -430,11 +427,9 @@ export default function OperationalInsightsPage() {
           Daily progression will appear after 2+ days of data.
         </div>
       )}
-
-      {/* ── Per-stream Weekly + Daily ─────────────────────────────────── */}
-      {streams.map(stream => (
-        <StreamSection key={stream.streamId} stream={stream} daysElapsed={daysElapsed} />
-      ))}
+      {/* Per-stream weekly comparison and daily charts have been retired —
+          weekly comparisons live in the Weekly Insight PDF and daily
+          revenue trends are covered by the Daily Progression chart above. */}
     </div>
   );
 }
@@ -592,6 +587,37 @@ function StreamGrid({ streams }: { streams: StreamData[] }) {
 
   if (cols.length === 0) return null;
 
+  // Pharmacy MTD bill count — needed for the Sales card's avg-ticket
+  // sub-line. The server doesn't surface a Bills card, but it returns
+  // per-day `transactions` in `pharma.daily[]`, which sums to MTD bills.
+  const pharmaBillCount = pharma
+    ? pharma.daily.reduce((s, d) => s + (Number(d.transactions) || 0), 0)
+    : 0;
+
+  // Avg-ticket sub-line generator. Returns undefined for any card that
+  // shouldn't show one (per the spec — visits cards, Other Revenue, and
+  // pharmacy Gross Profit don't get the sub-line). Returning undefined
+  // is what gates the render in PaceCard.
+  function avgTicketSubLine(card: CardData, col: Column): string | undefined {
+    // Consultation / Diagnostics Revenue → revenue ÷ visits in same column.
+    if (
+      card.unit === 'currency'
+      && card.label === 'Revenue'
+      && (col.label === 'Consultation' || col.label === 'Diagnostics')
+    ) {
+      const visitsCard = col.cards.find(c => c.label === 'Visits');
+      const visits = Number(visitsCard?.mtd) || 0;
+      if (visits > 0 && card.mtd > 0) {
+        return `₹${Math.round(card.mtd / visits).toLocaleString('en-IN')} avg ticket`;
+      }
+    }
+    // Pharmacy Sales → sales ÷ pharmacy bill count.
+    if (card.unit === 'currency' && card.label === 'Sales' && pharmaBillCount > 0 && card.mtd > 0) {
+      return `₹${Math.round(card.mtd / pharmaBillCount).toLocaleString('en-IN')} avg ticket`;
+    }
+    return undefined;
+  }
+
   return (
     <div
       className="grid gap-3"
@@ -610,14 +636,20 @@ function StreamGrid({ streams }: { streams: StreamData[] }) {
           >
             {col.label}
           </p>
-          {col.cards.map(card => <PaceCard key={card.label} card={card} />)}
+          {col.cards.map(card => (
+            <PaceCard
+              key={card.label}
+              card={card}
+              subLine={avgTicketSubLine(card, col)}
+            />
+          ))}
         </div>
       ))}
     </div>
   );
 }
 
-function PaceCard({ card }: { card: CardData }) {
+function PaceCard({ card, subLine }: { card: CardData; subLine?: string }) {
   const pct = cardProjectedPct(card);
   const status = statusByProjected(pct, card.target > 0);
   const earnedPct = card.target > 0 ? (card.mtd / card.target) * 100 : 0;
@@ -723,6 +755,18 @@ function PaceCard({ card }: { card: CardData }) {
             </p>
           </div>
         </div>
+      )}
+      {/* Avg-ticket sub-line — provided by StreamGrid for the cards that
+          carry a ticket-style metric (Consultation/Diagnostics Revenue,
+          Pharmacy Sales). Hidden when the denominator is zero so the
+          card never shows ₹0 / NaN. */}
+      {subLine && (
+        <p
+          className="text-[11px] tabular-nums"
+          style={{ marginTop: 6, color: 'var(--mt-text-faint)' }}
+        >
+          {subLine}
+        </p>
       )}
     </div>
   );
@@ -1123,183 +1167,9 @@ function DailyProgressionChart({ dailyProgression, dailyNeed, monthLabel, year, 
   );
 }
 
-// ─── Per-stream Section (Weekly + Daily) ───────────────────────────────────
-
-function StreamSection({ stream, daysElapsed }: { stream: StreamData; daysElapsed: number }) {
-  const isClinic = stream.name.toLowerCase().includes('clinic') || stream.name.toLowerCase().includes('health');
-  const StreamIcon = isClinic ? Users : ShoppingBag;
-
-  return (
-    <div className="space-y-3">
-      <h2 className="flex items-center gap-2" style={{ fontSize: 15, fontWeight: 500, color: 'var(--mt-text-heading)' }}>
-        <StreamIcon size={16} style={{ color: 'var(--mt-accent)' }} />
-        {stream.name}
-      </h2>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <WeeklyComparison stream={stream} isClinic={isClinic} />
-        <DailyChart stream={stream} isClinic={isClinic} daysElapsed={daysElapsed} />
-      </div>
-    </div>
-  );
-}
-
-// Weekly comparison — handles three states cleanly:
-//   • current week has < 2 weekdays elapsed → hide entirely
-//   • 2-4 days elapsed → show this-week totals, no % change column
-//   • ≥ 5 days elapsed → full week-vs-week comparison (existing behaviour)
-function WeeklyComparison({ stream, isClinic }: { stream: StreamData; isClinic: boolean }) {
-  const tw = stream.thisWeek;
-  const lw = stream.lastWeek;
-
-  // Days elapsed in current week — Mon-anchored. The server uses
-  // weekAnchor = today, so we count weekdays between Monday and today
-  // inclusive.
-  const now = new Date();
-  const dayOfWeek = now.getDay(); // 0=Sun … 6=Sat
-  const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-  const elapsedThisWeek = mondayOffset + 1;
-
-  if (elapsedThisWeek < 2) {
-    return (
-      <div className="rounded-xl p-3" style={{ background: 'var(--mt-bg-surface)', border: '1px solid var(--mt-border)' }}>
-        <h3 className="text-xs mb-2" style={{ color: 'var(--mt-text-muted)', fontWeight: 500 }}>
-          This week vs last week
-        </h3>
-        <p className="text-[12px]" style={{ color: 'var(--mt-text-faint)' }}>
-          Weekly comparison appears after 2+ weekdays.
-        </p>
-      </div>
-    );
-  }
-
-  const showFullWeek = elapsedThisWeek >= 5;
-
-  const rows = isClinic ? [
-    { label: 'Visits', cur: tw.patients, prev: lw.patients, unit: 'count' as const },
-    { label: 'Revenue', cur: tw.revenue, prev: lw.revenue, unit: 'currency' as const },
-    { label: 'Avg Ticket', cur: tw.avgTicket, prev: lw.avgTicket, unit: 'currency' as const },
-  ] : [
-    { label: 'Transactions', cur: tw.transactions, prev: lw.transactions, unit: 'count' as const },
-    { label: 'Sales', cur: tw.revenue, prev: lw.revenue, unit: 'currency' as const },
-    { label: 'Profit', cur: tw.profit, prev: lw.profit, unit: 'currency' as const },
-    { label: 'Avg Ticket', cur: tw.avgTicket, prev: lw.avgTicket, unit: 'currency' as const },
-  ];
-
-  return (
-    <div className="rounded-xl p-3" style={{ background: 'var(--mt-bg-surface)', border: '1px solid var(--mt-border)' }}>
-      <h3 className="text-xs mb-1" style={{ color: 'var(--mt-text-muted)', fontWeight: 500 }}>
-        {showFullWeek ? 'This week vs last week' : `This week so far (${elapsedThisWeek} day${elapsedThisWeek === 1 ? '' : 's'})`}
-      </h3>
-      {!showFullWeek && (
-        <p className="text-[11px] mb-2" style={{ color: 'var(--mt-text-faint)' }}>
-          Last-week comparison shows after Friday — current week has only {elapsedThisWeek} weekday{elapsedThisWeek === 1 ? '' : 's'} of data.
-        </p>
-      )}
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="text-[10px] uppercase" style={{ color: 'var(--mt-text-faint)' }}>
-            <th className="text-left py-1 font-medium">Metric</th>
-            <th className="text-right py-1 font-medium">This week</th>
-            {showFullWeek && <th className="text-right py-1 font-medium">Last week</th>}
-            {showFullWeek && <th className="text-right py-1 font-medium">Change</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(r => {
-            const delta = showFullWeek && r.prev > 0 ? ((r.cur - r.prev) / r.prev) * 100 : 0;
-            const up = delta >= 0;
-            return (
-              <tr key={r.label} style={{ borderTop: '1px solid var(--mt-border)' }}>
-                <td className="py-1.5" style={{ color: 'var(--mt-text-secondary)' }}>{r.label}</td>
-                <td className="py-1.5 text-right tabular-nums" style={{ color: 'var(--mt-text-heading)', fontWeight: 500 }}>
-                  {fmtVal(r.cur, r.unit)}
-                </td>
-                {showFullWeek && (
-                  <td className="py-1.5 text-right tabular-nums" style={{ color: 'var(--mt-text-faint)' }}>
-                    {fmtVal(r.prev, r.unit)}
-                  </td>
-                )}
-                {showFullWeek && (
-                  <td className="py-1.5 text-right">
-                    {r.prev > 0 ? (
-                      <span
-                        className="inline-flex items-center gap-0.5 tabular-nums"
-                        style={{ color: up ? '#0F6E56' : '#A32D2D', fontWeight: 500 }}
-                      >
-                        {up ? <ArrowUp size={10} /> : <ArrowDown size={10} />}
-                        {Math.abs(Math.round(delta))}%
-                      </span>
-                    ) : (
-                      <Minus size={10} className="ml-auto" style={{ color: 'var(--mt-text-faint)' }} />
-                    )}
-                  </td>
-                )}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// Daily chart — one bar per completed day. Future days render as low-
-// opacity ghost bars with a placeholder height so the chart doesn't end
-// abruptly mid-month. Hidden entirely when < 2 days of data.
-function DailyChart({ stream, isClinic, daysElapsed }: { stream: StreamData; isClinic: boolean; daysElapsed: number }) {
-  if (daysElapsed < 2 || stream.daily.length < 2) {
-    return (
-      <div className="rounded-xl p-3" style={{ background: 'var(--mt-bg-surface)', border: '1px solid var(--mt-border)' }}>
-        <h3 className="text-xs mb-2" style={{ color: 'var(--mt-text-muted)', fontWeight: 500 }}>
-          Daily {isClinic ? 'visits' : 'revenue'} — {stream.name}
-        </h3>
-        <p className="text-[12px]" style={{ color: 'var(--mt-text-faint)' }}>
-          Daily chart appears after 2+ days of data.
-        </p>
-      </div>
-    );
-  }
-
-  const chartData = stream.daily.map(d => ({
-    date: d.date.slice(8, 10),
-    Visits: isClinic ? (d.patients || 0) : 0,
-    Revenue: isClinic ? 0 : d.revenue,
-  }));
-
-  const dataKey = isClinic ? 'Visits' : 'Revenue';
-  const barColor = isClinic ? '#1D9E75' : '#1D4ED8';
-
-  return (
-    <div className="rounded-xl p-3" style={{ background: 'var(--mt-bg-surface)', border: '1px solid var(--mt-border)' }}>
-      <h3 className="text-xs mb-2" style={{ color: 'var(--mt-text-muted)', fontWeight: 500 }}>
-        Daily {isClinic ? 'visits' : 'revenue'} — {stream.name}
-      </h3>
-      <ResponsiveContainer width="100%" height={160}>
-        <BarChart data={chartData} margin={{ top: 5, right: 5, bottom: 0, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="var(--mt-border)" vertical={false} />
-          <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--mt-text-faint)' }} axisLine={false} tickLine={false} />
-          <YAxis
-            tick={{ fontSize: 10, fill: 'var(--mt-text-faint)' }}
-            tickFormatter={(v: number) => formatCompact(v)}
-            width={42}
-            axisLine={false}
-            tickLine={false}
-          />
-          <Tooltip
-            contentStyle={{
-              backgroundColor: 'var(--mt-bg-raised)',
-              border: '1px solid var(--mt-border)',
-              borderRadius: '10px',
-              fontSize: '11px',
-              boxShadow: 'var(--mt-shadow-pop)',
-            }}
-            labelStyle={{ color: 'var(--mt-text-muted)' }}
-            itemStyle={{ color: 'var(--mt-text-primary)' }}
-            formatter={(value: number) => isClinic ? formatNumber(value) : formatINR(value)}
-          />
-          <Bar dataKey={dataKey} fill={barColor} radius={[3, 3, 0, 0]} />
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
+// Per-stream weekly + daily sections were removed in the May 2026 polish
+// pass. Weekly comparisons now live in the Weekly Insight PDF; the
+// month-wide daily revenue trend is covered by DailyProgressionChart
+// above. Per-stream signals (visits, revenue, sales, gross profit) live
+// in the 4×2 stream grid — augmented with Avg Ticket sub-lines on the
+// Consultation / Diagnostics Revenue cards and the Pharmacy Sales card.
