@@ -22,6 +22,7 @@
 
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { calculateProRataDelta, daysElapsedInMonth, daysInMonth } from '../../utils/proRata';
 import {
   ArrowUpRight, AlertTriangle, TrendingUp, TrendingDown,
   Minus,
@@ -160,9 +161,22 @@ export default function ActualsAllOverview({ data, historical, clinic, pharma, i
   const prevClinic    = prevMonth ? (histClinicMonthly.get(prevMonth) || 0) : null;
   const prevPharma    = prevMonth ? (histPharmaMonthly.get(prevMonth) || 0) : null;
 
-  const totalDelta  = (prevTotal != null && prevTotal > 0)  ? pct(totalRevenue - prevTotal, prevTotal) : null;
-  const clinicDelta = (prevClinic != null && prevClinic > 0) ? pct(clinicRevenue - prevClinic, prevClinic) : null;
-  const pharmaDelta = (prevPharma != null && prevPharma > 0) ? pct(pharmaRevenue - prevPharma, prevPharma) : null;
+  // Pro-rata month-over-month delta (May 2026 addendum). On day 2 of a
+  // 31-day month, comparing the running total against the *full* prior
+  // month gave a useless "−96%" reading. We now scale the prior-month
+  // total by the fraction of the current month elapsed, producing an
+  // apples-to-apples "where you should be at this point" baseline.
+  // Closed periods (e.g. user selected "Last month (Apr '26)") return
+  // fraction = 1, which collapses back to the standard MoM comparison.
+  const proRataDays   = currentMonth ? daysElapsedInMonth(currentMonth) : 0;
+  const proRataTotalD = currentMonth ? daysInMonth(currentMonth)        : 0;
+  const totalProRata  = calculateProRataDelta(totalRevenue,  prevTotal,  proRataDays, proRataTotalD);
+  const clinicProRata = calculateProRataDelta(clinicRevenue, prevClinic, proRataDays, proRataTotalD);
+  const pharmaProRata = calculateProRataDelta(pharmaRevenue, prevPharma, proRataDays, proRataTotalD);
+
+  const totalDelta  = totalProRata.delta;
+  const clinicDelta = clinicProRata.delta;
+  const pharmaDelta = pharmaProRata.delta;
 
   // ─── KPI sub-line metrics ─────────────────────────────────────────────────
   // Pulled from sub-tab endpoints when available. Each value defaults to
@@ -467,6 +481,8 @@ export default function ActualsAllOverview({ data, historical, clinic, pharma, i
             value={formatINR(totalRevenue)}
             delta={totalDelta}
             prevValue={prevTotal}
+            baseline={totalProRata.baseline}
+            isProRata={totalProRata.isProRata}
             rightSubText={prevTotal != null && prevTotal > 0 ? `${totalRevenue - prevTotal >= 0 ? '+' : ''}${formatINR(totalRevenue - prevTotal)}` : null}
             footerLabel={totalForecast > 0 ? `Forecast: ${formatINR(totalForecast)} (${isSingleMonth ? 'monthly' : 'period'})` : null}
             footerDelta={totalForecast > 0 ? pct(totalRevenue - totalForecast, totalForecast) : null}
@@ -476,6 +492,8 @@ export default function ActualsAllOverview({ data, historical, clinic, pharma, i
             value={formatINR(clinicRevenue)}
             delta={clinicDelta}
             prevValue={prevClinic}
+            baseline={clinicProRata.baseline}
+            isProRata={clinicProRata.isProRata}
             rightSubText={totalRevenue > 0 ? `${pct(clinicRevenue, totalRevenue).toFixed(1)}% of total` : null}
             footerLabel={
               clinicPatientCount != null
@@ -490,6 +508,8 @@ export default function ActualsAllOverview({ data, historical, clinic, pharma, i
             value={formatINR(pharmaRevenue)}
             delta={pharmaDelta}
             prevValue={prevPharma}
+            baseline={pharmaProRata.baseline}
+            isProRata={pharmaProRata.isProRata}
             rightSubText={totalRevenue > 0 ? `${pct(pharmaRevenue, totalRevenue).toFixed(1)}% of total` : null}
             footerLabel={
               pharmaBills != null
@@ -610,19 +630,31 @@ export default function ActualsAllOverview({ data, historical, clinic, pharma, i
 
 // ─── Sub-components ─────────────────────────────────────────────────────────
 
-function KpiCard({ label, value, delta, prevValue, rightSubText, footerLabel, footerDelta, footerLink, footerLinkLabel }: {
+function KpiCard({ label, value, delta, prevValue, baseline, isProRata, rightSubText, footerLabel, footerDelta, footerLink, footerLinkLabel }: {
   label: string;
   value: string;
-  delta: number | null;          // month-over-month %, null when prior period unavailable
-  prevValue: number | null;      // last-month rupees, null when unavailable
-  rightSubText: string | null;   // absolute MoM diff or "X% of total" — right-aligned in row 3
-  footerLabel?: string | null;   // left side of footer row (e.g., "Forecast: ₹X (monthly)")
-  footerDelta?: number | null;   // forecast delta % when this is a Total card
+  delta: number | null;            // month-over-month %, null when prior period unavailable
+  prevValue: number | null;        // last-month full total — used as fallback only
+  baseline?: number | null;        // pro-rata baseline ("day-matched pace") in rupees
+  isProRata?: boolean;             // true mid-month → suffix " vs pace" + show baseline in sub-line
+  rightSubText: string | null;     // absolute MoM diff or "X% of total" — right-aligned in row 3
+  footerLabel?: string | null;     // left side of footer row (e.g., "Forecast: ₹X (monthly)")
+  footerDelta?: number | null;     // forecast delta % when this is a Total card
   footerLink?: (() => void) | null;
   footerLinkLabel?: string;
 }) {
   const showDelta = delta != null && isFinite(delta);
   const showFooter = footerLabel || footerLink;
+  // Sub-line text: pro-rata mid-period uses the day-matched pace
+  // baseline ("vs Rs. 2,36,612 day-matched pace"). Closed periods or
+  // calls without baseline data fall back to the legacy full-prior
+  // framing ("vs Rs. 36,68,449 last month") so the card still reads
+  // sensibly in environments that haven't been migrated yet.
+  const subLabel = isProRata && baseline != null && baseline > 0
+    ? `vs ${formatINR(Math.round(baseline))} day-matched pace`
+    : prevValue != null && prevValue > 0
+      ? `vs ${formatINR(Math.round(prevValue))} last month`
+      : '';
   return (
     <div
       className="rounded-xl px-5 py-4"
@@ -643,15 +675,15 @@ function KpiCard({ label, value, delta, prevValue, rightSubText, footerLabel, fo
         >
           {label}
         </p>
-        {showDelta && <DeltaPill delta={delta} />}
+        {showDelta && <DeltaPill delta={delta} isProRata={!!isProRata} />}
       </div>
       <p className="mt-2" style={{ fontSize: 28, fontWeight: 500, color: 'var(--mt-text-heading)' }}>
         {value}
       </p>
-      {(prevValue != null || rightSubText) && (
+      {(subLabel || rightSubText) && (
         <div className="mt-1.5 flex items-center justify-between gap-2 text-[12px]">
           <span style={{ color: 'var(--mt-text-secondary)' }}>
-            {prevValue != null && prevValue > 0 ? `vs ${formatINR(Math.round(prevValue))} last month` : ''}
+            {subLabel}
           </span>
           {rightSubText && (
             <span style={{ color: 'var(--mt-text-faint)' }}>{rightSubText}</span>
@@ -684,14 +716,21 @@ function KpiCard({ label, value, delta, prevValue, rightSubText, footerLabel, fo
   );
 }
 
-function DeltaPill({ delta }: { delta: number }) {
+function DeltaPill({ delta, isProRata = false }: { delta: number; isProRata?: boolean }) {
+  // Tooltip shown on hover — explains the pro-rata logic the first
+  // time a user sees "−43.7% vs pace" instead of the legacy "−96%".
+  const tooltip = isProRata
+    ? "Comparison normalized for month progress. We compare today's earnings to where you'd be at the same point in last month, not to last month's full total. This way the delta means something on day 2 as well as day 28."
+    : 'Month-over-month change vs the prior period.';
+
   if (delta === 0) {
     return (
       <span
         className="inline-flex items-center gap-1 rounded-md text-[12px]"
         style={{ background: 'var(--mt-bg-muted)', color: 'var(--mt-text-faint)', padding: '2px 8px', fontWeight: 500 }}
+        title={tooltip}
       >
-        <Minus size={11} /> 0%
+        <Minus size={11} /> 0%{isProRata && <span style={{ fontSize: 9, opacity: 0.7, marginLeft: 2 }}>vs pace</span>}
       </span>
     );
   }
@@ -705,9 +744,11 @@ function DeltaPill({ delta }: { delta: number }) {
         padding: '2px 8px',
         fontWeight: 500,
       }}
+      title={tooltip}
     >
       {positive ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
       {positive ? '+' : ''}{delta.toFixed(1)}%
+      {isProRata && <span style={{ fontSize: 9, opacity: 0.7, marginLeft: 2, fontWeight: 400 }}>vs pace</span>}
     </span>
   );
 }
