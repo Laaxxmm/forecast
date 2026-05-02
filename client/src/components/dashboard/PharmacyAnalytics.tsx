@@ -750,296 +750,687 @@ function PurchasesTab({ data, isVisible, fyStart, fyEnd }: TabProps) {
 }
 
 // ── SALES TAB ────────────────────────────────────────────────────────────────
+//
+// Sales-tab visual primitives. Lives next to SalesTab so the Margin pill /
+// outlier mapping doesn't drift from the per-row colours used in the table.
+// Margin buckets here are coarser than the Purchases-tab ones because the
+// Sales tab cares about "is this drug making us money?" rather than the
+// finer 0/10/20/30/50%+ split used for purchase margin distribution.
 
-function SalesTab({ data, isVisible, search, setSearch, page, setPage, pageSize, fyStart, fyEnd }: TabProps) {
+type SalesMarginTone = 'darkGreen' | 'green' | 'amber' | 'red';
+
+function salesMarginTone(pct: number): SalesMarginTone {
+  if (pct >= 50) return 'darkGreen';
+  if (pct >= 20) return 'green';
+  if (pct >= 10) return 'amber';
+  return 'red';
+}
+
+const SALES_MARGIN_PILL: Record<SalesMarginTone, string> = {
+  darkGreen: 'bg-emerald-700/15 text-emerald-900 dark:text-emerald-300 border-emerald-700/30',
+  green:     'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20',
+  amber:     'bg-amber-500/10 text-amber-800 dark:text-amber-400 border-amber-500/20',
+  red:       'bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20',
+};
+
+// Outlier threshold — kept in one place so the KPI count, the alert callout,
+// the table flag, the row tint, and the "outliers only" filter all agree.
+// Per the redesign brief: low-margin (< 5%) sales on positive net-sales rows
+// are the "at risk" rows worth surfacing as a top-level alert. Loss-making
+// rows (negative gross profit) are tracked separately because they're a
+// stronger signal — usually a billing/discount error rather than a pricing
+// issue.
+const LOW_MARGIN_THRESHOLD = 5;
+
+// ── Doctor name fuzzy-merge helpers ───────────────────────────────────────
+//
+// Pharmacy referral data frequently contains the same doctor entered with
+// different spellings ("DR.RAJESHWARI" vs "DR.RAJESWARI" vs "DR.RAJESWRI").
+// Showing them as separate bars misrepresents who's actually driving
+// revenue, so the Top Referring Doctors card collapses near-identical
+// names into a single canonical row. The underlying data is NOT mutated —
+// the Sales Details table still shows the raw spellings so the user can
+// fix them at source.
+
+function normalizeDoctor(name: string): string {
+  return String(name || '')
+    .toUpperCase()
+    .replace(/^\s*DR\.?\s*/, '')   // strip leading "DR" / "DR."
+    .replace(/^\s*DOCTOR\s*/, '')  // strip leading "DOCTOR"
+    .replace(/[\s.\-_,]/g, '')     // strip whitespace and punctuation
+    .trim();
+}
+
+// Standard Levenshtein distance. Short strings only (doctor names) so the
+// O(m*n) cost is negligible.
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const prev: number[] = new Array(a.length + 1);
+  const curr: number[] = new Array(a.length + 1);
+  for (let j = 0; j <= a.length; j++) prev[j] = j;
+  for (let i = 1; i <= b.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= a.length; j++) {
+      const cost = b[i - 1] === a[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    for (let j = 0; j <= a.length; j++) prev[j] = curr[j];
+  }
+  return prev[a.length];
+}
+
+type DoctorGroup = { canonical: string; spellings: string[]; revenue: number };
+
+// Group near-identical doctor names. Two normalized forms count as the same
+// person when Levenshtein distance is ≤ 2 OR ≤ 25% of the longer name (so
+// long names tolerate slightly more variation, short names are stricter).
+// Canonical spelling per group = the longest spelling (most likely complete).
+function mergeReferrals(rows: Array<{ name: string; sales: number }>): DoctorGroup[] {
+  const groups: DoctorGroup[] = [];
+  for (const r of rows) {
+    const norm = normalizeDoctor(r.name);
+    const sales = Number(r.sales) || 0;
+    if (!norm) {
+      groups.push({ canonical: r.name, spellings: [r.name], revenue: sales });
+      continue;
+    }
+    const match = groups.find(g => {
+      const gnorm = normalizeDoctor(g.canonical);
+      if (!gnorm) return false;
+      const dist = levenshtein(norm, gnorm);
+      const longer = Math.max(norm.length, gnorm.length);
+      return dist <= 2 || (longer >= 8 && dist / longer <= 0.25);
+    });
+    if (match) {
+      if (!match.spellings.includes(r.name)) match.spellings.push(r.name);
+      match.revenue += sales;
+    } else {
+      groups.push({ canonical: r.name, spellings: [r.name], revenue: sales });
+    }
+  }
+  for (const g of groups) {
+    if (g.spellings.length > 1) {
+      g.canonical = g.spellings.slice().sort((a, b) => b.length - a.length)[0];
+    }
+  }
+  groups.sort((a, b) => b.revenue - a.revenue);
+  return groups;
+}
+
+function SalesTab({ data, isVisible, fyStart, fyEnd }: TabProps) {
   const { kpi, monthlyTrend, topDrugsBySales, topDrugsByProfit, referralAnalysis, topPatients, table } = data;
 
-  const cardKeys = ['pharma_total_sales', 'pharma_total_cogs', 'pharma_total_profit', 'pharma_profit_margin', 'pharma_total_bills', 'pharma_unique_patients'];
-  const chartKeys = ['pharma_monthly_sales_trend', 'pharma_top_drugs_sales', 'pharma_top_drugs_profit', 'pharma_referral_analysis', 'pharma_sales_vs_cogs', 'pharma_top_patients'];
-  const anyCardVisible = cardKeys.some(isVisible);
-  const anyChartVisible = chartKeys.some(isVisible);
-  const tableVisible = isVisible('pharma_sales_table');
+  // ── Visibility gates ─────────────────────────────────────────────────────
+  // Existing keys are reused. Mappings for the redesigned tab:
+  //   pharma_total_sales         → Net sales KPI tile
+  //   pharma_total_cogs          → COGS KPI tile
+  //   pharma_total_profit        → Gross profit KPI tile
+  //   pharma_profit_margin       → "X% margin" sub-line under Gross profit
+  //   pharma_total_bills         → Total bills KPI tile
+  //   pharma_unique_patients     → orphaned in this tab (data was always 0)
+  //   pharma_monthly_sales_trend → "How sales convert to profit" hero card
+  //   pharma_sales_vs_cogs       → also gates the hero card (same content)
+  //   pharma_top_drugs_sales     → combined Top drugs card
+  //   pharma_top_drugs_profit    → also gates the combined Top drugs card
+  //   pharma_referral_analysis   → Top referring doctors card
+  //   pharma_top_patients        → orphaned (not in redesigned layout)
+  //   pharma_sales_table         → Sales details table + outlier alert
+  const showNetSales        = isVisible('pharma_total_sales');
+  const showCogs            = isVisible('pharma_total_cogs');
+  const showGrossProfit     = isVisible('pharma_total_profit');
+  const showMarginSub       = isVisible('pharma_profit_margin');
+  const showBills           = isVisible('pharma_total_bills');
+  const showHero            = isVisible('pharma_monthly_sales_trend') || isVisible('pharma_sales_vs_cogs');
+  const showTopDrugs        = isVisible('pharma_top_drugs_sales') || isVisible('pharma_top_drugs_profit');
+  const showReferrals       = isVisible('pharma_referral_analysis');
+  const showTable           = isVisible('pharma_sales_table');
 
-  const filteredTable = useMemo(() => {
-    if (!search || !table) return table || [];
-    const s = search.toLowerCase();
-    return table.filter((r: any) =>
-      (r.drug_name || '').toLowerCase().includes(s) ||
-      (r.patient_name || '').toLowerCase().includes(s) ||
-      (r.bill_no || '').toLowerCase().includes(s)
-    );
-  }, [table, search]);
+  // ── Derived KPI values ──────────────────────────────────────────────────
+  const netSales       = Number(kpi?.totalNetSales ?? Math.max(0, (Number(kpi?.totalSales) || 0) - (Number(kpi?.totalTax) || 0))) || 0;
+  const totalCogs      = Number(kpi?.totalCogs) || 0;
+  const grossProfit    = Number(kpi?.totalGrossProfit ?? kpi?.totalProfit) || 0;
+  const grossMarginPct = netSales > 0 ? (grossProfit / netSales) * 100 : 0;
+  const totalBills     = Number(kpi?.totalBills) || 0;
+  const avgBill        = totalBills > 0 ? netSales / totalBills : 0;
+  const grossSales     = Number(kpi?.totalSales) || 0;
+  const totalTax       = Number(kpi?.totalTax) || 0;
+  const reportedProfit = kpi?.reportedProfit != null ? Number(kpi.reportedProfit) : null;
+  const overstatedBy   = reportedProfit != null ? reportedProfit - grossProfit : 0;
 
-  const trendData = monthlyTrend?.map((m: any) => ({ ...m, label: getMonthLabel(m.month) })) || [];
-  const totalPages = Math.ceil(filteredTable.length / pageSize);
-  const pageRows = filteredTable.slice(page * pageSize, (page + 1) * pageSize);
+  // ── Per-row enrichment (drives table + outliers + per-drug aggregates) ──
+  type EnrichedRow = Record<string, any> & {
+    _sales: number; _tax: number; _cogs: number;
+    _netSales: number; _grossProfit: number; _marginPct: number;
+    _isLoss: boolean; _isLowMargin: boolean;
+  };
+  const enriched = useMemo<EnrichedRow[]>(() => {
+    return (table || []).map((r: any): EnrichedRow => {
+      const sales      = Number(r.sales_amount) || 0;
+      const tax        = Number(r.sales_tax) || 0;
+      const cogs       = Number(r.purchase_amount) || 0;
+      const ns         = sales - tax;
+      const profit     = ns - cogs;
+      const marginPct  = ns > 0 ? (profit / ns) * 100 : 0;
+      const isLoss     = profit < 0;
+      const isLowMargin = !isLoss && ns > 0 && marginPct < LOW_MARGIN_THRESHOLD;
+      return {
+        ...r,
+        _sales: sales, _tax: tax, _cogs: cogs,
+        _netSales: ns, _grossProfit: profit,
+        _marginPct: marginPct,
+        _isLoss: isLoss, _isLowMargin: isLowMargin,
+      };
+    });
+  }, [table]);
+
+  const lowMarginRows = useMemo(() => enriched.filter((r: EnrichedRow) => r._isLowMargin), [enriched]);
+  const lowMarginCount = lowMarginRows.length;
+  const lowMarginRevenue = useMemo(
+    () => lowMarginRows.reduce((s: number, r: EnrichedRow) => s + r._sales, 0),
+    [lowMarginRows],
+  );
+
+  // Per-drug aggregates derived from enriched rows. Used by:
+  //   • Hero card highest/lowest margin SKU
+  //   • Top drugs combined card
+  //   • Outlier alert pills (top 5 outlier drugs by sales value)
+  type DrugAgg = { name: string; revenue: number; netSales: number; profit: number; margin: number };
+  const drugAggregates = useMemo<DrugAgg[]>(() => {
+    const acc = new Map<string, { revenue: number; netSales: number; profit: number }>();
+    for (const r of enriched) {
+      const e = acc.get(r.drug_name) || { revenue: 0, netSales: 0, profit: 0 };
+      e.revenue += r._sales;
+      e.netSales += r._netSales;
+      e.profit += r._grossProfit;
+      acc.set(r.drug_name, e);
+    }
+    const out: DrugAgg[] = [];
+    for (const [name, v] of acc) {
+      out.push({
+        name, revenue: v.revenue, netSales: v.netSales, profit: v.profit,
+        margin: v.netSales > 0 ? (v.profit / v.netSales) * 100 : 0,
+      });
+    }
+    return out;
+  }, [enriched]);
+
+  // Highest/lowest margin SKUs — only consider drugs with positive net sales
+  // so a single zero-sales row doesn't hijack either extreme.
+  const drugsWithPositiveSales = useMemo(
+    () => drugAggregates.filter(d => d.netSales > 0),
+    [drugAggregates],
+  );
+  const highestMarginSKU = drugsWithPositiveSales.length > 0
+    ? drugsWithPositiveSales.reduce((m, d) => d.margin > m.margin ? d : m)
+    : null;
+  const lowestMarginSKU = drugsWithPositiveSales.length > 0
+    ? drugsWithPositiveSales.reduce((m, d) => d.margin < m.margin ? d : m)
+    : null;
+
+  // Top outlier drugs by sales value, for the alert callout pills.
+  const topOutlierDrugs = useMemo(() => {
+    const acc = new Map<string, { sales: number; netSales: number; profit: number }>();
+    for (const r of lowMarginRows) {
+      const e = acc.get(r.drug_name) || { sales: 0, netSales: 0, profit: 0 };
+      e.sales += r._sales;
+      e.netSales += r._netSales;
+      e.profit += r._grossProfit;
+      acc.set(r.drug_name, e);
+    }
+    const out: Array<{ name: string; sales: number; margin: number }> = [];
+    for (const [name, v] of acc) {
+      out.push({ name, sales: v.sales, margin: v.netSales > 0 ? (v.profit / v.netSales) * 100 : 0 });
+    }
+    return out.sort((a, b) => b.sales - a.sales).slice(0, 5);
+  }, [lowMarginRows]);
+
+  // ── Period label for hero subtitle ──────────────────────────────────────
+  const periodLabel = useMemo(() => {
+    if (!monthlyTrend || monthlyTrend.length === 0) return '';
+    if (monthlyTrend.length === 1) return getMonthLabel(monthlyTrend[0].month);
+    return `${getMonthLabel(monthlyTrend[0].month)} – ${getMonthLabel(monthlyTrend[monthlyTrend.length - 1].month)}`;
+  }, [monthlyTrend]);
+
+  // ── Combined Top Drugs (sortable) ───────────────────────────────────────
+  const [drugSort, setDrugSort] = useState<'revenue' | 'profit' | 'margin'>('revenue');
+  const [showAllDrugs, setShowAllDrugs] = useState(false);
+
+  // Server's topDrugsBySales / topDrugsByProfit are still used as a coverage
+  // fallback for periods where the table was truncated to 200 rows. We
+  // prefer per-drug aggregates from enriched rows when available, but merge
+  // in any names from the server lists that didn't appear in the table.
+  const combinedDrugs = useMemo<DrugAgg[]>(() => {
+    const byName = new Map<string, DrugAgg>();
+    for (const d of drugAggregates) byName.set(d.name, d);
+
+    // Fallback: server's topDrugsBySales has GST-inclusive sales but no profit
+    // breakdown for the whole list, so merge with topDrugsByProfit by name.
+    const profitByName = new Map<string, { profit: number; margin: number }>();
+    for (const d of topDrugsByProfit || []) {
+      profitByName.set(d.name, {
+        profit: Number(d.grossProfit ?? d.profit) || 0,
+        margin: Number(d.marginPct) || 0,
+      });
+    }
+    for (const d of topDrugsBySales || []) {
+      if (byName.has(d.name)) continue;
+      const pp = profitByName.get(d.name);
+      const revenue = Number(d.sales) || 0;
+      const profit = pp?.profit ?? 0;
+      const margin = pp?.margin ?? 0;
+      byName.set(d.name, {
+        name: d.name,
+        revenue,
+        netSales: margin !== 0 && profit !== 0 ? profit / (margin / 100) : revenue,
+        profit, margin,
+      });
+    }
+    return Array.from(byName.values());
+  }, [drugAggregates, topDrugsBySales, topDrugsByProfit]);
+
+  const sortedDrugs = useMemo(() => {
+    const list = combinedDrugs.slice();
+    if (drugSort === 'revenue')      list.sort((a, b) => b.revenue - a.revenue);
+    else if (drugSort === 'profit')  list.sort((a, b) => b.profit - a.profit);
+    else                              list.sort((a, b) => b.margin - a.margin);
+    return list;
+  }, [combinedDrugs, drugSort]);
+
+  const visibleDrugs = showAllDrugs ? sortedDrugs : sortedDrugs.slice(0, 7);
+
+  // ── Doctor fuzzy-merge for referral card ────────────────────────────────
+  const mergedReferrals = useMemo(() => mergeReferrals(referralAnalysis || []), [referralAnalysis]);
+  const dupGroups = mergedReferrals.filter(g => g.spellings.length > 1);
+  const dupCount = dupGroups.reduce((s, g) => s + (g.spellings.length - 1), 0);
+  const sampleDupSpellings = dupGroups[0]?.spellings.slice(0, 3).join(' / ') || '';
+  const topReferrers = mergedReferrals.slice(0, 5);
+  const maxRefRevenue = topReferrers[0]?.revenue || 1;
+  const REFERRER_BAR_COLORS = ['#BA7517', '#EF9F27', '#FAC775', '#FAC775', '#FAC775'];
+
+  // ── Sales table state ───────────────────────────────────────────────────
+  const [outliersOnly, setOutliersOnly] = useState(false);
+  const [showAllCols, setShowAllCols] = useState(false);
+  const tableRows = outliersOnly ? lowMarginRows : enriched;
+
+  // ── KPI strip layout ────────────────────────────────────────────────────
+  // 5 tiles in the redesigned spec — Gross Margin % is folded into the Gross
+  // Profit sub-line, Unique Patients is dropped, Outlier Sales replaces it.
+  const kpiVisible = [showNetSales, showCogs, showGrossProfit, showBills, true /* outlier always */]
+    .filter(Boolean).length;
+  const kpiColCls: Record<number, string> = {
+    1: 'lg:grid-cols-1', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5',
+  };
+
+  // Hero math — only render the bar if we have a positive net-sales base.
+  const cogsPct   = netSales > 0 ? (totalCogs / netSales) * 100 : 0;
+  const profitPct = netSales > 0 ? (grossProfit / netSales) * 100 : 0;
+  const heroEligible = netSales > 0 && (totalCogs > 0 || grossProfit !== 0);
 
   return (
     <div>
-      {/* KPI Cards */}
-      {anyCardVisible && (() => {
-        const visibleCount = cardKeys.filter(isVisible).length;
-        const cols: Record<number, string> = { 1: '', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6' };
-        return (
-          <div className={`grid grid-cols-2 md:grid-cols-3 ${cols[visibleCount] || 'lg:grid-cols-6'} gap-4 mb-3`}>
-            {isVisible('pharma_total_sales') && (
-              // Headline sales card shows NET of GST so it reads as
-              // P&L revenue (matches Gross Profit / Margin which are
-              // also computed off net sales). Gross sales incl. GST is
-              // still surfaced in the footnote below + the Sales table
-              // for GST-filing reconciliation. Falls back to
-              // (totalSales - totalTax) for legacy responses without
-              // `totalNetSales`.
-              <MiniKPI
-                label="Net Sales (ex-GST)"
-                sub="Top-line revenue"
-                value={formatINR(kpi.totalNetSales ?? Math.max(0, (kpi.totalSales || 0) - (kpi.totalTax || 0)))}
-                icon={TrendingUp}
-                color="teal"
-              />
+      {/* ── KPI strip (5 tinted cards) ─────────────────────────────────── */}
+      {kpiVisible > 0 && (
+        <div className={`grid grid-cols-2 md:grid-cols-3 ${kpiColCls[kpiVisible] || 'lg:grid-cols-5'} gap-4 mb-6`}>
+          {showNetSales && (
+            <PurchaseKPI tone="green" label="Net sales (ex-GST)" value={formatINR(netSales)} sub="Top-line revenue" />
+          )}
+          {showCogs && (
+            <PurchaseKPI tone="blue" label="COGS (ex-GST)" value={formatINR(totalCogs)} sub="Net purchase rate" />
+          )}
+          {showGrossProfit && (
+            <PurchaseKPI
+              tone="purple"
+              label="Gross profit"
+              value={formatINR(grossProfit)}
+              sub={showMarginSub && netSales > 0 ? `${grossMarginPct.toFixed(2)}% margin` : 'Net Sales − COGS'}
+            />
+          )}
+          {showBills && (
+            <PurchaseKPI
+              tone="amber"
+              label="Total bills"
+              value={formatNumber(totalBills)}
+              sub={avgBill > 0 ? `avg ${formatINR(Math.round(avgBill))}` : undefined}
+            />
+          )}
+          <PurchaseKPI
+            tone="coral"
+            label="Outlier sales"
+            value={formatNumber(lowMarginCount)}
+            sub={`below ${LOW_MARGIN_THRESHOLD}% margin`}
+          />
+        </div>
+      )}
+
+      {/* ── GST sanity-check callout ────────────────────────────────────── */}
+      {kpi && grossSales > 0 && totalTax > 0 && (
+        <div className="rounded-xl px-5 py-4 mb-6 bg-emerald-500/10 border border-emerald-500/15">
+          <p className="text-sm font-medium text-emerald-900 dark:text-emerald-200">
+            GST sanity check passed ✓
+          </p>
+          <p className="text-[12px] text-emerald-700/90 dark:text-emerald-400/80 mt-1.5 leading-relaxed">
+            {reportedProfit != null ? (
+              <>
+                Source-system &quot;profit&quot; was overstated by{' '}
+                <span className="font-medium">{formatINR(Math.round(overstatedBy))}</span>
+                {' '}— exactly matches the GST collected on{' '}
+                <span className="font-medium">{formatINR(grossSales)}</span> gross sales.
+                Your true gross profit is{' '}
+                <span className="font-medium">{formatINR(Math.round(grossProfit))}</span>, not{' '}
+                <span className="font-medium">{formatINR(Math.round(reportedProfit))}</span>.
+                Operating expenses (rent, salaries, expiries) still need deduction for net profit.
+              </>
+            ) : (
+              <>
+                <span className="font-medium">{formatINR(totalTax)}</span> GST was collected on{' '}
+                <span className="font-medium">{formatINR(grossSales)}</span> gross sales — that's a govt
+                liability, not income. Your true gross profit (ex-GST) is{' '}
+                <span className="font-medium">{formatINR(Math.round(grossProfit))}</span>.
+                Operating expenses (rent, salaries, expiries) still need deduction for net profit.
+              </>
             )}
-            {isVisible('pharma_total_cogs') && <MiniKPI label="COGS (ex-GST)" sub="Net purchase rate" value={formatINR(kpi.totalCogs)} icon={DollarSign} color="blue" />}
-            {isVisible('pharma_total_profit') && <MiniKPI label="Gross Profit" sub="Net Sales − COGS" value={formatINR(kpi.totalGrossProfit ?? kpi.totalProfit)} icon={TrendingUp} color="emerald" />}
-            {isVisible('pharma_profit_margin') && <MiniKPI label="Gross Margin %" sub="On Net Sales (ex-GST)" value={`${kpi.grossMarginPct ?? kpi.profitMargin}%`} icon={BarChart3} color="purple" />}
-            {isVisible('pharma_total_bills') && <MiniKPI label="Total Bills" value={formatNumber(kpi.totalBills)} icon={FileText} color="amber" />}
-            {isVisible('pharma_unique_patients') && <MiniKPI label="Unique Patients" value={formatNumber(kpi.uniquePatients)} icon={Users} color="cyan" />}
+          </p>
+        </div>
+      )}
+
+      {/* ── "How sales convert to profit" hero card ─────────────────────── */}
+      {showHero && heroEligible && (
+        <div className="card mb-6">
+          <div className="flex items-start justify-between gap-3 mb-1">
+            <h3 className="text-base font-medium text-theme-heading">How sales convert to profit</h3>
+            {periodLabel && (
+              <p className="text-[13px] text-theme-faint shrink-0">{periodLabel} · ex-GST</p>
+            )}
           </div>
-        );
-      })()}
+          <p className="text-[13px] text-theme-secondary mt-0.5 mb-5">
+            For every ₹100 of net sales,{' '}
+            <span className="text-theme-heading">₹{cogsPct.toFixed(2)}</span> covers the cost of goods and{' '}
+            <span className="text-theme-heading">₹{profitPct.toFixed(2)}</span> is gross profit
+          </p>
 
-      {/* Profit math footnote — explains the GST-inclusive vs ex-GST split.
-          Headline card now shows Net Sales (ex-GST), so the footnote
-          surfaces Gross Sales (for GST-filing reconciliation) plus the
-          sanity-check identity (reported − correct ≡ tax collected). */}
-      {anyCardVisible && kpi && (
-        <div className="text-[11px] text-theme-faint mb-6 px-3 py-2 rounded-lg border border-dark-400/20 bg-dark-700/30 leading-relaxed">
-          <span className="font-medium text-theme-secondary">Gross Sales (incl. GST · for filing):</span>{' '}
-          {formatINR(kpi.totalSales || 0)}
-          {' · '}
-          <span className="font-medium text-theme-secondary">GST collected (govt liability, not income):</span>{' '}
-          {formatINR(kpi.totalTax || 0)}
-          {kpi.reportedProfit != null && (
-            <>
-              {' · '}
-              <span className="font-medium text-theme-secondary">Source-system &quot;profit&quot; was overstated by:</span>{' '}
-              {formatINR((kpi.reportedProfit || 0) - (kpi.totalGrossProfit ?? kpi.totalProfit ?? 0))}
-              <span className="text-theme-faint"> (matches GST collected — sanity check)</span>
-            </>
-          )}
-          <span className="block mt-1 text-theme-faint">
-            Gross Profit is profit on goods only — operating expenses (rent, salaries, expiries) still need to be deducted to get bottom-line profit.
-          </span>
+          {/* Stacked bar: COGS + Gross Profit = Net Sales (100%). */}
+          <div className="flex h-[32px] rounded-md overflow-hidden">
+            <div
+              className="flex items-center px-3 text-[12px] font-medium text-white whitespace-nowrap overflow-hidden"
+              style={{ width: `${Math.max(0, cogsPct)}%`, backgroundColor: '#185FA5' }}
+              title={`COGS: ${formatINR(totalCogs)} (${cogsPct.toFixed(2)}%)`}
+            >
+              {cogsPct >= 18 ? `COGS · ${formatINR(totalCogs)} · ${cogsPct.toFixed(2)}%`
+                : cogsPct >= 8 ? `COGS · ${cogsPct.toFixed(0)}%`
+                : ''}
+            </div>
+            <div
+              className="flex items-center px-3 text-[12px] font-medium text-white whitespace-nowrap overflow-hidden"
+              style={{ width: `${Math.max(0, profitPct)}%`, backgroundColor: '#1D9E75' }}
+              title={`Gross profit: ${formatINR(grossProfit)} (${profitPct.toFixed(2)}%)`}
+            >
+              {profitPct >= 18 ? `Profit · ${formatINR(grossProfit)} · ${profitPct.toFixed(2)}%`
+                : profitPct >= 6 ? `Profit · ${profitPct.toFixed(2)}%`
+                : ''}
+            </div>
+          </div>
+          <div className="flex justify-between mt-1.5 text-[11px] text-theme-faint">
+            <span>₹0</span>
+            <span>Net sales: {formatINR(netSales)}</span>
+          </div>
+
+          {/* Three breakdown columns. */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-5 pt-4 border-t border-dark-400/20">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.5px] text-theme-muted mb-1">Avg margin / bill</p>
+              <p className="text-base font-medium text-theme-heading tabular-nums">
+                {totalBills > 0 ? formatINR(Math.round(grossProfit / totalBills)) : '—'}
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.5px] text-theme-muted mb-1">Highest margin SKU</p>
+              {highestMarginSKU ? (
+                <p className="text-sm font-medium text-theme-heading">
+                  <span className="text-emerald-700 dark:text-emerald-400 tabular-nums">{highestMarginSKU.margin.toFixed(1)}%</span>{' '}
+                  <span className="text-theme-secondary text-[13px]">{highestMarginSKU.name}</span>
+                </p>
+              ) : <p className="text-sm text-theme-faint">—</p>}
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.5px] text-theme-muted mb-1">Lowest margin SKU</p>
+              {lowestMarginSKU ? (
+                <p className="text-sm font-medium text-theme-heading">
+                  <span className="text-red-700 dark:text-red-400 tabular-nums">{lowestMarginSKU.margin.toFixed(1)}%</span>{' '}
+                  <span className="text-theme-secondary text-[13px]">{lowestMarginSKU.name}</span>
+                </p>
+              ) : <p className="text-sm text-theme-faint">—</p>}
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Charts */}
-      {anyChartVisible && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
-          {/* Monthly Sales & Profitability — uses ex-GST values so the green
-              bar (Net Sales) and purple bar (Gross Profit) are directly
-              comparable to COGS, which is also ex-GST. */}
-          {isVisible('pharma_monthly_sales_trend') && trendData.length > 0 && (
-            <div className="card lg:col-span-2">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Monthly Sales &amp; Profitability</h3>
-              <p className="text-xs text-theme-faint mb-4">Net Sales (ex-GST), COGS, and Gross Profit per month</p>
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={trendData} barGap={2}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" vertical={false} />
-                  <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <Tooltip formatter={(v: number) => formatINR(v)} contentStyle={CHART_STYLE} />
-                  <Legend />
-                  <Bar dataKey="netSales" name="Net Sales (ex-GST)" fill="#10b981" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="cogs" name="COGS" fill="#3b82f6" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="grossProfit" name="Gross Profit" fill="#8b5cf6" radius={[6, 6, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+      {/* ── Outlier alert callout ──────────────────────────────────────── */}
+      {showTable && lowMarginCount > 0 && (
+        <div className="rounded-xl px-5 py-4 mb-6 bg-rose-500/10 border border-rose-500/15">
+          <p className="text-sm font-medium text-rose-900 dark:text-rose-200">
+            ⚠ {formatNumber(lowMarginCount)} sale{lowMarginCount === 1 ? '' : 's'} below {LOW_MARGIN_THRESHOLD}% margin
+            {lowMarginRevenue > 0 ? ` — ${formatINR(Math.round(lowMarginRevenue))} in revenue at risk` : ''}
+          </p>
+          <p className="text-[12px] text-rose-700/90 dark:text-rose-400/80 mt-1.5 leading-relaxed">
+            High-value injectables and slow-movers are selling at near-zero margin. Either MRP needs revision
+            or these are loss-leaders that should be re-priced.
+          </p>
+          {topOutlierDrugs.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-3">
+              {topOutlierDrugs.map(d => (
+                <span
+                  key={d.name}
+                  className="inline-block px-2 py-1 text-[11px] rounded-md bg-white/90 dark:bg-rose-950/40 text-rose-900 dark:text-rose-200 border border-rose-200/60 dark:border-rose-500/20"
+                >
+                  {d.name} · {d.margin.toFixed(1)}%
+                </span>
+              ))}
             </div>
           )}
+        </div>
+      )}
 
-          {/* Net Sales vs COGS — both ex-GST so the gap = Gross Profit. */}
-          {isVisible('pharma_sales_vs_cogs') && trendData.length > 0 && (
-            <div className="card">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Net Sales vs COGS</h3>
-              <p className="text-xs text-theme-faint mb-4">Both ex-GST · gap = Gross Profit</p>
-              <ResponsiveContainer width="100%" height={250}>
-                <LineChart data={trendData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" />
-                  <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <Tooltip formatter={(v: number) => formatINR(v)} contentStyle={CHART_STYLE} />
-                  <Legend />
-                  <Line type="monotone" dataKey="netSales" name="Net Sales" stroke="#10b981" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="cogs" name="COGS" stroke="#ef4444" strokeWidth={2} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
+      {/* ── "Top drugs by revenue and profit" combined card ──────────── */}
+      {showTopDrugs && combinedDrugs.length > 0 && (
+        <div className="card mb-6">
+          <div className="flex items-start justify-between gap-3 mb-1">
+            <div>
+              <h3 className="text-base font-medium text-theme-heading">Top drugs by revenue and profit</h3>
+              <p className="text-[13px] text-theme-faint mt-0.5">
+                High revenue doesn't always mean high profit — see margin column
+              </p>
             </div>
-          )}
+            <select
+              value={drugSort}
+              onChange={e => setDrugSort(e.target.value as 'revenue' | 'profit' | 'margin')}
+              className="text-[12px] bg-transparent border border-dark-400/30 rounded-md px-2 py-1 text-theme-secondary"
+            >
+              <option value="revenue">Sort: revenue</option>
+              <option value="profit">Sort: profit</option>
+              <option value="margin">Sort: margin</option>
+            </select>
+          </div>
 
-          {/* Top Drugs by Sales */}
-          {isVisible('pharma_top_drugs_sales') && topDrugsBySales?.length > 0 && (
-            <div className="card">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Top Drugs by Revenue</h3>
-              <p className="text-xs text-theme-faint mb-4">Highest selling medicines</p>
-              <div className="space-y-2 max-h-[350px] overflow-y-auto pr-2">
-                {topDrugsBySales.map((d: any, i: number) => {
-                  const maxVal = topDrugsBySales[0]?.sales || 1;
-                  const width = Math.max(4, (d.sales / maxVal) * 100);
-                  return (
-                    <div key={i}>
-                      <div className="flex justify-between text-xs mb-1">
-                        <span className="text-theme-secondary truncate mr-2">{d.name}</span>
-                        <span className="text-theme-heading font-medium shrink-0">{formatINR(d.sales)}</span>
-                      </div>
-                      <div className="h-5 rounded-md overflow-hidden bg-dark-600">
-                        <div className="h-full rounded-md" style={{ width: `${width}%`, backgroundColor: COLORS[i % COLORS.length] }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+          <div className="mt-4">
+            <div className="grid grid-cols-[1fr_110px_110px_90px] gap-x-4 px-1 pb-2 text-[11px] uppercase tracking-[0.5px] text-theme-muted border-b border-dark-400/20">
+              <span>Drug</span>
+              <span className="text-right">Revenue</span>
+              <span className="text-right">Gross profit</span>
+              <span className="text-right">Margin</span>
             </div>
-          )}
-
-          {/* Top Drugs by Gross Profit — uses recomputed gross profit (Net Sales − COGS),
-              not the source-system 'profit' which leaves GST inside profit. */}
-          {isVisible('pharma_top_drugs_profit') && topDrugsByProfit?.length > 0 && (
-            <div className="card">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Top Drugs by Gross Profit</h3>
-              <p className="text-xs text-theme-faint mb-4">Margin % is on Net Sales (ex-GST)</p>
-              <div className="space-y-2 max-h-[350px] overflow-y-auto pr-2">
-                {topDrugsByProfit.map((d: any, i: number) => {
-                  const value = d.grossProfit ?? d.profit ?? 0;
-                  const maxVal = (topDrugsByProfit[0]?.grossProfit ?? topDrugsByProfit[0]?.profit) || 1;
-                  const width = Math.max(4, (value / maxVal) * 100);
-                  const barColor = d.marginPct >= 30 ? '#10b981' : d.marginPct >= 15 ? '#f59e0b' : '#ef4444';
-                  return (
-                    <div key={i}>
-                      <div className="flex justify-between text-xs mb-1">
-                        <span className="text-theme-secondary truncate mr-2">{d.name}</span>
-                        <span className="text-theme-heading font-medium shrink-0">{formatINR(value)} <span className="text-theme-faint">({d.marginPct}%)</span></span>
-                      </div>
-                      <div className="h-5 rounded-md overflow-hidden bg-dark-600">
-                        <div className="h-full rounded-md" style={{ width: `${width}%`, backgroundColor: barColor }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Referral Analysis */}
-          {isVisible('pharma_referral_analysis') && referralAnalysis?.length > 0 && (
-            <div className="card">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Referral Analysis</h3>
-              <p className="text-xs text-theme-faint mb-4">Revenue by referral source</p>
-              <ResponsiveContainer width="100%" height={Math.max(200, referralAnalysis.length * 32)}>
-                <BarChart data={referralAnalysis} layout="vertical" barGap={2}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" horizontal={false} />
-                  <XAxis type="number" tickFormatter={v => `${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={140} axisLine={false} tickLine={false} />
-                  <Tooltip formatter={(v: number) => formatINR(v)} contentStyle={CHART_STYLE} />
-                  <Bar dataKey="sales" name="Revenue" fill="#f59e0b" radius={[0, 6, 6, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-
-          {/* Top Patients */}
-          {isVisible('pharma_top_patients') && topPatients?.length > 0 && (
-            <div className="card">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Top Patients by Spend</h3>
-              <p className="text-xs text-theme-faint mb-4">Highest-value pharmacy customers</p>
-              <div className="space-y-2 max-h-[350px] overflow-y-auto pr-2">
-                {topPatients.map((p: any, i: number) => (
-                  <div key={i} className="flex items-center justify-between bg-dark-600/50 rounded-lg px-3 py-2">
-                    <div className="min-w-0 mr-3">
-                      <div className="text-xs font-medium text-theme-heading truncate">{p.patient_name}</div>
-                      <div className="text-[10px] text-theme-faint">{p.visits} visits, {p.drugs} drugs</div>
-                    </div>
-                    <span className="text-sm font-bold text-teal-400 shrink-0">{formatINR(p.totalSales)}</span>
+            <div className="divide-y divide-dark-400/10">
+              {visibleDrugs.map(d => {
+                const tone = salesMarginTone(d.margin);
+                return (
+                  <div
+                    key={d.name}
+                    className="grid grid-cols-[1fr_110px_110px_90px] gap-x-4 items-center px-1 py-2.5 text-sm"
+                  >
+                    <span className="text-theme-primary truncate">{d.name}</span>
+                    <span className="text-theme-heading text-right tabular-nums">{formatINR(d.revenue)}</span>
+                    <span className={`text-right tabular-nums ${d.profit < 0 ? 'text-red-700 dark:text-red-400' : 'text-theme-heading'}`}>
+                      {formatINR(Math.round(d.profit))}
+                    </span>
+                    <span className="text-right">
+                      <span className={`inline-block px-2 py-0.5 rounded-md text-[11px] border ${SALES_MARGIN_PILL[tone]}`}>
+                        {d.margin.toFixed(1)}%
+                      </span>
+                    </span>
                   </div>
-                ))}
-              </div>
+                );
+              })}
             </div>
-          )}
+            {sortedDrugs.length > 7 && (
+              <button
+                onClick={() => setShowAllDrugs(v => !v)}
+                className="mt-3 text-[12px] text-theme-faint hover:text-theme-secondary transition-colors"
+              >
+                {showAllDrugs ? 'Show fewer' : `+ ${sortedDrugs.length - 7} more · view all`}
+              </button>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Sales Table */}
-      {tableVisible && table?.length > 0 && (() => {
-        // Pre-compute derived fields ONCE per row so the DataTable filter/sort
-        // can read them via accessors. Same flag rules as before:
-        //   loss-making: COGS > Net Sales (truly negative gross profit)
-        //   outlier:     margin <5% or >40% (review for billing/discount errors)
-        const enriched = table.map((r: any) => {
-          const sales = Number(r.sales_amount) || 0;
-          const tax = Number(r.sales_tax) || 0;
-          const cogs = Number(r.purchase_amount) || 0;
-          const netSales = sales - tax;
-          const grossProfit = netSales - cogs;
-          const marginPct = netSales > 0 ? (grossProfit / netSales) * 100 : 0;
-          const isLoss = grossProfit < 0;
-          const isOutlier = !isLoss && netSales > 0 && (marginPct < 5 || marginPct > 40);
-          return { ...r, _sales: sales, _tax: tax, _cogs: cogs, _netSales: netSales, _grossProfit: grossProfit, _marginPct: marginPct, _isLoss: isLoss, _isOutlier: isOutlier };
-        });
-        const cols: ColumnDef<typeof enriched[number]>[] = [
+      {/* ── Top referring doctors (with fuzzy-merge data-quality warning) ── */}
+      {showReferrals && mergedReferrals.length > 0 && (
+        <div className="card mb-6">
+          <h3 className="text-base font-medium text-theme-heading">Top referring doctors</h3>
+          <p className="text-[13px] text-theme-faint mt-0.5 mb-4">By referred revenue</p>
+
+          {dupGroups.length > 0 && (
+            <div className="rounded-md px-3 py-2 mb-4 bg-amber-500/10 border border-amber-500/15 text-[12px] text-amber-800 dark:text-amber-300 leading-relaxed">
+              <span className="font-medium">⚠ {dupCount} doctor name{dupCount === 1 ? '' : 's'} look like duplicate{dupCount === 1 ? '' : 's'}</span>
+              {sampleDupSpellings ? <> — {sampleDupSpellings} may be the same person.</> : '.'}
+              {' '}Standardize the names to get accurate referral revenue.
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {topReferrers.map((g, i) => {
+              const width = Math.max(2, (g.revenue / maxRefRevenue) * 100);
+              const barColor = REFERRER_BAR_COLORS[Math.min(i, REFERRER_BAR_COLORS.length - 1)];
+              return (
+                <div key={g.canonical}>
+                  <div className="flex items-baseline justify-between gap-3 mb-1">
+                    <span className="text-sm font-medium text-theme-primary truncate">
+                      {g.canonical}
+                      {g.spellings.length > 1 && (
+                        <span
+                          className="ml-2 text-[11px] text-theme-faint"
+                          title={`Merged spellings: ${g.spellings.join(', ')}`}
+                        >
+                          ({g.spellings.length} spellings merged)
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-sm text-theme-heading shrink-0 tabular-nums">{formatINR(g.revenue)}</span>
+                  </div>
+                  <div className="h-[6px] rounded-full bg-amber-500/10 overflow-hidden">
+                    <div className="h-full rounded-full" style={{ width: `${width}%`, backgroundColor: barColor }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── Sales details table ──────────────────────────────────────────── */}
+      {showTable && (table?.length || 0) > 0 && (() => {
+        const baseCols: ColumnDef<typeof enriched[number]>[] = [
           { key: 'bill_no', header: 'Bill #', cellClassName: 'font-mono text-xs', width: 'max-w-[110px]' },
           { key: 'bill_date', header: 'Date', type: 'date' },
           { key: 'patient_name', header: 'Patient', cellClassName: 'truncate max-w-[120px]' },
-          { key: 'drug_name', header: 'Drug', cellClassName: 'truncate max-w-[150px]' },
+          { key: 'drug_name', header: 'Drug', cellClassName: 'truncate max-w-[180px]' },
           { key: 'qty', header: 'Qty', type: 'number', format: 'number' },
           { key: 'sales', header: 'Sales (incl. GST)', type: 'number', accessor: r => r._sales, render: r => formatINR(r._sales) },
+        ];
+        const extraCols: ColumnDef<typeof enriched[number]>[] = [
           { key: 'tax', header: 'GST', type: 'number', accessor: r => r._tax, render: r => formatINR(r._tax) },
           { key: 'netSales', header: 'Net Sales', type: 'number', accessor: r => r._netSales, render: r => formatINR(r._netSales) },
-          { key: 'cogs', header: 'COGS', type: 'number', accessor: r => r._cogs, render: r => formatINR(r._cogs) },
-          { key: 'grossProfit', header: 'Gross Profit', type: 'number', accessor: r => r._grossProfit,
-            render: r => <span className={r._grossProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}>{formatINR(r._grossProfit)}</span> },
-          { key: 'marginPct', header: 'Margin %', type: 'number', accessor: r => r._marginPct,
-            render: r => <span className={r._isLoss ? 'text-red-400' : r._isOutlier ? 'text-amber-400' : 'text-theme-faint'}>
-              {r._netSales > 0 ? `${r._marginPct.toFixed(1)}%` : '-'}
-            </span> },
-          { key: 'flags', header: 'Flags', type: 'custom', render: r => (
-            <span className="text-xs">
-              {r._isLoss && (
-                <span title="COGS exceeds Net Sales — loss-making line. Could be a real loss, or a billing/discount error worth investigating."
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20">
-                  <AlertTriangle size={10} /> Loss
-                </span>
-              )}
-              {r._isOutlier && (
-                <span title={`Margin ${r._marginPct.toFixed(1)}% is outside the 5–40% normal band — review for billing/discount errors.`}
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                  <AlertTriangle size={10} /> Outlier
-                </span>
-              )}
-            </span>
-          ) },
-          { key: 'referred_by', header: 'Referred By', cellClassName: 'truncate max-w-[100px]' },
         ];
+        const tailCols: ColumnDef<typeof enriched[number]>[] = [
+          { key: 'grossProfit', header: 'Profit', type: 'number', accessor: r => r._grossProfit,
+            render: r => <span className={r._grossProfit >= 0 ? 'text-theme-heading' : 'text-red-700 dark:text-red-400'}>{formatINR(Math.round(r._grossProfit))}</span> },
+          { key: 'marginPct', header: 'Margin', type: 'number', accessor: r => r._marginPct,
+            render: r => {
+              if (r._netSales <= 0) return <span className="text-theme-faint">—</span>;
+              const m = r._marginPct;
+              const isLow = r._isLowMargin;
+              const cls = isLow ? 'text-red-700 dark:text-red-400 font-medium'
+                : m >= 20 ? 'text-emerald-700 dark:text-emerald-400'
+                : 'text-theme-secondary';
+              return (
+                <span className={cls}>
+                  {isLow && <AlertTriangle size={11} className="inline mr-1 align-text-bottom" />}
+                  {m.toFixed(1)}%
+                </span>
+              );
+            } },
+          { key: 'referred_by', header: 'Referred By', cellClassName: 'truncate max-w-[120px]' },
+        ];
+        const cols = showAllCols ? [...baseCols, ...extraCols, ...tailCols] : [...baseCols, ...tailCols];
+
         return (
           <div className="card mb-6">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
               <div>
-                <h3 className="text-sm font-semibold text-theme-heading">Sales Details</h3>
-                <p className="text-xs text-theme-faint">{formatNumber(table.length)} records</p>
+                <h3 className="text-base font-medium text-theme-heading">Sales details</h3>
+                <p className="text-[13px] text-theme-faint">
+                  {formatNumber(enriched.length)} line item{enriched.length === 1 ? '' : 's'}
+                  {lowMarginCount > 0 ? ` · ${formatNumber(lowMarginCount)} outlier${lowMarginCount === 1 ? '' : 's'} flagged` : ''}
+                </p>
               </div>
-              <button onClick={() => exportFromDb('pharma-sales', PHARMA_SALES_EXPORT_COLUMNS, 'Sales_Details', fyStart, fyEnd)}
-                className="btn btn-sm btn-ghost flex items-center gap-1.5 text-xs text-theme-faint hover:text-accent-500" title="Download XLSX">
-                <Download size={14} /> Download
-              </button>
+              <div className="flex items-center gap-2">
+                {lowMarginCount > 0 && (
+                  <button
+                    onClick={() => setOutliersOnly(v => !v)}
+                    className={`text-[12px] px-3 py-1.5 rounded-md border transition-colors flex items-center gap-1.5 ${
+                      outliersOnly
+                        ? 'bg-rose-500/15 text-rose-700 dark:text-rose-400 border-rose-500/30'
+                        : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/20 hover:bg-rose-500/15'
+                    }`}
+                    title="Show only rows below the low-margin threshold"
+                  >
+                    <AlertTriangle size={12} />
+                    Outliers only{outliersOnly ? ' ✓' : ''}
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowAllCols(v => !v)}
+                  className="text-[12px] px-3 py-1.5 rounded-md border border-dark-400/30 text-theme-faint hover:text-theme-secondary transition-colors"
+                  title="Toggle GST and Net Sales columns"
+                >
+                  {showAllCols ? 'Hide' : 'Show'} GST cols
+                </button>
+                <button
+                  onClick={() => exportFromDb('pharma-sales', PHARMA_SALES_EXPORT_COLUMNS, 'Sales_Details', fyStart, fyEnd)}
+                  className="btn btn-sm btn-ghost flex items-center gap-1.5 text-xs text-theme-faint hover:text-accent-500"
+                  title="Download XLSX"
+                >
+                  <Download size={14} /> Download
+                </button>
+              </div>
             </div>
             <DataTable
               columns={cols}
-              rows={enriched}
-              pageSize={50}
+              rows={tableRows}
+              pageSize={15}
               searchPlaceholder="Search drug, patient, bill..."
-              rowClassName={r => r._isLoss ? 'bg-rose-500/5' : ''}
+              rowClassName={r => r._isLoss ? 'bg-rose-500/10' : r._isLowMargin ? 'bg-rose-500/5' : ''}
             />
           </div>
         );
       })()}
+
+      {/* Top patients card was retired in the May 2026 redesign. The
+          `pharma_top_patients` admin toggle is now orphaned in this tab; it
+          has no effect on rendering. The variable is kept referenced so an
+          accidental "remove unused" pass doesn't drop the destructure. */}
+      {false && topPatients && null}
     </div>
   );
 }

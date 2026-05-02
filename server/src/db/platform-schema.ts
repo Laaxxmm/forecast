@@ -393,18 +393,23 @@ export function initializePlatformSchema(db: DbHelper) {
           'Toggles the "incl. ₹X tax" annotation under the Total Purchase card. No standalone tax card is rendered.', source);
 
         // ── Sales KPI Cards ──
-        seedVis(c.id, sid, 'cards', 'pharma_total_sales', 'Total Sales', 6,
-          'Sum of all pharmacy sales revenue', source);
-        seedVis(c.id, sid, 'cards', 'pharma_total_cogs', 'Cost of Goods', 7,
-          'Total cost of goods sold', source);
-        seedVis(c.id, sid, 'cards', 'pharma_total_profit', 'Total Profit', 8,
-          'Total profit (Sales minus COGS)', source);
-        seedVis(c.id, sid, 'cards', 'pharma_profit_margin', 'Profit Margin %', 9,
-          'Overall profit margin percentage', source);
+        // The Sales & Profit tab tightens 6 KPI cards into 5: Gross Margin %
+        // is folded into the Gross Profit sub-line, Unique Patients is
+        // retired (the metric was always 0), and an "Outlier sales" KPI is
+        // surfaced for low-margin rows. The toggles below stay in admin so
+        // existing clients can disable individual KPIs as before.
+        seedVis(c.id, sid, 'cards', 'pharma_total_sales', 'Net Sales (ex-GST)', 6,
+          'Sum of all pharmacy sales revenue, excluding GST. Headline P&L revenue.', source);
+        seedVis(c.id, sid, 'cards', 'pharma_total_cogs', 'COGS (ex-GST)', 7,
+          'Total cost of goods sold (net purchase rate, ex-GST).', source);
+        seedVis(c.id, sid, 'cards', 'pharma_total_profit', 'Gross Profit', 8,
+          'Net Sales − COGS. Sub-line shows margin percentage when "Profit Margin %" is also enabled.', source);
+        seedVis(c.id, sid, 'cards', 'pharma_profit_margin', 'Margin sub-line on Gross Profit', 9,
+          'Toggles the "X% margin" annotation under the Gross Profit card. No standalone margin card is rendered in the redesigned layout.', source);
         seedVis(c.id, sid, 'cards', 'pharma_total_bills', 'Total Bills', 10,
-          'Count of distinct sales bills', source);
-        seedVis(c.id, sid, 'cards', 'pharma_unique_patients', 'Unique Patients', 11,
-          'Number of distinct pharmacy customers', source);
+          'Count of distinct sales bills. Sub-line shows average bill value (net sales ÷ bills).', source);
+        seedVis(c.id, sid, 'cards', 'pharma_unique_patients', 'Unique Patients (retired)', 11,
+          'Retired in the May 2026 redesign — the metric was always 0 on pharmacy sales data. Toggle has no effect on rendering.', source);
 
         // ── Stock KPI Cards ──
         // The Stock & Expiry tab redesign collapses the 5-card strip
@@ -447,18 +452,23 @@ export function initializePlatformSchema(db: DbHelper) {
           'Soft-green banner under the sourcing card surfacing total rupee value of free goods received and the top stockist providing them.', source);
 
         // ── Sales Charts ──
-        seedVis(c.id, sid, 'charts', 'pharma_monthly_sales_trend', 'Monthly Sales Trend', 7,
-          'Grouped bar chart showing sales, COGS, and profit per month', source);
-        seedVis(c.id, sid, 'charts', 'pharma_sales_vs_cogs', 'Sales vs COGS Line', 8,
-          'Line chart comparing monthly sales and cost of goods', source);
-        seedVis(c.id, sid, 'charts', 'pharma_top_drugs_sales', 'Top Drugs by Revenue', 9,
-          'Top 15 drugs ranked by sales amount', source);
-        seedVis(c.id, sid, 'charts', 'pharma_top_drugs_profit', 'Top Drugs by Profit', 10,
-          'Top 15 drugs ranked by profit with margin percentage', source);
-        seedVis(c.id, sid, 'charts', 'pharma_referral_analysis', 'Referral Analysis', 11,
-          'Revenue breakdown by referral source (doctor, walk-in, etc.)', source);
-        seedVis(c.id, sid, 'charts', 'pharma_top_patients', 'Top Patients by Spend', 12,
-          'Top 20 pharmacy customers by total purchase amount', source);
+        // The Sales & Profit tab consolidates the old six visuals into:
+        //   • Profitability hero — driven by `pharma_monthly_sales_trend` OR `pharma_sales_vs_cogs`
+        //   • Combined Top drugs card — driven by `pharma_top_drugs_sales` OR `pharma_top_drugs_profit`
+        //   • Top referring doctors — driven by `pharma_referral_analysis` (with fuzzy-merge for duplicate names)
+        // The Top Patients card is retired in the new layout.
+        seedVis(c.id, sid, 'charts', 'pharma_monthly_sales_trend', 'Profitability hero card', 7,
+          'Renders the "How sales convert to profit" hero card (stacked COGS / Profit bar with avg-margin/bill, highest, and lowest margin SKU breakdown). Either this toggle or "Sales vs COGS" being enabled shows the card.', source);
+        seedVis(c.id, sid, 'charts', 'pharma_sales_vs_cogs', 'Profitability hero card (alt toggle)', 8,
+          'Alternate visibility key for the "How sales convert to profit" hero card. The card shows when this OR "Monthly Sales Trend" is enabled.', source);
+        seedVis(c.id, sid, 'charts', 'pharma_top_drugs_sales', 'Top Drugs combined card', 9,
+          'Drives the consolidated "Top drugs by revenue and profit" table with per-drug margin pills. Either this toggle or "Top Drugs by Profit" being enabled shows the card.', source);
+        seedVis(c.id, sid, 'charts', 'pharma_top_drugs_profit', 'Top Drugs combined card (alt toggle)', 10,
+          'Alternate visibility key for the combined Top drugs card. The card shows when this OR "Top Drugs by Revenue" is enabled.', source);
+        seedVis(c.id, sid, 'charts', 'pharma_referral_analysis', 'Top referring doctors', 11,
+          'Top referring doctors card with fuzzy-merge of duplicate name spellings (e.g. DR.RAJESHWARI / DR.RAJESWARI / DR.RAJESWRI grouped as one). Includes a data-quality warning when duplicates are detected.', source);
+        seedVis(c.id, sid, 'charts', 'pharma_top_patients', 'Top Patients (retired)', 12,
+          'Retired in the May 2026 redesign — toggle has no effect on the Sales & Profit tab. May be reintroduced if patient-spend analysis returns.', source);
 
         // ── Stock Charts ──
         // The Stock & Expiry tab redesign replaces the donut chart and
@@ -538,6 +548,47 @@ export function initializePlatformSchema(db: DbHelper) {
     ['pharma_purchase_table',
       'Purchase Details Table',
       'Searchable table: Invoice, Date, Stockist, Drug, Batch Qty, Purchase Value, Tax, Margin. Free-qty rows are tinted green; rows are paginated at 10.'],
+
+    // ── Sales & Profit tab — May 2026 redesign ──
+    ['pharma_total_sales',
+      'Net Sales (ex-GST)',
+      'Sum of all pharmacy sales revenue, excluding GST. Headline P&L revenue.'],
+    ['pharma_total_cogs',
+      'COGS (ex-GST)',
+      'Total cost of goods sold (net purchase rate, ex-GST).'],
+    ['pharma_total_profit',
+      'Gross Profit',
+      'Net Sales − COGS. Sub-line shows margin percentage when "Profit Margin %" is also enabled.'],
+    ['pharma_profit_margin',
+      'Margin sub-line on Gross Profit',
+      'Toggles the "X% margin" annotation under the Gross Profit card. No standalone margin card is rendered in the redesigned layout.'],
+    ['pharma_total_bills',
+      'Total Bills',
+      'Count of distinct sales bills. Sub-line shows average bill value (net sales ÷ bills).'],
+    ['pharma_unique_patients',
+      'Unique Patients (retired)',
+      'Retired in the May 2026 redesign — the metric was always 0 on pharmacy sales data. Toggle has no effect on rendering.'],
+    ['pharma_monthly_sales_trend',
+      'Profitability hero card',
+      'Renders the "How sales convert to profit" hero card (stacked COGS / Profit bar with avg-margin/bill, highest, and lowest margin SKU breakdown). Either this toggle or "Sales vs COGS" being enabled shows the card.'],
+    ['pharma_sales_vs_cogs',
+      'Profitability hero card (alt toggle)',
+      'Alternate visibility key for the "How sales convert to profit" hero card. The card shows when this OR "Monthly Sales Trend" is enabled.'],
+    ['pharma_top_drugs_sales',
+      'Top Drugs combined card',
+      'Drives the consolidated "Top drugs by revenue and profit" table with per-drug margin pills. Either this toggle or "Top Drugs by Profit" being enabled shows the card.'],
+    ['pharma_top_drugs_profit',
+      'Top Drugs combined card (alt toggle)',
+      'Alternate visibility key for the combined Top drugs card. The card shows when this OR "Top Drugs by Revenue" is enabled.'],
+    ['pharma_referral_analysis',
+      'Top referring doctors',
+      'Top referring doctors card with fuzzy-merge of duplicate name spellings (e.g. DR.RAJESHWARI / DR.RAJESWARI / DR.RAJESWRI grouped as one). Includes a data-quality warning when duplicates are detected.'],
+    ['pharma_top_patients',
+      'Top Patients (retired)',
+      'Retired in the May 2026 redesign — toggle has no effect on the Sales & Profit tab. May be reintroduced if patient-spend analysis returns.'],
+    ['pharma_sales_table',
+      'Sales Details Table',
+      'Searchable table: Bill, Date, Patient, Drug, Qty, Sales, Profit, Margin, Referred By. Outlier rows (margin < 5%) are tinted pink; "Outliers only" filter and "Show GST cols" toggle live in the header.'],
   ];
   for (const [key, label, desc] of PHARMA_PURCHASE_LABEL_REFRESH) {
     try {
