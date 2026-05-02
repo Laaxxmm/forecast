@@ -1,86 +1,16 @@
 import { useEffect, useState, useMemo } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import api from '../api/client';
-import { formatINR, getMonthLabel } from '../utils/format';
 import ClinicAnalytics from '../components/dashboard/ClinicAnalytics';
 import PharmacyAnalytics from '../components/dashboard/PharmacyAnalytics';
+import ActualsAllOverview from '../components/dashboard/ActualsAllOverview';
 import { buildPeriodOptions } from '../components/dashboard/dashboardUtils';
-import {
-  TrendingUp, TrendingDown, IndianRupee, Activity,
-  BarChart3, Briefcase, RefreshCcw, GraduationCap, Store, Globe, Warehouse,
-  UtensilsCrossed, Truck, ChefHat, ShoppingBag, FlaskConical, Stethoscope, Pill, Users
-} from 'lucide-react';
-
-const ICON_MAP: Record<string, any> = {
-  Stethoscope, Pill, BarChart3, Briefcase, RefreshCcw, GraduationCap,
-  Store, Globe, Warehouse, UtensilsCrossed, Truck, ChefHat, ShoppingBag,
-  FlaskConical, TrendingUp, Users, IndianRupee, Activity,
-};
-
-const COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899'];
-const BAR_COLORS = ['#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#10b981'];
-
-function KPICard({ title, value, subtitle, icon: Icon, trend, color = 'accent', onClick }: {
-  title: string; value: string; subtitle?: string; icon: any; trend?: number; color?: string; onClick?: () => void;
-}) {
-  const iconTone: Record<string, { bg: string; fg: string; ring: string }> = {
-    accent: {
-      bg: 'color-mix(in srgb, #10b981 14%, transparent)',
-      fg: '#10b981',
-      ring: 'color-mix(in srgb, #10b981 30%, transparent)',
-    },
-    blue: {
-      bg: 'color-mix(in srgb, #3b82f6 14%, transparent)',
-      fg: '#3b82f6',
-      ring: 'color-mix(in srgb, #3b82f6 30%, transparent)',
-    },
-    purple: {
-      bg: 'color-mix(in srgb, #8b5cf6 14%, transparent)',
-      fg: '#8b5cf6',
-      ring: 'color-mix(in srgb, #8b5cf6 30%, transparent)',
-    },
-    amber: {
-      bg: 'color-mix(in srgb, #f59e0b 14%, transparent)',
-      fg: '#f59e0b',
-      ring: 'color-mix(in srgb, #f59e0b 30%, transparent)',
-    },
-  };
-  const tone = iconTone[color] || iconTone.accent;
-  const trendPositive = trend !== undefined && trend >= 0;
-
-  return (
-    <div
-      className={`mt-kpi group ${onClick ? 'cursor-pointer' : ''}`}
-      onClick={onClick}
-    >
-      <div className="flex items-start justify-between mb-3">
-        <div
-          className="w-10 h-10 rounded-xl flex items-center justify-center transition-transform duration-200 group-hover:scale-[1.04]"
-          style={{
-            background: tone.bg,
-            boxShadow: `inset 0 0 0 1px ${tone.ring}`,
-          }}
-        >
-          <Icon size={18} style={{ color: tone.fg }} />
-        </div>
-        {trend !== undefined && (
-          <span
-            className={`mt-pill ${trendPositive ? 'mt-pill--success' : 'mt-pill--danger'}`}
-          >
-            {trendPositive ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-            {trendPositive ? '+' : ''}{trend.toFixed(1)}%
-          </span>
-        )}
-      </div>
-      <p className="mt-kpi__label">{title}</p>
-      <p className="mt-kpi__value">{value}</p>
-      {subtitle && <p className="mt-kpi__sub">{subtitle}</p>}
-    </div>
-  );
-}
+import { Activity, ChevronDown } from 'lucide-react';
 
 export default function DashboardPage() {
   const [data, setData] = useState<any>(null);
+  const [historical, setHistorical] = useState<any | null>(null);
+  const [clinicData, setClinicData] = useState<any | null>(null);
+  const [pharmaData, setPharmaData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedPeriod, setSelectedPeriod] = useState('current_month');
   // Orphan-actuals recovery state — same pattern as ForecastModulePage's
@@ -89,7 +19,9 @@ export default function DashboardPage() {
   const [actualsOrphans, setActualsOrphans] = useState<{ totalRows: number; counts: any } | null>(null);
   const [migratingActuals, setMigratingActuals] = useState(false);
 
-  // Active stream filter (set by sidebar or KPI card click)
+  // Active stream filter — set by the top-right dropdown on this page or
+  // the legacy sidebar pills. Both write to the same localStorage keys, so
+  // either UI keeps the selection in sync.
   const activeStreamId = localStorage.getItem('stream_id');
   const activeStreamName = localStorage.getItem('stream_name');
 
@@ -128,6 +60,40 @@ export default function DashboardPage() {
       setLoading(false);
     }).catch(() => setLoading(false));
   }, [periodStartMonth, periodEndMonth]);
+
+  // Fetch a wider window (full FY to current month) for the homepage's
+  // 6-month trend + month-over-month delta calculations. The headline
+  // KPIs above stay scoped to the user-selected period; this fetch only
+  // backfills the longer historical series the redesigned All view needs.
+  // Limited to current FY because the dashboard endpoint queries scenarios
+  // scoped to the active FY — pre-FY history is documented as a follow-up
+  // ask in HOMEPAGE_BACKEND.md.
+  useEffect(() => {
+    if (activeStreamId) return; // sub-tab view — no homepage trend needed
+    if (!data?.fy?.start_date) return;
+    const fyStart = data.fy.start_date.slice(0, 7);
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    api.get('/dashboard/overview', { params: { startMonth: fyStart, endMonth: today } })
+      .then(res => setHistorical(res.data))
+      .catch(() => { /* trend hides itself on missing data */ });
+  }, [data?.fy?.start_date, activeStreamId]);
+
+  // Fetch sub-tab data for the alert center + Quick view cards in All mode.
+  // Skipped when a specific stream is selected because the sub-tab itself
+  // will fetch its own data anyway.
+  useEffect(() => {
+    if (activeStreamId) return;
+    const params: Record<string, string> = {};
+    if (periodStartMonth) params.startMonth = periodStartMonth;
+    if (periodEndMonth) params.endMonth = periodEndMonth;
+    api.get('/dashboard/clinic-analytics', { params })
+      .then(res => setClinicData(res.data))
+      .catch(() => setClinicData(null));
+    api.get('/dashboard/pharmacy-analytics', { params })
+      .then(res => setPharmaData(res.data))
+      .catch(() => setPharmaData(null));
+  }, [periodStartMonth, periodEndMonth, activeStreamId]);
 
   // Detect orphan (NULL-branch) actuals once on mount. Multi-branch
   // tenants only — single-branch has nothing to leak. Skipped silently
@@ -241,14 +207,11 @@ export default function DashboardPage() {
     String(s.id) === activeStreamId &&
     (s.name || '').toLowerCase().includes('pharma')
   );
-  // Chart visibility helper
+  // Chart visibility helper — used by stream-specific sub-tabs (Clinic /
+  // Pharmacy). The All view's redesigned layout doesn't read individual
+  // chart visibility settings; the sub-cards (alerts, trend, quick view)
+  // self-gate on whether their underlying data is non-empty.
   const chartVis = data.chartVisibility || [];
-  const isChartVisible = (key: string) => {
-    const entry = chartVis.find((v: any) => v.element_key === key && v.scope === 'total');
-    return entry ? !!entry.is_visible : true; // default visible if no config
-  };
-  const showTrend = isChartVisible('monthly_revenue_trend');
-  const showPie = isChartVisible('revenue_split');
 
   // Clinic stream visibility helper
   const clinicStream = streams.find((s: any) => {
@@ -274,54 +237,78 @@ export default function DashboardPage() {
     return entry ? !!entry.is_visible : true; // default visible for pharmacy
   };
 
-  // Filter streams for charts when a specific stream is selected
-  const chartStreams = activeStreamId
-    ? streams.filter((s: any) => String(s.id) === activeStreamId)
-    : streams;
+  // ── Header context ───────────────────────────────────────────────────────
+  // Org and branch names are written to localStorage by the login + branch
+  // selection flows. Falling back to a generic label keeps the subtitle
+  // honest when something hasn't populated yet — never invent values.
+  const orgName = (typeof window !== 'undefined' && localStorage.getItem('client_name'))
+    || (typeof window !== 'undefined' && localStorage.getItem('client_slug'))
+    || '';
+  const branchName = typeof window !== 'undefined' ? (localStorage.getItem('branch_name') || '') : '';
 
-  // Build monthly trend data from stream monthly breakdowns
-  const monthlyMap: Record<string, any> = {};
-  for (const stream of chartStreams) {
-    for (const entry of (stream.monthly || [])) {
-      if (entry.category !== 'revenue') continue;
-      if (!monthlyMap[entry.month]) monthlyMap[entry.month] = { month: entry.month };
-      const key = stream.name.toLowerCase().replace(/\s+/g, '_');
-      monthlyMap[entry.month][key] = (monthlyMap[entry.month][key] || 0) + entry.total;
+  // ── Top-right stream filter dropdown ─────────────────────────────────────
+  // Mirrors the legacy sidebar pills via the same localStorage keys, so
+  // either UI moves the filter without diverging state.
+  const streamFilterValue = activeStreamId || 'all';
+  const onStreamFilterChange = (val: string) => {
+    if (val === 'all') {
+      selectStream(null, '');
+      return;
     }
-  }
-  const trendData = Object.values(monthlyMap)
-    .sort((a: any, b: any) => a.month.localeCompare(b.month))
-    .map((d: any) => ({ ...d, label: getMonthLabel(d.month) }));
-
-  // Pie data — revenue per stream
-  const pieData = chartStreams
-    .filter(s => s.total_revenue > 0)
-    .map(s => ({ name: s.name, value: s.total_revenue }));
+    const s = streams.find((x: any) => String(x.id) === val);
+    if (s) selectStream(String(s.id), s.name);
+  };
 
   return (
     <div className="animate-fade-in">
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex items-start justify-between mb-6 gap-4 flex-wrap">
         <div>
-          <h1 className="mt-heading text-2xl">Actuals</h1>
-          <p className="mt-1 text-sm" style={{ color: 'var(--mt-text-faint)' }}>
-            {activeStreamName
-              ? `${activeStreamName} \u2014 ${currentPeriod?.label || data.fy?.label || 'All Time'}`
-              : `${currentPeriod?.label || data.fy?.label || 'All Time'} Overview`}
+          <h1 className="mt-heading" style={{ fontSize: 22, fontWeight: 500 }}>Actuals</h1>
+          <p className="mt-1 text-[13px]" style={{ color: 'var(--mt-text-faint)' }}>
+            {[
+              orgName,
+              branchName,
+              activeStreamName
+                ? `${activeStreamName} \u2014 ${currentPeriod?.label || data.fy?.label || 'All Time'}`
+                : (currentPeriod?.label || data.fy?.label || 'All Time'),
+            ].filter(Boolean).join(' \u00b7 ')}
           </p>
         </div>
-        {periodOptions.length > 0 && (
-          <select
-            data-tour="period-filter"
-            value={selectedPeriod}
-            onChange={e => setSelectedPeriod(e.target.value)}
-            className="mt-input"
-            style={{ width: '16rem', padding: '8px 12px' }}
-          >
-            {periodOptions.map(p => (
-              <option key={p.value} value={p.value}>{p.label}</option>
-            ))}
-          </select>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {streams.length > 0 && (
+            <div className="relative">
+              <select
+                value={streamFilterValue}
+                onChange={e => onStreamFilterChange(e.target.value)}
+                className="mt-input"
+                style={{ paddingRight: 28, fontSize: 13 }}
+                aria-label="Filter by stream"
+              >
+                <option value="all">All</option>
+                {streams.map((s: any) => (
+                  <option key={s.id} value={String(s.id)}>{s.name}</option>
+                ))}
+              </select>
+              <ChevronDown
+                size={13}
+                style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--mt-text-faint)' }}
+              />
+            </div>
+          )}
+          {periodOptions.length > 0 && (
+            <select
+              data-tour="period-filter"
+              value={selectedPeriod}
+              onChange={e => setSelectedPeriod(e.target.value)}
+              className="mt-input"
+              style={{ width: '16rem', padding: '8px 12px', fontSize: 13 }}
+            >
+              {periodOptions.map(p => (
+                <option key={p.value} value={p.value}>{p.label}</option>
+              ))}
+            </select>
+          )}
+        </div>
       </div>
 
       {/* Orphan-actuals recovery banner. Surfaces only when there's
@@ -382,162 +369,22 @@ export default function DashboardPage() {
         );
       })()}
 
-      {/* KPI Cards — only in "All" mode */}
+      {/* All-streams homepage — KPI strip + forecast advisory + alerts +
+          6-month trend + Quick view + Dig deeper. Stream-specific views
+          (Clinic / Pharmacy) below this block remain unchanged. */}
       {isAllStreams && (
-        <div data-tour="kpi-cards" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
-          {data.cards && data.cards.length > 0 ? (
-            data.cards.map((card: any) => {
-              const CardIcon = ICON_MAP[card.icon] || BarChart3;
-              return (
-                <KPICard
-                  key={card.id}
-                  title={card.title}
-                  value={formatINR(card.value)}
-                  subtitle={card.subtitle === 'No data yet' ? card.subtitle :
-                    card.budget > 0 ? `vs ${formatINR(card.budget)} forecast` :
-                    card.subtitle || undefined}
-                  icon={CardIcon}
-                  color={card.color || 'accent'}
-                  trend={card.trend}
-                  onClick={card.card_type === 'total'
-                    ? undefined
-                    : card.stream_id
-                      ? () => selectStream(String(card.stream_id), card.title.replace(' Revenue', '') || card.title)
-                      : undefined}
-                />
-              );
-            })
-          ) : (
-            <>
-              <KPICard
-                title="Total Revenue"
-                value={formatINR(data.combined.total_revenue)}
-                subtitle="All streams"
-                icon={IndianRupee}
-                color="accent"
-                trend={data.combined.total_budget > 0
-                  ? ((data.combined.total_revenue - data.combined.total_budget) / data.combined.total_budget) * 100
-                  : undefined}
-              />
-              {streams.map((stream: any) => {
-                const StreamIcon = ICON_MAP[stream.icon] || BarChart3;
-                const trend = stream.budget_total > 0
-                  ? ((stream.total_revenue - stream.budget_total) / stream.budget_total) * 100
-                  : undefined;
-                return (
-                  <KPICard
-                    key={stream.id}
-                    title={`${stream.name} Revenue`}
-                    value={formatINR(stream.total_revenue)}
-                    subtitle={stream.total_revenue > 0 ? `vs ${formatINR(stream.budget_total)} forecast` : 'No data yet'}
-                    icon={StreamIcon}
-                    color={stream.color || 'blue'}
-                    trend={trend}
-                    onClick={() => selectStream(String(stream.id), stream.name)}
-                  />
-                );
-              })}
-              {streams.length === 0 && (
-                <div
-                  className="flex items-center justify-center p-6 rounded-2xl"
-                  style={{
-                    border: '1px dashed var(--mt-border)',
-                    background: 'var(--mt-bg-muted)',
-                  }}
-                >
-                  <p className="text-sm text-center" style={{ color: 'var(--mt-text-faint)' }}>
-                    Configure revenue streams in Admin Panel
-                  </p>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Charts Row — hidden when clinic/pharmacy stream is active */}
-      {!isClinicStream && !isPharmaStream && (showTrend || showPie) && (
-        <div className={`grid grid-cols-1 ${showTrend && showPie ? 'lg:grid-cols-3' : ''} gap-5 mb-6`}>
-          {showTrend && (
-            <div className={`mt-card p-5 ${showPie ? 'lg:col-span-2' : ''}`}>
-              <h3 className="mt-heading text-sm mb-1">Monthly Revenue Trend</h3>
-              <p className="text-xs mb-6" style={{ color: 'var(--mt-text-faint)' }}>
-                Revenue breakdown by stream
-              </p>
-              {trendData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={trendData} barGap={2}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--mt-border)" vertical={false} />
-                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--mt-text-faint)' }} axisLine={false} tickLine={false} />
-                    <YAxis tickFormatter={v => `${(v / 100000).toFixed(1)}L`} tick={{ fontSize: 11, fill: 'var(--mt-text-faint)' }} axisLine={false} tickLine={false} />
-                    <Tooltip
-                      formatter={(v: number) => formatINR(v)}
-                      contentStyle={{
-                        backgroundColor: 'var(--mt-bg-raised)',
-                        border: '1px solid var(--mt-border)',
-                        borderRadius: '12px',
-                        color: 'var(--mt-text-primary)',
-                      }}
-                      labelStyle={{ color: 'var(--mt-text-muted)' }}
-                    />
-                    <Legend wrapperStyle={{ color: 'var(--mt-text-muted)', fontSize: 12 }} />
-                    {chartStreams.map((stream: any, i: number) => {
-                      const key = stream.name.toLowerCase().replace(/\s+/g, '_');
-                      return (
-                        <Bar key={stream.id} dataKey={key} name={stream.name} fill={BAR_COLORS[i % BAR_COLORS.length]} radius={[6, 6, 0, 0]} />
-                      );
-                    })}
-                  </BarChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="flex items-center justify-center h-[300px]" style={{ color: 'var(--mt-text-faint)' }}>
-                  <div className="text-center">
-                    <Activity size={32} className="mx-auto mb-2" />
-                    <p className="text-sm">Import data to see trends</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {showPie && (
-            <div className="mt-card p-5">
-              <h3 className="mt-heading text-sm mb-1">Revenue Split</h3>
-              <p className="text-xs mb-6" style={{ color: 'var(--mt-text-faint)' }}>By stream</p>
-              {pieData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie
-                      data={pieData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={60}
-                      outerRadius={95}
-                      dataKey="value"
-                      strokeWidth={0}
-                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                    >
-                      {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                    </Pie>
-                    <Tooltip
-                      formatter={(v: number) => formatINR(v)}
-                      contentStyle={{
-                        backgroundColor: 'var(--mt-bg-raised)',
-                        border: '1px solid var(--mt-border)',
-                        borderRadius: '12px',
-                        color: 'var(--mt-text-primary)',
-                      }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="flex items-center justify-center h-[300px]" style={{ color: 'var(--mt-text-faint)' }}>
-                  <p className="text-sm">No data</p>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        <ActualsAllOverview
+          data={data}
+          historical={historical}
+          clinic={clinicData}
+          pharma={pharmaData}
+          orgInfo={{
+            orgName,
+            branchName,
+            periodLabel: currentPeriod?.label || data.fy?.label || '',
+          }}
+          selectStream={selectStream}
+        />
       )}
 
       {/* Clinic Analytics — only when clinic stream is active */}
