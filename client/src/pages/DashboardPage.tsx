@@ -100,19 +100,26 @@ export default function DashboardPage() {
   // /dashboard/operational-insights endpoint is the only place that
   // returns daily breakdowns per stream — overview gives monthly,
   // clinic-analytics and pharmacy-analytics return aggregates without
-  // dates. This adds one fetch on top of the existing four; keeping it
-  // gated on All-mode + current month so we don't pay the cost when
-  // viewing a sub-stream view or a historical period through the period
-  // selector (the operational-insights handler defaults to today's
-  // month, which is what the homepage chart wants anyway).
+  // dates.
+  //
+  // operational-insights handles one month at a time via ?month=YYYY-MM.
+  // We pass the end month of the user-selected period so that:
+  //   • single-month period (e.g. "Last month (Apr '26)") → that month
+  //   • multi-month period (e.g. "Current quarter") → latest month in
+  //     the range, which is the most relevant for a "daily progression"
+  //     chart since the earlier months are already complete history.
+  // Without this, the chart would always show today's month even when
+  // the user selected a different period in the dropdown.
   useEffect(() => {
     if (activeStreamId) return;
     const ctl = new AbortController();
-    api.get('/dashboard/operational-insights', { signal: ctl.signal })
+    const params: Record<string, string> = {};
+    if (periodEndMonth) params.month = periodEndMonth;
+    api.get('/dashboard/operational-insights', { params, signal: ctl.signal })
       .then(res => { if (!ctl.signal.aborted) setInsightsData(res.data); })
       .catch(() => { if (!ctl.signal.aborted) setInsightsData(null); });
     return () => ctl.abort();
-  }, [activeStreamId]);
+  }, [activeStreamId, periodEndMonth]);
 
   // Detect orphan (NULL-branch) actuals once on mount. Multi-branch
   // tenants only — single-branch has nothing to leak. Skipped silently
