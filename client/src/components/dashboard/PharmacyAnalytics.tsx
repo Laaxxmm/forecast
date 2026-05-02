@@ -8,7 +8,7 @@ import { formatINR, formatNumber, getMonthLabel } from '../../utils/format';
 import {
   Pill, ShoppingCart, TrendingUp, Package, AlertTriangle, Search,
   ChevronLeft, ChevronRight, DollarSign, Users, FileText, Gift,
-  BarChart3, Layers, ArrowRightLeft, Warehouse, Clock, Download,
+  BarChart3, ArrowRightLeft, Warehouse, Clock, Download,
 } from 'lucide-react';
 import { downloadXlsx, PURCHASE_COLUMNS, SALES_COLUMNS, STOCK_COLUMNS,
   PHARMA_PURCHASE_EXPORT_COLUMNS, PHARMA_SALES_EXPORT_COLUMNS } from '../../utils/xlsxExport';
@@ -224,7 +224,7 @@ async function exportFromDb(source: string, columns: any[], filename: string, fy
 // language we can lift these into common; until then they belong here so the
 // shared MiniKPI used by the other tabs stays untouched.
 
-type PurchaseTone = 'green' | 'blue' | 'purple' | 'amber' | 'coral';
+type PurchaseTone = 'green' | 'blue' | 'purple' | 'amber' | 'coral' | 'teal';
 
 // Soft tint backgrounds + same-ramp dark text. Each tone exposes:
 //   bg     — card fill (alpha tint, works in both light + dark themes)
@@ -238,6 +238,7 @@ const PURCHASE_TONES: Record<PurchaseTone, { bg: string; border: string; label: 
   purple: { bg: 'bg-purple-500/10',  border: 'border-purple-500/15',  label: 'text-purple-700 dark:text-purple-400',   value: 'text-purple-900 dark:text-purple-300',   sub: 'text-purple-700/70 dark:text-purple-400/70' },
   amber:  { bg: 'bg-amber-500/10',   border: 'border-amber-500/15',   label: 'text-amber-800 dark:text-amber-400',     value: 'text-amber-900 dark:text-amber-300',     sub: 'text-amber-800/70 dark:text-amber-400/70' },
   coral:  { bg: 'bg-rose-500/10',    border: 'border-rose-500/15',    label: 'text-rose-700 dark:text-rose-400',       value: 'text-rose-900 dark:text-rose-300',       sub: 'text-rose-700/70 dark:text-rose-400/70' },
+  teal:   { bg: 'bg-teal-500/10',    border: 'border-teal-500/15',    label: 'text-teal-700 dark:text-teal-400',       value: 'text-teal-900 dark:text-teal-300',       sub: 'text-teal-700/70 dark:text-teal-400/70' },
 };
 
 function PurchaseKPI({ tone, label, value, sub }: { tone: PurchaseTone; label: string; value: string; sub?: string }) {
@@ -1045,147 +1046,517 @@ function SalesTab({ data, isVisible, search, setSearch, page, setPage, pageSize,
 
 // ── STOCK TAB ────────────────────────────────────────────────────────────────
 
-function StockTab({ data, isVisible, search, setSearch, page, setPage, pageSize, fyStart, fyEnd }: TabProps) {
+function StockTab({ data, isVisible }: TabProps) {
   const { kpi, topProducts, expiryZones, table } = data;
+  const [criticalOnly, setCriticalOnly] = useState(false);
+  const [showExpired, setShowExpired] = useState(false);
 
-  const cardKeys = ['pharma_stock_value', 'pharma_stock_skus', 'pharma_near_expiry', 'pharma_expired_items', 'pharma_total_batches'];
-  const chartKeys = ['pharma_expiry_zones', 'pharma_top_stock_products'];
+  const cardKeys = ['pharma_live_stock_value', 'pharma_healthy_stock', 'pharma_at_risk_stock', 'pharma_expired_items'];
+  const chartKeys = ['pharma_expired_alert', 'pharma_expiry_breakdown', 'pharma_critical_batches', 'pharma_top_stock_products'];
   const anyCardVisible = cardKeys.some(isVisible);
   const anyChartVisible = chartKeys.some(isVisible);
   const tableVisible = isVisible('pharma_stock_table');
 
-  const filteredTable = useMemo(() => {
-    if (!search || !table) return table || [];
-    const s = search.toLowerCase();
-    return table.filter((r: any) =>
-      (r.drug_name || '').toLowerCase().includes(s) ||
-      (r.batch_no || '').toLowerCase().includes(s)
-    );
-  }, [table, search]);
+  // ── Derive everything from the existing API payload ─────────────────
+  // We do not change the server response shape. The brief explicitly
+  // calls for KPIs framed around live-vs-expired and healthy-vs-at-risk,
+  // which are recombinations of the four sellable expiry zones the API
+  // already returns.
+  const zoneByName: Record<string, { batches: number; value: number; qty: number }> = {};
+  for (const z of (expiryZones || []) as any[]) {
+    zoneByName[z.name] = { batches: z.batches || 0, value: z.value || 0, qty: z.qty || 0 };
+  }
+  const zCritical = zoneByName['Critical (0-3m)'] || { batches: 0, value: 0, qty: 0 };
+  const zWarning  = zoneByName['Warning (3-6m)']  || { batches: 0, value: 0, qty: 0 };
+  const zSafe     = zoneByName['Safe (6-12m)']    || { batches: 0, value: 0, qty: 0 };
+  const zLong     = zoneByName['Long Term (12m+)']|| { batches: 0, value: 0, qty: 0 };
+  const zExpired  = zoneByName['Expired']         || { batches: 0, value: 0, qty: 0 };
 
-  const EXPIRY_COLORS: Record<string, string> = {
-    'Expired': '#ef4444',
-    'Critical (0-3m)': '#f97316',
-    'Warning (3-6m)': '#f59e0b',
-    'Safe (6-12m)': '#10b981',
-    'Long Term (12m+)': '#3b82f6',
-    'Unknown': '#64748b',
+  const liveStockValue   = zCritical.value + zWarning.value + zSafe.value + zLong.value;
+  const liveBatchCount   = zCritical.batches + zWarning.batches + zSafe.batches + zLong.batches;
+  const healthyStockValue = zSafe.value + zLong.value;
+  const atRiskStockValue  = zCritical.value + zWarning.value;
+  const healthyPct = liveStockValue > 0 ? Math.round((healthyStockValue / liveStockValue) * 100) : 0;
+  const atRiskPct  = liveStockValue > 0 ? Math.round((atRiskStockValue  / liveStockValue) * 100) : 0;
+
+  const totalBatches = kpi?.totalBatches || (liveBatchCount + zExpired.batches);
+  const expiredBatches = kpi?.expired || zExpired.batches;
+  const expiredPct = totalBatches > 0 ? Math.round((expiredBatches / totalBatches) * 1000) / 10 : 0;
+  const expiredAbsValue = Math.abs(zExpired.value);
+
+  // ── Snapshot date helpers ──────────────────────────────────────────
+  // The API returns snapshotDate as a YYYY-MM-DD or ISO string. Format
+  // it as "28 Apr 2026" and compute the days-elapsed-since-now so the
+  // user knows how stale the inventory snapshot is.
+  const parseSnapshot = (s?: string): Date | null => {
+    if (!s) return null;
+    const m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
+    if (!m) return null;
+    const y = parseInt(m[1], 10), mo = parseInt(m[2], 10) - 1, d = parseInt(m[3], 10);
+    return new Date(y, mo, d);
   };
+  const snapshotDate = parseSnapshot(kpi?.snapshotDate);
+  const snapshotLabel = snapshotDate
+    ? snapshotDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+    : kpi?.snapshotDate || '—';
+  const snapshotAge = snapshotDate
+    ? Math.max(0, Math.floor((Date.now() - snapshotDate.getTime()) / 86400000))
+    : null;
 
-  const totalPages = Math.ceil(filteredTable.length / pageSize);
-  const pageRows = filteredTable.slice(page * pageSize, (page + 1) * pageSize);
+  // ── Per-batch days-to-expiry & enriched table rows ─────────────────
+  // The brief is explicit: days-to-expiry must be computed from the
+  // SNAPSHOT date, not from today. Stock data is point-in-time.
+  // Pharma data uses MM/YYYY or YYYY-MM expiry strings; we default to
+  // the last day of the expiry month so a "01/2027" batch is treated
+  // as expiring 31 Jan 2027 (industry convention).
+  const parseExpiry = (s?: string): Date | null => {
+    if (!s) return null;
+    const dayMatch = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/.exec(s);
+    if (dayMatch) {
+      return new Date(parseInt(dayMatch[3], 10), parseInt(dayMatch[2], 10) - 1, parseInt(dayMatch[1], 10));
+    }
+    const monthFirst = /^(\d{1,2})[\/\-](\d{4})$/.exec(s);
+    if (monthFirst) {
+      const y = parseInt(monthFirst[2], 10), mo = parseInt(monthFirst[1], 10);
+      return new Date(y, mo, 0); // last day of that month
+    }
+    const yearFirst = /^(\d{4})[\/\-](\d{1,2})(?:[\/\-](\d{1,2}))?$/.exec(s);
+    if (yearFirst) {
+      const y = parseInt(yearFirst[1], 10), mo = parseInt(yearFirst[2], 10), d = parseInt(yearFirst[3] || '0', 10);
+      return d ? new Date(y, mo - 1, d) : new Date(y, mo, 0);
+    }
+    return null;
+  };
+  const refDate = snapshotDate || new Date();
+  const enrichedTable = useMemo(() => {
+    return ((table || []) as any[]).map((r: any) => {
+      const exp = parseExpiry(r.expiry_date);
+      const days = exp ? Math.floor((exp.getTime() - refDate.getTime()) / 86400000) : null;
+      return { ...r, _expDate: exp, _daysToExpiry: days };
+    });
+  }, [table, refDate.getTime()]);
+
+  const sellableRows  = enrichedTable.filter(r => (r._daysToExpiry ?? 1) >= 0);
+  const expiredRows   = enrichedTable.filter(r => (r._daysToExpiry ?? 0) < 0);
+  const visibleRows   = showExpired ? enrichedTable : sellableRows;
+  const stockTableRows = criticalOnly
+    ? visibleRows.filter(r => r._daysToExpiry != null && r._daysToExpiry >= 0 && r._daysToExpiry <= 90)
+    : visibleRows;
+
+  // Top critical-by-value batches (≤ 90 days, sellable)
+  const allCritical = sellableRows
+    .filter(r => r._daysToExpiry != null && r._daysToExpiry <= 90)
+    .sort((a, b) => (b.stock_value || 0) - (a.stock_value || 0));
+  const criticalTotal = allCritical.reduce((s, r) => s + (r.stock_value || 0), 0);
+  const topCritical = allCritical.slice(0, 6);
+
+  // Earliest-expiry per top product (computed client-side from the
+  // batch table; the API's topProducts payload doesn't carry expiry).
+  const earliestExpiryByDrug = useMemo(() => {
+    const m = new Map<string, Date | null>();
+    for (const r of enrichedTable) {
+      if (!r.drug_name || !r._expDate || (r._daysToExpiry ?? 0) < 0) continue;
+      const cur = m.get(r.drug_name);
+      if (!cur || r._expDate < cur) m.set(r.drug_name, r._expDate);
+    }
+    return m;
+  }, [enrichedTable]);
+
+  const sellableSkuCount = useMemo(() => {
+    const s = new Set<string>();
+    for (const r of sellableRows) s.add(r.drug_name);
+    return s.size;
+  }, [sellableRows]);
+
+  // ── Stacked-bar segments ───────────────────────────────────────────
+  const segments = [
+    { key: 'critical', label: 'Critical · 0–3m', value: zCritical.value, batches: zCritical.batches, color: '#E24B4A',
+      tile: { bg: 'rgb(226 75 74 / 0.10)',  border: 'rgb(226 75 74 / 0.25)',  label: 'text-rose-700 dark:text-rose-300',  num: 'text-rose-900 dark:text-rose-200' } },
+    { key: 'warning',  label: 'Warning · 3–6m', value: zWarning.value,  batches: zWarning.batches,  color: '#BA7517',
+      tile: { bg: 'rgb(186 117 23 / 0.10)', border: 'rgb(186 117 23 / 0.25)', label: 'text-amber-800 dark:text-amber-300', num: 'text-amber-900 dark:text-amber-200' } },
+    { key: 'safe',     label: 'Safe · 6–12m',   value: zSafe.value,     batches: zSafe.batches,     color: '#639922',
+      tile: { bg: 'rgb(99 153 34 / 0.10)',  border: 'rgb(99 153 34 / 0.25)',  label: 'text-emerald-700 dark:text-emerald-300', num: 'text-emerald-900 dark:text-emerald-200' } },
+    { key: 'long',     label: 'Long term · 12m+', value: zLong.value,   batches: zLong.batches,     color: '#185FA5',
+      tile: { bg: 'rgb(24 95 165 / 0.10)',  border: 'rgb(24 95 165 / 0.25)',  label: 'text-blue-700 dark:text-blue-300',  num: 'text-blue-900 dark:text-blue-200' } },
+  ];
+
+  // ── Pill helper for days-to-expiry / earliest-expiry ──────────────
+  const expiryPillByDays = (days: number | null) => {
+    if (days == null) return { bg: 'rgb(148 163 184 / 0.15)', text: 'text-slate-700 dark:text-slate-300' };
+    if (days < 90)   return { bg: 'rgb(226 75 74 / 0.12)',  text: 'text-rose-800 dark:text-rose-200' };
+    if (days < 180)  return { bg: 'rgb(186 117 23 / 0.12)', text: 'text-amber-800 dark:text-amber-200' };
+    if (days < 365)  return { bg: 'rgb(99 153 34 / 0.12)',  text: 'text-emerald-800 dark:text-emerald-200' };
+    return { bg: 'rgb(24 95 165 / 0.12)', text: 'text-blue-800 dark:text-blue-200' };
+  };
 
   return (
     <div>
-      {/* Snapshot Badge */}
+      {/* ── Snapshot timestamp ─────────────────────────────────────
+          Promotes "when was this data captured" from a small grey
+          chip to a visible context line above the KPI strip. */}
       {kpi?.snapshotDate && (
-        <div className="flex items-center gap-2 mb-4">
-          <Clock size={13} className="text-theme-faint" />
-          <span className="text-xs text-theme-faint">Snapshot: {kpi.snapshotDate}</span>
-        </div>
+        <p className="text-[12px] text-theme-secondary mb-3 flex items-center gap-2">
+          <Clock size={12} className="shrink-0" />
+          <span>Snapshot taken: {snapshotLabel}</span>
+          {snapshotAge != null && (
+            <span className="text-theme-faint">· {snapshotAge === 0 ? 'today' : `${snapshotAge} day${snapshotAge === 1 ? '' : 's'} ago`}</span>
+          )}
+        </p>
       )}
 
-      {/* KPI Cards */}
+      {/* ── KPI strip — 4 cards framed live vs expired, healthy vs at-risk ── */}
       {anyCardVisible && (() => {
         const visibleCount = cardKeys.filter(isVisible).length;
-        const cols: Record<number, string> = { 1: '', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5' };
+        const cols: Record<number, string> = { 1: '', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4' };
         return (
-          <div className={`grid grid-cols-2 md:grid-cols-3 ${cols[visibleCount] || 'lg:grid-cols-5'} gap-4 mb-6`}>
-            {isVisible('pharma_stock_value') && <MiniKPI label="Total Stock Value" value={formatINR(kpi.totalStockValue)} icon={Warehouse} color="teal" />}
-            {isVisible('pharma_stock_skus') && <MiniKPI label="Unique SKUs" value={formatNumber(kpi.totalSkus)} icon={Package} color="blue" />}
-            {isVisible('pharma_near_expiry') && <MiniKPI label="Near Expiry" value={formatNumber(kpi.nearExpiry || 0)} icon={AlertTriangle} color="amber" sub="Within 6 months" />}
-            {isVisible('pharma_expired_items') && <MiniKPI label="Expired Batches" value={formatNumber(kpi.expired || 0)} icon={AlertTriangle} color="rose" />}
-            {isVisible('pharma_total_batches') && <MiniKPI label="Total Batches" value={formatNumber(kpi.totalBatches)} icon={Layers} color="purple" />}
+          <div className={`grid grid-cols-2 md:grid-cols-2 ${cols[visibleCount] || 'lg:grid-cols-4'} gap-4 mb-4`}>
+            {isVisible('pharma_live_stock_value') && (
+              <PurchaseKPI
+                tone="teal"
+                label="Live stock value"
+                value={formatINR(liveStockValue)}
+                sub={`${formatNumber(liveBatchCount)} sellable batches · ${formatNumber(sellableSkuCount || kpi.totalSkus || 0)} SKUs`}
+              />
+            )}
+            {isVisible('pharma_healthy_stock') && (
+              <PurchaseKPI
+                tone="blue"
+                label="Healthy stock"
+                value={formatINR(healthyStockValue)}
+                sub={`${healthyPct}% · expires 6m+`}
+              />
+            )}
+            {isVisible('pharma_at_risk_stock') && (
+              <PurchaseKPI
+                tone="amber"
+                label="At-risk stock"
+                value={formatINR(atRiskStockValue)}
+                sub={`${atRiskPct}% · expires within 6m`}
+              />
+            )}
+            {isVisible('pharma_expired_items') && (
+              <PurchaseKPI
+                tone="coral"
+                label="Already expired"
+                value={formatNumber(expiredBatches)}
+                sub={`batches written off · ${formatINR(expiredAbsValue)}`}
+              />
+            )}
           </div>
         );
       })()}
 
-      {/* Charts */}
-      {anyChartVisible && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
-          {/* Expiry Zone Distribution */}
-          {isVisible('pharma_expiry_zones') && expiryZones?.length > 0 && (
-            <div className="card">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Stock by Expiry Zone</h3>
-              <p className="text-xs text-theme-faint mb-4">Batch count and value by expiry timeline</p>
-              <div className="flex gap-6">
-                <div className="flex-1">
-                  <ResponsiveContainer width="100%" height={220}>
-                    <PieChart>
-                      <Pie data={expiryZones} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" strokeWidth={0}
-                        label={({ name, percent }) => `${(percent * 100).toFixed(0)}%`}>
-                        {expiryZones.map((z: any, i: number) => (
-                          <Cell key={i} fill={EXPIRY_COLORS[z.name] || COLORS[i]} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(v: number) => formatINR(v)} contentStyle={CHART_STYLE} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="flex flex-col justify-center gap-2">
-                  {expiryZones.map((z: any, i: number) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: EXPIRY_COLORS[z.name] || COLORS[i] }} />
-                      <div>
-                        <div className="text-xs text-theme-secondary">{z.name}</div>
-                        <div className="text-[10px] text-theme-faint">{z.batches} batches | {formatINR(z.value)}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
+      {/* ── Expired batches alert callout ─────────────────────────
+          Reframes the scary 71% figure as a likely data-hygiene
+          issue rather than a business failure. Hidden if expired
+          share is below 5% (callout would be noise). */}
+      {isVisible('pharma_expired_alert') && expiredBatches > 0 && expiredPct >= 5 && (
+        <div
+          className="mb-4 rounded-xl flex items-start gap-4"
+          style={{
+            background: 'rgb(163 45 45 / 0.08)',
+            borderLeft: '4px solid #A32D2D',
+            padding: '1rem 1.25rem',
+          }}
+        >
+          <div className="flex-1 min-w-0">
+            <p className="text-[14px] font-medium text-rose-900 dark:text-rose-200 flex items-center gap-1.5">
+              <AlertTriangle size={14} className="shrink-0" />
+              {expiredPct.toFixed(1)}% of all batches on file are already expired
+            </p>
+            <p className="text-[12px] text-rose-800 dark:text-rose-300/90 mt-1.5 leading-relaxed">
+              {formatNumber(expiredBatches)} of {formatNumber(totalBatches)} batches in the system have crossed
+              their expiry date. Likely cause: old batches were never archived after sell-through. This isn't
+              current loss (already written off at -{formatINR(expiredAbsValue)}) but it bloats reports and slows
+              queries. Recommend a one-time data cleanup to archive batches expired more than 12 months ago.
+            </p>
+          </div>
+          <div className="text-right shrink-0" style={{ minWidth: '80px' }}>
+            <p className="text-[24px] font-medium leading-none text-rose-900 dark:text-rose-200">{expiredPct.toFixed(1)}%</p>
+            <p className="text-[11px] text-rose-800 dark:text-rose-300/90 mt-1">of total batches</p>
+          </div>
+        </div>
+      )}
 
-          {/* Top Products by Stock Value */}
-          {isVisible('pharma_top_stock_products') && topProducts?.length > 0 && (
-            <div className="card">
-              <h3 className="text-sm font-semibold text-theme-heading mb-1">Top Products by Stock Value</h3>
-              <p className="text-xs text-theme-faint mb-4">Highest inventory value items</p>
-              <ResponsiveContainer width="100%" height={Math.max(200, topProducts.length * 28)}>
-                <BarChart data={topProducts.slice(0, 12)} layout="vertical" barGap={2}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a28" horizontal={false} />
-                  <XAxis type="number" tickFormatter={v => `${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                  <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={140} axisLine={false} tickLine={false} />
-                  <Tooltip formatter={(v: number) => formatINR(v)} contentStyle={CHART_STYLE} />
-                  <Bar dataKey="value" name="Stock Value" fill="#10b981" radius={[0, 6, 6, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+      {/* ── When your stock will expire — stacked-bar card ─────────
+          Replaces the donut + long legend. The bar shows the four
+          sellable zones proportioned by VALUE (not batch count) so
+          it tells the financial story directly. Detail tiles below
+          give batch counts + value per zone. */}
+      {isVisible('pharma_expiry_breakdown') && liveStockValue > 0 && (
+        <div
+          className="mb-4 rounded-xl p-5"
+          style={{ background: 'var(--mt-bg-raised)', border: '0.5px solid var(--mt-border)' }}
+        >
+          <h3 className="text-base font-medium text-theme-heading">When your stock will expire</h3>
+          <p className="text-[13px] text-theme-secondary mt-0.5">By value, sellable batches only</p>
+          <p className="text-[13px] text-theme-faint mt-1">
+            {formatINR(atRiskStockValue)} worth of stock expires in the next 6 months — focus liquidation here.
+          </p>
+
+          {/* Single horizontal stacked bar */}
+          <div
+            className="mt-4 flex w-full overflow-hidden rounded-md"
+            style={{ height: '36px' }}
+            role="img"
+            aria-label={`Stock value by expiry zone: ${segments.map(s => `${s.label} ${formatINR(s.value)}`).join(', ')}`}
+          >
+            {segments.map((seg, i) => {
+              const pct = liveStockValue > 0 ? (seg.value / liveStockValue) * 100 : 0;
+              const showLabel = pct >= 8;
+              return (
+                <div
+                  key={seg.key}
+                  className="flex items-center justify-center text-[11px] font-medium text-white"
+                  style={{
+                    width: pct > 0 ? `${Math.max(0.4, pct)}%` : '0%',
+                    background: seg.color,
+                    minWidth: pct > 0 ? '4px' : '0',
+                    paddingInline: showLabel ? '8px' : '0',
+                    borderRight: i < segments.length - 1 && pct > 0 ? '1px solid rgba(255,255,255,0.15)' : 'none',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {showLabel && `${formatINR(seg.value)} · ${pct.toFixed(0)}%`}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Detail tiles */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-3">
+            {segments.map(seg => (
+              <div
+                key={seg.key}
+                className="rounded-md p-3"
+                style={{ background: seg.tile.bg, border: `0.5px solid ${seg.tile.border}` }}
+              >
+                <div className={`text-[12px] font-medium flex items-center gap-1.5 ${seg.tile.label}`}>
+                  <span className="inline-block rounded-sm" style={{ width: '8px', height: '8px', background: seg.color }} />
+                  {seg.label}
+                </div>
+                <p className={`text-[16px] font-medium mt-1.5 ${seg.tile.num}`}>{formatINR(seg.value)}</p>
+                <p className={`text-[11px] mt-0.5 ${seg.tile.label}`}>
+                  {formatNumber(seg.batches)} batch{seg.batches === 1 ? '' : 'es'}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Expires within 3 months — act now ────────────────────────
+          New card. The data was always there (every batch row has
+          expiry + value); the brief promotes it from "buried in the
+          table" to a top-of-page action list. */}
+      {isVisible('pharma_critical_batches') && allCritical.length > 0 && (
+        <div
+          className="mb-4 rounded-xl p-5"
+          style={{ background: 'var(--mt-bg-raised)', border: '0.5px solid var(--mt-border)' }}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-base font-medium text-theme-heading">Expires within 3 months — act now</h3>
+              <p className="text-[13px] text-theme-secondary mt-0.5">
+                Top {Math.min(6, allCritical.length)} by value · {formatINR(criticalTotal)} total
+              </p>
+              <p className="text-[13px] text-theme-faint mt-1">
+                Discount, return to stockist, or push these to fast-moving doctors.
+              </p>
             </div>
+          </div>
+
+          <div className="mt-4">
+            <div className="grid grid-cols-[1fr_80px_120px_100px] gap-3 px-2 pb-2 text-[12px] uppercase tracking-[0.5px] text-theme-faint border-b" style={{ borderColor: 'var(--mt-border)' }}>
+              <span>Drug · batch</span>
+              <span className="text-right">Qty</span>
+              <span className="text-right">Value at risk</span>
+              <span className="text-right">Expires in</span>
+            </div>
+            {topCritical.map((r, i) => {
+              const days = r._daysToExpiry ?? 0;
+              const pill = expiryPillByDays(days);
+              return (
+                <div
+                  key={i}
+                  className="grid grid-cols-[1fr_80px_120px_100px] gap-3 px-2 py-2.5 items-center text-[13px]"
+                  style={{ borderTop: i === 0 ? 'none' : '0.5px solid var(--mt-border)' }}
+                >
+                  <div className="min-w-0">
+                    <span className="text-theme-heading truncate block" title={r.drug_name}>{r.drug_name}</span>
+                    <span className="text-[11px] text-theme-faint font-mono">{r.batch_no}</span>
+                  </div>
+                  <span className="text-right text-theme-secondary">{formatNumber(r.avl_qty || 0)}</span>
+                  <span className="text-right text-theme-heading font-medium">{formatINR(r.stock_value || 0)}</span>
+                  <span className="text-right">
+                    <span
+                      className={`inline-block rounded-md text-[11px] ${pill.text}`}
+                      style={{ background: pill.bg, padding: '2px 8px' }}
+                    >
+                      {days} day{days === 1 ? '' : 's'}
+                    </span>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          {allCritical.length > 6 && (
+            <button
+              type="button"
+              onClick={() => setCriticalOnly(true)}
+              className="mt-3 text-[12px] text-theme-faint hover:text-theme-heading transition-colors"
+            >
+              + {allCritical.length - 6} more critical batch{allCritical.length - 6 === 1 ? '' : 'es'} · view all
+            </button>
           )}
         </div>
       )}
 
-      {/* Stock Table */}
-      {tableVisible && table?.length > 0 && (() => {
+      {/* ── Top products by stock value ───────────────────────────
+          Color encodes earliest-expiry zone instead of being a
+          single green palette. The "earliest expiry" is computed
+          client-side from the batch table since the API's
+          topProducts payload doesn't carry per-product expiry. */}
+      {isVisible('pharma_top_stock_products') && topProducts?.length > 0 && (() => {
+        const visible = topProducts.slice(0, 7);
+        return (
+          <div
+            className="mb-4 rounded-xl p-5"
+            style={{ background: 'var(--mt-bg-raised)', border: '0.5px solid var(--mt-border)' }}
+          >
+            <h3 className="text-base font-medium text-theme-heading">Top products by stock value</h3>
+            <p className="text-[13px] text-theme-secondary mt-0.5">Highest inventory items</p>
+            <p className="text-[13px] text-theme-faint mt-1">Color shows expiry zone — green is safe, amber/red needs attention.</p>
+
+            <div className="mt-4">
+              <div className="grid grid-cols-[1fr_120px_80px_120px] gap-3 px-2 pb-2 text-[12px] uppercase tracking-[0.5px] text-theme-faint border-b" style={{ borderColor: 'var(--mt-border)' }}>
+                <span>Drug</span>
+                <span className="text-right">Stock value</span>
+                <span className="text-right">Qty</span>
+                <span className="text-right">Earliest expiry</span>
+              </div>
+              {visible.map((p: any, i: number) => {
+                const earliest = earliestExpiryByDrug.get(p.name) || null;
+                const days = earliest ? Math.floor((earliest.getTime() - refDate.getTime()) / 86400000) : null;
+                const pill = expiryPillByDays(days);
+                const label = earliest
+                  ? earliest.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
+                  : '—';
+                return (
+                  <div
+                    key={i}
+                    className="grid grid-cols-[1fr_120px_80px_120px] gap-3 px-2 py-2.5 items-center text-[13px]"
+                    style={{ borderTop: i === 0 ? 'none' : '0.5px solid var(--mt-border)' }}
+                  >
+                    <span className="text-theme-heading truncate" title={p.name}>{p.name}</span>
+                    <span className="text-right text-theme-heading font-medium">{formatINR(p.value || 0)}</span>
+                    <span className="text-right text-theme-secondary">{formatNumber(p.qty || 0)}</span>
+                    <span className="text-right">
+                      <span
+                        className={`inline-block rounded-md text-[11px] ${pill.text}`}
+                        style={{ background: pill.bg, padding: '2px 8px' }}
+                      >
+                        {label}
+                      </span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {topProducts.length > 7 && (
+              <p className="mt-3 text-[12px] text-theme-faint">
+                + {topProducts.length - 7} more · use the table below to browse the full list
+              </p>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ── Stock details table ───────────────────────────────────
+          Drops the empty Strips column, hides expired by default,
+          adds Critical-only quick filter, and tints at-risk rows
+          + colour-codes the Stock Value column by safety. */}
+      {tableVisible && enrichedTable.length > 0 && (() => {
         const cols: ColumnDef<any>[] = [
-          { key: 'drug_name', header: 'Drug Name', cellClassName: 'truncate max-w-[180px]' },
-          { key: 'batch_no', header: 'Batch', cellClassName: 'font-mono text-xs' },
+          { key: 'drug_name', header: 'Drug Name', cellClassName: 'truncate max-w-[220px]' },
+          { key: 'batch_no', header: 'Batch', cellClassName: 'font-mono text-[11px]' },
           { key: 'received_date', header: 'Received', type: 'date' },
-          { key: 'expiry_date', header: 'Expiry', type: 'date' },
+          { key: 'expiry_date', header: 'Expiry', type: 'date',
+            render: r => {
+              const d = r._daysToExpiry;
+              if (d != null && d < 0) {
+                return <span className="text-rose-700 dark:text-rose-300 font-medium flex items-center gap-1"><AlertTriangle size={11} /> {r.expiry_date}</span>;
+              }
+              if (d != null && d <= 90) {
+                return <span className="text-rose-700 dark:text-rose-300 font-medium flex items-center gap-1"><AlertTriangle size={11} /> {r.expiry_date}</span>;
+              }
+              return <span className="text-theme-secondary">{r.expiry_date}</span>;
+            } },
           { key: 'avl_qty', header: 'Avl Qty', type: 'number', format: 'number' },
-          { key: 'strips', header: 'Strips', type: 'number', render: r => r.strips || '-' },
           { key: 'purchase_price', header: 'Purchase Price', type: 'number', format: 'currency' },
           { key: 'stock_value', header: 'Stock Value', type: 'number',
-            render: r => <span className="text-teal-400 font-medium">{formatINR(r.stock_value || 0)}</span> },
+            render: r => {
+              const d = r._daysToExpiry;
+              const cls = d != null && d <= 90
+                ? 'text-rose-800 dark:text-rose-300 font-medium'
+                : d != null && d >= 180
+                  ? 'text-emerald-800 dark:text-emerald-300 font-medium'
+                  : 'text-theme-heading font-medium';
+              return <span className={cls}>{formatINR(r.stock_value || 0)}</span>;
+            } },
         ];
         return (
-          <div className="card mb-6">
-            <div className="flex items-center justify-between mb-4">
+          <div
+            className="mb-6 rounded-xl p-5"
+            style={{ background: 'var(--mt-bg-raised)', border: '0.5px solid var(--mt-border)' }}
+          >
+            <div className="flex items-end justify-between mb-3 gap-3 flex-wrap">
               <div>
-                <h3 className="text-sm font-semibold text-theme-heading">Stock Details</h3>
-                <p className="text-xs text-theme-faint">{formatNumber(table.length)} items</p>
+                <h3 className="text-base font-medium text-theme-heading">Stock details</h3>
+                <p className="text-[13px] text-theme-secondary mt-0.5">
+                  {formatNumber(stockTableRows.length)} {showExpired ? 'items' : 'sellable items'}
+                  {' · sorted by stock value'}
+                  {expiredRows.length > 0 && !showExpired && (
+                    <> · <button type="button" onClick={() => setShowExpired(true)} className="underline hover:text-theme-heading">show {formatNumber(expiredRows.length)} expired</button></>
+                  )}
+                  {showExpired && (
+                    <> · <button type="button" onClick={() => setShowExpired(false)} className="underline hover:text-theme-heading">hide expired</button></>
+                  )}
+                </p>
               </div>
-              <button onClick={() => exportFromDb('pharma-stock', STOCK_COLUMNS, 'Stock_Details')}
-                className="btn btn-sm btn-ghost flex items-center gap-1.5 text-xs text-theme-faint hover:text-accent-500" title="Download XLSX">
-                <Download size={14} /> Download
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCriticalOnly(v => !v)}
+                  className="flex items-center gap-1 rounded-md text-[12px] transition-colors"
+                  style={{
+                    background: criticalOnly ? 'rgb(226 75 74 / 0.20)' : 'rgb(226 75 74 / 0.10)',
+                    color: criticalOnly ? '#7f1d1d' : '#A32D2D',
+                    padding: '6px 12px',
+                    border: criticalOnly ? '1px solid rgb(226 75 74 / 0.35)' : '1px solid transparent',
+                  }}
+                  title="Filter to batches expiring within 90 days"
+                >
+                  <AlertTriangle size={12} /> Critical only{criticalOnly ? ' · on' : ''}
+                </button>
+                <button
+                  onClick={() => exportFromDb('pharma-stock', STOCK_COLUMNS, 'Stock_Details')}
+                  className="btn btn-sm btn-ghost flex items-center gap-1.5 text-[12px] text-theme-faint hover:text-accent-500"
+                  title="Download XLSX"
+                >
+                  <Download size={14} /> Download
+                </button>
+              </div>
             </div>
             <DataTable
               columns={cols}
-              rows={table}
-              pageSize={50}
+              rows={stockTableRows}
+              pageSize={15}
+              defaultSort={{ key: 'stock_value', dir: 'desc' }}
               searchPlaceholder="Search drug, batch..."
+              rowClassName={(r: any) => r._daysToExpiry != null && r._daysToExpiry >= 0 && r._daysToExpiry <= 90 ? 'bg-rose-500/5' : ''}
             />
           </div>
         );

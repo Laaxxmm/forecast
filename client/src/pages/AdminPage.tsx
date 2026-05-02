@@ -1686,12 +1686,13 @@ function DashboardConfigSection({ slug, streams }: { slug: string; streams: any[
     pharma_top_patients: 'sales',
     pharma_sales_table: 'sales',
     // Stock & Expiry
-    pharma_stock_value: 'stock',
-    pharma_stock_skus: 'stock',
-    pharma_near_expiry: 'stock',
+    pharma_live_stock_value: 'stock',
+    pharma_healthy_stock: 'stock',
+    pharma_at_risk_stock: 'stock',
     pharma_expired_items: 'stock',
-    pharma_total_batches: 'stock',
-    pharma_expiry_zones: 'stock',
+    pharma_expired_alert: 'stock',
+    pharma_expiry_breakdown: 'stock',
+    pharma_critical_batches: 'stock',
     pharma_top_stock_products: 'stock',
     pharma_stock_table: 'stock',
     // Cross-Report

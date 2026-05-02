@@ -355,6 +355,26 @@ export function initializePlatformSchema(db: DbHelper) {
       // Pharmacy-specific items (OneGlance data)
       const isPharma = nameLower.includes('pharma');
       if (isPharma) {
+        // The Stock & Expiry tab redesign drops three KPI cards
+        // (Unique SKUs, Near Expiry, Total Batches) and the donut
+        // chart (`pharma_expiry_zones`) in favour of a tighter
+        // 4-card strip + alert callout + stacked-bar breakdown.
+        // Idempotent: re-runs are no-ops because the rows are gone.
+        const DEPRECATED_PHARMA_STOCK_KEYS = [
+          'pharma_stock_value',   // renamed → pharma_live_stock_value
+          'pharma_stock_skus',    // folded into Live stock value sub-line
+          'pharma_near_expiry',   // replaced by pharma_at_risk_stock
+          'pharma_total_batches', // dropped (was misleading — included expired)
+          'pharma_expiry_zones',  // donut replaced by stacked-bar breakdown card
+        ];
+        for (const k of DEPRECATED_PHARMA_STOCK_KEYS) {
+          db.run(
+            `DELETE FROM dashboard_chart_visibility
+              WHERE client_id = ? AND scope = ? AND element_key = ?`,
+            [c.id, sid, k]
+          );
+        }
+
         // ── Purchase KPI Cards ──
         // Layout: 5 tinted KPI cards. The "Total Tax" toggle no longer renders
         // its own card — it now controls the "incl. ₹X tax" sub-line shown
@@ -387,16 +407,21 @@ export function initializePlatformSchema(db: DbHelper) {
           'Number of distinct pharmacy customers', source);
 
         // ── Stock KPI Cards ──
-        seedVis(c.id, sid, 'cards', 'pharma_stock_value', 'Total Stock Value', 12,
-          'Total inventory valuation from latest snapshot', source);
-        seedVis(c.id, sid, 'cards', 'pharma_stock_skus', 'Unique SKUs', 13,
-          'Number of distinct stock items', source);
-        seedVis(c.id, sid, 'cards', 'pharma_near_expiry', 'Near Expiry Batches', 14,
-          'Batches expiring within 6 months', source);
-        seedVis(c.id, sid, 'cards', 'pharma_expired_items', 'Expired Batches', 15,
-          'Batches that have already expired', source);
-        seedVis(c.id, sid, 'cards', 'pharma_total_batches', 'Total Batches', 16,
-          'Total number of stock batches', source);
+        // The Stock & Expiry tab redesign collapses the 5-card strip
+        // (Total Stock Value / Unique SKUs / Near Expiry / Expired
+        // Batches / Total Batches) into a 4-card strip framed around
+        // live-vs-expired and healthy-vs-at-risk. The dropped keys
+        // (pharma_stock_skus, pharma_near_expiry, pharma_total_batches)
+        // are deleted on next boot via the cleanup pass below so the
+        // admin customiser stays in sync.
+        seedVis(c.id, sid, 'cards', 'pharma_live_stock_value', 'Live stock value', 12,
+          'Sellable stock value across non-expired batches. Sub-line shows sellable batch count and SKU count.', source);
+        seedVis(c.id, sid, 'cards', 'pharma_healthy_stock', 'Healthy stock', 13,
+          'Stock value expiring 6 months or more out (Safe + Long term zones).', source);
+        seedVis(c.id, sid, 'cards', 'pharma_at_risk_stock', 'At-risk stock', 14,
+          'Stock value expiring within 6 months (Critical 0–3m + Warning 3–6m).', source);
+        seedVis(c.id, sid, 'cards', 'pharma_expired_items', 'Already expired', 15,
+          'Batch count and value already past expiry — written off, surfaced for data-hygiene visibility.', source);
 
         // ── Cross-Report KPI Cards ──
         seedVis(c.id, sid, 'cards', 'pharma_cross_kpis', 'Cross-Report KPIs', 17,
@@ -436,10 +461,20 @@ export function initializePlatformSchema(db: DbHelper) {
           'Top 20 pharmacy customers by total purchase amount', source);
 
         // ── Stock Charts ──
-        seedVis(c.id, sid, 'charts', 'pharma_expiry_zones', 'Expiry Zone Distribution', 13,
-          'Donut chart showing stock value by expiry timeline (expired, critical, warning, safe, long term)', source);
-        seedVis(c.id, sid, 'charts', 'pharma_top_stock_products', 'Top Stock Products', 14,
-          'Horizontal bar chart of products with highest inventory value', source);
+        // The Stock & Expiry tab redesign replaces the donut chart and
+        // long legend with a stacked-bar breakdown card, adds an
+        // expired-batch alert callout for data-hygiene visibility, and
+        // promotes critical-batch action items out of the table into a
+        // dedicated card. The deprecated `pharma_expiry_zones` key is
+        // deleted via the cleanup pass below.
+        seedVis(c.id, sid, 'charts', 'pharma_expired_alert', 'Expired batches alert', 13,
+          'Red callout banner that appears when 5%+ of all batches on file have crossed their expiry date. Reframes the figure as a likely data-hygiene issue.', source);
+        seedVis(c.id, sid, 'charts', 'pharma_expiry_breakdown', 'When your stock will expire', 14,
+          'Horizontal stacked-bar card showing live stock value split across the four sellable expiry zones, with detail tiles per zone.', source);
+        seedVis(c.id, sid, 'charts', 'pharma_critical_batches', 'Expires within 3 months — act now', 15,
+          'Top 6 batches expiring within 90 days, ranked by stock value, with days-to-expiry pills.', source);
+        seedVis(c.id, sid, 'charts', 'pharma_top_stock_products', 'Top products by stock value', 16,
+          'Top 7 products by stock value with earliest-expiry pill colour-coded by safety zone (red/amber/green/blue).', source);
 
         // ── Cross-Report Charts ──
         seedVis(c.id, sid, 'charts', 'pharma_purchase_vs_sales', 'Purchase vs Sales Comparison', 15,
@@ -452,8 +487,8 @@ export function initializePlatformSchema(db: DbHelper) {
           'Searchable table: Invoice, Date, Stockist, Drug, Batch Qty, Purchase Value, Tax, Margin. Free-qty rows are tinted green; rows are paginated at 10.', source);
         seedVis(c.id, sid, 'tables', 'pharma_sales_table', 'Sales Details Table', 1,
           'Searchable table: Bill, Date, Patient, Drug, Qty, Sales, COGS, Profit, Referred By. Paginated.', source);
-        seedVis(c.id, sid, 'tables', 'pharma_stock_table', 'Stock Details Table', 2,
-          'Searchable table: Drug, Batch, Received, Expiry, Avl Qty, Strips, Purchase Price, Stock Value. Paginated.', source);
+        seedVis(c.id, sid, 'tables', 'pharma_stock_table', 'Stock details', 2,
+          'Searchable table of sellable items (expired hidden by default) with at-risk row tinting, Critical-only quick filter, and download. Strips column dropped.', source);
       }
     }
   }
