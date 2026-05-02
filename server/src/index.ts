@@ -26,6 +26,8 @@ import dashboardRoutes from './routes/dashboard.js';
 import forecastModuleRoutes from './routes/forecast-module.js';
 import dashboardActualsRoutes from './routes/dashboard-actuals.js';
 import syncRoutes from './routes/sync.js';
+import autoSyncRoutes from './routes/auto-sync.js';
+import { registerAutoSync, scheduleCatchup } from './services/scheduler/auto-sync.js';
 import revenueSharingRoutes from './routes/revenue-sharing.js';
 import dbViewerRoutes from './routes/db-viewer.js';
 import ingestRoutes from './routes/ingest.js';
@@ -262,6 +264,11 @@ app.use('/api/vcfo/compliance-services', ...vcfoOps, vcfoComplianceServicesRoute
 app.use('/api/vcfo/compliances', ...vcfoOps, vcfoComplianceRoutes);
 app.use('/api/vcfo', ...vcfoOps, vcfoReportsRoutes);
 app.use('/api/dashboard-actuals', ...forecastOps, dashboardActualsRoutes);
+// /api/sync/auto must mount BEFORE the /api/sync catch-all so its sub-paths
+// (config, history, run-now) are matched first. PUT /config and POST /run-now
+// gate themselves on requireRole inside the router; GET /config + /history
+// are role-relaxed so any logged-in user on the branch can read.
+app.use('/api/sync/auto', ...forecastOps, autoSyncRoutes);
 app.use('/api/sync', ...forecastOps, forecastWrite, syncRoutes);
 app.use('/api/revenue-sharing', ...forecastOps, revenueSharingRoutes);
 app.use('/api/db', requireAuth, resolveTenant, resolveBranch, requireSuperAdmin, dbViewerRoutes);
@@ -1051,6 +1058,17 @@ async function start() {
   }
 
   console.log('Database initialized and seeded');
+
+  // ─── Auto-sync scheduler ──────────────────────────────────────────────
+  // Register the 23:00 IST cron and run a boot-time catch-up if the server
+  // missed today's tick. Both no-op unless AUTO_SYNC_ENABLED=true.
+  try {
+    registerAutoSync();
+    scheduleCatchup();
+  } catch (e) {
+    console.error('[auto-sync] registration failed:', e);
+  }
+
   app.listen(PORT, () => {
     console.log(`Magna Tracker server running on port ${PORT}`);
   });

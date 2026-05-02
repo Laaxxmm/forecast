@@ -21,6 +21,8 @@ export default function SettingsPage() {
   const [turiaHasCreds, setTuriaHasCreds] = useState(false);
   const [turiaSaving, setTuriaSaving] = useState(false);
   const [turiaSaved, setTuriaSaved] = useState(false);
+  const [hpAutoSync, setHpAutoSync] = useState(false);
+  const [ogAutoSync, setOgAutoSync] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const enabledIntegrations: string[] = (() => {
@@ -56,6 +58,23 @@ export default function SettingsPage() {
         setTuriaCreds(c => ({ ...c, phoneNumber: res.data.phoneNumber || '', financialYear: res.data.financialYear || '2025-26' }));
         setTuriaHasCreds(res.data.hasCredentials);
       }).catch(() => {});
+    }
+    if (showHp || showOg) {
+      api.get('/sync/auto/config').then(res => {
+        setHpAutoSync(!!res.data.healthplixEnabled);
+        setOgAutoSync(!!res.data.oneglanceEnabled);
+      }).catch(() => {});
+    }
+  };
+
+  const toggleAutoSync = async (source: 'healthplix' | 'oneglance', enabled: boolean) => {
+    if (source === 'healthplix') setHpAutoSync(enabled); else setOgAutoSync(enabled);
+    try {
+      await api.put('/sync/auto/config', source === 'healthplix' ? { healthplixEnabled: enabled } : { oneglanceEnabled: enabled });
+    } catch {
+      // Revert on failure
+      if (source === 'healthplix') setHpAutoSync(!enabled); else setOgAutoSync(!enabled);
+      alert('Failed to update auto-sync setting');
     }
   };
 
@@ -316,6 +335,13 @@ export default function SettingsPage() {
             </button>
             {hpHasPassword && clearBtn(clearHpCredentials)}
           </div>
+          {hpHasPassword && (
+            <label className="flex items-center gap-2 mt-4 pt-3 cursor-pointer text-sm" style={{ borderTop: '1px solid var(--mt-border)', color: 'var(--mt-text-secondary)' }}>
+              <input type="checkbox" checked={hpAutoSync} onChange={e => toggleAutoSync('healthplix', e.target.checked)} />
+              <span>Auto-sync nightly at 11 PM IST</span>
+              <span className="text-xs" style={{ color: 'var(--mt-text-faint)' }}>(today + yesterday)</span>
+            </label>
+          )}
         </CredCard>}
 
         {/* Oneglance Credentials */}
@@ -349,6 +375,13 @@ export default function SettingsPage() {
             </button>
             {ogHasPassword && clearBtn(clearOgCredentials)}
           </div>
+          {ogHasPassword && (
+            <label className="flex items-center gap-2 mt-4 pt-3 cursor-pointer text-sm" style={{ borderTop: '1px solid var(--mt-border)', color: 'var(--mt-text-secondary)' }}>
+              <input type="checkbox" checked={ogAutoSync} onChange={e => toggleAutoSync('oneglance', e.target.checked)} />
+              <span>Auto-sync nightly at 11 PM IST</span>
+              <span className="text-xs" style={{ color: 'var(--mt-text-faint)' }}>(today + yesterday)</span>
+            </label>
+          )}
         </CredCard>}
 
         {/* Turia Credentials */}

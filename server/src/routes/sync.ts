@@ -1,17 +1,13 @@
 import { Router, type Request, type Response } from 'express';
 import { requireRole, requireIntegration } from '../middleware/auth.js';
-import { encrypt, decrypt } from '../utils/crypto.js';
-import { branchFilter, getBranchIdForInsert, branchSettingsKey } from '../utils/branch.js';
+import { encrypt } from '../utils/crypto.js';
+import { branchSettingsKey, branchFilter, getBranchIdForInsert } from '../utils/branch.js';
+import { runHealthplixSync } from '../services/sync/healthplix-runner.js';
+import { runOneglanceSync } from '../services/sync/oneglance-runner.js';
+import { parseTuriaInvoices } from '../services/parsers/turia.js';
 import { findActiveScenarioForStream } from '../utils/scenarios.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
-import { parseHealthplix } from '../services/parsers/healthplix.js';
-import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
-import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.js';
-import { parseOneglanceStock } from '../services/parsers/oneglance-stock.js';
-import { parseTuriaInvoices } from '../services/parsers/turia.js';
 // Lazy-import Playwright sync modules (not available on cloud hosts)
-const loadSyncHealthplix = () => import('../services/sync/healthplix-sync.js').then(m => m.syncHealthplix);
-const loadSyncOneglance = () => import('../services/sync/oneglance-sync.js').then(m => m.syncOneglance);
 const loadSyncTuria = () => import('../services/sync/turia-sync.js').then(m => m.syncTuria);
 import fs from 'fs';
 import path from 'path';
@@ -20,8 +16,10 @@ const router = Router();
 
 const isProd = process.env.NODE_ENV === 'production';
 
-// Per-tenant sync state for progress tracking
-interface SyncState {
+// Per-tenant sync state for progress tracking. Exported so the auto-sync
+// scheduler can peek at active manual runs and skip them rather than starting
+// a second Chromium for the same (tenant, source).
+export interface SyncState {
   activeSyncId: string | null;
   progress: { step: string; message: string; pct: number; error?: string; result?: any } | null;
 }
@@ -31,18 +29,18 @@ interface TuriaSyncState extends SyncState {
   otpResolver: ((otp: string) => void) | null;
 }
 
-const hpSyncStates = new Map<string, SyncState>();
-const ogSyncStates = new Map<string, SyncState>();
+export const hpSyncStates = new Map<string, SyncState>();
+export const ogSyncStates = new Map<string, SyncState>();
 const turiaSyncStates = new Map<string, TuriaSyncState>();
 
-function getHpState(slug: string): SyncState {
+export function getHpState(slug: string): SyncState {
   if (!hpSyncStates.has(slug)) {
     hpSyncStates.set(slug, { activeSyncId: null, progress: null });
   }
   return hpSyncStates.get(slug)!;
 }
 
-function getOgState(slug: string): SyncState {
+export function getOgState(slug: string): SyncState {
   if (!ogSyncStates.has(slug)) {
     ogSyncStates.set(slug, { activeSyncId: null, progress: null });
   }
@@ -118,151 +116,35 @@ router.post('/healthplix', requireRole('admin', 'operational_head'), requireInte
     return res.status(409).json({ error: 'A sync is already in progress' });
   }
 
-  // Load credentials (branch-scoped)
-  const db = req.tenantDb!;
   const branchId = getBranchIdForInsert(req);
-  const usernameRow = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('healthplix_username', req));
-  const passwordRow = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('healthplix_password', req));
-  const clinicRow = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('healthplix_clinic', req));
-
-  if (!usernameRow?.value || !passwordRow?.value) {
-    return res.status(400).json({ error: 'Healthplix credentials not configured. Go to Settings to set them up.' });
-  }
-
-  const username = usernameRow.value;
-  const password = decrypt(passwordRow.value);
-  const clinicName = clinicRow?.value || 'MagnaCode Bangalore';
-
-  // Start sync
   const syncId = Date.now().toString();
   state.activeSyncId = syncId;
   state.progress = { step: 'starting', message: 'Initializing...', pct: 0 };
 
-  // Run sync in background, respond immediately with syncId
+  // Respond immediately with syncId; runner executes in the background.
   res.json({ syncId, status: 'started' });
 
   try {
-    const syncHealthplix = await loadSyncHealthplix();
-    const result = await syncHealthplix({
-      username,
-      password,
-      clinicName,
+    const summary = await runHealthplixSync({
+      tenantSlug,
+      clientId: req.clientId!,
+      ctx: req,
+      branchId,
       fromDate,
       toDate,
-      headless: true,
+      trigger: 'manual',
       onProgress: (step, message, pct) => {
         state.progress = { step, message, pct };
       },
     });
-
-    // Parse the downloaded file through existing parser
-    state.progress = { step: 'parsing', message: 'Parsing downloaded report...', pct: 92 };
-
-    const { rows, summary } = parseHealthplix(result.filePath);
-
-    state.progress = { step: 'saving', message: `Saving ${rows.length} rows to database...`, pct: 95 };
-
-    // ── Deduplication: delete existing clinic rows for THIS BRANCH on the
-    //    dates being re-synced. branch_id scope is MANDATORY — a sync for one
-    //    branch must never wipe another branch's rows for overlapping dates.
-    //    `branch_id IS ?` also handles NULL (single-branch clients). ──
-    const clinicDatesToReplace = [...new Set(rows.map((r: any) => r.bill_date).filter(Boolean))];
-    if (clinicDatesToReplace.length > 0) {
-      const ph = clinicDatesToReplace.map(() => '?').join(',');
-      db.run(
-        `DELETE FROM clinic_actuals WHERE branch_id IS ? AND bill_date IN (${ph})`,
-        branchId, ...clinicDatesToReplace
-      );
-      console.log(`[hp-sync] Cleared existing clinic data for branch=${branchId}, dates=${clinicDatesToReplace.length}`);
-    }
-
-    // Insert into DB
-    db.run(
-      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      'HEALTHPLIX_SYNC', result.filename, rows.length,
-      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId, result.filePath
-    );
-    // sql.js lastInsertRowid is unreliable after save(); use SELECT instead
-    const importLogRow = db.get("SELECT id FROM import_logs WHERE source = 'HEALTHPLIX_SYNC' ORDER BY id DESC LIMIT 1");
-    const importId = importLogRow?.id || 0;
-
-    db.beginBatch();
-    try {
-      for (const r of rows) {
-        db.run(
-          `INSERT INTO clinic_actuals (import_id, bill_date, bill_month, patient_id, patient_name, order_number,
-            billed, paid, discount, tax, refund, due, addl_disc, item_price, item_disc,
-            department, service_name, billed_doctor, service_owner, branch_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          importId, r.bill_date, r.bill_month, r.patient_id, r.patient_name,
-          r.order_number, r.billed, r.paid, r.discount, r.tax, r.refund, r.due,
-          r.addl_disc, r.item_price, r.item_disc, r.department, r.service_name,
-          r.billed_doctor, r.service_owner, branchId
-        );
-      }
-      db.endBatch();
-    } catch (e) { db.rollbackBatch(); throw e; }
-
-    // Verify rows were actually inserted
-    const verifyCount = db.get('SELECT COUNT(*) as n FROM clinic_actuals WHERE import_id = ?', importId)?.n || 0;
-    console.log(`[hp-sync] Post-insert verification: expected=${rows.length}, actual=${verifyCount}, importId=${importId}`);
-    if (verifyCount === 0) {
-      console.error(`[hp-sync] ⚠ CRITICAL: 0 rows in clinic_actuals after batch insert — data may not have persisted`);
-    }
-
-    // Auto-add doctors. Stamp branch_id so the doctor is scoped to the
-    // branch this sync ran for (Revenue Sharing visibility relies on it).
-    // Existing rows (UNIQUE on name) are left untouched by INSERT OR IGNORE.
-    const doctors = [...new Set(rows.map((r: any) => r.billed_doctor).filter((d: any) => d && d !== '-'))];
-    for (const d of doctors) {
-      db.run('INSERT OR IGNORE INTO doctors (name, branch_id) VALUES (?, ?)', d, branchId);
-    }
-
-    // Auto-sync actuals to dashboard for the active scenario
-    // Strict: NULL-branch legacy rows are not re-aggregated under the
-    // active branch during the post-import rebuild.
-    const bf = branchFilter(req, { strict: true });
-    const platformDb = await getPlatformHelper();
-    const clinicStream = req.clientId ? platformDb.get(
-      "SELECT id FROM business_streams WHERE client_id = ? AND (LOWER(name) LIKE '%clinic%' OR LOWER(name) LIKE '%health%') AND is_active = 1 LIMIT 1",
-      req.clientId
-    ) : null;
-    const clinicStreamId = clinicStream?.id || null;
-    // Canonical scenario helper — same scenario the dashboard read picks.
-    const activeScenario = findActiveScenarioForStream(db, req, clinicStreamId);
-    if (activeScenario) {
-      // Clear old Clinic Revenue entries before re-syncing (prevents stale month data)
-      db.run(
-        `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Clinic Revenue'${bf.where}`,
-        activeScenario.id, ...bf.params
-      );
-      const clinicMonthly = db.all(
-        `SELECT bill_month as month, COALESCE(SUM(item_price), 0) as total
-         FROM clinic_actuals WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where} GROUP BY bill_month`,
-        ...bf.params
-      );
-      for (const row of clinicMonthly) {
-        if (!row.month) continue;
-        db.run(
-          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
-           VALUES (?, 'revenue', 'Clinic Revenue', ?, ?, ?, ?, datetime('now'))
-           ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
-           DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
-          activeScenario.id, row.month, row.total, branchId, clinicStreamId
-        );
-      }
-    }
-
-    // Keep downloaded file for later download from Import History
 
     state.progress = {
       step: 'complete',
       message: 'Sync completed successfully',
       pct: 100,
       result: {
-        importId,
-        ...summary,
+        importId: summary.importId,
+        ...summary.summary,
       },
     };
   } catch (err: any) {
@@ -276,7 +158,6 @@ router.post('/healthplix', requireRole('admin', 'operational_head'), requireInte
     // Clear lock immediately on error so user can retry
     state.activeSyncId = null;
   } finally {
-    // Clear completed sync state after a delay so status can be polled
     if (state.progress?.step === 'complete') {
       setTimeout(() => {
         if (state.activeSyncId === syncId) {
@@ -373,18 +254,7 @@ router.post('/oneglance', requireRole('admin', 'operational_head'), requireInteg
     return res.status(409).json({ error: 'An Oneglance sync is already in progress' });
   }
 
-  const db = req.tenantDb!;
   const branchId = getBranchIdForInsert(req);
-  const usernameRow = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('oneglance_username', req));
-  const passwordRow = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('oneglance_password', req));
-
-  if (!usernameRow?.value || !passwordRow?.value) {
-    return res.status(400).json({ error: 'Oneglance credentials not configured. Go to Settings to set them up.' });
-  }
-
-  const username = usernameRow.value;
-  const password = decrypt(passwordRow.value);
-
   const syncId = Date.now().toString();
   ogState.activeSyncId = syncId;
   ogState.progress = { step: 'starting', message: 'Initializing...', pct: 0 };
@@ -392,215 +262,19 @@ router.post('/oneglance', requireRole('admin', 'operational_head'), requireInteg
   res.json({ syncId, status: 'started' });
 
   try {
-    const syncOneglance = await loadSyncOneglance();
-    const result = await syncOneglance({
-      username,
-      password,
+    const result = await runOneglanceSync({
+      tenantSlug,
+      clientId: req.clientId!,
+      ctx: req,
+      branchId,
       fromDate,
       toDate,
       reportType: reportType || 'both',
+      trigger: 'manual',
       onProgress: (step, message, pct) => {
         ogState.progress = { step, message, pct };
       },
     });
-
-    ogState.progress = { step: 'parsing', message: 'Parsing downloaded reports...', pct: 85 };
-
-    let totalRows = 0;
-
-    // Current month — reject any rows with future months (OneGlance CSVs contain bad dates)
-    const currentMonth = new Date().toISOString().slice(0, 7);
-
-    // Parse and save Sales report
-    if (result.salesFile) {
-      ogState.progress = { step: 'parsing', message: 'Parsing sales report...', pct: 87 };
-      const { rows: allRows, summary } = parseOneglanceSales(result.salesFile.filePath);
-      const rows = allRows.filter(r => !r.bill_month || r.bill_month <= currentMonth);
-      console.log(`[oneglance-sync] Sales: ${allRows.length} total rows, ${rows.length} after filtering future months (dropped ${allRows.length - rows.length})`);
-
-      // ── Deduplication: delete existing sales rows for THIS BRANCH on the
-      //    dates being re-synced. branch_id scope is MANDATORY. ──
-      const salesDatesToReplace = [...new Set(rows.map((r: any) => r.bill_date).filter(Boolean))];
-      if (salesDatesToReplace.length > 0) {
-        const ph = salesDatesToReplace.map(() => '?').join(',');
-        db.run(
-          `DELETE FROM pharmacy_sales_actuals WHERE branch_id IS ? AND bill_date IN (${ph})`,
-          branchId, ...salesDatesToReplace
-        );
-        console.log(`[oneglance-sync] Cleared existing sales data for branch=${branchId}, dates=${salesDatesToReplace.length}`);
-      }
-
-      db.run(
-        `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        'ONEGLANCE_SALES_SYNC', result.salesFile.filename, rows.length,
-        summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId, result.salesFile.filePath
-      );
-      const salesImportRow = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_SALES_SYNC' ORDER BY id DESC LIMIT 1");
-      const salesImportId = salesImportRow?.id || 0;
-
-      db.beginBatch();
-      try {
-        for (const r of rows) {
-          db.run(
-            `INSERT INTO pharmacy_sales_actuals (import_id, bill_no, bill_date, bill_month, drug_name, batch_no,
-              hsn_code, tax_pct, patient_id, patient_name, referred_by, qty, sales_amount,
-              purchase_amount, purchase_tax, sales_tax, profit, branch_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            salesImportId, r.bill_no, r.bill_date, r.bill_month, r.drug_name, r.batch_no,
-            r.hsn_code, r.tax_pct, r.patient_id, r.patient_name, r.referred_by, r.qty,
-            r.sales_amount, r.purchase_amount, r.purchase_tax, r.sales_tax, r.profit, branchId
-          );
-        }
-        db.endBatch();
-      } catch (e) { db.rollbackBatch(); throw e; }
-      totalRows += rows.length;
-
-      // Auto-sync pharmacy revenue to dashboard_actuals (branch-scoped)
-      // Strict: NULL-branch legacy rows excluded from the rebuild.
-      const bf = branchFilter(req, { strict: true });
-      // Look up the pharmacy stream_id to tag dashboard entries
-      const platformDb = await getPlatformHelper();
-      const pharmaStream = req.clientId ? platformDb.get(
-        "SELECT id FROM business_streams WHERE client_id = ? AND LOWER(name) LIKE '%pharma%' AND is_active = 1 LIMIT 1",
-        req.clientId
-      ) : null;
-      const pharmaStreamId = pharmaStream?.id || null;
-      // Canonical scenario helper — same scenario the dashboard read picks.
-      const activeScenario = findActiveScenarioForStream(db, req, pharmaStreamId);
-      if (activeScenario) {
-        // Clear old Pharmacy Revenue/COGS entries before re-syncing (prevents stale month data).
-        // branch_id scope is MANDATORY — syncing one branch must never wipe another branch's rollup.
-        db.run(
-          `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Pharmacy Revenue'${bf.where}`,
-          activeScenario.id, ...bf.params
-        );
-        db.run(
-          `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'direct_costs' AND item_name = 'Pharmacy COGS'${bf.where}`,
-          activeScenario.id, ...bf.params
-        );
-        const pharmaMonthly = db.all(
-          // Pharmacy revenue is rolled up ex-GST so the rollup matches
-          // the P&L semantic shown on the Actuals / Insights pages
-          // (sales_amount is gross from OneGlance; subtract sales_tax).
-          `SELECT bill_month as month,
-                  COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as revenue,
-                  COALESCE(SUM(purchase_amount), 0) as cogs
-           FROM pharmacy_sales_actuals
-           WHERE bill_month IS NOT NULL AND bill_month != ''${bf.where}
-           GROUP BY bill_month`,
-          ...bf.params
-        );
-        for (const row of pharmaMonthly) {
-          if (!row.month) continue;
-          db.run(
-            `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
-             VALUES (?, 'revenue', 'Pharmacy Revenue', ?, ?, ?, ?, datetime('now'))
-             ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
-             DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
-            activeScenario.id, row.month, row.revenue, branchId, pharmaStreamId
-          );
-          db.run(
-            `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
-             VALUES (?, 'direct_costs', 'Pharmacy COGS', ?, ?, ?, ?, datetime('now'))
-             ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
-             DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
-            activeScenario.id, row.month, row.cogs, branchId, pharmaStreamId
-          );
-        }
-      }
-
-      // Keep file for download from Import History
-    }
-
-    // Parse and save Purchase report
-    if (result.purchaseFile) {
-      ogState.progress = { step: 'parsing', message: 'Parsing purchase report...', pct: 92 };
-      const { rows: allPurchaseRows, summary } = parseOneglancePurchase(result.purchaseFile.filePath);
-      const rows = allPurchaseRows.filter(r => !r.invoice_month || r.invoice_month <= currentMonth);
-      console.log(`[oneglance-sync] Purchase: ${allPurchaseRows.length} total rows, ${rows.length} after filtering future months`);
-
-      // ── Deduplication: delete existing purchase rows for THIS BRANCH on
-      //    the dates being re-synced. branch_id scope is MANDATORY. ──
-      const purchaseDatesToReplace = [...new Set(rows.map((r: any) => r.invoice_date).filter(Boolean))];
-      if (purchaseDatesToReplace.length > 0) {
-        const ph = purchaseDatesToReplace.map(() => '?').join(',');
-        db.run(
-          `DELETE FROM pharmacy_purchase_actuals WHERE branch_id IS ? AND invoice_date IN (${ph})`,
-          branchId, ...purchaseDatesToReplace
-        );
-        console.log(`[oneglance-sync] Cleared existing purchase data for branch=${branchId}, dates=${purchaseDatesToReplace.length}`);
-      }
-
-      db.run(
-        `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        'ONEGLANCE_PURCHASE_SYNC', result.purchaseFile.filename, rows.length,
-        summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId, result.purchaseFile.filePath
-      );
-      const purchaseImportRow = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_PURCHASE_SYNC' ORDER BY id DESC LIMIT 1");
-      const purchaseImportId = purchaseImportRow?.id || 0;
-
-      db.beginBatch();
-      try {
-        for (const r of rows) {
-          db.run(
-            `INSERT INTO pharmacy_purchase_actuals (import_id, invoice_no, invoice_date, invoice_month,
-              stockiest_name, mfg_name, drug_name, batch_no, hsn_code, batch_qty, free_qty, mrp, rate,
-              discount_amount, net_purchase_value, net_sales_value, tax_pct, tax_amount,
-              purchase_qty, purchase_value, sales_value, profit, profit_pct, branch_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            purchaseImportId, r.invoice_no, r.invoice_date, r.invoice_month,
-            r.stockiest_name, r.mfg_name, r.drug_name, r.batch_no, r.hsn_code,
-            r.batch_qty, r.free_qty, r.mrp, r.rate, r.discount_amount,
-            r.net_purchase_value, r.net_sales_value, r.tax_pct, r.tax_amount,
-            r.purchase_qty, r.purchase_value, r.sales_value, r.profit, r.profit_pct, branchId
-          );
-        }
-        db.endBatch();
-      } catch (e) { db.rollbackBatch(); throw e; }
-      totalRows += rows.length;
-
-      // Keep file for download from Import History
-    }
-
-    // Parse and save Stock report
-    if (result.stockFile) {
-      ogState.progress = { step: 'parsing', message: 'Parsing stock report...', pct: 94 };
-      const { rows, summary } = parseOneglanceStock(result.stockFile.filePath);
-      const snapshotDate = new Date().toISOString().slice(0, 10);
-
-      // Replace existing snapshot for the same date & branch
-      db.run('DELETE FROM pharmacy_stock_actuals WHERE snapshot_date = ? AND branch_id IS ?',
-        snapshotDate, branchId);
-
-      db.run(
-        `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        'ONEGLANCE_STOCK_SYNC', result.stockFile.filename, rows.length,
-        snapshotDate, snapshotDate, 'completed', branchId, result.stockFile.filePath
-      );
-      const stockImportId = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_STOCK_SYNC' ORDER BY id DESC LIMIT 1")?.id || 0;
-
-      db.beginBatch();
-      try {
-        for (const r of rows) {
-          db.run(
-            `INSERT INTO pharmacy_stock_actuals (import_id, snapshot_date, drug_name, batch_no,
-              received_date, expiry_date, avl_qty, strips, purchase_price, purchase_tax,
-              purchase_value, stock_value, branch_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            stockImportId, snapshotDate, r.drug_name, r.batch_no,
-            r.received_date, r.expiry_date, r.avl_qty, r.strips,
-            r.purchase_price, r.purchase_tax, r.purchase_value, r.stock_value, branchId
-          );
-        }
-        db.endBatch();
-      } catch (e) { db.rollbackBatch(); throw e; }
-      totalRows += rows.length;
-
-      // Keep file for download from Import History
-    }
 
     // Compose the final message. When stock failed but sales/purchase
     // succeeded (partial-success path for huge-inventory branches), surface
@@ -611,9 +285,9 @@ router.post('/oneglance', requireRole('admin', 'operational_head'), requireInteg
       : '';
     ogState.progress = {
       step: 'complete',
-      message: `Sync completed — ${totalRows} rows imported${partialStockWarning}`,
+      message: `Sync completed — ${result.totalRows} rows imported${partialStockWarning}`,
       pct: 100,
-      result: { totalRows, stockError: result.stockError || null },
+      result: { totalRows: result.totalRows, stockError: result.stockError || null },
     };
   } catch (err: any) {
     console.error('[oneglance-sync] Error:', err.message || err);

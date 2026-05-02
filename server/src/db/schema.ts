@@ -79,6 +79,23 @@ export function initializeSchema(db: DbHelper) {
       updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS auto_sync_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_date_ist TEXT NOT NULL,
+      branch_id INTEGER,
+      source TEXT NOT NULL CHECK(source IN ('healthplix','oneglance')),
+      trigger TEXT NOT NULL CHECK(trigger IN ('schedule','catchup','manual_test')),
+      status TEXT NOT NULL CHECK(status IN ('running','success','failed','skipped')),
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      rows_imported INTEGER,
+      import_id INTEGER,
+      error TEXT,
+      UNIQUE(run_date_ist, branch_id, source, trigger)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_auto_sync_runs_date ON auto_sync_runs(run_date_ist DESC);
+
     CREATE TABLE IF NOT EXISTS clinic_actuals (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       import_id INTEGER NOT NULL REFERENCES import_logs(id),

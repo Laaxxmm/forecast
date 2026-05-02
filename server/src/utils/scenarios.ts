@@ -1,5 +1,4 @@
-import { Request } from 'express';
-import { branchFilter } from './branch.js';
+import { branchFilter, type BranchContext } from './branch.js';
 
 /**
  * Pick the canonical active-scenario for a given stream — the SAME scenario
@@ -25,10 +24,10 @@ import { branchFilter } from './branch.js';
  */
 export function findActiveScenarioForStream(
   db: any,
-  req: Request,
+  ctx: BranchContext,
   streamId: number | null,
 ): { id: number } | null {
-  const bfs = branchFilter(req, 's');
+  const bfs = branchFilter(ctx, 's');
   return db.get(
     `SELECT s.id FROM scenarios s
      JOIN financial_years fy ON s.fy_id = fy.id
