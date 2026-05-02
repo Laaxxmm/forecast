@@ -781,12 +781,49 @@ function addFooter(doc: jsPDF, label: string) {
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
   const n = doc.getNumberOfPages();
+
+  // Newsletter-voice addendum: every page footer carries the report
+  // identity on the left and a subtle "Powered by indefine. · Page N
+  // of M" co-branding strip on the right. The Indefine logo image is
+  // deferred to a follow-up (see INSIGHT_PDF_BACKEND.md §5a) — for
+  // now the wordmark renders as plain text with a small red period
+  // accent matching the brief's brand callout.
   for (let p = 1; p <= n; p++) {
     doc.setPage(p);
+
+    // Left: report info
     doc.setFontSize(7.5);
-    doc.setTextColor(...MUTED_TEXT);
-    doc.text(label, 14, pageH - 8);
-    doc.text(`Page ${p} of ${n}`, pageW - 14, pageH - 8, { align: 'right' });
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...TEXT_TERTIARY);
+    doc.text(safeText(label), 14, pageH - 8);
+
+    // Right (assembled right-to-left): page number, then wordmark, then
+    // "Powered by". jsPDF doesn't lay out flex rows so we compute the
+    // x-coordinates from getTextWidth() and walk leftward.
+    const pageLabel = `Page ${p} of ${n}`;
+    doc.setFontSize(7.5);
+    doc.setTextColor(...TEXT_FAINT);
+    doc.text(pageLabel, pageW - 14, pageH - 8, { align: 'right' });
+    const pageLabelW = doc.getTextWidth(pageLabel);
+
+    // "indefine." wordmark — lowercase brand text + red period accent.
+    // The period sits flush after the "e" so the eye reads it as part
+    // of the wordmark, not a sentence terminator.
+    const wordmarkX = pageW - 14 - pageLabelW - 6;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    const dotW = doc.getTextWidth('.');
+    doc.setTextColor(...TEXT_DARK);
+    doc.text('indefine', wordmarkX - dotW, pageH - 8, { align: 'right' });
+    const indefineW = doc.getTextWidth('indefine');
+    doc.setTextColor(...STATUS_RED_BORDER);
+    doc.text('.', wordmarkX, pageH - 8, { align: 'right' });
+
+    // "Powered by" lead-in
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...TEXT_FAINT);
+    doc.text('Powered by', wordmarkX - dotW - indefineW - 4, pageH - 8, { align: 'right' });
   }
 }
 
@@ -843,43 +880,45 @@ function statusTheme(band: StatusBand) {
   };
 }
 
-/** Compose the hero block headline as a sentence, not a status code.
- *  Daily phrasing uses "projected"; weekly/monthly closed periods use
- *  "closed at". `kind` toggles the verb form. */
+/** Compose the hero block headline as a complete sentence using
+ *  newsletter voice — "you" / "your" framing, never status codes.
+ *  The brief is firm: every headline must read like the opening line
+ *  of a letter to the doctor / pharmacy owner, not a database row. */
 function composeStatusHeadline(
   kind: 'daily' | 'weekly' | 'monthly_mtd' | 'monthly_final',
   projectedPct: number,
   band: StatusBand,
-  options: { topStream?: string; weakStream?: string; wow?: number },
+  options: { topStream?: string; weakStream?: string; wow?: number; period?: string },
 ): string {
   const pct = Math.round(projectedPct);
   if (kind === 'daily') {
-    if (band === 'on_track')      return `On track -- projected at ${pct}% of target`;
-    if (band === 'on_pace')       return `On pace -- projected at ${pct}% of target`;
-    if (band === 'behind')        return `Behind early-period pace -- projected at ${pct}% of target`;
-    if (band === 'behind_target') return `Behind target -- projected at ${pct}% of target`;
-    return `Materially behind -- projected at ${pct}% of target`;
+    if (band === 'on_track')      return `You're on track -- projected to finish at ${pct}% of target`;
+    if (band === 'on_pace')       return `You're on pace -- projected to finish at ${pct}% of target`;
+    if (band === 'behind')        return `You're behind the early-month pace -- projected at ${pct}% of target`;
+    if (band === 'behind_target') return `You're behind target -- projected to finish at ${pct}% of target`;
+    return `You're materially behind -- projected at ${pct}% of target if today's pace holds`;
   }
   if (kind === 'weekly') {
     const w = options.wow;
-    if (w == null) return `Week revenue at ${pct}% of target`;
-    if (w >= 10)        return `Week-on-week revenue up ${w.toFixed(0)}% -- strong momentum`;
-    if (w >= 0)         return `Steady week -- up ${w.toFixed(1)}% vs last`;
-    if (w >= -10)       return `Week revenue down ${Math.abs(w).toFixed(1)}% -- watch for next-week recovery`;
-    return `Significant week-on-week drop of ${Math.abs(w).toFixed(0)}% -- investigate`;
+    if (w == null) return `Your week revenue is at ${pct}% of target`;
+    if (w >= 10)        return `Your revenue is up ${w.toFixed(0)}% week-on-week -- strong momentum`;
+    if (w >= 0)         return `Steady week -- you're up ${w.toFixed(1)}% vs last`;
+    if (w >= -10)       return `Revenue dipped ${Math.abs(w).toFixed(1)}% this week -- watch for next-week recovery`;
+    return `You're down ${Math.abs(w).toFixed(0)}% week-on-week -- worth investigating`;
   }
+  const period = options.period || 'the month';
   if (kind === 'monthly_final') {
-    if (pct >= 110) return `Closed at ${pct}% of target -- ${options.topStream || 'pharmacy'} drove the surplus`;
-    if (pct >= 95)  return `Met target at ${pct}% -- solid performance`;
-    if (pct >= 80)  return `Below target at ${pct}% -- ${options.weakStream || 'clinic'} pulled down`;
-    return `Materially below target at ${pct}% -- recovery plan needed`;
+    if (pct >= 110) return `You closed ${period} at ${pct}% of target -- ${options.topStream || 'pharmacy'} drove the surplus`;
+    if (pct >= 95)  return `You met ${period}'s target at ${pct}% -- solid finish`;
+    if (pct >= 80)  return `You closed ${period} at ${pct}% of target -- ${options.weakStream || 'clinic'} pulled the average down`;
+    return `You closed ${period} at ${pct}% of target -- a recovery plan is needed`;
   }
   // monthly_mtd
-  if (band === 'on_track')      return `On track -- projected at ${pct}% of target`;
-  if (band === 'on_pace')       return `On pace -- projected at ${pct}% of target`;
-  if (band === 'behind')        return `Behind early-month pace -- projected at ${pct}% of target`;
-  if (band === 'behind_target') return `Behind target -- projected at ${pct}% of target`;
-  return `Materially behind -- projected at ${pct}% of target`;
+  if (band === 'on_track')      return `You're on track for ${period} -- projected to finish at ${pct}% of target`;
+  if (band === 'on_pace')       return `You're on pace -- projected to finish at ${pct}% of target`;
+  if (band === 'behind')        return `You're behind the early-month pace -- projected at ${pct}% of target`;
+  if (band === 'behind_target') return `You're behind target -- projected at ${pct}% of target`;
+  return `You're materially behind -- projected at ${pct}% of target if today's pace holds`;
 }
 
 /** Outline header per brief: dark green title under a 3px green underline,
@@ -1270,6 +1309,203 @@ function drawNumberedAlert(
   doc.text(subLines, x + padX + 2, y + padY + 3.2 + headLines.length * 4.4 + 0.5);
 
   return y + h + 3;
+}
+
+/** Newsletter-voice "Three things" numbered story card.
+ *  - 12-14px padding, off-white background, 4px border-radius
+ *  - Large coloured numeral on the left (1, 2, 3) — colour reflects severity
+ *  - 12px font-weight 500 headline (the story in one phrase)
+ *  - 11px body explaining the math/context in plain words
+ *
+ *  Used on Page 1 of all three reports to replace the previous flat
+ *  alert lists. Composition mixes positive + negative observations
+ *  whenever possible. Each card carries a rupee or volume number in
+ *  the body to ground the story in reality. */
+type ThingTone = 'positive' | 'watch' | 'critical';
+function drawThingCard(
+  doc: jsPDF,
+  x: number, y: number, w: number,
+  index: number,
+  headline: string,
+  body: string,
+  tone: ThingTone,
+): number {
+  const numColor = tone === 'positive' ? STATUS_GREEN_BORDER
+                 : tone === 'watch'    ? STATUS_AMBER_BORDER
+                 :                       STATUS_RED_BORDER;
+  const padX = 12;
+  const padY = 8;
+  const numCol = 12;
+
+  doc.setFontSize(11);
+  const headLines = doc.splitTextToSize(safeText(headline), w - padX * 2 - numCol);
+  doc.setFontSize(8.6);
+  const bodyLines = doc.splitTextToSize(safeText(body), w - padX * 2 - numCol);
+
+  const headH = headLines.length * 4.6;
+  const bodyH = bodyLines.length * 3.9;
+  const h = padY + headH + 1.5 + bodyH + padY;
+
+  // Card surface
+  doc.setFillColor(...SURFACE);
+  doc.roundedRect(x, y, w, h, 1.5, 1.5, 'F');
+
+  // Left numeral
+  doc.setFontSize(20);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...numColor);
+  doc.text(String(index), x + padX - 2, y + padY + headH - 1);
+
+  // Headline
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...TEXT_DARK);
+  doc.text(headLines, x + padX + numCol, y + padY + 4);
+
+  // Body
+  doc.setFontSize(8.6);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...TEXT_SECONDARY);
+  doc.text(bodyLines, x + padX + numCol, y + padY + headH + 4);
+
+  return y + h + 4;
+}
+
+/** Newsletter-voice action card.
+ *  - 14px padding, white background, 4px border-radius
+ *  - 3px solid coloured left border (volume / margin / risk-mitigation)
+ *  - Top row flex-justify-between: 13px headline (left) + rupee-impact
+ *    pill (right)
+ *  - Body: 11px line-height 1.5 explaining the math
+ *
+ *  Categories:
+ *    - 'volume'   — green left border #1D9E75, green pill
+ *    - 'margin'   — red left border #A32D2D, red pill
+ *    - 'risk'     — amber left border #BA7517, amber pill */
+type ActionCategory = 'volume' | 'margin' | 'risk';
+function drawActionCard(
+  doc: jsPDF,
+  x: number, y: number, w: number,
+  category: ActionCategory,
+  headline: string,
+  body: string,
+  impactPill: string,
+): number {
+  const t = category === 'volume'
+    ? { border: STATUS_GREEN_BORDER, pillBg: PILL_GREEN_BG, pillText: PILL_GREEN_TEXT }
+    : category === 'margin'
+      ? { border: STATUS_RED_BORDER, pillBg: PILL_RED_BG, pillText: PILL_RED_TEXT }
+      : { border: STATUS_AMBER_BORDER, pillBg: PILL_AMBER_BG, pillText: PILL_AMBER_TEXT };
+
+  const padX = 10;
+  const padY = 6;
+
+  // Pill geometry — measured first so we know how much room the
+  // headline has on the right side of its row.
+  doc.setFontSize(8.5);
+  doc.setFont('helvetica', 'bold');
+  const pillW = doc.getTextWidth(impactPill) + 8;
+  const pillH = 5;
+
+  // Headline — wrap to width minus pill area
+  doc.setFontSize(10.5);
+  doc.setFont('helvetica', 'bold');
+  const headLines = doc.splitTextToSize(safeText(headline), w - padX * 2 - pillW - 6);
+
+  doc.setFontSize(8.6);
+  doc.setFont('helvetica', 'normal');
+  const bodyLines = doc.splitTextToSize(safeText(body), w - padX * 2);
+
+  const headH = headLines.length * 4.4;
+  const bodyH = bodyLines.length * 3.9;
+  const h = padY + headH + 2 + bodyH + padY;
+
+  // Card surface — pure white per the brief
+  doc.setFillColor(255, 255, 255);
+  doc.roundedRect(x, y, w, h, 1.5, 1.5, 'F');
+  // Hairline outer border so the card pops on off-white surfaces
+  doc.setDrawColor(...HAIRLINE);
+  doc.setLineWidth(0.2);
+  doc.roundedRect(x, y, w, h, 1.5, 1.5, 'S');
+  // 3px left border in the category colour
+  doc.setFillColor(...t.border);
+  doc.rect(x, y, 1, h, 'F');
+
+  // Headline
+  doc.setFontSize(10.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...TEXT_DARK);
+  doc.text(headLines, x + padX, y + padY + 3.4);
+
+  // Pill (top-right)
+  doc.setFillColor(...t.pillBg);
+  doc.roundedRect(x + w - padX - pillW, y + padY - 1, pillW, pillH, 1, 1, 'F');
+  doc.setFontSize(8.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...t.pillText);
+  doc.text(safeText(impactPill), x + w - padX - pillW / 2, y + padY + 2.3, { align: 'center' });
+
+  // Body
+  doc.setFontSize(8.6);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...TEXT_SECONDARY);
+  doc.text(bodyLines, x + padX, y + padY + headH + 4);
+
+  return y + h + 4;
+}
+
+/** Compose three story cards from the alerts array, padding with a
+ *  positive observation when fewer than 3 negatives exist so the
+ *  section is always exactly 3 cards (per the brief).
+ *
+ *  Inputs:
+ *  - alerts:   narrative.alerts[] from the existing engine, ranked by
+ *              impact. Strings of the form "headline - body" or just
+ *              "headline".
+ *  - positive: optional string to use as a green-toned story card if
+ *              fewer than 3 alerts exist. Caller composes this from
+ *              the data (e.g. top performer, week improvement).
+ *
+ *  Returns up to 3 cards in the form { headline, body, tone }. */
+function composeThreeThings(
+  alerts: string[],
+  positive?: { headline: string; body: string },
+): { headline: string; body: string; tone: ThingTone }[] {
+  const out: { headline: string; body: string; tone: ThingTone }[] = [];
+  for (let i = 0; i < Math.min(3, alerts.length); i++) {
+    const parts = alerts[i].split(' - ');
+    const headline = parts[0];
+    const body = parts.slice(1).join(' - ') || '';
+    out.push({ headline, body, tone: i === 0 ? 'critical' : 'watch' });
+  }
+  if (out.length < 3 && positive) {
+    out.push({ headline: positive.headline, body: positive.body, tone: 'positive' });
+  }
+  return out.slice(0, 3);
+}
+
+/** Pattern-match a narrative action string into the right action-card
+ *  category. Volume plays touch cross-sell, capacity, throughput;
+ *  margin plays touch pricing, MRP, discounts; risk plays touch
+ *  expiry, supplier concentration, data hygiene. Defaults to volume
+ *  if nothing matches — callers can override. */
+function categoriseAction(text: string): ActionCategory {
+  const t = text.toLowerCase();
+  if (/(margin|price|discount|mrp|markup|outlier)/.test(t))      return 'margin';
+  if (/(expir|stockist|supplier|concentration|dead stock|hygien)/.test(t)) return 'risk';
+  return 'volume';
+}
+
+/** Cheap rupee-impact extractor for narrative actions — pulls the
+ *  first "Rs. X,XXX" / "Rs. 1.2L" pattern out of the body so it can
+ *  populate the action card's right-side pill. Falls back to a short
+ *  category-tag if no number is present. */
+function extractImpactPill(text: string, category: ActionCategory): string {
+  const m = /Rs\.\s*[\d,.]+(?:[KLM]|Cr)?/i.exec(text);
+  if (m) return '+' + m[0].replace(/^Rs\.\s*/i, 'Rs. ');
+  return category === 'volume' ? 'Volume play'
+       : category === 'margin' ? 'Margin play'
+       :                          'Risk play';
 }
 
 /** Soft-tinted callout card used for "Cross-tab insight pending" stubs
@@ -2065,41 +2301,63 @@ function generateDailyPDF(
   const headline = composeStatusHeadline('daily', projPct, band, {});
   const dailyNeed = data.daysRemaining > 0 ? Math.max(0, tgt - mtd) / data.daysRemaining : 0;
   const dailyRun  = mtd / Math.max(data.daysElapsed, 1);
+  // Newsletter voice (May 2026 addendum): the body opens like a
+  // letter and frames numbers in plain words. We address the reader
+  // directly with "you" / "your" and bold the rupee values via the
+  // hero block's own typography (font-weight 500 across).
   const body = tgt > 0
-    ? `MTD revenue ${fmtRsLakh(mtd)} - ${Math.round((mtd / tgt) * 100)}% of monthly target with ${Math.round(expectedPct)}% of the month elapsed. Current run-rate ${fmtRsLakh(dailyRun)}/day vs need ${fmtRsLakh(dailyNeed)}/day for the remaining ${data.daysRemaining} days.`
-    : `MTD revenue ${fmtRsLakh(mtd)}. No monthly target configured.`;
-  y = drawHeroStatus(doc, INNER_X, y, INNER_W, `STATUS - DAY ${data.daysElapsed}`, 'Updates daily', headline, body, band);
+    ? `Dear team -- here's where you stand today. You've earned ${fmtRsLakh(mtd)} so far, ${Math.round((mtd / tgt) * 100)}% of the monthly target with ${Math.round(expectedPct)}% of the month elapsed. Today's pace is ${fmtRsLakh(dailyRun)}/day; you need ${fmtRsLakh(dailyNeed)}/day for the remaining ${data.daysRemaining} days.`
+    : `Dear team -- here's where you stand today. You've earned ${fmtRsLakh(mtd)} so far. No monthly target is configured yet.`;
+  y = drawHeroStatus(doc, INNER_X, y, INNER_W, `DAY ${data.daysElapsed} OF ${data.daysInMonth}`, 'Updates daily', headline, body, band);
 
-  // KPI strip — Earned MTD / Projected EOM / Gap to target / Daily need
+  // KPI strip — newsletter-voice labels per the May 2026 addendum.
+  // "Earned MTD" / "Projected EOM" / "Gap to target" / "Daily need"
+  // become "You earned" / "On track to finish at" / "Short by" /
+  // "Need per day" — same data, plain language.
   const gap = Math.max(0, tgt - proj);
   y = drawKpiStrip(doc, INNER_X, y, INNER_W, [
-    { label: 'Earned MTD',     value: fmtRsLakh(mtd) },
-    { label: 'Projected EOM',  value: tgt > 0 ? fmtRsLakh(proj) : '--', sub: tgt > 0 ? `${Math.round(projPct)}% of target` : undefined },
-    { label: 'Gap to target',  value: tgt > 0 ? fmtRsLakh(gap)  : '--', sub: gap > 0 ? 'shortfall' : 'on target', subTone: gap > 0 ? 'negative' : 'positive' },
-    { label: 'Daily need',     value: dailyNeed > 0 ? fmtRsLakh(dailyNeed) : '--', sub: data.daysRemaining > 0 ? `for ${data.daysRemaining} days left` : 'period closed' },
+    { label: 'You earned',           value: fmtRsLakh(mtd) },
+    { label: 'On track to finish at', value: tgt > 0 ? fmtRsLakh(proj) : '--', sub: tgt > 0 ? `${Math.round(projPct)}% of target` : undefined },
+    { label: 'Short by',             value: tgt > 0 ? fmtRsLakh(gap)  : '--', sub: gap > 0 ? 'shortfall' : 'on target', subTone: gap > 0 ? 'negative' : 'positive' },
+    { label: 'Need per day',         value: dailyNeed > 0 ? fmtRsLakh(dailyNeed) : '--', sub: data.daysRemaining > 0 ? `for ${data.daysRemaining} days left` : 'period closed' },
   ]);
 
   // Critical alerts — top 3, ranked
-  const alerts = narrative.alerts.slice(0, 3);
-  if (alerts.length > 0) {
-    y = drawSectionBar(doc, INNER_X, y + 2, 'Critical alerts', SECTION_RED);
-    for (let i = 0; i < alerts.length; i++) {
-      const parts = alerts[i].split(' - ');
-      const head = parts[0];
-      const sub  = parts.slice(1).join(' - ') || '';
-      y = drawNumberedAlert(doc, INNER_X, y, INNER_W, i + 1, head, sub, i === 0 ? 'critical' : 'watch');
+  // ── Three things to focus on today ─────────────────────────────
+  // Newsletter-voice rebuild of the previous "Critical alerts" block.
+  // Always exactly 3 numbered story cards, padded with a positive
+  // observation if fewer than 3 alerts exist. Each card carries a
+  // rupee or volume number so the story is grounded in real data.
+  const dailyTopStream = data.streams.reduce((p, x) => {
+    const xPrim = getStreamPrimary(x);
+    const pPrim = getStreamPrimary(p);
+    return (xPrim?.mtd || 0) > (pPrim?.mtd || 0) ? x : p;
+  }, data.streams[0]);
+  const dailyTopPrim = dailyTopStream ? getStreamPrimary(dailyTopStream) : null;
+  const positiveDaily = dailyTopPrim && dailyTopPrim.mtd > 0
+    ? { headline: `${dailyTopStream.name} is your strongest stream so far`, body: `${dailyTopStream.name} has earned ${fmtRsLakh(dailyTopPrim.mtd)} this month${dailyTopPrim.target > 0 ? `, ${Math.round((dailyTopPrim.mtd / dailyTopPrim.target) * 100)}% of its target` : ''}. Keep the pace and it'll carry the headline number.` }
+    : undefined;
+  const things = composeThreeThings(narrative.alerts, positiveDaily);
+  if (things.length > 0) {
+    y = drawSectionBar(doc, INNER_X, y + 2, 'Three things to focus on today', SECTION_RED);
+    for (let i = 0; i < things.length; i++) {
+      y = drawThingCard(doc, INNER_X, y, INNER_W, i + 1, things[i].headline, things[i].body, things[i].tone);
     }
   }
 
-  // Today's actions — top 3, prioritized
+  // ── What today calls for ───────────────────────────────────────
+  // Action cards with category-coloured left border + rupee-impact
+  // pill, replacing the previous flat numbered list.
   const actions = narrative.actions.slice(0, 3);
   if (actions.length > 0 && y < pageH - 80) {
-    y = drawSectionBar(doc, INNER_X, y + 4, "Today's actions", SECTION_AMBER);
-    for (let i = 0; i < actions.length; i++) {
-      const parts = actions[i].split(' - ');
+    y = drawSectionBar(doc, INNER_X, y + 4, 'What today calls for', SECTION_AMBER);
+    for (const a of actions) {
+      const parts = a.split(' - ');
       const head = parts[0];
-      const sub  = parts.slice(1).join(' - ') || '';
-      y = drawNumberedAlert(doc, INNER_X, y, INNER_W, i + 1, head, sub, i === 0 ? 'critical' : 'watch');
+      const body = parts.slice(1).join(' - ') || '';
+      const cat = categoriseAction(head + ' ' + body);
+      const pill = extractImpactPill(body, cat);
+      y = drawActionCard(doc, INNER_X, y, INNER_W, cat, head, body, pill);
     }
   }
 
@@ -2281,12 +2539,13 @@ function generateWeeklyPDF(
     clientName, branchName, branchState,
   );
 
-  // Hero status — WoW driven headline
+  // Hero status — newsletter voice: salutation, sentence headline,
+  // body addressed to the reader. WoW change drives the band.
   const wowBand: StatusBand = wow >= 0 ? (wow >= 10 ? 'on_track' : 'on_pace') : (wow >= -10 ? 'behind' : 'at_risk');
   const wowHead = composeStatusHeadline('weekly', 0, wowBand, { wow });
   const peakStream = data.streams.reduce((p, x) => (x.thisWeek?.revenue || 0) > (p.thisWeek?.revenue || 0) ? x : p, data.streams[0]);
-  const wowBody = `Week revenue ${fmtRsLakh(tw.revenue)} vs ${fmtRsLakh(lw.revenue)} last week. ${peakStream ? `${peakStream.name} led at ${fmtRsLakh(peakStream.thisWeek?.revenue || 0)}.` : ''} Margin held at ${marginPct.toFixed(1)}%.`;
-  y = drawHeroStatus(doc, INNER_X, y, INNER_W, 'STATUS - WEEK SUMMARY', `${data.daysRemaining} days remain in ${data.monthLabel}`, wowHead, wowBody, wowBand);
+  const wowBody = `Dear team -- here's how the week went. You earned ${fmtRsLakh(tw.revenue)} this week vs ${fmtRsLakh(lw.revenue)} last week.${peakStream ? ` ${peakStream.name} led at ${fmtRsLakh(peakStream.thisWeek?.revenue || 0)}.` : ''} Margin held at ${marginPct.toFixed(1)}%. ${data.daysRemaining} days remain in ${data.monthLabel}.`;
+  y = drawHeroStatus(doc, INNER_X, y, INNER_W, 'WEEK SUMMARY', `${data.daysRemaining} days remain in ${data.monthLabel}`, wowHead, wowBody, wowBand);
 
   // KPI strip
   const wowChange = fmtChange(tw.revenue, lw.revenue);
@@ -2325,13 +2584,21 @@ function generateWeeklyPDF(
     y += 6;
   }
 
-  // Watch areas — top alerts as amber numbered cards
-  const watchAlerts = narrative.alerts.slice(0, 3);
-  if (watchAlerts.length > 0) {
-    y = drawSectionBar(doc, INNER_X, y + 2, 'Watch areas going into next week', SECTION_AMBER);
-    for (let i = 0; i < watchAlerts.length; i++) {
-      const parts = watchAlerts[i].split(' - ');
-      y = drawNumberedAlert(doc, INNER_X, y, INNER_W, i + 1, parts[0], parts.slice(1).join(' - '), 'watch');
+  // ── Three things from this week ────────────────────────────────
+  // Newsletter-voice section: 3 numbered story cards covering the
+  // week's biggest signals. Pads with a positive observation when
+  // fewer than 3 alerts exist (e.g. peak day callout).
+  const positiveWeekly = bars.length > 0
+    ? (() => {
+        const best = bars.reduce((p, x) => x.value > p.value ? x : p, bars[0]);
+        return { headline: `${best.label} was your best day of the week`, body: `${best.label} closed at ${fmtRsLakh(best.value)} -- the high-water mark of the week. Worth understanding what worked so you can repeat it.` };
+      })()
+    : undefined;
+  const weeklyThings = composeThreeThings(narrative.alerts, positiveWeekly);
+  if (weeklyThings.length > 0) {
+    y = drawSectionBar(doc, INNER_X, y + 2, 'Three things from this week', SECTION_RED);
+    for (let i = 0; i < weeklyThings.length; i++) {
+      y = drawThingCard(doc, INNER_X, y, INNER_W, i + 1, weeklyThings[i].headline, weeklyThings[i].body, weeklyThings[i].tone);
     }
   }
 
@@ -2508,12 +2775,15 @@ function generateMonthlyPDF(
   );
 
   const monthlyKind = isFinal ? 'monthly_final' : 'monthly_mtd';
-  const headline = composeStatusHeadline(monthlyKind, projPct, band, { topStream: topStream.name, weakStream: weakStream.name });
+  const monthName = data.monthLabel.split(' ')[0] || data.monthLabel;
+  const headline = composeStatusHeadline(monthlyKind, projPct, band, { topStream: topStream.name, weakStream: weakStream.name, period: monthName });
+  // Newsletter-voice opening — "Dear team" salutation, plain words,
+  // a 3-4 sentence story about what happened in the month.
   const monthlyBody = tgt > 0
-    ? `Combined revenue ${fmtRsLakh(mtd)} of ${fmtRsLakh(tgt)} target (projected ${fmtRsLakh(proj)}). ${topStream.name} at ${Math.round(topStream.pct)}% of its target; ${weakStream.name} at ${Math.round(weakStream.pct)}%.`
-    : `Combined revenue ${fmtRsLakh(mtd)}. No monthly target configured.`;
+    ? `Dear team -- here's how ${monthName} went. You earned ${fmtRsLakh(mtd)} of a ${fmtRsLakh(tgt)} target${isFinal ? '' : `, with ${data.daysRemaining} days still to go`}. ${topStream.name} hit ${Math.round(topStream.pct)}% of its goal; ${weakStream.name} came in at ${Math.round(weakStream.pct)}%. ${isFinal ? `That's the story of ${monthName} in one paragraph.` : `The next ${data.daysRemaining} days will decide whether you close above or below target.`}`
+    : `Dear team -- here's how ${monthName} went. You earned ${fmtRsLakh(mtd)}. No monthly target is configured yet.`;
   y = drawHeroStatus(doc, INNER_X, y, INNER_W,
-    isFinal ? 'STATUS - FINAL' : 'STATUS - MTD',
+    isFinal ? `${data.monthLabel.toUpperCase()} - FINAL` : `${data.monthLabel.toUpperCase()} - MTD`,
     isFinal ? `Closed ${data.monthLabel}` : `${data.daysRemaining} days remaining`,
     headline, monthlyBody, band,
   );
@@ -2530,31 +2800,33 @@ function generateMonthlyPDF(
 
   const deltaTgt = tgt > 0 ? mtd - tgt : 0;
   y = drawKpiStrip(doc, INNER_X, y, INNER_W, [
-    { label: 'Combined revenue', value: fmtRsLakh(mtd), sub: tgt > 0 ? (deltaTgt >= 0 ? `+${fmtRsLakh(deltaTgt)} vs target` : `${fmtRsLakh(deltaTgt)} vs target`) : undefined, subTone: deltaTgt >= 0 ? 'positive' : 'negative' },
-    { label: 'Clinic',     value: clinicPrimary ? fmtRsLakh(clinicPrimary.mtd) : '--', sub: clinicPrimary?.target ? `${Math.round((clinicPrimary.mtd / clinicPrimary.target) * 100)}% of target` : undefined },
-    { label: 'Pharmacy',   value: pharmaPrimary ? fmtRsLakh(pharmaPrimary.mtd) : '--', sub: pharmaPrimary?.target ? `${Math.round((pharmaPrimary.mtd / pharmaPrimary.target) * 100)}% of target` : undefined },
+    { label: 'You earned',      value: fmtRsLakh(mtd), sub: tgt > 0 ? (deltaTgt >= 0 ? `+${fmtRsLakh(deltaTgt)} vs target` : `${fmtRsLakh(deltaTgt)} vs target`) : undefined, subTone: deltaTgt >= 0 ? 'positive' : 'negative' },
+    { label: 'Clinic',          value: clinicPrimary ? fmtRsLakh(clinicPrimary.mtd) : '--', sub: clinicPrimary?.target ? `${Math.round((clinicPrimary.mtd / clinicPrimary.target) * 100)}% of target` : undefined },
+    { label: 'Pharmacy',        value: pharmaPrimary ? fmtRsLakh(pharmaPrimary.mtd) : '--', sub: pharmaPrimary?.target ? `${Math.round((pharmaPrimary.mtd / pharmaPrimary.target) * 100)}% of target` : undefined },
     { label: 'Pharmacy margin', value: pharmaMargin > 0 ? `${pharmaMargin.toFixed(1)}%` : '--', sub: pharmaMarginTarget > 0 ? `${marginGap >= 0 ? '+' : ''}${marginGap.toFixed(1)}pp vs forecast` : undefined, subTone: marginGap >= 0 ? 'positive' : 'negative' },
   ]);
 
-  // The single most important insight — top alert as a headline card
-  const heroAlert = narrative.alerts[0];
-  if (heroAlert) {
-    y = drawSectionBar(doc, INNER_X, y + 2, 'The single most important insight', SECTION_RED);
-    const parts = heroAlert.split(' - ');
-    y = drawNumberedAlert(doc, INNER_X, y, INNER_W, 1, parts[0], parts.slice(1).join(' - '), 'critical');
-  } else if (band === 'on_track' || band === 'on_pace') {
-    y = drawSectionBar(doc, INNER_X, y + 2, 'The single most important insight', SECTION_BLUE);
-    y = drawCalloutCard(doc, INNER_X, y, INNER_W,
-      `${topStream.name} cleared its target and pulled the combined number above plan. Maintain that pace into next month.`,
-      'neutral'
-    );
+  // ── Three things you should know about [Month] ────────────────
+  // Newsletter-voice section: 3 numbered story cards covering the
+  // month's biggest signals. Mixes positive + negative -- e.g. when
+  // the combined number is on track, the top alert sits alongside a
+  // green positive observation about the strongest stream.
+  const positiveMonthly = topStream && topStream.pct > 0
+    ? { headline: `${topStream.name} carried the headline number`, body: `${topStream.name} hit ${Math.round(topStream.pct)}% of its target with ${fmtRsLakh(topStream.mtd)} earned. That's the engine you want to keep tuned.` }
+    : undefined;
+  const monthlyThings = composeThreeThings(narrative.alerts, positiveMonthly);
+  if (monthlyThings.length > 0) {
+    y = drawSectionBar(doc, INNER_X, y + 2, `Three things you should know about ${monthName}`, SECTION_RED);
+    for (let i = 0; i < monthlyThings.length; i++) {
+      y = drawThingCard(doc, INNER_X, y, INNER_W, i + 1, monthlyThings[i].headline, monthlyThings[i].body, monthlyThings[i].tone);
+    }
   }
 
   // Verdict — a soft prose summary
   y = drawSectionBar(doc, INNER_X, y + 2, 'Verdict', SECTION_BLUE);
   const verdictText = isFinal
     ? `${data.monthLabel} closed at ${Math.round(projPct)}% of target. ${topStream.name} ${topStream.pct >= 100 ? 'cleared its goal' : `landed at ${Math.round(topStream.pct)}%`}; ${weakStream.name} ${weakStream.pct >= 100 ? 'also cleared' : `pulled the average down at ${Math.round(weakStream.pct)}%`}. Focus next month on ${weakStream.pct < 80 ? `recovering ${weakStream.name}` : 'maintaining momentum and protecting margin'}.`
-    : `${data.monthLabel} is on track to land at ${Math.round(projPct)}% with ${data.daysRemaining} days remaining. The headline number is ${heroAlert ? 'driven by the issue flagged above' : 'tracking close to plan'} - decisions for the remainder of the month should focus on ${weakStream.pct < 80 ? weakStream.name : 'sustaining the current pace'}.`;
+    : `${data.monthLabel} is on track to land at ${Math.round(projPct)}% with ${data.daysRemaining} days remaining. The headline number is ${narrative.alerts.length > 0 ? 'driven by the issue flagged above' : 'tracking close to plan'} - decisions for the remainder of the month should focus on ${weakStream.pct < 80 ? weakStream.name : 'sustaining the current pace'}.`;
   y = drawCalloutCard(doc, INNER_X, y, INNER_W, verdictText, 'neutral');
 
   // ── PAGE 2 — Month progression ────────────────────────────────────
