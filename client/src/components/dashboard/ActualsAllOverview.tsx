@@ -4,8 +4,7 @@
 // Owns the redesigned All-streams overview: 3 KPI cards with month-over-month
 // delta + demoted forecast comparison, the forecast advisory banner, the
 // alert center pulling top signals from each sub-tab, the 6-month mini-bar
-// trend, side-by-side Clinic + Pharmacy quick-view cards, and the
-// "Dig deeper" footer nav.
+// trend, and side-by-side Clinic + Pharmacy quick-view cards.
 //
 // Stream-specific views (Clinic / Pharmacy) are still rendered by
 // DashboardPage via ClinicAnalytics / PharmacyAnalytics — this component
@@ -25,7 +24,7 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowUpRight, AlertTriangle, TrendingUp, TrendingDown,
-  Minus, ChevronRight,
+  Minus,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -575,19 +574,6 @@ export default function ActualsAllOverview({ data, historical, clinic, pharma, i
           </div>
         )}
 
-        {/* Dig deeper footer — kept inside main column. */}
-        <div
-          className="rounded-xl px-5 py-4"
-          style={{ background: 'var(--mt-bg-muted)', border: '1px solid var(--mt-border)' }}
-        >
-          <p className="text-[13px] mb-3" style={{ color: 'var(--mt-text-secondary)' }}>Dig deeper</p>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-            <DigDeeperTile title="Forecast"  desc="Set targets, track variance" onClick={() => navigate('/forecast')} />
-            <DigDeeperTile title="Analysis"  desc="Trends, breakdowns"          onClick={() => navigate('/analysis')} />
-            <DigDeeperTile title="Insights"  desc="Anomaly detection"           onClick={() => navigate('/insights')} />
-            <DigDeeperTile title="Scenarios" desc="What-if modeling"            onClick={() => navigate('/scenarios')} />
-          </div>
-        </div>
       </div>
 
       {/* ── Right sidebar (sticky alerts + forecast advisory) ───────────── */}
@@ -824,27 +810,6 @@ function QuickViewCard({ title, onView, metrics }: {
         ))}
       </div>
     </div>
-  );
-}
-
-function DigDeeperTile({ title, desc, onClick }: { title: string; desc: string; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="text-left rounded-md transition-colors"
-      style={{
-        background: 'var(--mt-bg-surface)',
-        border: '1px solid var(--mt-border)',
-        padding: '10px 12px',
-        cursor: 'pointer',
-      }}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[12px]" style={{ color: 'var(--mt-text-heading)', fontWeight: 500 }}>{title}</p>
-        <ChevronRight size={12} style={{ color: 'var(--mt-text-faint)' }} />
-      </div>
-      <p className="text-[11px] mt-0.5" style={{ color: 'var(--mt-text-faint)' }}>{desc}</p>
-    </button>
   );
 }
 

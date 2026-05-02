@@ -4,7 +4,7 @@ import ClinicAnalytics from '../components/dashboard/ClinicAnalytics';
 import PharmacyAnalytics from '../components/dashboard/PharmacyAnalytics';
 import ActualsAllOverview from '../components/dashboard/ActualsAllOverview';
 import { buildPeriodOptions } from '../components/dashboard/dashboardUtils';
-import { Activity, ChevronDown } from 'lucide-react';
+import { Activity, ChevronLeft } from 'lucide-react';
 
 export default function DashboardPage() {
   const [data, setData] = useState<any>(null);
@@ -272,21 +272,53 @@ export default function DashboardPage() {
     || '';
   const branchName = typeof window !== 'undefined' ? (localStorage.getItem('branch_name') || '') : '';
 
-  // ── Top-right stream filter dropdown ─────────────────────────────────────
-  // Mirrors the legacy sidebar pills via the same localStorage keys, so
-  // either UI moves the filter without diverging state.
-  const streamFilterValue = activeStreamId || 'all';
-  const onStreamFilterChange = (val: string) => {
-    if (val === 'all') {
-      selectStream(null, '');
-      return;
-    }
-    const s = streams.find((x: any) => String(x.id) === val);
-    if (s) selectStream(String(s.id), s.name);
-  };
+  // The All/Clinic/Pharmacy filter dropdown was retired in the May 2026
+  // header cleanup — switching streams now happens via the left sidebar,
+  // the alert sidebar links, and the Quick view "view ↗" links on the
+  // All overview. The sub-views show a back-nav row pointing at the
+  // All view; the top-right keeps just the period dropdown.
+  const goAllStreams = () => selectStream(null, '');
+  const isSubView = !!activeStreamId;
 
   return (
     <div className="animate-fade-in">
+      {/* Back-nav row — only on stream sub-views (Clinic / Pharmacy).
+          Clicking either the back arrow or the "All" breadcrumb segment
+          routes to the All view via selectStream(null). The URL stays
+          /actuals throughout (stream selection is held in state, not
+          the path), so the browser back button still goes to whatever
+          page the user came from before opening /actuals. */}
+      {isSubView && (
+        <div className="flex items-center gap-3 text-[13px] mb-3" style={{ color: 'var(--mt-text-secondary)' }}>
+          <button
+            type="button"
+            onClick={goAllStreams}
+            className="inline-flex items-center gap-1.5 transition-colors"
+            style={{ color: 'var(--mt-text-secondary)', cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}
+            onMouseEnter={e => (e.currentTarget.style.color = '#185FA5')}
+            onMouseLeave={e => (e.currentTarget.style.color = 'var(--mt-text-secondary)')}
+          >
+            <ChevronLeft size={14} />
+            <span>Back to all</span>
+          </button>
+          <span style={{ color: 'var(--mt-text-faint)' }}>·</span>
+          <span>
+            <button
+              type="button"
+              onClick={goAllStreams}
+              className="transition-colors"
+              style={{ color: 'var(--mt-text-secondary)', cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}
+              onMouseEnter={e => (e.currentTarget.style.color = '#185FA5')}
+              onMouseLeave={e => (e.currentTarget.style.color = 'var(--mt-text-secondary)')}
+            >
+              All
+            </button>
+            <span style={{ color: 'var(--mt-text-faint)', margin: '0 6px' }}>›</span>
+            <span style={{ color: 'var(--mt-text-heading)' }}>{activeStreamName}</span>
+          </span>
+        </div>
+      )}
+
       <div className="flex items-start justify-between mb-6 gap-4 flex-wrap">
         <div>
           <h1 className="mt-heading" style={{ fontSize: 22, fontWeight: 500 }}>Actuals</h1>
@@ -301,26 +333,6 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {streams.length > 0 && (
-            <div className="relative">
-              <select
-                value={streamFilterValue}
-                onChange={e => onStreamFilterChange(e.target.value)}
-                className="mt-input"
-                style={{ paddingRight: 28, fontSize: 13 }}
-                aria-label="Filter by stream"
-              >
-                <option value="all">All</option>
-                {streams.map((s: any) => (
-                  <option key={s.id} value={String(s.id)}>{s.name}</option>
-                ))}
-              </select>
-              <ChevronDown
-                size={13}
-                style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--mt-text-faint)' }}
-              />
-            </div>
-          )}
           {periodOptions.length > 0 && (
             <select
               data-tour="period-filter"
