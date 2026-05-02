@@ -24,6 +24,14 @@ export default function LoginPage() {
 
   useEffect(() => {
     api.get('/logo').then(res => setPlatformLogo(res.data.platformLogo)).catch(() => {});
+    // Clear any persisted stream selection from a previous session.
+    // The login-response interceptor (api/client.ts) also does this, but
+    // only fires on a fresh /auth/login call — users with a still-valid
+    // token from a previous session never hit that path. Doing it here
+    // covers re-login, 401-redirect, and "I just navigated to /login"
+    // cases so the Actuals page starts on "All" not the user's last pick.
+    localStorage.removeItem('stream_id');
+    localStorage.removeItem('stream_name');
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
