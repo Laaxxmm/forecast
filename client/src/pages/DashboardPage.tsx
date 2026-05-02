@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import api from '../api/client';
 import ClinicAnalytics from '../components/dashboard/ClinicAnalytics';
 import PharmacyAnalytics from '../components/dashboard/PharmacyAnalytics';
@@ -14,7 +15,23 @@ export default function DashboardPage() {
   const [pharmaData, setPharmaData] = useState<any | null>(null);
   const [insightsData, setInsightsData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selectedPeriod, setSelectedPeriod] = useState('current_month');
+
+  // Period selection lives in the URL query string (?period=YYYY-MM or
+  // a named preset like current_month / current_quarter / ytd / full_year /
+  // last_month). Reading from / writing to the URL means:
+  //   - the period survives Clinic/Pharmacy stream switches (which
+  //     reload() the page but keep the query string intact),
+  //   - browser back/forward naturally restore prior selections,
+  //   - URLs are shareable.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlPeriod = searchParams.get('period');
+  const selectedPeriod = !urlPeriod || urlPeriod === 'current' ? 'current_month' : urlPeriod;
+  const setSelectedPeriod = (value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value === 'current_month') next.delete('period');
+    else next.set('period', value);
+    setSearchParams(next, { replace: false });
+  };
   // Orphan-actuals recovery state — same pattern as ForecastModulePage's
   // orphan-scenario banner. Strict branch isolation hides NULL-branch
   // rows; if any exist, surface them so an admin can claim them.
@@ -43,6 +60,36 @@ export default function DashboardPage() {
     if (!data?.fy?.start_date) return [];
     return buildPeriodOptions(data.fy.start_date);
   }, [data?.fy?.start_date]);
+
+  // Remember this dashboard path for the post-login default landing
+  // logic. We store the path only — never query parameters — because
+  // the period selection is per-session: a user who was looking at
+  // April '26 last week probably wants current-month data this week
+  // unless they explicitly select otherwise (per the brief).
+  useEffect(() => {
+    const path = window.location.pathname;
+    if (path.startsWith('/actuals') || path === '/insights') {
+      localStorage.setItem('last_visited_page', path);
+    }
+  }, []);
+
+  // Validate the URL period against the loaded option list. If the URL
+  // carries something invalid (?period=banana, ?period=2099-99, or a
+  // month before any available data), silently strip it so the user
+  // ends up on the current-month default instead of stuck with broken
+  // state. Only runs once options are loaded — until then, the URL
+  // value is trusted (otherwise the cleanup would fire on first paint
+  // before the FY data arrived and remove a perfectly good ?period=).
+  useEffect(() => {
+    if (periodOptions.length === 0) return;
+    if (!urlPeriod || urlPeriod === 'current') return;
+    const isKnown = periodOptions.some(p => p.value === urlPeriod);
+    if (!isKnown) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('period');
+      setSearchParams(next, { replace: true });
+    }
+  }, [periodOptions, urlPeriod, searchParams, setSearchParams]);
 
   const currentPeriod = useMemo(() => {
     return periodOptions.find(p => p.value === selectedPeriod) || null;

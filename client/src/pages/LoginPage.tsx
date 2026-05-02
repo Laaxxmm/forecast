@@ -47,7 +47,15 @@ export default function LoginPage() {
           navigate('/select-client');
         }
       } else {
-        navigate('/modules');
+        // Returning client_users land on the dashboard page they were
+        // last on — respects user preference and skips the
+        // module-picker friction. First-time logins (or anyone whose
+        // last_visited_page is missing/invalid) fall through to
+        // /modules, which auto-skips to /actuals when only one module
+        // is available.
+        const lastPath = localStorage.getItem('last_visited_page');
+        const isValidDashPath = !!lastPath && /^(\/actuals|\/insights)(\/|$)/.test(lastPath);
+        navigate(isValidDashPath ? lastPath! : '/modules');
       }
     } catch {
       setError('Invalid username or password');

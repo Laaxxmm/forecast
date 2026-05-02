@@ -229,6 +229,11 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
     localStorage.removeItem('enabled_modules');
     localStorage.removeItem('enabled_integrations');
     localStorage.removeItem('active_module');
+    // Clear the post-login landing memory so the next login (or a
+    // different user on this machine) gets the clean first-time
+    // experience: /modules → /actuals. Without this the prior user's
+    // last page would leak into a different account's session.
+    localStorage.removeItem('last_visited_page');
     window.location.href = '/login';
   };
 

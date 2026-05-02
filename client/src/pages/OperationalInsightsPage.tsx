@@ -25,6 +25,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine, Cell,
@@ -174,7 +175,44 @@ export default function OperationalInsightsPage() {
     return opts;
   }, []);
 
-  const [selectedMonth, setSelectedMonth] = useState<string>(() => monthOptions[0].value);
+  // Period selection lives in the URL query string (?period=YYYY-MM)
+  // so it survives navigation between dashboard pages and is shareable.
+  // The Insights page already speaks YYYY-MM natively (its dropdown
+  // values are exactly the calendar-month strings) so no name<->ISO
+  // translation is needed here, unlike DashboardPage's named presets.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlPeriod = searchParams.get('period');
+  const defaultMonth = monthOptions[0].value;
+  const selectedMonth = !urlPeriod || urlPeriod === 'current'
+    ? defaultMonth
+    : monthOptions.some(o => o.value === urlPeriod) ? urlPeriod : defaultMonth;
+  const setSelectedMonth = (value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value === defaultMonth) next.delete('period');
+    else next.set('period', value);
+    setSearchParams(next, { replace: false });
+  };
+
+  // Strip an invalid period parameter from the URL so the user lands
+  // on the current-month default rather than seeing the dropdown
+  // mismatch the URL silently.
+  useEffect(() => {
+    if (!urlPeriod || urlPeriod === 'current') return;
+    if (!monthOptions.some(o => o.value === urlPeriod)) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('period');
+      setSearchParams(next, { replace: true });
+    }
+  }, [urlPeriod, monthOptions, searchParams, setSearchParams]);
+
+  // Remember this dashboard path for the post-login default landing
+  // logic (path only, no query params — period is per-session).
+  useEffect(() => {
+    const path = window.location.pathname;
+    if (path.startsWith('/actuals') || path === '/insights') {
+      localStorage.setItem('last_visited_page', path);
+    }
+  }, []);
 
   useEffect(() => {
     const ctl = new AbortController();
