@@ -246,12 +246,13 @@ export default function ImportPage() {
     return true;
   });
 
-  // Auto Sync source visibility — same role-aware rules as the upload
-  // tabs above. The Healthplix sync tab on a Hyderabad central_store
-  // would kick off a clinic scrape against the wrong OneGlance instance,
-  // so it's hidden along with Turia. Standalone branches keep all tabs.
-  const allowHpInSync = currentBranchRole === 'standalone';
-  const allowTuriaInSync = currentBranchRole === 'standalone';
+  // Auto Sync source visibility — Healthplix (clinic) and Turia
+  // (consultancy) only get hidden on a central_store branch, which is a
+  // back-office procurement entity with no clinic / consultancy ops.
+  // Satellites DO have clinics (and may have consultancy), so they keep
+  // all sync sources just like standalone branches.
+  const allowHpInSync = currentBranchRole !== 'central_store';
+  const allowTuriaInSync = currentBranchRole !== 'central_store';
   // The OneGlance "Report" type buttons need to match what's actually
   // implemented for the current role. Central stores only download
   // Purchase today; satellites have nothing wired yet (Sales / Stock /
