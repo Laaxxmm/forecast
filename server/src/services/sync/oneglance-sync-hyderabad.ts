@@ -110,93 +110,138 @@ async function login(page: Page, opts: OneglanceHyderabadSyncOptions): Promise<v
  * From the post-login Dashboard, navigate to the Purchase/Sales Report
  * for the Store: click Reports icon in the left sidebar → expand STORE
  * group → click "Purchase/Sales Report - Store".
+ *
+ * Each step verifies the resulting page state before moving on so we
+ * fail with a useful error message + screenshot instead of silently
+ * trying to interact with a page that didn't load.
  */
-async function navigateToStorePurchaseSalesReport(page: Page, opts: OneglanceHyderabadSyncOptions): Promise<void> {
-  progress(opts, 'navigate', 'Opening Reports section...', 18);
+async function navigateToStorePurchaseSalesReport(
+  page: Page,
+  opts: OneglanceHyderabadSyncOptions,
+): Promise<void> {
+  // Step 1: click the Reports icon. The sidebar has a column of icons
+  // (Home, Calendar, +Note, Lab, Pill, User, Tools/Reports, Building).
+  // The Reports icon sits 7th from top in the user's screenshots. We
+  // try in order: text "Reports", aria/title, then the 7th aside link.
+  progress(opts, 'navigate', 'Opening Reports section...', 16);
+  await debugScreenshot(page, '03a-before-reports-click');
 
-  // The sidebar has a column of icons. "Reports" is the wrench/tools
-  // icon. We can't rely on a stable label, so we try a sequence of
-  // selectors: aria-label/title, then a child SVG / class hint, then
-  // a positional fallback (the icon shows the word REPORTS in the
-  // top header after click — we use that as a confirmation signal).
-  const reportsClickResult = await page.evaluate(() => {
-    const candidates = document.querySelectorAll('a[title], a[aria-label], button[title], button[aria-label]');
-    for (const el of candidates) {
-      const label = (el.getAttribute('aria-label') || el.getAttribute('title') || '').toLowerCase();
-      if (label.includes('report')) {
-        (el as HTMLElement).click();
-        return 'aria';
-      }
-    }
-    // Try sidebar links / nav items whose class or text mentions report
-    const sidebarLinks = document.querySelectorAll('aside a, nav a, [class*="sidebar"] a, [class*="side-bar"] a, aside li, nav li');
-    for (const el of sidebarLinks) {
-      const txt = (el.textContent || '').trim().toLowerCase();
-      const cls = (el.className || '').toString().toLowerCase();
-      if (txt === 'reports' || cls.includes('report')) {
-        (el as HTMLElement).click();
-        return 'sidebar';
-      }
-    }
-    return null;
-  });
+  let reportsOpened = false;
 
-  if (!reportsClickResult) {
-    // Fallback: try a Playwright text locator for any "Reports" label
-    const loc = page.locator('text=/^Reports$/i').first();
-    if (await loc.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await loc.click({ timeout: 5_000 });
+  // Best path: a Playwright text locator. The header at the top of the
+  // page changes to "REPORTS" once the section is loaded.
+  const reportsTextLink = page.locator('a, button').filter({ hasText: /^\s*REPORTS?\s*$/i }).first();
+  if (await reportsTextLink.isVisible({ timeout: 2_500 }).catch(() => false)) {
+    await reportsTextLink.click({ timeout: 5_000 });
+    reportsOpened = true;
+  }
+
+  if (!reportsOpened) {
+    // Fallback: aria/title attribute search
+    const ariaClicked = await page.evaluate(() => {
+      const candidates = document.querySelectorAll('a[title], a[aria-label], button[title], button[aria-label]');
+      for (const el of candidates) {
+        const label = (el.getAttribute('aria-label') || el.getAttribute('title') || '').toLowerCase();
+        if (label === 'reports' || label === 'report') {
+          (el as HTMLElement).click();
+          return true;
+        }
+      }
+      return false;
+    });
+    reportsOpened = ariaClicked;
+  }
+
+  if (!reportsOpened) {
+    // Final fallback: click the 7th sidebar icon (the wrench/tools).
+    // OneGlance Hyderabad's sidebar order looks consistent across the
+    // user's screenshots so this is a safe last resort.
+    const sidebarIcon = page.locator('aside a, aside li, nav a, [class*="sidebar"] a').nth(6);
+    if (await sidebarIcon.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await sidebarIcon.click({ timeout: 5_000, force: true });
+      reportsOpened = true;
     }
   }
 
-  await page.waitForTimeout(2000);
-  await debugScreenshot(page, '03-reports-menu');
-
-  progress(opts, 'navigate', 'Expanding STORE menu...', 22);
-  const storeClicked = await page.evaluate(() => {
-    const els = document.querySelectorAll('a, div, span, li, button, h3, h4');
-    for (const el of els) {
-      const ownText = el.childNodes.length <= 2 ? el.textContent?.trim() : '';
-      if (ownText && /^store$/i.test(ownText)) {
-        (el as HTMLElement).click();
-        return true;
-      }
-    }
-    return false;
-  });
-  if (!storeClicked) {
-    await page.locator('text=/^STORE$/i').first().click({ timeout: 5_000 }).catch(() => {});
+  if (!reportsOpened) {
+    await debugScreenshot(page, '03b-FAILED-reports-icon-not-found');
+    throw new Error('Could not click the Reports icon in the left sidebar.');
   }
+
+  // Confirm the Reports view actually loaded by waiting for one of the
+  // category headers (ACCOUNTS / CLINIC / IP / LAB / PHARMACY / STORE).
   await page.waitForTimeout(1500);
-  await debugScreenshot(page, '04-store-expanded');
-
-  progress(opts, 'navigate', 'Opening Purchase/Sales Report - Store...', 25);
-  const reportClicked = await page.evaluate(() => {
-    const els = document.querySelectorAll('a, div, span, li, button');
-    for (const el of els) {
-      const text = el.textContent?.trim() || '';
-      // Match "Purchase/Sales Report - Store" with various spacings/dashes
-      if (text.match(/purchase\s*\/?\s*sales\s*report\s*[-–]?\s*store/i) && text.length < 80) {
-        (el as HTMLElement).click();
-        return true;
-      }
-    }
-    return false;
+  await page.locator('text=/^STORE$/i').first().waitFor({ state: 'visible', timeout: 15_000 }).catch(async () => {
+    await debugScreenshot(page, '03c-FAILED-reports-page-not-loaded');
+    throw new Error('Clicked the Reports icon but the report category list did not appear.');
   });
+  await debugScreenshot(page, '03d-reports-view-loaded');
+  progress(opts, 'navigate', 'Reports view loaded', 20);
 
-  if (!reportClicked) {
-    const loc = page.locator('text=/Purchase.*Sales.*Report.*Store/i').first();
-    if (await loc.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await loc.click({ timeout: 5_000 });
-    } else {
+  // Step 2: click STORE to expand its sub-items. STORE is a category
+  // header — clicking it should reveal "Bill Collection - Store",
+  // "Purchase/Sales Report - Store", etc.
+  progress(opts, 'navigate', 'Expanding STORE menu...', 22);
+  const storeHeader = page.locator('text=/^STORE$/i').first();
+  await storeHeader.click({ timeout: 5_000, force: true });
+
+  // Wait for "Purchase/Sales Report - Store" to appear (proof STORE is
+  // expanded). This is much more reliable than a fixed waitForTimeout.
+  const reportLink = page.locator('a, div, span, li, button').filter({
+    hasText: /Purchase\s*\/\s*Sales\s+Report\s*-\s*Store/i,
+  }).first();
+
+  let reportLinkVisible = await reportLink.isVisible({ timeout: 3_000 }).catch(() => false);
+  if (!reportLinkVisible) {
+    // STORE click may have been intercepted (header element vs button).
+    // Try clicking it again with a different strategy.
+    await storeHeader.click({ timeout: 3_000, force: true }).catch(() => {});
+    await page.waitForTimeout(1_500);
+    reportLinkVisible = await reportLink.isVisible({ timeout: 3_000 }).catch(() => false);
+  }
+  await debugScreenshot(page, '04-after-store-click');
+
+  if (!reportLinkVisible) {
+    // Last-ditch: the user's screenshot shows STORE sub-items rendered
+    // as a vertical list. Look for any element whose visible text is
+    // the link we want, even if it's nested deep, and scroll into view.
+    const found = await page.evaluate(() => {
+      const all = document.querySelectorAll('a, div, span, li, button');
+      const matches: Array<{ idx: number; text: string }> = [];
+      let idx = 0;
+      for (const el of all) {
+        const text = (el.textContent || '').trim();
+        // Direct match on a leaf element (no excessively long parent text)
+        if (text.length < 60 && /Purchase\s*\/\s*Sales\s+Report\s*-?\s*Store/i.test(text)) {
+          matches.push({ idx, text });
+          (el as HTMLElement).scrollIntoView({ block: 'center', behavior: 'auto' });
+          (el as HTMLElement).click();
+          return { matched: true, count: matches.length, sample: text };
+        }
+        idx++;
+      }
+      return { matched: false, count: 0, sample: null };
+    });
+    if (!found.matched) {
       await debugScreenshot(page, '05-FAILED-purchase-sales-not-found');
       throw new Error('Could not find "Purchase/Sales Report - Store" link in the STORE menu.');
     }
+  } else {
+    // Step 3: click the link
+    progress(opts, 'navigate', 'Opening Purchase/Sales Report - Store...', 26);
+    await reportLink.scrollIntoViewIfNeeded({ timeout: 3_000 }).catch(() => {});
+    await reportLink.click({ timeout: 8_000, force: true });
   }
 
-  await page.waitForTimeout(2500);
+  // Confirm the report filter form loaded by waiting for the date inputs.
+  await page.waitForTimeout(2_500);
   try { await page.waitForLoadState('networkidle', { timeout: 20_000 }); } catch {
     console.log('[oneglance-hyderabad] networkidle timeout while loading report page; proceeding');
+  }
+  const dateInput = page.locator('input.dateclass, input[placeholder="DD/MM/YYYY"]').first();
+  if (!(await dateInput.isVisible({ timeout: 10_000 }).catch(() => false))) {
+    await debugScreenshot(page, '06-FAILED-filter-form-not-loaded');
+    throw new Error('Clicked "Purchase/Sales Report - Store" but the filter form (Period date inputs) did not appear.');
   }
   await debugScreenshot(page, '06-report-page-loaded');
   progress(opts, 'navigate', 'Report page loaded', 30);
