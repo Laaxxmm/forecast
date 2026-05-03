@@ -240,11 +240,51 @@ export function initializePlatformSchema(db: DbHelper) {
     "ALTER TABLE branches ADD COLUMN branch_role TEXT DEFAULT 'standalone'",
     "ALTER TABLE branches ADD COLUMN parent_branch_id INTEGER REFERENCES branches(id)",
     "ALTER TABLE branches ADD COLUMN is_user_visible INTEGER DEFAULT 1",
+    // OneGlance "Center" string used in the report filter (e.g.
+    // "MAGNACODE - FILM NAGAR" for Jubliee Hills). Stored per-branch
+    // because the names don't always match the Magna Tracker branch name
+    // (Jubliee Hills ↔ FILM NAGAR; Himayathnagar ↔ HIMAYATH NAGAR with a
+    // space). Only used by the Hyderabad scraper for Sales / Stock /
+    // Transfer downloads at satellites — left empty for everyone else.
+    "ALTER TABLE branches ADD COLUMN oneglance_center TEXT DEFAULT ''",
     "ALTER TABLE dashboard_chart_visibility ADD COLUMN description TEXT DEFAULT ''",
     "ALTER TABLE dashboard_chart_visibility ADD COLUMN source TEXT DEFAULT ''",
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch { /* column already exists */ }
+  }
+
+  // Backfill OneGlance Center names for the original Hyderabad
+  // satellites. Idempotent: only updates rows where oneglance_center
+  // is currently empty AND the branch matches a known Magna Tracker
+  // name within Hyderabad. Anyone adding new Hyderabad branches later
+  // sets the value manually via Admin → Branches.
+  const HYDERABAD_ONEGLANCE_CENTER_MAP: Record<string, string> = {
+    'jubliee hills': 'MAGNACODE - FILM NAGAR',
+    'jubilee hills': 'MAGNACODE - FILM NAGAR',
+    'marredpally': 'MAGNACODE - MARREDPALLY',
+    'manikonda': 'MAGNACODE - MANIKONDA',
+    'himayathnagar': 'MAGNACODE - HIMAYATH NAGAR',
+    'himayath nagar': 'MAGNACODE - HIMAYATH NAGAR',
+    'kokapet': 'MAGNACODE - KOKAPET',
+  };
+  try {
+    const hydSatellites = db.all(
+      `SELECT id, name FROM branches
+        WHERE LOWER(TRIM(city)) = 'hyderabad'
+          AND COALESCE(branch_role, 'standalone') = 'satellite'
+          AND COALESCE(oneglance_center, '') = ''`
+    );
+    for (const b of hydSatellites) {
+      const key = (b.name || '').toString().toLowerCase().trim();
+      const mapped = HYDERABAD_ONEGLANCE_CENTER_MAP[key];
+      if (mapped) {
+        db.run('UPDATE branches SET oneglance_center = ? WHERE id = ?', mapped, b.id);
+        console.log(`[Platform Migration] Set oneglance_center for "${b.name}" → "${mapped}"`);
+      }
+    }
+  } catch (e: any) {
+    console.warn('[Platform Migration] Hyderabad oneglance_center backfill skipped:', e?.message);
   }
 
   // Auto-promote the first team member to owner if none exist

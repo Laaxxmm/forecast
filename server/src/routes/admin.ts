@@ -795,7 +795,7 @@ router.post('/clients/:slug/branches', async (req: Request, res: Response) => {
 
 router.put('/clients/:slug/branches/:id', async (req: Request, res: Response) => {
   const db = await getPlatformHelper();
-  const { name, code, city, manager_name, state, sort_order, is_active, branch_role, parent_branch_id, is_user_visible } = req.body;
+  const { name, code, city, manager_name, state, sort_order, is_active, branch_role, parent_branch_id, is_user_visible, oneglance_center } = req.body;
   const branchId = parseInt(req.params.id as string);
 
   const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
@@ -821,6 +821,9 @@ router.put('/clients/:slug/branches/:id', async (req: Request, res: Response) =>
   }
   if (is_user_visible !== undefined) {
     db.run('UPDATE branches SET is_user_visible = ? WHERE id = ? AND client_id = ?', [is_user_visible ? 1 : 0, branchId, client.id]);
+  }
+  if (oneglance_center !== undefined) {
+    db.run('UPDATE branches SET oneglance_center = ? WHERE id = ? AND client_id = ?', [String(oneglance_center || '').trim(), branchId, client.id]);
   }
 
   res.json({ ok: true });

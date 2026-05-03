@@ -259,7 +259,7 @@ export default function ImportPage() {
   // Sales+Purchase / Sales / Purchase / Stock / All set.
   const allowedOgReports: Array<'both' | 'sales' | 'purchase' | 'stock' | 'all'> =
     currentBranchRole === 'central_store' ? ['purchase']
-      : currentBranchRole === 'satellite' ? ['sales', 'stock']
+      : currentBranchRole === 'satellite' ? ['sales']  // Stock / Transfer at satellites — wired in subsequent rounds
       : ['both', 'sales', 'purchase', 'stock', 'all'];
   // The Auto-Sync defaults useEffect that auto-corrects `syncSource` and
   // `ogReportType` when the role-aware allow lists change is declared
