@@ -22,6 +22,10 @@ const TABS = [
   { key: 'sales', label: 'Sales & Profit', icon: TrendingUp },
   { key: 'stock', label: 'Stock & Expiry', icon: Package },
   { key: 'cross', label: 'Cross-Report', icon: ArrowRightLeft },
+  // Hub-and-spoke only — only shown when the current branch context is a
+  // central_store, satellite, or a regional rollup. Standalone branches
+  // never see this tab.
+  { key: 'movement', label: 'Stock Movement', icon: Warehouse },
 ] as const;
 
 type TabKey = typeof TABS[number]['key'];
@@ -39,6 +43,23 @@ export default function PharmacyAnalytics({ isVisible, startMonth, endMonth }: P
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
+
+  // Branch role for the current selection. Drives whether the Stock
+  // Movement tab is shown. Resolved from the selected branch in
+  // localStorage against the cached /api/branches payload — falls back to
+  // 'standalone' when the selection is a region rollup OR no branch is
+  // selected (so the tab simply doesn't appear).
+  const [movementMode, setMovementMode] = useState<'standalone' | 'central_store' | 'satellite' | 'region'>('standalone');
+  useEffect(() => {
+    const branchId = localStorage.getItem('branch_id');
+    if (!branchId || branchId === 'all') { setMovementMode('standalone'); return; }
+    if (branchId.startsWith('region:')) { setMovementMode('region'); return; }
+    api.get('/branches').then(res => {
+      const b = (res.data.branches || []).find((br: any) => String(br.id) === branchId);
+      const role = b?.branch_role || 'standalone';
+      setMovementMode(role === 'central_store' || role === 'satellite' ? role : 'standalone');
+    }).catch(() => setMovementMode('standalone'));
+  }, [startMonth, endMonth]);
 
   useEffect(() => {
     const params: Record<string, string> = {};
@@ -100,6 +121,7 @@ export default function PharmacyAnalytics({ isVisible, startMonth, endMonth }: P
     if (t.key === 'sales') return data.hasSales;
     if (t.key === 'stock') return data.hasStock;
     if (t.key === 'cross') return data.hasSales && data.hasPurchases;
+    if (t.key === 'movement') return movementMode !== 'standalone';
     return false;
   });
 
@@ -143,6 +165,184 @@ export default function PharmacyAnalytics({ isVisible, startMonth, endMonth }: P
       {activeTab === 'cross' && data.crossInsights && (
         <CrossTab data={data} isVisible={isVisible} startMonth={startMonth} endMonth={endMonth} />
       )}
+      {activeTab === 'movement' && (
+        <StockMovementTab startMonth={startMonth} endMonth={endMonth} mode={movementMode} />
+      )}
+    </div>
+  );
+}
+
+// ── Stock Movement Tab (Hyderabad hub-and-spoke) ─────────────────────────
+//
+// Hidden for standalone branches. For satellites it shows what was received
+// from the central Store this period; for the central Store it shows what
+// went out and to whom; for the regional rollup it shows the from→to matrix.
+// Backed by GET /api/dashboard/stock-movement.
+function StockMovementTab({
+  startMonth, endMonth, mode,
+}: {
+  startMonth?: string | null; endMonth?: string | null;
+  mode: 'standalone' | 'central_store' | 'satellite' | 'region';
+}) {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    const params: Record<string, string> = {};
+    if (startMonth) params.startMonth = startMonth;
+    if (endMonth) params.endMonth = endMonth;
+    setLoading(true);
+    api.get('/dashboard/stock-movement', { params })
+      .then(res => { setData(res.data); setLoading(false); })
+      .catch(() => { setData(null); setLoading(false); });
+  }, [startMonth, endMonth, mode]);
+
+  if (loading) return (
+    <div className="text-center py-8">
+      <div className="w-6 h-6 border-2 border-teal-500/30 border-t-teal-500 rounded-full animate-spin mx-auto" />
+    </div>
+  );
+
+  if (!data || data.mode === 'standalone') {
+    return (
+      <div className="text-center py-10 text-sm" style={{ color: 'var(--mt-text-faint)' }}>
+        Stock movement only applies to hub-and-spoke branches (central store + satellites).
+      </div>
+    );
+  }
+
+  if (data.mode === 'satellite') {
+    const summary = data.summary || {};
+    return (
+      <div className="space-y-5">
+        <div className="text-sm" style={{ color: 'var(--mt-text-secondary)' }}>
+          Received from <span className="font-semibold" style={{ color: 'var(--mt-text-heading)' }}>{data.counterparty?.name || 'central store'}</span>
+        </div>
+        <div className="grid grid-cols-4 gap-3">
+          <MiniKPI label="Transfers" value={formatNumber(summary.transfers || 0)} icon={ArrowRightLeft} color="teal" />
+          <MiniKPI label="Units received" value={formatNumber(summary.qty || 0)} icon={Package} color="blue" />
+          <MiniKPI label="Total value" value={formatINR(summary.total_value || 0)} icon={DollarSign} color="purple" />
+          <MiniKPI label="Cost basis (ex-tax)" value={formatINR(summary.purchase_value || 0)} icon={Warehouse} color="amber" />
+        </div>
+        <MovementTopDrugs items={data.topItems || []} />
+      </div>
+    );
+  }
+
+  if (data.mode === 'central') {
+    return (
+      <div className="space-y-5">
+        <div className="text-sm" style={{ color: 'var(--mt-text-secondary)' }}>
+          Stock transferred OUT this period
+        </div>
+        <FlowList flows={data.flows || []} mode="central" />
+        <MovementTopDrugs items={data.topItems || []} title="Top drugs sent out" />
+      </div>
+    );
+  }
+
+  // region
+  return (
+    <div className="space-y-5">
+      <div className="text-sm" style={{ color: 'var(--mt-text-secondary)' }}>
+        {data.city || 'Region'} — inter-branch stock flows this period
+      </div>
+      <FlowList flows={data.flows || []} mode="region" />
+    </div>
+  );
+}
+
+function FlowList({ flows, mode }: { flows: any[]; mode: 'central' | 'region' }) {
+  if (flows.length === 0) {
+    return (
+      <div className="text-center py-6 text-xs" style={{ color: 'var(--mt-text-faint)' }}>
+        No transfer activity in this period.
+      </div>
+    );
+  }
+  const max = Math.max(...flows.map(f => Number(f.total_value) || 0), 1);
+  return (
+    <div
+      className="rounded-xl overflow-hidden"
+      style={{ background: 'var(--mt-bg-muted)', border: '1px solid var(--mt-border)' }}
+    >
+      <div className="grid grid-cols-12 px-4 py-2 text-[10px] uppercase tracking-wider"
+           style={{ color: 'var(--mt-text-faint)', borderBottom: '1px solid var(--mt-border)' }}>
+        <div className="col-span-5">{mode === 'region' ? 'From → To' : 'Destination'}</div>
+        <div className="col-span-2 text-right">Transfers</div>
+        <div className="col-span-2 text-right">Units</div>
+        <div className="col-span-3 text-right">Value</div>
+      </div>
+      {flows.map((f, i) => {
+        const pct = ((Number(f.total_value) || 0) / max) * 100;
+        const label = mode === 'region'
+          ? `${f.from?.name || '?'} → ${f.to?.name || '?'}`
+          : (f.to?.name || '?');
+        return (
+          <div
+            key={i}
+            className="grid grid-cols-12 px-4 py-2.5 text-xs items-center"
+            style={{ borderBottom: i < flows.length - 1 ? '1px solid var(--mt-border)' : 'none' }}
+          >
+            <div className="col-span-5">
+              <div className="font-medium" style={{ color: 'var(--mt-text-secondary)' }}>{label}</div>
+              <div className="mt-1 h-1 rounded-full overflow-hidden" style={{ background: 'var(--mt-border)' }}>
+                <div style={{ width: `${pct}%`, height: '100%', background: 'var(--mt-accent)' }} />
+              </div>
+            </div>
+            <div className="col-span-2 text-right" style={{ color: 'var(--mt-text-muted)' }}>{formatNumber(f.transfers || 0)}</div>
+            <div className="col-span-2 text-right" style={{ color: 'var(--mt-text-muted)' }}>{formatNumber(f.qty || 0)}</div>
+            <div className="col-span-3 text-right font-medium" style={{ color: 'var(--mt-text-heading)' }}>{formatINR(f.total_value || 0)}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function MovementTopDrugs({ items, title = 'Top drugs received' }: { items: any[]; title?: string }) {
+  if (items.length === 0) {
+    return (
+      <div className="text-center py-6 text-xs" style={{ color: 'var(--mt-text-faint)' }}>
+        No drug-level transfer data in this period.
+      </div>
+    );
+  }
+  const max = Math.max(...items.map(i => Number(i.total_value) || 0), 1);
+  return (
+    <div>
+      <div className="text-[11px] font-semibold mb-2" style={{ color: 'var(--mt-text-muted)' }}>{title}</div>
+      <div
+        className="rounded-xl overflow-hidden"
+        style={{ background: 'var(--mt-bg-muted)', border: '1px solid var(--mt-border)' }}
+      >
+        <div className="grid grid-cols-12 px-4 py-2 text-[10px] uppercase tracking-wider"
+             style={{ color: 'var(--mt-text-faint)', borderBottom: '1px solid var(--mt-border)' }}>
+          <div className="col-span-6">Drug</div>
+          <div className="col-span-2 text-right">Units</div>
+          <div className="col-span-1 text-right">Batches</div>
+          <div className="col-span-3 text-right">Value</div>
+        </div>
+        {items.map((it, i) => {
+          const pct = ((Number(it.total_value) || 0) / max) * 100;
+          return (
+            <div
+              key={i}
+              className="grid grid-cols-12 px-4 py-2 text-xs items-center"
+              style={{ borderBottom: i < items.length - 1 ? '1px solid var(--mt-border)' : 'none' }}
+            >
+              <div className="col-span-6">
+                <div className="truncate" style={{ color: 'var(--mt-text-secondary)' }}>{it.drug_name}</div>
+                <div className="mt-1 h-1 rounded-full overflow-hidden" style={{ background: 'var(--mt-border)' }}>
+                  <div style={{ width: `${pct}%`, height: '100%', background: 'var(--mt-accent)' }} />
+                </div>
+              </div>
+              <div className="col-span-2 text-right" style={{ color: 'var(--mt-text-muted)' }}>{formatNumber(it.qty || 0)}</div>
+              <div className="col-span-1 text-right" style={{ color: 'var(--mt-text-muted)' }}>{it.batches != null ? formatNumber(it.batches) : '-'}</div>
+              <div className="col-span-3 text-right font-medium" style={{ color: 'var(--mt-text-heading)' }}>{formatINR(it.total_value || 0)}</div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

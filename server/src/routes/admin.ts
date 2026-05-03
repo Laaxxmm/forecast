@@ -746,7 +746,7 @@ router.get('/clients/:slug/branches', async (req: Request, res: Response) => {
 
 router.post('/clients/:slug/branches', async (req: Request, res: Response) => {
   const db = await getPlatformHelper();
-  const { name, code, city, manager_name, state } = req.body;
+  const { name, code, city, manager_name, state, branch_role, parent_branch_id, is_user_visible } = req.body;
   if (!name || !code) return res.status(400).json({ error: 'name and code are required' });
 
   const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
@@ -760,12 +760,24 @@ router.post('/clients/:slug/branches', async (req: Request, res: Response) => {
   const existing = db.get('SELECT id FROM branches WHERE client_id = ? AND code = ?', [client.id, code]);
   if (existing) return res.status(409).json({ error: 'Branch code already exists for this client' });
 
+  const role = (branch_role && ['standalone', 'central_store', 'satellite'].includes(branch_role))
+    ? branch_role
+    : 'standalone';
+  const parentId = role === 'satellite' ? (parent_branch_id || null) : null;
+  // Default central_store branches to hidden from end users; satellites and
+  // standalones default to visible. Caller can override either way.
+  const visibleDefault = role === 'central_store' ? 0 : 1;
+  const visibleVal = is_user_visible === undefined
+    ? visibleDefault
+    : (is_user_visible ? 1 : 0);
+
   const maxOrder = db.get('SELECT MAX(sort_order) as max_order FROM branches WHERE client_id = ?', client.id);
   const sortOrder = (maxOrder?.max_order || 0) + 1;
 
   const result = db.run(
-    'INSERT INTO branches (client_id, name, code, city, manager_name, state, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [client.id, name, code, city || null, manager_name || null, state || '', sortOrder]
+    `INSERT INTO branches (client_id, name, code, city, manager_name, state, sort_order, branch_role, parent_branch_id, is_user_visible)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [client.id, name, code, city || null, manager_name || null, state || '', sortOrder, role, parentId, visibleVal]
   );
 
   // If stream_ids provided, create branch_streams mappings
@@ -774,12 +786,16 @@ router.post('/clients/:slug/branches', async (req: Request, res: Response) => {
     db.run('INSERT OR IGNORE INTO branch_streams (branch_id, stream_id) VALUES (?, ?)', [result.lastInsertRowid, sid]);
   }
 
-  res.status(201).json({ id: result.lastInsertRowid, name, code, city, state: state || '', manager_name, sort_order: sortOrder });
+  res.status(201).json({
+    id: result.lastInsertRowid,
+    name, code, city, state: state || '', manager_name, sort_order: sortOrder,
+    branch_role: role, parent_branch_id: parentId, is_user_visible: visibleVal,
+  });
 });
 
 router.put('/clients/:slug/branches/:id', async (req: Request, res: Response) => {
   const db = await getPlatformHelper();
-  const { name, code, city, manager_name, state, sort_order, is_active } = req.body;
+  const { name, code, city, manager_name, state, sort_order, is_active, branch_role, parent_branch_id, is_user_visible } = req.body;
   const branchId = parseInt(req.params.id as string);
 
   const client = db.get('SELECT id FROM clients WHERE slug = ?', req.params.slug);
@@ -792,6 +808,20 @@ router.put('/clients/:slug/branches/:id', async (req: Request, res: Response) =>
   if (state !== undefined) db.run('UPDATE branches SET state = ? WHERE id = ? AND client_id = ?', [state, branchId, client.id]);
   if (sort_order !== undefined) db.run('UPDATE branches SET sort_order = ? WHERE id = ? AND client_id = ?', [sort_order, branchId, client.id]);
   if (is_active !== undefined) db.run('UPDATE branches SET is_active = ? WHERE id = ? AND client_id = ?', [is_active ? 1 : 0, branchId, client.id]);
+  if (branch_role !== undefined && ['standalone', 'central_store', 'satellite'].includes(branch_role)) {
+    db.run('UPDATE branches SET branch_role = ? WHERE id = ? AND client_id = ?', [branch_role, branchId, client.id]);
+    // Drop the parent link if the role is no longer satellite — keeps the
+    // FK from pointing at a stale value the UI never re-shows.
+    if (branch_role !== 'satellite') {
+      db.run('UPDATE branches SET parent_branch_id = NULL WHERE id = ? AND client_id = ?', [branchId, client.id]);
+    }
+  }
+  if (parent_branch_id !== undefined) {
+    db.run('UPDATE branches SET parent_branch_id = ? WHERE id = ? AND client_id = ?', [parent_branch_id || null, branchId, client.id]);
+  }
+  if (is_user_visible !== undefined) {
+    db.run('UPDATE branches SET is_user_visible = ? WHERE id = ? AND client_id = ?', [is_user_visible ? 1 : 0, branchId, client.id]);
+  }
 
   res.json({ ok: true });
 });

@@ -183,6 +183,53 @@ export function initializeSchema(db: DbHelper) {
       stock_value REAL DEFAULT 0,
       branch_id INTEGER
     );
+
+    -- Inter-branch stock transfers (Hyderabad central-store → satellites model).
+    -- Source = branch_from_id (always the central_store), destination = branch_to_id
+    -- (a satellite). purchase_price is the per-unit cost basis used as the
+    -- satellite's COGS rate when matched to its sales by (drug, batch).
+    CREATE TABLE IF NOT EXISTS pharmacy_stock_transfers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      import_id INTEGER REFERENCES import_logs(id),
+      branch_from_id INTEGER NOT NULL,
+      branch_to_id INTEGER NOT NULL,
+      invoice_no TEXT,
+      invoice_date TEXT,
+      invoice_month TEXT,
+      indent_no TEXT,
+      indent_date TEXT,
+      drug_name TEXT,
+      drug_name_normalized TEXT,
+      batch_no TEXT,
+      qty REAL DEFAULT 0,
+      rate REAL DEFAULT 0,
+      mrp REAL DEFAULT 0,
+      gst_5 REAL DEFAULT 0, cgst_5 REAL DEFAULT 0, sgst_5 REAL DEFAULT 0,
+      gst_12 REAL DEFAULT 0, cgst_12 REAL DEFAULT 0, sgst_12 REAL DEFAULT 0,
+      gst_18 REAL DEFAULT 0, cgst_18 REAL DEFAULT 0, sgst_18 REAL DEFAULT 0,
+      gst_28 REAL DEFAULT 0, cgst_28 REAL DEFAULT 0, sgst_28 REAL DEFAULT 0,
+      gst_other REAL DEFAULT 0, cgst_other REAL DEFAULT 0, sgst_other REAL DEFAULT 0,
+      gst_total REAL DEFAULT 0, cgst_total REAL DEFAULT 0, sgst_total REAL DEFAULT 0,
+      total_value REAL DEFAULT 0,
+      purchase_value REAL DEFAULT 0,
+      purchase_price REAL DEFAULT 0,
+      counterparty_raw TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Per-branch COGS aggregate cache. Mirrors the dashboard_actuals pattern:
+    -- precomputed for fast dashboard reads, refreshed on every relevant import.
+    -- For standalone branches: cogs_amount = SUM(purchase_amount) from sales.
+    -- For satellites: cogs_amount = SUM(qty × matched-transfer purchase_price).
+    -- unmatched_count flags sales rows that couldn't be joined to a transfer.
+    CREATE TABLE IF NOT EXISTS pharmacy_branch_cogs (
+      branch_id INTEGER NOT NULL,
+      month TEXT NOT NULL,
+      cogs_amount REAL NOT NULL DEFAULT 0,
+      unmatched_count INTEGER NOT NULL DEFAULT 0,
+      computed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (branch_id, month)
+    );
   `);
 
   // Forecast module tables
@@ -830,6 +877,10 @@ export function initializeSchema(db: DbHelper) {
     'CREATE INDEX IF NOT EXISTS idx_scenarios_branch ON scenarios(branch_id)',
     'CREATE INDEX IF NOT EXISTS idx_pharma_stock_snapshot ON pharmacy_stock_actuals(snapshot_date)',
     'CREATE INDEX IF NOT EXISTS idx_pharma_stock_branch ON pharmacy_stock_actuals(branch_id)',
+    'CREATE INDEX IF NOT EXISTS idx_transfers_to_date ON pharmacy_stock_transfers(branch_to_id, invoice_date)',
+    'CREATE INDEX IF NOT EXISTS idx_transfers_from_date ON pharmacy_stock_transfers(branch_from_id, invoice_date)',
+    'CREATE INDEX IF NOT EXISTS idx_transfers_drug_batch ON pharmacy_stock_transfers(drug_name_normalized, batch_no)',
+    'CREATE INDEX IF NOT EXISTS idx_transfers_month ON pharmacy_stock_transfers(branch_to_id, invoice_month)',
   ];
   for (const idx of indexes) {
     try { db.exec(idx); } catch { /* index may already exist */ }

@@ -306,32 +306,60 @@ app.get('/api/branches', requireAuth, resolveTenant, resolveBranch, async (req, 
   const client = platformDb.get('SELECT is_multi_branch FROM clients WHERE id = ?', req.clientId);
 
   if (!client?.is_multi_branch) {
-    return res.json({ isMultiBranch: false, branches: [] });
+    return res.json({ isMultiBranch: false, branches: [], regions: [] });
   }
+
+  const isAdmin = req.userType === 'super_admin' || req.session?.role === 'admin';
 
   // For super admins and client admins, return all branches
   // For regular users, return only their assigned branches
   let branches;
-  if (req.userType === 'super_admin' || req.session?.role === 'admin') {
+  if (isAdmin) {
     branches = platformDb.all(
-      'SELECT id, name, code, city, state, manager_name, sort_order FROM branches WHERE client_id = ? AND is_active = 1 ORDER BY sort_order, name',
+      `SELECT id, name, code, city, state, manager_name, sort_order,
+              COALESCE(branch_role, 'standalone') as branch_role,
+              parent_branch_id,
+              COALESCE(is_user_visible, 1) as is_user_visible
+         FROM branches WHERE client_id = ? AND is_active = 1
+        ORDER BY sort_order, name`,
       req.clientId
     );
   } else {
     branches = platformDb.all(
-      `SELECT b.id, b.name, b.code, b.city, b.state, b.manager_name, b.sort_order, uba.can_view_consolidated
-       FROM branches b
-       JOIN user_branch_access uba ON uba.branch_id = b.id
-       WHERE b.client_id = ? AND b.is_active = 1 AND uba.user_id = ?
-       ORDER BY b.sort_order, b.name`,
+      `SELECT b.id, b.name, b.code, b.city, b.state, b.manager_name, b.sort_order,
+              COALESCE(b.branch_role, 'standalone') as branch_role,
+              b.parent_branch_id,
+              COALESCE(b.is_user_visible, 1) as is_user_visible,
+              uba.can_view_consolidated
+         FROM branches b
+         JOIN user_branch_access uba ON uba.branch_id = b.id
+        WHERE b.client_id = ? AND b.is_active = 1 AND uba.user_id = ?
+        ORDER BY b.sort_order, b.name`,
       req.clientId, req.session?.userId
     );
   }
 
-  const canViewConsolidated = req.userType === 'super_admin' || req.session?.role === 'admin'
+  const canViewConsolidated = isAdmin
     || branches.some((b: any) => b.can_view_consolidated);
 
-  res.json({ isMultiBranch: true, branches, canViewConsolidated });
+  // Region rollup options: any city that has both a central_store and at
+  // least one satellite gets a "region:<city>" entry the sidebar can render
+  // as a consolidated row. Hidden from the satellite-only view if the user
+  // doesn't have access to at least one of the city's satellites.
+  const cityMap = new Map<string, { hasCentral: boolean; satellites: number }>();
+  for (const b of branches as any[]) {
+    if (!b.city) continue;
+    const key = b.city.trim();
+    if (!cityMap.has(key)) cityMap.set(key, { hasCentral: false, satellites: 0 });
+    const entry = cityMap.get(key)!;
+    if (b.branch_role === 'central_store') entry.hasCentral = true;
+    if (b.branch_role === 'satellite') entry.satellites += 1;
+  }
+  const regions = Array.from(cityMap.entries())
+    .filter(([_, v]) => v.hasCentral && v.satellites >= 1)
+    .map(([city]) => ({ city, key: `region:${city}`, label: `${city} (consolidated)` }));
+
+  res.json({ isMultiBranch: true, branches, canViewConsolidated, regions });
 });
 
 // ─── Debug screenshots (for diagnosing sync issues) ─────────────────────────

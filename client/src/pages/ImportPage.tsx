@@ -3,14 +3,15 @@ import api from '../api/client';
 import { Stethoscope, Pill, ShoppingCart, Upload, CheckCircle, AlertCircle, Trash2,
          RefreshCw, Cloud, Settings as SettingsIcon, Calendar,
          LogIn, Building2, FileSearch, CalendarRange, Download, Database, Check, XCircle,
-         Phone, KeyRound, Briefcase, Package, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
+         Phone, KeyRound, Briefcase, Package, ArrowLeftRight, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { downloadXlsx, CLINIC_EXPORT_COLUMNS, PHARMA_SALES_EXPORT_COLUMNS, PHARMA_PURCHASE_EXPORT_COLUMNS, STOCK_COLUMNS } from '../utils/xlsxExport';
 import DataTable, { type ColumnDef } from '../components/common/DataTable';
 
-type Source = 'healthplix' | 'oneglance-sales' | 'oneglance-purchase' | 'oneglance-stock' | 'turia';
+type Source = 'healthplix' | 'oneglance-sales' | 'oneglance-purchase' | 'oneglance-stock' | 'oneglance-transfer' | 'turia';
 type Mode = 'upload' | 'sync';
 type SyncSource = 'healthplix' | 'oneglance' | 'turia';
+type BranchRole = 'standalone' | 'central_store' | 'satellite';
 
 interface ImportLog {
   id: number;
@@ -24,11 +25,16 @@ interface ImportLog {
   file_path?: string;
 }
 
-const allSources: { key: Source; label: string; desc: string; icon: any; endpoint: string; integration: string }[] = [
+// Each source advertises which branch_roles it applies to. Used to hide
+// inapplicable cards in hub-and-spoke setups (Hyderabad satellites have no
+// Purchase Report; central stores have no Sales/Stock Reports). 'standalone'
+// branches see the historical default set.
+const allSources: { key: Source; label: string; desc: string; icon: any; endpoint: string; integration: string; roles?: BranchRole[] }[] = [
   { key: 'healthplix', label: 'Healthplix', desc: 'Clinic billing report', icon: Stethoscope, endpoint: '/import/healthplix', integration: 'healthplix' },
-  { key: 'oneglance-sales', label: 'Oneglance Sales', desc: 'Pharmacy sales report', icon: Pill, endpoint: '/import/oneglance-sales', integration: 'oneglance' },
-  { key: 'oneglance-purchase', label: 'Oneglance Purchase', desc: 'Pharmacy purchase report', icon: ShoppingCart, endpoint: '/import/oneglance-purchase', integration: 'oneglance' },
-  { key: 'oneglance-stock', label: 'Oneglance Stock', desc: 'Pharmacy stock snapshot', icon: Package, endpoint: '/import/oneglance-stock', integration: 'oneglance' },
+  { key: 'oneglance-sales', label: 'Oneglance Sales', desc: 'Pharmacy sales report', icon: Pill, endpoint: '/import/oneglance-sales', integration: 'oneglance', roles: ['standalone', 'satellite'] },
+  { key: 'oneglance-purchase', label: 'Oneglance Purchase', desc: 'Pharmacy purchase report', icon: ShoppingCart, endpoint: '/import/oneglance-purchase', integration: 'oneglance', roles: ['standalone', 'central_store'] },
+  { key: 'oneglance-stock', label: 'Oneglance Stock', desc: 'Pharmacy stock snapshot', icon: Package, endpoint: '/import/oneglance-stock', integration: 'oneglance', roles: ['standalone', 'satellite'] },
+  { key: 'oneglance-transfer', label: 'Stock Transfer', desc: 'Inter-branch stock transfers', icon: ArrowLeftRight, endpoint: '/import/oneglance-transfer', integration: 'oneglance', roles: ['central_store', 'satellite'] },
   { key: 'turia', label: 'Turia Invoices', desc: 'Consultancy invoice data', icon: Briefcase, endpoint: '/import/turia', integration: 'turia' },
 ];
 
@@ -204,7 +210,31 @@ export default function ImportPage() {
   const enabledIntegrations: string[] = (() => {
     try { return JSON.parse(localStorage.getItem('enabled_integrations') || '[]'); } catch { return []; }
   })();
-  const sources = allSources.filter(s => enabledIntegrations.includes(s.integration));
+
+  // Resolve the current branch's role so we can hide inapplicable upload
+  // cards (e.g. no Purchase Report for satellites, no Sales/Stock for the
+  // central store). Falls back to 'standalone' for legacy / single-branch
+  // tenants — that preserves today's full set of cards.
+  const [currentBranchRole, setCurrentBranchRole] = useState<BranchRole>('standalone');
+  useEffect(() => {
+    const branchId = localStorage.getItem('branch_id');
+    if (!branchId || branchId === 'all' || branchId.startsWith('region:')) {
+      setCurrentBranchRole('standalone');
+      return;
+    }
+    api.get('/branches').then(res => {
+      const branches = res.data.branches || [];
+      const current = branches.find((b: any) => String(b.id) === branchId);
+      const role: BranchRole = (current?.branch_role as BranchRole) || 'standalone';
+      setCurrentBranchRole(role);
+    }).catch(() => setCurrentBranchRole('standalone'));
+  }, []);
+
+  const sources = allSources.filter(s => {
+    if (!enabledIntegrations.includes(s.integration)) return false;
+    if (s.roles && !s.roles.includes(currentBranchRole)) return false;
+    return true;
+  });
   const showHpSync = enabledIntegrations.includes('healthplix');
   const showOgSync = enabledIntegrations.includes('oneglance');
   const showTuriaSync = enabledIntegrations.includes('turia');

@@ -1975,8 +1975,23 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
   const [name, setName] = useState('');
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
+  // Hub-and-spoke fields. branch_role defaults to 'standalone' (today's
+  // behavior). 'central_store' = back-office procurement entity (e.g. the
+  // Hyderabad Store). 'satellite' = retail branch that receives transfers
+  // from a parent central_store. parentBranchId is only used when role =
+  // 'satellite'.
+  const [branchRole, setBranchRole] = useState<'standalone' | 'central_store' | 'satellite'>('standalone');
+  const [parentBranchId, setParentBranchId] = useState<string>('');
   const [enabling, setEnabling] = useState(false);
   const [editingBranch, setEditingBranch] = useState<any>(null);
+
+  // Available central_store branches in the same city — used as parent
+  // options for satellites. Falls back to all central_stores if the city
+  // doesn't match any (e.g. mid-edit before the city is filled in).
+  const centralStoresInCity = (cityFilter: string) => branches.filter(b =>
+    b.branch_role === 'central_store'
+    && (cityFilter ? (b.city || '').toLowerCase() === cityFilter.toLowerCase() : true)
+  );
 
   const autoCode = (n: string) => n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 20);
   interface StreamAccess { id: number; name: string; user_ids: number[] }
@@ -2112,17 +2127,66 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
               </select>
             </div>
           </div>
+          <div className="grid grid-cols-3 gap-3 mb-3">
+            <div>
+              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>Branch Role</label>
+              <select
+                value={branchRole}
+                onChange={e => { setBranchRole(e.target.value as any); setParentBranchId(''); }}
+                className="mt-input text-sm"
+              >
+                <option value="standalone">Standalone (default)</option>
+                <option value="central_store">Central Store (back-office)</option>
+                <option value="satellite">Satellite (receives transfers)</option>
+              </select>
+            </div>
+            {branchRole === 'satellite' && (
+              <div className="col-span-2">
+                <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>
+                  Parent (Central Store)
+                </label>
+                <select
+                  value={parentBranchId}
+                  onChange={e => setParentBranchId(e.target.value)}
+                  className="mt-input text-sm"
+                >
+                  <option value="">Select central store…</option>
+                  {centralStoresInCity(city).map(b => (
+                    <option key={b.id} value={b.id}>{b.name}{b.city ? ` · ${b.city}` : ''}</option>
+                  ))}
+                </select>
+                {centralStoresInCity(city).length === 0 && (
+                  <p className="text-[10px] mt-1" style={{ color: 'var(--mt-text-faint)' }}>
+                    No central store exists yet for this city. Create one first.
+                  </p>
+                )}
+              </div>
+            )}
+            {branchRole === 'central_store' && (
+              <div className="col-span-2 flex items-center text-[11px]" style={{ color: 'var(--mt-text-faint)' }}>
+                Central stores are hidden from the end-user branch dropdown by default.
+              </div>
+            )}
+          </div>
           <div className="flex gap-2">
             <button
               onClick={async () => {
                 if (!name) return;
+                if (branchRole === 'satellite' && !parentBranchId) {
+                  alert('Pick a parent central store, or change the role to standalone.');
+                  return;
+                }
                 await api.post(`/admin/clients/${slug}/branches`, {
-                  name, code: autoCode(name), state: state || undefined, city: city || undefined,
+                  name, code: autoCode(name),
+                  state: state || undefined, city: city || undefined,
+                  branch_role: branchRole,
+                  parent_branch_id: branchRole === 'satellite' ? Number(parentBranchId) : null,
                 });
                 setName(''); setState(''); setCity('');
+                setBranchRole('standalone'); setParentBranchId('');
                 setShowAdd(false); onReload();
               }}
-              disabled={!name}
+              disabled={!name || (branchRole === 'satellite' && !parentBranchId)}
               className="mt-btn-gradient text-xs"
             >Add Branch</button>
             <button onClick={() => setShowAdd(false)} className="mt-btn-soft text-xs">Cancel</button>
@@ -2158,14 +2222,33 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
                       <MapPin size={15} style={{ color: TONES.accent.fg }} />
                     </div>
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm font-medium" style={{ color: 'var(--mt-text)' }}>{branch.name}</span>
                         <span className="text-[10px] font-mono" style={{ color: 'var(--mt-text-faint)' }}>{branch.code}</span>
+                        {branch.branch_role === 'central_store' && (
+                          <span
+                            className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded"
+                            style={{ background: TONES.amber.soft, color: TONES.amber.fg, border: `1px solid ${TONES.amber.border}` }}
+                          >Central Store</span>
+                        )}
+                        {branch.branch_role === 'satellite' && (
+                          <span
+                            className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded"
+                            style={{ background: TONES.accent.soft, color: TONES.accent.fg, border: `1px solid ${TONES.accent.border}` }}
+                          >Satellite</span>
+                        )}
+                        {branch.is_user_visible === 0 && (
+                          <span className="text-[9px] uppercase tracking-wide" style={{ color: 'var(--mt-text-faint)' }}>(hidden from users)</span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--mt-text-faint)' }}>
                         {branch.state && <span>{branch.state}</span>}
                         {branch.state && branch.city && <span>·</span>}
                         {branch.city && <span>{branch.city}</span>}
+                        {branch.branch_role === 'satellite' && branch.parent_branch_id && (() => {
+                          const parent = branches.find(b => b.id === branch.parent_branch_id);
+                          return parent ? <span>· from {parent.name}</span> : null;
+                        })()}
                       </div>
                     </div>
                   </div>
@@ -2240,16 +2323,70 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
                           </select>
                         </div>
                       </div>
+                      <div className="grid grid-cols-3 gap-3 mb-3">
+                        <div>
+                          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>Branch Role</label>
+                          <select
+                            value={editingBranch.branch_role || 'standalone'}
+                            onChange={e => setEditingBranch({
+                              ...editingBranch,
+                              branch_role: e.target.value,
+                              parent_branch_id: e.target.value === 'satellite' ? editingBranch.parent_branch_id : null,
+                              is_user_visible: e.target.value === 'central_store' && editingBranch.is_user_visible === undefined
+                                ? 0
+                                : editingBranch.is_user_visible,
+                            })}
+                            className="mt-input text-sm"
+                          >
+                            <option value="standalone">Standalone</option>
+                            <option value="central_store">Central Store</option>
+                            <option value="satellite">Satellite</option>
+                          </select>
+                        </div>
+                        {editingBranch.branch_role === 'satellite' && (
+                          <div>
+                            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>Parent (Central Store)</label>
+                            <select
+                              value={editingBranch.parent_branch_id || ''}
+                              onChange={e => setEditingBranch({ ...editingBranch, parent_branch_id: e.target.value ? Number(e.target.value) : null })}
+                              className="mt-input text-sm"
+                            >
+                              <option value="">Select central store…</option>
+                              {centralStoresInCity(editingBranch.city || '').map(b => (
+                                <option key={b.id} value={b.id}>{b.name}{b.city ? ` · ${b.city}` : ''}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                        <div>
+                          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>Visibility</label>
+                          <label className="flex items-center gap-2 text-xs mt-2" style={{ color: 'var(--mt-text-muted)' }}>
+                            <input
+                              type="checkbox"
+                              checked={editingBranch.is_user_visible !== 0 && editingBranch.is_user_visible !== false}
+                              onChange={e => setEditingBranch({ ...editingBranch, is_user_visible: e.target.checked ? 1 : 0 })}
+                              className="w-3.5 h-3.5"
+                              style={{ accentColor: 'var(--mt-accent)' }}
+                            />
+                            <span>Show in branch dropdown</span>
+                          </label>
+                        </div>
+                      </div>
                       <div className="flex gap-2">
                         <button
                           onClick={async () => {
                             await api.put(`/admin/clients/${slug}/branches/${editingBranch.id}`, {
                               name: editingBranch.name, code: autoCode(editingBranch.name),
                               state: editingBranch.state || '', city: editingBranch.city || '',
+                              branch_role: editingBranch.branch_role || 'standalone',
+                              parent_branch_id: editingBranch.branch_role === 'satellite'
+                                ? (editingBranch.parent_branch_id || null)
+                                : null,
+                              is_user_visible: editingBranch.is_user_visible === 0 || editingBranch.is_user_visible === false ? 0 : 1,
                             });
                             setEditingBranch(null); onReload();
                           }}
-                          disabled={!editingBranch.name}
+                          disabled={!editingBranch.name || (editingBranch.branch_role === 'satellite' && !editingBranch.parent_branch_id)}
                           className="mt-btn-gradient text-xs"
                         >Save</button>
                         <button onClick={() => setEditingBranch(null)} className="mt-btn-soft text-xs">Cancel</button>

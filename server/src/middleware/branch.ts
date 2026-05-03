@@ -6,9 +6,10 @@ declare global {
   namespace Express {
     interface Request {
       branchId?: number | null;
-      branchMode?: 'single' | 'specific' | 'consolidated';
+      branchMode?: 'single' | 'specific' | 'consolidated' | 'region';
       allowedBranchIds?: number[];
       isMultiBranch?: boolean;
+      regionCity?: string | null;
       streamId?: number | null;
       streamMode?: 'none' | 'specific' | 'all';
       allowedStreamIds?: number[];
@@ -92,6 +93,34 @@ export async function resolveBranch(req: Request, res: Response, next: NextFunct
       }
       req.branchMode = 'consolidated';
       req.branchId = null;
+    } else if (branchHeader.startsWith('region:')) {
+      // Hub-and-spoke regional rollup. Used for cities like Hyderabad where
+      // a central_store branch procures and transfers to user-visible
+      // satellites. The set expands to the satellites only — the central is
+      // back-office and excluded from sales/stock rollups (its purchases
+      // are still queried separately by the dashboard route).
+      const cityRaw = branchHeader.slice('region:'.length);
+      const city = decodeURIComponent(cityRaw).trim();
+      if (!city) {
+        return res.status(400).json({ error: 'Region requires a city' });
+      }
+      const regionBranches = platformDb.all(
+        `SELECT id FROM branches
+          WHERE client_id = ? AND is_active = 1
+            AND LOWER(city) = LOWER(?)
+            AND COALESCE(branch_role, 'standalone') = 'satellite'`,
+        req.clientId, city,
+      );
+      const regionIds = regionBranches.map((b: any) => b.id);
+      // Restrict to branches the caller can actually see.
+      const filtered = regionIds.filter(id => allowedBranchIds.includes(id));
+      if (filtered.length === 0) {
+        return res.status(403).json({ error: 'Access denied to this region' });
+      }
+      req.branchMode = 'region';
+      req.branchId = null;
+      req.allowedBranchIds = filtered;
+      req.regionCity = city;
     } else {
       // Specific branch requested
       const branchId = parseInt(branchHeader);
