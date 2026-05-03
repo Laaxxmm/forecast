@@ -47,46 +47,104 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
 
   const db = await getClientHelper(tenantSlug);
 
-  const usernameRow = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('oneglance_username', ctx));
-  const passwordRow = db.get("SELECT value FROM app_settings WHERE key = ?", branchSettingsKey('oneglance_password', ctx));
-
-  if (!usernameRow?.value || !passwordRow?.value) {
-    throw new Error('Oneglance credentials not configured');
-  }
-
-  const username = usernameRow.value;
-  const password = decrypt(passwordRow.value);
-
-  // Look up branch role so we can skip parsing reports that don't apply.
-  // - central_store branches don't sell retail → ignore sales / stock files
-  //   even if Playwright happened to download them.
-  // - satellite branches don't buy from external stockists → ignore purchase
-  //   files. (When the Playwright scraper is updated to skip the Purchase
-  //   tab for satellites, this guard becomes a defensive no-op.)
+  // Look up branch role + city + parent so we can:
+  // - dispatch between the existing emr7 scraper and the new emr25 / Hyderabad
+  //   scraper without touching the rest of the pipeline
+  // - resolve credentials from the parent Store when called from a satellite
+  //   (Hyderabad uses a single shared OneGlance login for the whole city)
+  // - skip parsing reports that don't apply to the branch role
   const platformDbForRole = await getPlatformHelper();
   const branchRow = branchId ? platformDbForRole.get(
-    'SELECT branch_role FROM branches WHERE id = ?',
+    `SELECT branch_role, parent_branch_id, city
+       FROM branches WHERE id = ?`,
     branchId,
   ) : null;
   const branchRole: 'standalone' | 'central_store' | 'satellite' =
     (branchRow?.branch_role === 'central_store' || branchRow?.branch_role === 'satellite')
       ? branchRow.branch_role
       : 'standalone';
+  const cityNorm = (branchRow?.city || '').toString().trim().toLowerCase();
+  const isHyderabad = cityNorm === 'hyderabad';
+  const useHyderabadScraper = isHyderabad && (branchRole === 'central_store' || branchRole === 'satellite');
 
-  const { syncOneglance } = await import('./oneglance-sync.js');
+  // Credential lookup. For Hyderabad satellites the credentials live on the
+  // parent central_store (one shared OneGlance login for the whole city);
+  // for everyone else, the calling branch's own settings.
+  const credentialBranchId =
+    branchRole === 'satellite' && branchRow?.parent_branch_id
+      ? branchRow.parent_branch_id
+      : branchId;
+  const credKey = (base: string) =>
+    !ctx.isMultiBranch || !credentialBranchId
+      ? base
+      : `branch_${credentialBranchId}__${base}`;
+  const usernameRow = db.get("SELECT value FROM app_settings WHERE key = ?", credKey('oneglance_username'));
+  const passwordRow = db.get("SELECT value FROM app_settings WHERE key = ?", credKey('oneglance_password'));
 
-  const result = await syncOneglance({
-    username,
-    password,
-    fromDate,
-    toDate,
-    reportType: reportType || 'both',
-    onProgress: progress,
-  });
+  if (!usernameRow?.value || !passwordRow?.value) {
+    if (branchRole === 'satellite') {
+      throw new Error(
+        'Oneglance credentials not configured. For Hyderabad satellites, save the credentials once on the central Store branch — they are shared automatically.',
+      );
+    }
+    throw new Error('Oneglance credentials not configured');
+  }
+
+  const username = usernameRow.value;
+  const password = decrypt(passwordRow.value);
+
+  // Existing-scraper return shape; the Hyderabad path produces a subset
+  // that we map onto this so the rest of the pipeline is unchanged.
+  type ResultShape = {
+    salesFile?: { filePath: string; filename: string };
+    purchaseFile?: { filePath: string; filename: string };
+    stockFile?: { filePath: string; filename: string };
+    stockError?: string;
+  };
+  let result: ResultShape;
+
+  if (useHyderabadScraper) {
+    // Decide which Hyderabad reports to download for this run. Only
+    // 'purchase' is implemented today (central_store only); the other
+    // role/report combinations get added one at a time.
+    const reports: Array<'purchase'> = [];
+    if (branchRole === 'central_store') {
+      if (reportType === 'purchase' || reportType === 'both' || reportType === 'all' || !reportType) {
+        reports.push('purchase');
+      }
+    }
+    // satellite + Hyderabad: no reports wired yet — return an empty run
+    // rather than fall through to the emr7 scraper which doesn't know
+    // the emr25 navigation.
+    if (reports.length === 0) {
+      progress('complete', 'No Hyderabad reports configured for this branch yet', 100);
+      return { totalRows: 0, importIds: {} };
+    }
+
+    const { syncOneglanceHyderabad } = await import('./oneglance-sync-hyderabad.js');
+    const hydResult = await syncOneglanceHyderabad({
+      username, password, fromDate, toDate,
+      reports,
+      onProgress: progress,
+    });
+    result = { purchaseFile: hydResult.purchaseFile };
+  } else {
+    const { syncOneglance } = await import('./oneglance-sync.js');
+    result = await syncOneglance({
+      username,
+      password,
+      fromDate,
+      toDate,
+      reportType: reportType || 'both',
+      onProgress: progress,
+    });
+  }
 
   // Drop downloaded files that don't apply to this branch's role. Keeps
   // the rest of the pipeline simple (each block already guards on the
-  // file being defined).
+  // file being defined). For the Hyderabad path this is mostly a no-op
+  // since the scraper only downloads role-appropriate files anyway, but
+  // it stays here as a defensive guard for the legacy emr7 path.
   if (branchRole === 'central_store') {
     result.salesFile = undefined;
     result.stockFile = undefined;
