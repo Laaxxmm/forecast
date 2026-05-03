@@ -121,51 +121,116 @@ async function navigateToStorePurchaseSalesReport(
 ): Promise<void> {
   // Step 1: click the Reports icon. The sidebar has a column of icons
   // (Home, Calendar, +Note, Lab, Pill, User, Tools/Reports, Building).
-  // The Reports icon sits 7th from top in the user's screenshots. We
-  // try in order: text "Reports", aria/title, then the 7th aside link.
+  // The Reports icon sits 7th from top in the user's screenshots, but
+  // OneGlance doesn't put text labels on the icons — we have to find
+  // the wrench/tools icon by other means.
   progress(opts, 'navigate', 'Opening Reports section...', 16);
   await debugScreenshot(page, '03a-before-reports-click');
 
+  // Diagnostic dump: every clickable element in the leftmost ~100px,
+  // sorted by Y position. Logged so we can debug structure mismatches
+  // without another round trip to the user.
+  const sidebarDump = await page.evaluate(() => {
+    const all = Array.from(document.querySelectorAll('a, button, [role="button"], [onclick]'));
+    return all.map((el, idx) => {
+      const r = el.getBoundingClientRect();
+      return {
+        idx,
+        tag: el.tagName,
+        x: Math.round(r.x), y: Math.round(r.y),
+        w: Math.round(r.width), h: Math.round(r.height),
+        text: (el.textContent || '').trim().slice(0, 40),
+        title: el.getAttribute('title') || '',
+        aria: el.getAttribute('aria-label') || '',
+        href: (el as HTMLAnchorElement).href || '',
+        onclick: el.getAttribute('onclick') || '',
+        cls: (el.className || '').toString().slice(0, 60),
+      };
+    }).filter(e => e.x < 120 && e.y > 0 && e.w > 10 && e.h > 10).sort((a, b) => a.y - b.y);
+  });
+  console.log('[oneglance-hyderabad] sidebar candidates (x<120):', JSON.stringify(sidebarDump, null, 2));
+
   let reportsOpened = false;
 
-  // Best path: a Playwright text locator. The header at the top of the
-  // page changes to "REPORTS" once the section is loaded.
-  const reportsTextLink = page.locator('a, button').filter({ hasText: /^\s*REPORTS?\s*$/i }).first();
-  if (await reportsTextLink.isVisible({ timeout: 2_500 }).catch(() => false)) {
-    await reportsTextLink.click({ timeout: 5_000 });
-    reportsOpened = true;
-  }
-
+  // Strategy 1: any element whose href / onclick / id mentions "report"
+  // or "utility" (the route name OneGlance uses for the reports page).
   if (!reportsOpened) {
-    // Fallback: aria/title attribute search
-    const ariaClicked = await page.evaluate(() => {
-      const candidates = document.querySelectorAll('a[title], a[aria-label], button[title], button[aria-label]');
-      for (const el of candidates) {
-        const label = (el.getAttribute('aria-label') || el.getAttribute('title') || '').toLowerCase();
-        if (label === 'reports' || label === 'report') {
+    const hrefClicked = await page.evaluate(() => {
+      const all = document.querySelectorAll('a, button, [role="button"], [onclick]');
+      for (const el of all) {
+        const href = ((el as HTMLAnchorElement).href || '').toLowerCase();
+        const onclick = (el.getAttribute('onclick') || '').toLowerCase();
+        const id = (el.id || '').toLowerCase();
+        if (href.match(/utility|report/i) || onclick.match(/utility|report/i) || id.match(/report/i)) {
           (el as HTMLElement).click();
-          return true;
+          return { href, onclick, id };
         }
       }
-      return false;
+      return null;
     });
-    reportsOpened = ariaClicked;
-  }
-
-  if (!reportsOpened) {
-    // Final fallback: click the 7th sidebar icon (the wrench/tools).
-    // OneGlance Hyderabad's sidebar order looks consistent across the
-    // user's screenshots so this is a safe last resort.
-    const sidebarIcon = page.locator('aside a, aside li, nav a, [class*="sidebar"] a').nth(6);
-    if (await sidebarIcon.isVisible({ timeout: 2_000 }).catch(() => false)) {
-      await sidebarIcon.click({ timeout: 5_000, force: true });
+    if (hrefClicked) {
+      console.log('[oneglance-hyderabad] clicked via href/onclick:', JSON.stringify(hrefClicked));
       reportsOpened = true;
     }
   }
 
+  // Strategy 2: aria/title attribute equals "reports" / "report"
+  if (!reportsOpened) {
+    const ariaClicked = await page.evaluate(() => {
+      const candidates = document.querySelectorAll('[title], [aria-label]');
+      for (const el of candidates) {
+        const label = (el.getAttribute('aria-label') || el.getAttribute('title') || '').toLowerCase();
+        if (label === 'reports' || label === 'report') {
+          (el as HTMLElement).click();
+          return label;
+        }
+      }
+      return null;
+    });
+    if (ariaClicked) {
+      console.log('[oneglance-hyderabad] clicked via aria/title:', ariaClicked);
+      reportsOpened = true;
+    }
+  }
+
+  // Strategy 3: visible "REPORTS" header anywhere on screen (some
+  // installs put the section name as a clickable breadcrumb chip).
+  if (!reportsOpened) {
+    const reportsTextLink = page.locator('a, button').filter({ hasText: /^\s*REPORTS?\s*$/i }).first();
+    if (await reportsTextLink.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await reportsTextLink.click({ timeout: 5_000 });
+      reportsOpened = true;
+    }
+  }
+
+  // Strategy 4: positional fallback. The user's screenshots show the
+  // sidebar icons in a fixed column on the very left (x ≈ 0–80) with
+  // 8 icons stacked vertically. Reports is the 7th. Click it by Y
+  // position — using the diagnostic dump above we already have the
+  // sorted list.
+  if (!reportsOpened && sidebarDump.length >= 7) {
+    const target = sidebarDump[6]; // 7th icon (0-indexed)
+    console.log('[oneglance-hyderabad] positional fallback — clicking idx 6:', JSON.stringify(target));
+    const handle = await page.evaluate((idx: number) => {
+      const all = Array.from(document.querySelectorAll('a, button, [role="button"], [onclick]'));
+      const filtered = all.map((el, i) => ({ el: el as HTMLElement, i, r: el.getBoundingClientRect() }))
+        .filter(e => e.r.x < 120 && e.r.y > 0 && e.r.width > 10 && e.r.height > 10)
+        .sort((a, b) => a.r.y - b.r.y);
+      const t = filtered[idx];
+      if (t) {
+        t.el.click();
+        return true;
+      }
+      return false;
+    }, 6);
+    if (handle) reportsOpened = true;
+  }
+
   if (!reportsOpened) {
     await debugScreenshot(page, '03b-FAILED-reports-icon-not-found');
-    throw new Error('Could not click the Reports icon in the left sidebar.');
+    throw new Error(
+      `Could not click the Reports icon in the left sidebar. Found ${sidebarDump.length} sidebar candidates — see server logs for the dump.`,
+    );
   }
 
   // Confirm the Reports view actually loaded by waiting for one of the
