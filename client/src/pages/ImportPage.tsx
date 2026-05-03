@@ -26,16 +26,26 @@ interface ImportLog {
 }
 
 // Each source advertises which branch_roles it applies to. Used to hide
-// inapplicable cards in hub-and-spoke setups (Hyderabad satellites have no
-// Purchase Report; central stores have no Sales/Stock Reports). 'standalone'
-// branches see the historical default set.
+// inapplicable cards in hub-and-spoke setups:
+//   - Healthplix / Turia are retail/clinic data — irrelevant for a back-
+//     office central_store that has no patient or consultancy footprint.
+//   - Sales / Stock are retail data — irrelevant for the central_store.
+//   - Purchase belongs to whoever buys from external stockists — that's the
+//     central_store in a hub-and-spoke city, the standalone branch
+//     elsewhere. Satellites never have direct purchases.
+//   - Stock Transfer is an inbound report (per OneGlance, generated at the
+//     receiving branch). The central_store has no inbound transfers and
+//     OneGlance doesn't expose a per-store outgoing report — the Store's
+//     outgoing flows are the union of all satellites' incoming, computed
+//     from the same `pharmacy_stock_transfers` rows. So the card only
+//     applies to satellites.
 const allSources: { key: Source; label: string; desc: string; icon: any; endpoint: string; integration: string; roles?: BranchRole[] }[] = [
-  { key: 'healthplix', label: 'Healthplix', desc: 'Clinic billing report', icon: Stethoscope, endpoint: '/import/healthplix', integration: 'healthplix' },
+  { key: 'healthplix', label: 'Healthplix', desc: 'Clinic billing report', icon: Stethoscope, endpoint: '/import/healthplix', integration: 'healthplix', roles: ['standalone', 'satellite'] },
   { key: 'oneglance-sales', label: 'Oneglance Sales', desc: 'Pharmacy sales report', icon: Pill, endpoint: '/import/oneglance-sales', integration: 'oneglance', roles: ['standalone', 'satellite'] },
   { key: 'oneglance-purchase', label: 'Oneglance Purchase', desc: 'Pharmacy purchase report', icon: ShoppingCart, endpoint: '/import/oneglance-purchase', integration: 'oneglance', roles: ['standalone', 'central_store'] },
   { key: 'oneglance-stock', label: 'Oneglance Stock', desc: 'Pharmacy stock snapshot', icon: Package, endpoint: '/import/oneglance-stock', integration: 'oneglance', roles: ['standalone', 'satellite'] },
-  { key: 'oneglance-transfer', label: 'Stock Transfer', desc: 'Inter-branch stock transfers', icon: ArrowLeftRight, endpoint: '/import/oneglance-transfer', integration: 'oneglance', roles: ['central_store', 'satellite'] },
-  { key: 'turia', label: 'Turia Invoices', desc: 'Consultancy invoice data', icon: Briefcase, endpoint: '/import/turia', integration: 'turia' },
+  { key: 'oneglance-transfer', label: 'Stock Transfer', desc: 'Inter-branch stock transfers', icon: ArrowLeftRight, endpoint: '/import/oneglance-transfer', integration: 'oneglance', roles: ['satellite'] },
+  { key: 'turia', label: 'Turia Invoices', desc: 'Consultancy invoice data', icon: Briefcase, endpoint: '/import/turia', integration: 'turia', roles: ['standalone', 'satellite'] },
 ];
 
 function fmtDate(d: Date): string {
