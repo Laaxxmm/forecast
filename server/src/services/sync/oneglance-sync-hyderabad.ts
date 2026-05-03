@@ -567,20 +567,63 @@ async function downloadStoreReport(
   await debugScreenshot(page, `09-report-loaded-${stepKey}`);
   progress(opts, stepKey, 'Report rendered', 65);
 
-  // Download the CSV. The header has csv + pdf buttons; we only want csv.
+  // Download the CSV. The button is `<button id="csvbtn">csv</button>` —
+  // we use the exact id selector to avoid matching any other "csv" text
+  // on the page. The click may deliver the CSV in three different ways:
+  //   1. Standard `download` event (Playwright's first-class case)
+  //   2. New tab via `window.open(...)` showing the CSV inline
+  //   3. Same-tab navigation to a CSV URL
+  // We listen for all three concurrently and take whichever fires first.
   progress(opts, stepKey, 'Downloading CSV...', 70);
-  const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
-  await page.locator(
-    'button:has-text("csv"), a:has-text("csv"), input[value="csv"]'
-  ).first().click({ timeout: TIMEOUT });
-  const download = await downloadPromise;
+  await page.locator('#csvbtn, button.uti_btn').first().waitFor({ state: 'visible', timeout: 30_000 });
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const filename = `oneglance-hyderabad-${type.toLowerCase()}-${timestamp}.csv`;
   const filePath = path.join(downloadDir, filename);
-  await download.saveAs(filePath);
-  progress(opts, stepKey, 'CSV downloaded', 80);
+
+  const context = page.context();
+  const downloadPromise = page.waitForEvent('download', { timeout: 90_000 }).catch(() => null);
+  const popupPromise = context.waitForEvent('page', { timeout: 90_000 }).catch(() => null);
+
+  await page.locator('#csvbtn').first().click({ timeout: TIMEOUT });
   await debugScreenshot(page, `10-after-csv-click-${stepKey}`);
+
+  // Race: whichever fires first wins. If both fail, throw with diagnostics.
+  const winner = await Promise.race([
+    downloadPromise.then(d => d ? { kind: 'download' as const, d } : null),
+    popupPromise.then(p => p ? { kind: 'popup' as const, p } : null),
+  ]);
+
+  if (winner?.kind === 'download') {
+    await winner.d.saveAs(filePath);
+    progress(opts, stepKey, 'CSV downloaded (file)', 80);
+  } else if (winner?.kind === 'popup') {
+    // OneGlance opened the CSV in a new tab. Read the popup's body text
+    // (the CSV content) and persist it ourselves.
+    const popup = winner.p;
+    try {
+      await popup.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => {});
+      const csvText = await popup.evaluate(() => document.body?.innerText || '');
+      if (!csvText || csvText.length < 50) {
+        await debugScreenshot(popup, `10b-popup-empty-${stepKey}`);
+        throw new Error(`CSV popup content was empty (length=${csvText?.length || 0})`);
+      }
+      fs.writeFileSync(filePath, csvText, 'utf-8');
+      progress(opts, stepKey, 'CSV downloaded (popup)', 80);
+    } finally {
+      await popup.close().catch(() => {});
+    }
+  } else {
+    // Neither event fired in 90 seconds. Cancel the still-pending
+    // promises and surface a clear diagnostic so we know what to look
+    // at in the next round.
+    await debugScreenshot(page, `10c-FAILED-no-download-event-${stepKey}`);
+    throw new Error(
+      `CSV download never fired (no 'download' event, no popup tab) within 90 seconds after clicking #csvbtn. ` +
+      `The button may use a different delivery mechanism (e.g. blob URL, fetch + manual save). ` +
+      `Inspect the Network tab on the next manual run to find the actual CSV request.`,
+    );
+  }
 
   return { filePath, filename };
 }
