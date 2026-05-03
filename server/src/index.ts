@@ -378,6 +378,48 @@ app.get('/api/debug/screenshots/:name', requireAuth, requireSuperAdmin, (req, re
   res.sendFile(filePath);
 });
 
+// ─── Hyderabad sync debug artefacts (traces, screenshots, network logs) ─────
+// Lets a superadmin download trace zips / screenshots / JSON network logs
+// captured during Hyderabad OneGlance sync runs without needing shell
+// access to the deploy host. Same security gate as /api/debug/screenshots.
+const hydDebugDir = path.join(process.env.DATA_DIR || (isProd ? '/data' : '.'), 'uploads', 'debug-hyderabad');
+app.get('/api/debug/hyderabad', requireAuth, requireSuperAdmin, (_req, res) => {
+  // Lists the latest few artefacts in the Hyderabad debug directory
+  // (top-level + the trace/ subfolder). Returns relative paths the
+  // /api/debug/hyderabad/file route accepts.
+  const out: { name: string; size: number; mtime: string }[] = [];
+  function walk(dir: string, prefix: string) {
+    if (!fs.existsSync(dir)) return;
+    for (const f of fs.readdirSync(dir)) {
+      const p = path.join(dir, f);
+      const stat = fs.statSync(p);
+      if (stat.isDirectory()) {
+        if (f === 'video') continue; // skip noisy video dir
+        walk(p, prefix ? `${prefix}/${f}` : f);
+      } else {
+        out.push({ name: prefix ? `${prefix}/${f}` : f, size: stat.size, mtime: stat.mtime.toISOString() });
+      }
+    }
+  }
+  walk(hydDebugDir, '');
+  out.sort((a, b) => b.mtime.localeCompare(a.mtime));
+  res.json(out.slice(0, 50));
+});
+app.get('/api/debug/hyderabad/file', requireAuth, requireSuperAdmin, (req, res) => {
+  // ?path=trace/trace-...zip   OR  ?path=10-after-csv-click-sales.png
+  const rel = String(req.query.path || '');
+  // Reject path traversal: must not contain `..`, must be relative.
+  if (!rel || rel.includes('..') || rel.startsWith('/') || rel.startsWith('\\')) {
+    return res.status(400).send('Invalid path');
+  }
+  const filePath = path.join(hydDebugDir, rel);
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    return res.status(404).send('Not found');
+  }
+  // Force a download with a sensible filename rather than inline display.
+  res.download(filePath, path.basename(filePath));
+});
+
 // ─── Debug: DB table status (for diagnosing data loss) ──────────────────────
 app.get('/api/debug/db-status', requireAuth, requireSuperAdmin, async (_req, res) => {
   try {
