@@ -722,6 +722,16 @@ export async function syncOneglanceHyderabad(
   const wantVideo = process.env.ONEGLANCE_HYDERABAD_VIDEO === '1';
   if (wantVideo && !fs.existsSync(videoDir)) fs.mkdirSync(videoDir, { recursive: true });
 
+  // Tracing is opt-in too, but doesn't need ffmpeg — it's just
+  // screenshots + DOM snapshots packaged as a zip. Set
+  // ONEGLANCE_HYDERABAD_TRACE=1 to enable. The zip can be replayed
+  // locally with `npx playwright show-trace <path-to-trace.zip>`,
+  // which opens an interactive timeline + DOM snapshots + network +
+  // console.
+  const traceDir = path.join(DATA_DIR, 'uploads', 'debug-hyderabad', 'trace');
+  const wantTrace = process.env.ONEGLANCE_HYDERABAD_TRACE === '1';
+  if (wantTrace && !fs.existsSync(traceDir)) fs.mkdirSync(traceDir, { recursive: true });
+
   const context: BrowserContext = await browser.newContext({
     acceptDownloads: true,
     viewport: { width: 1400, height: 900 },
@@ -732,6 +742,17 @@ export async function syncOneglanceHyderabad(
       : {}),
   });
   const page = await context.newPage();
+
+  // Start tracing immediately after newPage so the trace captures the
+  // full run including login. tracing.stop is in the finally block.
+  if (wantTrace) {
+    try {
+      await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+      console.log('[oneglance-hyderabad] Tracing started');
+    } catch (e: any) {
+      console.warn('[oneglance-hyderabad] tracing.start failed:', e?.message);
+    }
+  }
 
   // tsx/esbuild emits `__name(fn, "name")` decorations to preserve
   // function names in stack traces. Those references get serialized
@@ -776,6 +797,20 @@ export async function syncOneglanceHyderabad(
 
     return result;
   } finally {
+    // Stop tracing FIRST — must happen before context.close, otherwise
+    // the trace zip is incomplete or never written.
+    if (wantTrace) {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const tracePath = path.join(traceDir, `trace-${ts}.zip`);
+      try {
+        await context.tracing.stop({ path: tracePath });
+        console.log(`[oneglance-hyderabad] Trace saved: ${tracePath}`);
+        console.log(`[oneglance-hyderabad] To view: npx playwright show-trace ${tracePath}`);
+      } catch (e: any) {
+        console.warn('[oneglance-hyderabad] tracing.stop failed:', e?.message);
+      }
+    }
+
     // Video path is only meaningful when ONEGLANCE_HYDERABAD_VIDEO=1
     // enabled recording — page.video() returns undefined otherwise.
     let videoSrc: string | null = null;
