@@ -587,7 +587,30 @@ async function downloadStoreReport(
   const downloadPromise = page.waitForEvent('download', { timeout: 90_000 }).catch(() => null);
   const popupPromise = context.waitForEvent('page', { timeout: 90_000 }).catch(() => null);
 
-  await page.locator('#csvbtn').first().click({ timeout: TIMEOUT, force: true });
+  // Bypass Playwright's actionability checks entirely. The csv button
+  // is sometimes flagged as "not visible" by Playwright's heuristics
+  // even though the user can see and click it manually (likely due to
+  // ancestor containers with intermediate styles, scroll-into-view
+  // races, or duplicate ids). Calling .click() directly on the DOM
+  // node from inside page.evaluate fires the same onclick handler
+  // OneGlance attached, without going through Playwright's gates.
+  const clicked = await page.evaluate(() => {
+    const btn = document.querySelector('#csvbtn') as HTMLButtonElement | null;
+    if (!btn) return { ok: false, reason: 'csvbtn-not-found' as const };
+    // Try click() first (fires onclick + jQuery handlers), and as a
+    // belt-and-braces also dispatch a synthetic MouseEvent in case
+    // the page wires its handler via addEventListener('click').
+    try { btn.click(); } catch {}
+    try { btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); } catch {}
+    if ((window as any).jQuery) {
+      try { (window as any).jQuery(btn).trigger('click'); } catch {}
+    }
+    return { ok: true, reason: 'fired' as const };
+  });
+  if (!clicked.ok) {
+    await debugScreenshot(page, `10b-FAILED-csvbtn-not-found-${stepKey}`);
+    throw new Error(`Could not click the csv button: ${clicked.reason}`);
+  }
   await debugScreenshot(page, `10-after-csv-click-${stepKey}`);
 
   // Race: whichever fires first wins. If both fail, throw with diagnostics.
