@@ -246,21 +246,22 @@ export default function ImportPage() {
     return true;
   });
 
-  // Auto Sync source visibility — Healthplix (clinic) and Turia
-  // (consultancy) only get hidden on a central_store branch, which is a
-  // back-office procurement entity with no clinic / consultancy ops.
-  // Satellites DO have clinics (and may have consultancy), so they keep
-  // all sync sources just like standalone branches.
+  // Auto Sync source visibility:
+  // - Healthplix (clinic): hidden on central_store (back-office, no
+  //   clinic), shown on satellite + standalone.
+  // - Turia (consultancy): hidden on both central_store AND satellite
+  //   for the Hyderabad model — Turia isn't used at the satellites.
+  //   Standalone branches keep it.
   const allowHpInSync = currentBranchRole !== 'central_store';
-  const allowTuriaInSync = currentBranchRole !== 'central_store';
+  const allowTuriaInSync = currentBranchRole === 'standalone';
   // The OneGlance "Report" type buttons need to match what's actually
   // implemented for the current role. Central stores only download
   // Purchase today; satellites have nothing wired yet (Sales / Stock /
   // Transfer land in subsequent rounds). Standalone uses the historical
   // Sales+Purchase / Sales / Purchase / Stock / All set.
-  const allowedOgReports: Array<'both' | 'sales' | 'purchase' | 'stock' | 'all'> =
+  const allowedOgReports: Array<'both' | 'sales' | 'purchase' | 'stock' | 'transfer' | 'all'> =
     currentBranchRole === 'central_store' ? ['purchase']
-      : currentBranchRole === 'satellite' ? ['sales']  // Stock / Transfer at satellites — wired in subsequent rounds
+      : currentBranchRole === 'satellite' ? ['sales', 'stock', 'transfer']
       : ['both', 'sales', 'purchase', 'stock', 'all'];
   // The Auto-Sync defaults useEffect that auto-corrects `syncSource` and
   // `ogReportType` when the role-aware allow lists change is declared
@@ -277,7 +278,7 @@ export default function ImportPage() {
   const [hasHpCreds, setHasHpCreds] = useState<boolean | null>(null);
   const [hasOgCreds, setHasOgCreds] = useState<boolean | null>(null);
   const [hasTuriaCreds, setHasTuriaCreds] = useState<boolean | null>(null);
-  const [ogReportType, setOgReportType] = useState<'sales' | 'purchase' | 'stock' | 'both' | 'all'>('both');
+  const [ogReportType, setOgReportType] = useState<'sales' | 'purchase' | 'stock' | 'transfer' | 'both' | 'all'>('both');
   const [turiaOtp, setTuriaOtp] = useState('');
   const [otpSubmitting, setOtpSubmitting] = useState(false);
   const [turiaFY, setTuriaFY] = useState('2025-26');
@@ -295,7 +296,7 @@ export default function ImportPage() {
   useEffect(() => {
     if (syncSource === 'healthplix' && !allowHpInSync && showOgSync) setSyncSource('oneglance');
     else if (syncSource === 'turia' && !allowTuriaInSync && showOgSync) setSyncSource('oneglance');
-    if (!allowedOgReports.includes(ogReportType)) setOgReportType(allowedOgReports[0] || 'purchase');
+    if (!allowedOgReports.includes(ogReportType)) setOgReportType(allowedOgReports[0] || 'sales');
   }, [allowHpInSync, allowTuriaInSync, allowedOgReports.join(','), syncSource, ogReportType, showOgSync]);
 
   // Sync Tracker state
@@ -667,6 +668,7 @@ export default function ImportPage() {
                     { key: 'sales' as const, label: 'Sales' },
                     { key: 'purchase' as const, label: 'Purchase' },
                     { key: 'stock' as const, label: 'Stock' },
+                    { key: 'transfer' as const, label: 'Stock Transfer' },
                     { key: 'all' as const, label: 'All' },
                   ]).filter(rt => allowedOgReports.includes(rt.key)).map(rt => {
                     const active = ogReportType === rt.key;
@@ -694,6 +696,7 @@ export default function ImportPage() {
                       if (ogReportType === 'stock') return s.key !== 'sales' && s.key !== 'purchase';
                       if (ogReportType === 'sales') return s.key !== 'purchase' && s.key !== 'stock';
                       if (ogReportType === 'purchase') return s.key !== 'sales' && s.key !== 'stock';
+                      if (ogReportType === 'transfer') return s.key !== 'sales' && s.key !== 'purchase' && s.key !== 'stock';
                       return true;
                     })
                   }

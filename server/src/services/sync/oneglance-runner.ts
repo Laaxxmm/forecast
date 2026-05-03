@@ -23,7 +23,7 @@ export interface OneglanceRunOpts {
   branchId: number | null;
   fromDate: string;
   toDate: string;
-  reportType?: 'sales' | 'purchase' | 'stock' | 'both' | 'all';
+  reportType?: 'sales' | 'purchase' | 'stock' | 'transfer' | 'both' | 'all';
   trigger: 'manual' | 'auto-schedule' | 'auto-catchup' | 'auto-test';
   onProgress?: ProgressFn;
 }
@@ -111,7 +111,21 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
     // Coverage today:
     //   central_store → Purchase
     //   satellite     → Sales
-    // (Stock + Stock Transfer at satellites land in subsequent rounds.)
+    // (Stock + Stock Transfer at satellites are surfaced as buttons in
+    // the Auto Sync UI but the Playwright is not yet wired — we throw a
+    // clear actionable error instead of silently no-op'ing so the user
+    // knows what's missing.)
+    if (branchRole === 'satellite' && reportType === 'stock') {
+      throw new Error(
+        'Stock Report auto-sync for Hyderabad satellites is not yet wired. Walk Claude through the OneGlance navigation for the Stock Report and it will be enabled in the next round.',
+      );
+    }
+    if (branchRole === 'satellite' && reportType === 'transfer') {
+      throw new Error(
+        'Stock Transfer auto-sync for Hyderabad satellites is not yet wired. Walk Claude through the OneGlance navigation for Stock Transfer Details and it will be enabled in the next round.',
+      );
+    }
+
     const reports: Array<'purchase' | 'sales'> = [];
     if (branchRole === 'central_store') {
       if (reportType === 'purchase' || reportType === 'both' || reportType === 'all' || !reportType) {
@@ -144,13 +158,21 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
       salesFile: hydResult.salesFile,
     };
   } else {
+    if (reportType === 'transfer') {
+      // The legacy emr7 scraper doesn't know about Stock Transfer (it's
+      // a Hyderabad-only concept). The UI only exposes the 'transfer'
+      // button on Hyderabad satellites, so reaching this branch with
+      // reportType='transfer' would be a programming error elsewhere.
+      throw new Error('Stock Transfer sync is only available for Hyderabad satellite branches.');
+    }
+    const legacyReportType: 'sales' | 'purchase' | 'stock' | 'both' | 'all' = reportType || 'both';
     const { syncOneglance } = await import('./oneglance-sync.js');
     result = await syncOneglance({
       username,
       password,
       fromDate,
       toDate,
-      reportType: reportType || 'both',
+      reportType: legacyReportType,
       onProgress: progress,
     });
   }
