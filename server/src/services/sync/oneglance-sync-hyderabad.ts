@@ -587,6 +587,24 @@ async function downloadStoreReport(
   const downloadPromise = page.waitForEvent('download', { timeout: 90_000 }).catch(() => null);
   const popupPromise = context.waitForEvent('page', { timeout: 90_000 }).catch(() => null);
 
+  // Capture every network request that fires while we're trying to
+  // download. If the csv button silently does nothing OR makes a
+  // background fetch that doesn't trigger download/popup, this log
+  // tells us what URL the page actually hit so we can adapt.
+  const networkLog: Array<{ method: string; url: string; status?: number; ts: number }> = [];
+  const startTs = Date.now();
+  const onRequest = (req: any) => {
+    const url = req.url();
+    if (url.startsWith('data:') || url.includes('chrome-extension')) return;
+    networkLog.push({ method: req.method(), url, ts: Date.now() - startTs });
+  };
+  const onResponse = (resp: any) => {
+    const entry = networkLog.find(e => e.url === resp.url() && e.status === undefined);
+    if (entry) entry.status = resp.status();
+  };
+  page.on('request', onRequest);
+  page.on('response', onResponse);
+
   // Bypass Playwright's actionability checks entirely. The csv button
   // is sometimes flagged as "not visible" by Playwright's heuristics
   // even though the user can see and click it manually (likely due to
@@ -639,16 +657,31 @@ async function downloadStoreReport(
       await popup.close().catch(() => {});
     }
   } else {
-    // Neither event fired in 90 seconds. Cancel the still-pending
-    // promises and surface a clear diagnostic so we know what to look
-    // at in the next round.
+    // Neither event fired in 90 seconds. Surface every network request
+    // that fired while we were waiting — that tells us what URL the
+    // button DID hit (if any) and lets us adapt.
     await debugScreenshot(page, `10c-FAILED-no-download-event-${stepKey}`);
+    page.off('request', onRequest);
+    page.off('response', onResponse);
+
+    // Persist the network log to a file alongside the debug screenshots
+    // so the user can share it without copy-pasting from the console.
+    const logPath = path.join(DEBUG_DIR, `10d-network-after-csv-click-${stepKey}.json`);
+    try {
+      fs.writeFileSync(logPath, JSON.stringify(networkLog, null, 2));
+    } catch {}
+    console.log(`[oneglance-hyderabad] No download/popup fired. Network log saved to ${logPath}`);
+    console.log(`[oneglance-hyderabad] Network log (${networkLog.length} entries):`);
+    console.log(JSON.stringify(networkLog.slice(0, 30), null, 2));
+
     throw new Error(
-      `CSV download never fired (no 'download' event, no popup tab) within 90 seconds after clicking #csvbtn. ` +
-      `The button may use a different delivery mechanism (e.g. blob URL, fetch + manual save). ` +
-      `Inspect the Network tab on the next manual run to find the actual CSV request.`,
+      `CSV download never fired within 90s. The csv button click was dispatched but produced no download event AND no popup tab. ` +
+      `Network log saved to ${logPath} (${networkLog.length} requests captured). ` +
+      `Video of the run is saved under data/uploads/debug-hyderabad/video/.`,
     );
   }
+  page.off('request', onRequest);
+  page.off('response', onResponse);
 
   return { filePath, filename };
 }
@@ -680,11 +713,21 @@ export async function syncOneglanceHyderabad(
       ] : []),
     ],
   });
+  // Video directory for diagnostic recordings of Hyderabad scrape runs.
+  // Keeps the last few runs so the user can watch back what happened
+  // when a sync fails. .webm is playable in any modern browser / VLC.
+  const videoDir = path.join(DATA_DIR, 'uploads', 'debug-hyderabad', 'video');
+  if (!fs.existsSync(videoDir)) fs.mkdirSync(videoDir, { recursive: true });
+
   const context: BrowserContext = await browser.newContext({
     acceptDownloads: true,
     viewport: { width: 1400, height: 900 },
     geolocation: { latitude: 17.385, longitude: 78.4867 }, // Hyderabad
     permissions: ['geolocation'],
+    recordVideo: {
+      dir: videoDir,
+      size: { width: 1400, height: 900 },
+    },
   });
   const page = await context.newPage();
 
@@ -731,7 +774,17 @@ export async function syncOneglanceHyderabad(
 
     return result;
   } finally {
+    // Capture the video path BEFORE closing the context (after close it
+    // becomes inaccessible). Then close so the file is flushed to disk
+    // and rename to a predictable name the user can find.
+    let videoSrc: string | null = null;
+    try { videoSrc = await page.video()?.path() || null; } catch {}
     await context.close().catch(() => {});
     await browser.close().catch(() => {});
+    if (videoSrc && fs.existsSync(videoSrc)) {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const target = path.join(videoDir, `sync-${ts}.webm`);
+      try { fs.renameSync(videoSrc, target); console.log(`[oneglance-hyderabad] Video saved: ${target}`); } catch {}
+    }
   }
 }
