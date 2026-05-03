@@ -405,17 +405,18 @@ async function downloadStoreReport(
     // attribute matching "center" so we hunt for any element whose
     // visible text equals "Center" or "Center:" and grab the nearest
     // input sibling/descendant.
+    // NOTE: Everything inside this evaluate() runs in the browser
+    // context. Avoid named function declarations — esbuild/tsx wraps
+    // them with `__name(fn, "...")` decorations that don't exist in
+    // the browser, throwing `ReferenceError: __name is not defined`.
+    // Use only arrow expressions, ternaries, and inline lookups.
     const tagged = await page.evaluate(() => {
-      // Strategy A: clear any prior tag
+      // Clear any prior tag so a re-run doesn't pick up the previous match.
       document.querySelectorAll('[data-mt-center="1"]').forEach(el => el.removeAttribute('data-mt-center'));
 
-      // Strategy B: search common label-bearing tags for exact "Center"
-      // text, then find the closest input.
-      const labelSelectors = ['label', 'th', 'td', 'dt', 'span', 'div', 'p'];
-      const labelEls = document.querySelectorAll(labelSelectors.join(','));
-
-      function findNearbyInput(el: Element): HTMLInputElement | null {
-        // Look at right siblings of `el` and their input descendants.
+      // Inline helper: walk siblings + ancestors looking for the nearest
+      // text/search input. Arrow expression to avoid the __name decoration.
+      const findNearbyInput = (el: Element): HTMLInputElement | null => {
         let sib = el.nextElementSibling;
         let hops = 0;
         while (sib && hops < 5) {
@@ -425,7 +426,6 @@ async function downloadStoreReport(
           sib = sib.nextElementSibling;
           hops++;
         }
-        // If not in a sibling, try the parent's right siblings (table-row case).
         let p: Element | null = el.parentElement;
         for (let depth = 0; depth < 3 && p; depth++) {
           let sib2 = p.nextElementSibling;
@@ -438,11 +438,14 @@ async function downloadStoreReport(
           p = p.parentElement;
         }
         return null;
-      }
+      };
 
+      // Strategy A: label-text match. Find any label / th / td / dt /
+      // span / div / p whose own text (children's text only, not nested
+      // labels) is "Center" or "Center:".
+      const labelSelectors = ['label', 'th', 'td', 'dt', 'span', 'div', 'p'];
+      const labelEls = document.querySelectorAll(labelSelectors.join(','));
       for (const el of labelEls) {
-        // Use ownText (not textContent) so we don't match parent containers
-        // that include "Center" via a child label.
         const direct = Array.from(el.childNodes)
           .filter(n => n.nodeType === Node.TEXT_NODE)
           .map(n => (n.textContent || '').trim())
@@ -456,9 +459,8 @@ async function downloadStoreReport(
         }
       }
 
-      // Strategy C: any input/textarea whose attributes mention "center"
-      // (case-insensitive). Catches forms where labels are wired via
-      // for/id or aria-labelledby that we haven't traced.
+      // Strategy B: any input/textarea whose attributes mention "center"
+      // (name/id/placeholder/aria-label/data-name).
       const inputs = document.querySelectorAll<HTMLInputElement>('input, textarea');
       for (const inp of inputs) {
         const blob = `${inp.name || ''} ${inp.id || ''} ${inp.placeholder || ''} ${inp.getAttribute('aria-label') || ''} ${inp.getAttribute('data-name') || ''}`.toLowerCase();
@@ -468,9 +470,9 @@ async function downloadStoreReport(
         }
       }
 
-      // Strategy D: positional — last text input in the filter form,
-      // since "Center" is the bottom-most filter field per the user's
-      // screenshots (above the Detailed/Drug wise/Batch wise buttons).
+      // Strategy C: positional — the input vertically closest above the
+      // "Detailed" button. Per the user's screenshot, Center is the
+      // bottom-most filter field.
       const filterInputs = Array.from(document.querySelectorAll<HTMLInputElement>(
         'input[type="text"], input:not([type]), input[type="search"]'
       )).filter(el => {
@@ -478,7 +480,6 @@ async function downloadStoreReport(
         return r.width > 50 && r.height > 10 && el.offsetParent !== null;
       });
       if (filterInputs.length > 0) {
-        // Prefer the input closest above the Detailed button if we can find it.
         const detailedBtn = Array.from(document.querySelectorAll('button, input'))
           .find(el => /^\s*Detailed\s*$/i.test((el.textContent || '').trim()) || (el as HTMLInputElement).value === 'Detailed');
         if (detailedBtn) {
@@ -492,7 +493,6 @@ async function downloadStoreReport(
             return { method: 'positional-above-detailed', tag: 'INPUT' };
           }
         }
-        // Fallback: take the last filter input in document order.
         const last = filterInputs[filterInputs.length - 1];
         last.setAttribute('data-mt-center', '1');
         return { method: 'positional-last', tag: 'INPUT' };
