@@ -386,7 +386,7 @@ app.get('/api/debug/screenshots/:name', requireAuth, requireSuperAdmin, (req, re
 // their own sync should be able to fetch the trace from their own
 // tenant's debug directory).
 const hydDebugDir = path.join(process.env.DATA_DIR || (isProd ? '/data' : '.'), 'uploads', 'debug-hyderabad');
-app.get('/api/debug/hyderabad', requireAuth, requireAdmin, (_req, res) => {
+app.get('/api/debug/hyderabad', requireAuth, requireRole('admin', 'operational_head'), (_req, res) => {
   // Lists the latest few artefacts in the Hyderabad debug directory
   // (top-level + the trace/ subfolder). Returns relative paths the
   // /api/debug/hyderabad/file route accepts.
@@ -408,7 +408,7 @@ app.get('/api/debug/hyderabad', requireAuth, requireAdmin, (_req, res) => {
   out.sort((a, b) => b.mtime.localeCompare(a.mtime));
   res.json(out.slice(0, 50));
 });
-app.get('/api/debug/hyderabad/file', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/debug/hyderabad/file', requireAuth, requireRole('admin', 'operational_head'), (req, res) => {
   // ?path=trace/trace-...zip   OR  ?path=10-after-csv-click-sales.png
   const rel = String(req.query.path || '');
   // Reject path traversal: must not contain `..`, must be relative.
