@@ -12,6 +12,7 @@ import { getPlatformHelper } from '../../db/platform-connection.js';
 import { parseOneglanceSales } from '../parsers/oneglance-sales.js';
 import { parseOneglancePurchase } from '../parsers/oneglance-purchase.js';
 import { parseOneglanceStock } from '../parsers/oneglance-stock.js';
+import { recomputeBranchCogs } from '../pharmacy/cogs.js';
 
 export type ProgressFn = (step: string, message: string, pct: number) => void;
 
@@ -56,6 +57,22 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
   const username = usernameRow.value;
   const password = decrypt(passwordRow.value);
 
+  // Look up branch role so we can skip parsing reports that don't apply.
+  // - central_store branches don't sell retail → ignore sales / stock files
+  //   even if Playwright happened to download them.
+  // - satellite branches don't buy from external stockists → ignore purchase
+  //   files. (When the Playwright scraper is updated to skip the Purchase
+  //   tab for satellites, this guard becomes a defensive no-op.)
+  const platformDbForRole = await getPlatformHelper();
+  const branchRow = branchId ? platformDbForRole.get(
+    'SELECT branch_role FROM branches WHERE id = ?',
+    branchId,
+  ) : null;
+  const branchRole: 'standalone' | 'central_store' | 'satellite' =
+    (branchRow?.branch_role === 'central_store' || branchRow?.branch_role === 'satellite')
+      ? branchRow.branch_role
+      : 'standalone';
+
   const { syncOneglance } = await import('./oneglance-sync.js');
 
   const result = await syncOneglance({
@@ -66,6 +83,16 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
     reportType: reportType || 'both',
     onProgress: progress,
   });
+
+  // Drop downloaded files that don't apply to this branch's role. Keeps
+  // the rest of the pipeline simple (each block already guards on the
+  // file being defined).
+  if (branchRole === 'central_store') {
+    result.salesFile = undefined;
+    result.stockFile = undefined;
+  } else if (branchRole === 'satellite') {
+    result.purchaseFile = undefined;
+  }
 
   progress('parsing', 'Parsing downloaded reports...', 85);
 
@@ -251,6 +278,16 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
       db.endBatch();
     } catch (e) { db.rollbackBatch(); throw e; }
     totalRows += rows.length;
+  }
+
+  // Refresh per-branch COGS cache after any pharmacy import (sales or
+  // purchase). For Hyderabad satellites this also picks up any prior
+  // stock-transfer rows we already have on file. Best-effort — failures
+  // here shouldn't block the sync.
+  try {
+    await recomputeBranchCogs(db, branchId);
+  } catch (e: any) {
+    console.warn('[oneglance-runner] COGS recompute skipped:', e?.message);
   }
 
   return { totalRows, importIds, stockError: result.stockError };

@@ -9,8 +9,9 @@
 export interface BranchContext {
   isMultiBranch?: boolean;
   branchId?: number | null;
-  branchMode?: 'single' | 'specific' | 'consolidated';
+  branchMode?: 'single' | 'specific' | 'consolidated' | 'region';
   allowedBranchIds?: number[];
+  regionCity?: string | null;
   streamMode?: 'none' | 'specific' | 'all';
   streamId?: number | null;
 }
@@ -53,7 +54,10 @@ export function branchFilter(
       : { where: ` AND (${col} = ? OR ${col} IS NULL)`, params: [ctx.branchId] };
   }
 
-  if (ctx.branchMode === 'consolidated' && ctx.allowedBranchIds?.length) {
+  if ((ctx.branchMode === 'consolidated' || ctx.branchMode === 'region') && ctx.allowedBranchIds?.length) {
+    // Region mode reuses the consolidated IN-list path. The middleware has
+    // already narrowed allowedBranchIds to the satellite set for the chosen
+    // city, so the filter just needs to pass that set into SQL.
     const placeholders = ctx.allowedBranchIds.map(() => '?').join(',');
     return strict
       ? { where: ` AND ${col} IN (${placeholders})`, params: [...ctx.allowedBranchIds] }

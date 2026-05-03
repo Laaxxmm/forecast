@@ -61,6 +61,7 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
   const [clientLogo, setClientLogo] = useState<string | null>(null);
 
   const [branches, setBranches] = useState<any[]>([]);
+  const [regions, setRegions] = useState<{ city: string; key: string; label: string }[]>([]);
   const [canViewConsolidated, setCanViewConsolidated] = useState(false);
   const [selectedBranchId, setSelectedBranchId] = useState<string>(localStorage.getItem('branch_id') || 'all');
   const [showBranchDropdown, setShowBranchDropdown] = useState(false);
@@ -104,7 +105,16 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
     if (!isMultiBranch || (isSuperAdmin && isOwner)) return;
     api.get('/branches').then(res => {
       if (res.data.isMultiBranch) {
-        setBranches(res.data.branches || []);
+        // Hide back-office entities (e.g. the Hyderabad central Store) from
+        // the user-facing dropdown. Admins still see them when configuring,
+        // but the day-to-day user picks from retail branches + regional
+        // rollups only.
+        const isAdmin = isSuperAdmin || userRole === 'admin';
+        const visible = (res.data.branches || []).filter((b: any) =>
+          isAdmin ? true : (b.is_user_visible !== 0 && b.is_user_visible !== false),
+        );
+        setBranches(visible);
+        setRegions(res.data.regions || []);
         setCanViewConsolidated(res.data.canViewConsolidated);
         // Auto-select first branch if none selected
         if (!localStorage.getItem('branch_id') && res.data.branches?.length > 0) {
@@ -134,12 +144,19 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
     setSelectedBranchId(id);
     localStorage.setItem('branch_id', id);
     localStorage.setItem('branch_name', name);
-    // Persist state / city alongside branch_name so report headers don't have
-    // to re-fetch them. Look up the full branch record from the in-memory list
-    // populated by /api/branches (the dropdown user just clicked from).
-    const branch = branches.find(b => String(b.id) === String(id));
-    if (branch?.state) localStorage.setItem('branch_state', branch.state); else localStorage.removeItem('branch_state');
-    if (branch?.city) localStorage.setItem('branch_city', branch.city); else localStorage.removeItem('branch_city');
+    // Region rollup picks (e.g. "region:Hyderabad") aren't a single branch —
+    // clear branch_state / branch_city so report headers don't display the
+    // last-picked branch's location for the regional view. For specific
+    // branch picks, keep populating those.
+    if (id.startsWith('region:')) {
+      const region = regions.find(r => r.key === id);
+      if (region?.city) localStorage.setItem('branch_city', region.city); else localStorage.removeItem('branch_city');
+      localStorage.removeItem('branch_state');
+    } else {
+      const branch = branches.find(b => String(b.id) === String(id));
+      if (branch?.state) localStorage.setItem('branch_state', branch.state); else localStorage.removeItem('branch_state');
+      if (branch?.city) localStorage.setItem('branch_city', branch.city); else localStorage.removeItem('branch_city');
+    }
     // Reset stream when branch changes
     localStorage.removeItem('stream_id');
     localStorage.removeItem('stream_name');
@@ -209,7 +226,12 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
 
   const selectedBranchName = selectedBranchId === 'all'
     ? 'All Branches'
-    : branches.find(b => String(b.id) === selectedBranchId)?.name || localStorage.getItem('branch_name') || 'Branch';
+    : selectedBranchId.startsWith('region:')
+      ? (regions.find(r => r.key === selectedBranchId)?.label
+          || `${selectedBranchId.slice('region:'.length)} (consolidated)`)
+      : branches.find(b => String(b.id) === selectedBranchId)?.name
+        || localStorage.getItem('branch_name')
+        || 'Branch';
 
   const handleLogout = async () => {
     await api.post('/auth/logout').catch(() => {});
@@ -474,7 +496,14 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
                   </button>
                 )}
                 {(() => {
-                  // Group branches by state
+                  // Build a region lookup so we can render the consolidated
+                  // entry above the city's branch list.
+                  const regionByCity = new Map<string, { key: string; label: string }>();
+                  for (const r of regions) regionByCity.set(r.city.toLowerCase(), r);
+
+                  // Group branches by state. Within each state, sub-group by
+                  // city so a region rollup row can be rendered directly above
+                  // its city's branches.
                   const states = new Map<string, any[]>();
                   for (const b of branches) {
                     const st = b.state || '';
@@ -483,37 +512,69 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
                   }
                   const stateEntries = Array.from(states.entries());
                   const hasMultipleStates = stateEntries.filter(([s]) => s).length > 1;
-                  return stateEntries.map(([state, stateBranches]) => (
-                    <div key={state || '__none'}>
-                      {hasMultipleStates && state && (
-                        <div
-                          className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider"
-                          style={{ color: 'var(--mt-text-faint)' }}
-                        >
-                          {state}
-                        </div>
-                      )}
-                      {stateBranches.map((branch: any) => {
-                        const isActive = selectedBranchId === String(branch.id);
-                        return (
-                          <button
-                            key={branch.id}
-                            onClick={() => selectBranch(String(branch.id), branch.name)}
-                            className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors ${hasMultipleStates && state ? 'pl-5' : ''}`}
-                            style={{
-                              color: isActive ? 'var(--mt-accent-text)' : 'var(--mt-text-muted)',
-                              background: isActive ? 'var(--mt-accent-soft)' : 'transparent',
-                            }}
+                  return stateEntries.map(([state, stateBranches]) => {
+                    // Sub-group by city within the state.
+                    const cities = new Map<string, any[]>();
+                    for (const b of stateBranches) {
+                      const c = (b.city || '').trim();
+                      if (!cities.has(c)) cities.set(c, []);
+                      cities.get(c)!.push(b);
+                    }
+                    return (
+                      <div key={state || '__none'}>
+                        {hasMultipleStates && state && (
+                          <div
+                            className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider"
+                            style={{ color: 'var(--mt-text-faint)' }}
                           >
-                            <span>{branch.name}</span>
-                            {branch.city && (
-                              <span className="ml-1" style={{ color: 'var(--mt-text-faint)' }}>· {branch.city}</span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ));
+                            {state}
+                          </div>
+                        )}
+                        {Array.from(cities.entries()).map(([city, cityBranches]) => {
+                          const region = city ? regionByCity.get(city.toLowerCase()) : undefined;
+                          return (
+                            <div key={`${state}|${city || '__none'}`}>
+                              {region && (
+                                <button
+                                  key={region.key}
+                                  onClick={() => selectBranch(region.key, region.label)}
+                                  className={`w-full text-left px-3 py-2 text-xs font-semibold transition-colors ${hasMultipleStates && state ? 'pl-5' : ''}`}
+                                  style={{
+                                    color: selectedBranchId === region.key ? 'var(--mt-accent-text)' : 'var(--mt-text-primary)',
+                                    background: selectedBranchId === region.key ? 'var(--mt-accent-soft)' : 'transparent',
+                                  }}
+                                >
+                                  <span>{region.label}</span>
+                                </button>
+                              )}
+                              {cityBranches.map((branch: any) => {
+                                const isActive = selectedBranchId === String(branch.id);
+                                return (
+                                  <button
+                                    key={branch.id}
+                                    onClick={() => selectBranch(String(branch.id), branch.name)}
+                                    className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors ${region ? 'pl-6' : (hasMultipleStates && state ? 'pl-5' : '')}`}
+                                    style={{
+                                      color: isActive ? 'var(--mt-accent-text)' : 'var(--mt-text-muted)',
+                                      background: isActive ? 'var(--mt-accent-soft)' : 'transparent',
+                                    }}
+                                  >
+                                    <span>{branch.name}</span>
+                                    {branch.city && (
+                                      <span className="ml-1" style={{ color: 'var(--mt-text-faint)' }}>· {branch.city}</span>
+                                    )}
+                                    {branch.branch_role === 'central_store' && (
+                                      <span className="ml-2 text-[9px] uppercase tracking-wide" style={{ color: 'var(--mt-text-faint)' }}>(store)</span>
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  });
                 })()}
               </div>
             )}

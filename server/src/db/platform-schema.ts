@@ -228,6 +228,18 @@ export function initializePlatformSchema(db: DbHelper) {
     "ALTER TABLE client_integrations ADD COLUMN branch_id INTEGER REFERENCES branches(id)",
     "ALTER TABLE team_members ADD COLUMN is_owner INTEGER DEFAULT 0",
     "ALTER TABLE branches ADD COLUMN state TEXT DEFAULT ''",
+    // Hub-and-spoke branch hierarchy (Hyderabad central-store + satellites model).
+    // standalone (default): legacy peer branch with its own purchases — zero behavior change.
+    // central_store: back-office procurement entity that buys from external stockists
+    //                and transfers stock OUT to satellites. No retail sales.
+    // satellite: retail branch that receives stock from a parent central_store.
+    //            COGS is derived from incoming transfer values, not direct purchases.
+    // is_user_visible=0 hides a branch from the end-user dropdown (used for the
+    // Store, which is admin-only). parent_branch_id links a satellite to its
+    // central_store; null for standalone or central_store rows.
+    "ALTER TABLE branches ADD COLUMN branch_role TEXT DEFAULT 'standalone'",
+    "ALTER TABLE branches ADD COLUMN parent_branch_id INTEGER REFERENCES branches(id)",
+    "ALTER TABLE branches ADD COLUMN is_user_visible INTEGER DEFAULT 1",
     "ALTER TABLE dashboard_chart_visibility ADD COLUMN description TEXT DEFAULT ''",
     "ALTER TABLE dashboard_chart_visibility ADD COLUMN source TEXT DEFAULT ''",
   ];

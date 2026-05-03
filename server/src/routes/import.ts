@@ -5,10 +5,12 @@ import { parseHealthplix } from '../services/parsers/healthplix.js';
 import { parseOneglanceSales } from '../services/parsers/oneglance-sales.js';
 import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.js';
 import { parseOneglanceStock } from '../services/parsers/oneglance-stock.js';
+import { parseOneglanceTransfer } from '../services/parsers/oneglance-transfer.js';
 import { parseTuriaInvoices } from '../services/parsers/turia.js';
 import { getBranchIdForInsert, branchFilter, getStreamIdForInsert } from '../utils/branch.js';
 import { findActiveScenarioForStream } from '../utils/scenarios.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
+import { recomputeBranchCogs, getBranchRole } from '../services/pharmacy/cogs.js';
 import fs from 'fs';
 
 const isProd = process.env.NODE_ENV === 'production';
@@ -209,6 +211,15 @@ router.post('/oneglance-sales', requireRole('admin', 'operational_head'), requir
       }
     }
 
+    // Refresh per-branch COGS aggregate. Standalone branches use SUM(purchase_amount);
+    // satellites need it because their COGS comes from incoming transfers.
+    try {
+      const monthsTouched = [...new Set(rows.map(r => r.bill_month).filter(Boolean))];
+      await recomputeBranchCogs(db, branchId, monthsTouched);
+    } catch (e: any) {
+      console.warn('[import/oneglance-sales] COGS recompute skipped:', e?.message);
+    }
+
     res.json({ importId, ...summary });
   } catch (err: any) {
     if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
@@ -262,6 +273,146 @@ router.post('/oneglance-purchase', requireRole('admin', 'operational_head'), req
       }
       db.endBatch();
     } catch (e) { db.rollbackBatch(); throw e; }
+
+    // Refresh per-branch COGS aggregate. For standalone branches purchases
+    // don't directly drive COGS (sales rows already carry purchase_amount),
+    // but recomputing keeps the cache consistent if the caller uploads
+    // purchases before sales for the same period.
+    try {
+      const monthsTouched = [...new Set(rows.map(r => r.invoice_month).filter(Boolean))];
+      await recomputeBranchCogs(db, branchId, monthsTouched);
+    } catch (e: any) {
+      console.warn('[import/oneglance-purchase] COGS recompute skipped:', e?.message);
+    }
+
+    res.json({ importId, ...summary });
+  } catch (err: any) {
+    if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
+    res.status(400).json({ error: isProd ? 'Import failed' : err.message });
+  }
+});
+
+// ── Stock Transfer (OneGlance Stock Transfer Details) ─────────────────────
+// Hyderabad-only flow: the central_store branch transfers stock OUT to its
+// satellite branches. Each branch downloads its own report; the "Center Name"
+// column in each row identifies the counterparty by name. We resolve that to
+// the source/destination branch_id depending on which side uploaded.
+router.post('/oneglance-transfer', requireRole('admin', 'operational_head'), requireIntegration('oneglance'), upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  try {
+    const db = req.tenantDb!;
+    const branchId = getBranchIdForInsert(req);
+    if (!branchId) {
+      return res.status(400).json({ error: 'Stock transfers require a specific branch context. Switch to a branch and try again.' });
+    }
+    const role = await getBranchRole(branchId);
+    if (role === 'standalone') {
+      return res.status(400).json({ error: 'This branch is not configured for inter-branch transfers. Set its role to satellite (or central_store) in Admin → Branches first.' });
+    }
+
+    const platformDb = await getPlatformHelper();
+    const branchRow = platformDb.get('SELECT id, parent_branch_id FROM branches WHERE id = ?', branchId);
+    const parentBranchId: number | null = branchRow?.parent_branch_id || null;
+
+    const { rows: parsedRows, summary } = parseOneglanceTransfer(req.file.path);
+
+    // Build a name → branch_id index for counterparty resolution. Match on a
+    // normalized form (uppercase, trim, strip the "MAGNACODE - " org prefix
+    // commonly seen in OneGlance "Center Name" strings).
+    const allBranches = platformDb.all(
+      'SELECT id, name, code FROM branches WHERE client_id = ?',
+      req.clientId,
+    );
+    const norm = (s: string) => String(s || '').toUpperCase().replace(/MAGNACODE\s*-\s*/i, '').trim();
+    const nameIndex = new Map<string, number>();
+    for (const b of allBranches) {
+      if (b.name) nameIndex.set(norm(b.name), b.id);
+      if (b.code) nameIndex.set(norm(b.code), b.id);
+    }
+
+    // For satellite uploads, fall back to the configured parent_branch_id when
+    // the counterparty string can't be matched (the most common case for
+    // Hyderabad files where "Center Name" = the central store).
+    const resolveCounterparty = (raw: string | null): number | null => {
+      if (!raw) return parentBranchId;
+      const hit = nameIndex.get(norm(raw));
+      if (hit) return hit;
+      return parentBranchId;
+    };
+
+    const insertRows = parsedRows.map(r => {
+      const counterpartyId = resolveCounterparty(r.counterparty_raw);
+      const branchFrom = role === 'central_store' ? branchId : (counterpartyId || parentBranchId || branchId);
+      const branchTo = role === 'central_store' ? (counterpartyId || branchId) : branchId;
+      return { ...r, branch_from_id: branchFrom, branch_to_id: branchTo };
+    });
+
+    // Dedup by (branch_to_id, invoice_date) so re-uploads cleanly replace
+    // the previous data window. Mirrors the sales/purchase dedup pattern.
+    const datesByDest = new Map<number, Set<string>>();
+    for (const r of insertRows) {
+      if (!r.invoice_date) continue;
+      if (!datesByDest.has(r.branch_to_id)) datesByDest.set(r.branch_to_id, new Set());
+      datesByDest.get(r.branch_to_id)!.add(r.invoice_date);
+    }
+    for (const [destId, dateSet] of datesByDest) {
+      const dates = [...dateSet];
+      const ph = dates.map(() => '?').join(',');
+      db.run(
+        `DELETE FROM pharmacy_stock_transfers WHERE branch_to_id = ? AND invoice_date IN (${ph})`,
+        destId, ...dates,
+      );
+    }
+
+    db.run(
+      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      'ONEGLANCE_TRANSFER', req.file.originalname, insertRows.length,
+      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId, req.file.path,
+    );
+    const importId = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_TRANSFER' ORDER BY id DESC LIMIT 1")?.id || 0;
+
+    db.beginBatch();
+    try {
+      for (const r of insertRows) {
+        db.run(
+          `INSERT INTO pharmacy_stock_transfers (
+            import_id, branch_from_id, branch_to_id,
+            invoice_no, invoice_date, invoice_month, indent_no, indent_date,
+            drug_name, drug_name_normalized, batch_no,
+            qty, rate, mrp,
+            gst_5, cgst_5, sgst_5, gst_12, cgst_12, sgst_12,
+            gst_18, cgst_18, sgst_18, gst_28, cgst_28, sgst_28,
+            gst_other, cgst_other, sgst_other,
+            gst_total, cgst_total, sgst_total,
+            total_value, purchase_value, purchase_price, counterparty_raw
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          importId, r.branch_from_id, r.branch_to_id,
+          r.invoice_no, r.invoice_date, r.invoice_month, r.indent_no, r.indent_date,
+          r.drug_name, r.drug_name_normalized, r.batch_no,
+          r.qty, r.rate, r.mrp,
+          r.gst_5, r.cgst_5, r.sgst_5, r.gst_12, r.cgst_12, r.sgst_12,
+          r.gst_18, r.cgst_18, r.sgst_18, r.gst_28, r.cgst_28, r.sgst_28,
+          r.gst_other, r.cgst_other, r.sgst_other,
+          r.gst_total, r.cgst_total, r.sgst_total,
+          r.total_value, r.purchase_value, r.purchase_price, r.counterparty_raw,
+        );
+      }
+      db.endBatch();
+    } catch (e) { db.rollbackBatch(); throw e; }
+
+    // Refresh COGS for every destination branch touched by this upload —
+    // these are the satellites whose retail COGS is driven by the transfers
+    // we just wrote.
+    const monthsTouched = [...new Set(insertRows.map(r => r.invoice_month).filter(Boolean))];
+    const destBranchIds = [...new Set(insertRows.map(r => r.branch_to_id))];
+    for (const destId of destBranchIds) {
+      try {
+        await recomputeBranchCogs(db, destId, monthsTouched);
+      } catch (e: any) {
+        console.warn(`[import/oneglance-transfer] COGS recompute for branch ${destId} skipped:`, e?.message);
+      }
+    }
 
     res.json({ importId, ...summary });
   } catch (err: any) {
@@ -408,8 +559,18 @@ router.delete('/:id', requireRole('admin', 'operational_head'), async (req, res)
   db.run('DELETE FROM pharmacy_sales_actuals WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM pharmacy_purchase_actuals WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM pharmacy_stock_actuals WHERE import_id = ?', req.params.id);
+  db.run('DELETE FROM pharmacy_stock_transfers WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM turia_invoices WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM import_logs WHERE id = ?', req.params.id);
+
+  // Refresh COGS aggregate for the caller's branch — sales/transfer rows
+  // that this import wrote are now gone.
+  try {
+    const branchIdForCogs = getBranchIdForInsert(req);
+    await recomputeBranchCogs(db, branchIdForCogs);
+  } catch (e: any) {
+    console.warn('[import/delete] COGS recompute skipped:', e?.message);
+  }
 
   // Re-sync dashboard_actuals from remaining source data
   const activeScenario = db.get(
@@ -528,7 +689,8 @@ router.get('/sync-tracker', async (req, res) => {
   const syncRows = db.all(
     `SELECT source, MAX(created_at) as last_sync_at FROM import_logs
      WHERE source IN ('HEALTHPLIX','HEALTHPLIX_SYNC','ONEGLANCE_SALES','ONEGLANCE_SALES_SYNC',
-       'ONEGLANCE_PURCHASE','ONEGLANCE_PURCHASE_SYNC','ONEGLANCE_STOCK','ONEGLANCE_STOCK_SYNC','TURIA','TURIA_SYNC')
+       'ONEGLANCE_PURCHASE','ONEGLANCE_PURCHASE_SYNC','ONEGLANCE_STOCK','ONEGLANCE_STOCK_SYNC',
+       'ONEGLANCE_TRANSFER','ONEGLANCE_TRANSFER_SYNC','TURIA','TURIA_SYNC')
        AND status = 'completed'${bf.where} GROUP BY source`,
     ...bf.params
   );
@@ -600,6 +762,7 @@ router.get('/sync-tracker', async (req, res) => {
       sales: { covered: salesCovered, expected: salesExpected, pct: salesExpected ? Math.round(salesCovered / salesExpected * 1000) / 10 : 100, lastSync: syncMap['ONEGLANCE_SALES'] || null },
       purchase: { covered: purchaseCovered, expected: purchaseExpected, pct: purchaseExpected ? Math.round(purchaseCovered / purchaseExpected * 1000) / 10 : 100, lastSync: syncMap['ONEGLANCE_PURCHASE'] || null },
       stock: { latestSnapshot: stockRow?.latest || null, lastSync: syncMap['ONEGLANCE_STOCK'] || null },
+      transfer: { lastSync: syncMap['ONEGLANCE_TRANSFER'] || null },
       turia: { lastSync: syncMap['TURIA'] || null },
     },
     gaps,

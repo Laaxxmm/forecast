@@ -1685,4 +1685,137 @@ router.post('/resync-actuals', requireRole('admin'), async (req, res) => {
   res.json({ ok: true, streams: result });
 });
 
+// ── Stock Movement (Hyderabad hub-and-spoke) ──────────────────────────────
+// Returns inter-branch transfer activity for the current branch context.
+// The shape of the response depends on the branch's role:
+//   • satellite (req.branchId points at a satellite) — incoming transfers
+//     from the parent central_store, with top drugs by qty/value.
+//   • central_store — outgoing transfers, top destinations by value.
+//   • region (req.branchMode === 'region') — matrix of from→to flows for
+//     the city's central + satellites.
+// Standalone branches get an empty payload (no transfer data is meaningful).
+router.get('/stock-movement', async (req, res) => {
+  const db = req.tenantDb!;
+  const { startMonth, endMonth } = req.query as { startMonth?: string; endMonth?: string };
+  if (!startMonth || !endMonth) {
+    return res.status(400).json({ error: 'startMonth and endMonth are required' });
+  }
+
+  const platformDb = await getPlatformHelper();
+  const allBranches = platformDb.all(
+    `SELECT id, name, code, COALESCE(branch_role, 'standalone') as branch_role,
+            parent_branch_id, city
+       FROM branches WHERE client_id = ? AND is_active = 1`,
+    req.clientId,
+  );
+  const branchById = new Map<number, any>(allBranches.map((b: any) => [b.id, b]));
+  const nameOf = (id: number) => branchById.get(id)?.name || `Branch #${id}`;
+
+  // Region mode → multi-branch matrix view.
+  if (req.branchMode === 'region' && req.allowedBranchIds?.length) {
+    const regionIds = req.allowedBranchIds;
+    const ph = regionIds.map(() => '?').join(',');
+    const flows = db.all(
+      `SELECT branch_from_id, branch_to_id,
+              COUNT(*) as transfers,
+              SUM(qty) as qty,
+              SUM(total_value) as total_value,
+              SUM(purchase_value) as purchase_value
+         FROM pharmacy_stock_transfers
+        WHERE invoice_month >= ? AND invoice_month <= ?
+          AND (branch_to_id IN (${ph}) OR branch_from_id IN (${ph}))
+        GROUP BY branch_from_id, branch_to_id
+        ORDER BY total_value DESC`,
+      startMonth, endMonth, ...regionIds, ...regionIds,
+    );
+    return res.json({
+      mode: 'region',
+      city: req.regionCity || null,
+      flows: flows.map((f: any) => ({
+        from: { id: f.branch_from_id, name: nameOf(f.branch_from_id) },
+        to: { id: f.branch_to_id, name: nameOf(f.branch_to_id) },
+        transfers: f.transfers, qty: f.qty,
+        total_value: f.total_value, purchase_value: f.purchase_value,
+      })),
+    });
+  }
+
+  // Specific branch — figure out its role.
+  if (!req.branchId) {
+    return res.json({ mode: 'standalone', flows: [], topItems: [] });
+  }
+  const me = branchById.get(req.branchId);
+  const role = me?.branch_role || 'standalone';
+
+  if (role === 'standalone') {
+    return res.json({ mode: 'standalone', flows: [], topItems: [] });
+  }
+
+  if (role === 'satellite') {
+    // Incoming flow + top drugs received this period.
+    const summary = db.get(
+      `SELECT COUNT(*) as transfers, SUM(qty) as qty,
+              SUM(total_value) as total_value,
+              SUM(purchase_value) as purchase_value
+         FROM pharmacy_stock_transfers
+        WHERE branch_to_id = ? AND invoice_month >= ? AND invoice_month <= ?`,
+      req.branchId, startMonth, endMonth,
+    );
+    const topDrugs = db.all(
+      `SELECT drug_name,
+              SUM(qty) as qty,
+              SUM(total_value) as total_value,
+              SUM(purchase_value) as purchase_value,
+              COUNT(DISTINCT batch_no) as batches
+         FROM pharmacy_stock_transfers
+        WHERE branch_to_id = ? AND invoice_month >= ? AND invoice_month <= ?
+        GROUP BY drug_name
+        ORDER BY total_value DESC
+        LIMIT 15`,
+      req.branchId, startMonth, endMonth,
+    );
+    return res.json({
+      mode: 'satellite',
+      counterparty: me?.parent_branch_id ? { id: me.parent_branch_id, name: nameOf(me.parent_branch_id) } : null,
+      summary: summary || { transfers: 0, qty: 0, total_value: 0, purchase_value: 0 },
+      topItems: topDrugs,
+    });
+  }
+
+  // central_store — outgoing flows by destination.
+  const flows = db.all(
+    `SELECT branch_to_id,
+            COUNT(*) as transfers,
+            SUM(qty) as qty,
+            SUM(total_value) as total_value,
+            SUM(purchase_value) as purchase_value
+       FROM pharmacy_stock_transfers
+      WHERE branch_from_id = ? AND invoice_month >= ? AND invoice_month <= ?
+      GROUP BY branch_to_id
+      ORDER BY total_value DESC`,
+    req.branchId, startMonth, endMonth,
+  );
+  const topDrugs = db.all(
+    `SELECT drug_name,
+            SUM(qty) as qty,
+            SUM(total_value) as total_value,
+            SUM(purchase_value) as purchase_value
+       FROM pharmacy_stock_transfers
+      WHERE branch_from_id = ? AND invoice_month >= ? AND invoice_month <= ?
+      GROUP BY drug_name
+      ORDER BY total_value DESC
+      LIMIT 15`,
+    req.branchId, startMonth, endMonth,
+  );
+  return res.json({
+    mode: 'central',
+    flows: flows.map((f: any) => ({
+      to: { id: f.branch_to_id, name: nameOf(f.branch_to_id) },
+      transfers: f.transfers, qty: f.qty,
+      total_value: f.total_value, purchase_value: f.purchase_value,
+    })),
+    topItems: topDrugs,
+  });
+});
+
 export default router;
