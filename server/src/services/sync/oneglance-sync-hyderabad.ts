@@ -713,21 +713,23 @@ export async function syncOneglanceHyderabad(
       ] : []),
     ],
   });
-  // Video directory for diagnostic recordings of Hyderabad scrape runs.
-  // Keeps the last few runs so the user can watch back what happened
-  // when a sync fails. .webm is playable in any modern browser / VLC.
+  // Video recording is opt-in: it requires Playwright's ffmpeg binary
+  // (`npx playwright install ffmpeg`) which isn't part of the default
+  // `--with-deps chromium` install. If the binary isn't there,
+  // newPage() throws. Set ONEGLANCE_HYDERABAD_VIDEO=1 to enable
+  // recording in environments where ffmpeg is available.
   const videoDir = path.join(DATA_DIR, 'uploads', 'debug-hyderabad', 'video');
-  if (!fs.existsSync(videoDir)) fs.mkdirSync(videoDir, { recursive: true });
+  const wantVideo = process.env.ONEGLANCE_HYDERABAD_VIDEO === '1';
+  if (wantVideo && !fs.existsSync(videoDir)) fs.mkdirSync(videoDir, { recursive: true });
 
   const context: BrowserContext = await browser.newContext({
     acceptDownloads: true,
     viewport: { width: 1400, height: 900 },
     geolocation: { latitude: 17.385, longitude: 78.4867 }, // Hyderabad
     permissions: ['geolocation'],
-    recordVideo: {
-      dir: videoDir,
-      size: { width: 1400, height: 900 },
-    },
+    ...(wantVideo
+      ? { recordVideo: { dir: videoDir, size: { width: 1400, height: 900 } } }
+      : {}),
   });
   const page = await context.newPage();
 
@@ -774,11 +776,12 @@ export async function syncOneglanceHyderabad(
 
     return result;
   } finally {
-    // Capture the video path BEFORE closing the context (after close it
-    // becomes inaccessible). Then close so the file is flushed to disk
-    // and rename to a predictable name the user can find.
+    // Video path is only meaningful when ONEGLANCE_HYDERABAD_VIDEO=1
+    // enabled recording — page.video() returns undefined otherwise.
     let videoSrc: string | null = null;
-    try { videoSrc = await page.video()?.path() || null; } catch {}
+    if (wantVideo) {
+      try { videoSrc = await page.video()?.path() || null; } catch {}
+    }
     await context.close().catch(() => {});
     await browser.close().catch(() => {});
     if (videoSrc && fs.existsSync(videoSrc)) {
