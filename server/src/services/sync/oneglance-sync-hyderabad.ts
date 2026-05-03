@@ -620,6 +620,18 @@ export async function syncOneglanceHyderabad(
   });
   const page = await context.newPage();
 
+  // tsx/esbuild emits `__name(fn, "name")` decorations to preserve
+  // function names in stack traces. Those references get serialized
+  // into Playwright page.evaluate scripts as part of the captured
+  // function source, but the browser context doesn't have __name —
+  // result is `ReferenceError: __name is not defined`. Inject a
+  // no-op into every page context so all evaluate calls just work.
+  await page.addInitScript(() => {
+    if (typeof (window as any).__name === 'undefined') {
+      (window as any).__name = (target: any) => target;
+    }
+  });
+
   const result: OneglanceHyderabadSyncResult = {};
 
   try {
