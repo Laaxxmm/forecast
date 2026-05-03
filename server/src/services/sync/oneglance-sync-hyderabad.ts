@@ -567,15 +567,17 @@ async function downloadStoreReport(
   await debugScreenshot(page, `09-report-loaded-${stepKey}`);
   progress(opts, stepKey, 'Report rendered', 65);
 
-  // Download the CSV. The button is `<button id="csvbtn">csv</button>` —
-  // we use the exact id selector to avoid matching any other "csv" text
-  // on the page. The click may deliver the CSV in three different ways:
+  // Download the CSV. The button is `<button id="csvbtn">csv</button>`.
+  // Don't pre-wait on visibility — `button.uti_btn` is a generic class
+  // OneGlance reuses across the page (including hidden modals), and
+  // .first()-then-waitFor was matching one of those hidden ones. Use
+  // the precise id and click with force:true so any z-index oddities
+  // don't fail actionability. The button delivery mechanism varies by
+  // report:
   //   1. Standard `download` event (Playwright's first-class case)
   //   2. New tab via `window.open(...)` showing the CSV inline
-  //   3. Same-tab navigation to a CSV URL
-  // We listen for all three concurrently and take whichever fires first.
+  // We listen for both concurrently and take whichever fires first.
   progress(opts, stepKey, 'Downloading CSV...', 70);
-  await page.locator('#csvbtn, button.uti_btn').first().waitFor({ state: 'visible', timeout: 30_000 });
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const filename = `oneglance-hyderabad-${type.toLowerCase()}-${timestamp}.csv`;
@@ -585,7 +587,7 @@ async function downloadStoreReport(
   const downloadPromise = page.waitForEvent('download', { timeout: 90_000 }).catch(() => null);
   const popupPromise = context.waitForEvent('page', { timeout: 90_000 }).catch(() => null);
 
-  await page.locator('#csvbtn').first().click({ timeout: TIMEOUT });
+  await page.locator('#csvbtn').first().click({ timeout: TIMEOUT, force: true });
   await debugScreenshot(page, `10-after-csv-click-${stepKey}`);
 
   // Race: whichever fires first wins. If both fail, throw with diagnostics.
