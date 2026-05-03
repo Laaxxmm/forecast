@@ -668,22 +668,62 @@ router.get('/sync-tracker', async (req, res) => {
   const lastDay = `${monthParam}-${String(daysInMonth).padStart(2, '0')}`;
   const todayStr = now.toISOString().slice(0, 10);
 
-  // Q1–Q3: daily data coverage
-  const clinicDays = db.all(
+  // Resolve the current branch's role so we only track the data sources
+  // that actually apply. Without this, satellites flag every day as
+  // "missing Pharma Purchase" (which they should never have) and central
+  // stores flag every day as "missing Pharma Sales / Stock". Standalone
+  // branches see today's full set.
+  const platformDb = await getPlatformHelper();
+  const branchRow = req.branchId ? platformDb.get(
+    'SELECT branch_role FROM branches WHERE id = ?',
+    req.branchId,
+  ) : null;
+  const role: 'standalone' | 'central_store' | 'satellite' =
+    branchRow?.branch_role === 'central_store' || branchRow?.branch_role === 'satellite'
+      ? branchRow.branch_role
+      : 'standalone';
+
+  // Build the expected-source set per role. The frontend uses this to
+  // decide which rows / dots to render. Order matters — it controls the
+  // visual order of the legend and summary panels.
+  const tracksClinic = role !== 'central_store';
+  const tracksSales = role !== 'central_store';
+  const tracksPurchase = role !== 'satellite';
+  const tracksStock = role !== 'central_store';
+  const tracksTransfer = role !== 'standalone';
+
+  // Q1–Q3: daily data coverage (only fetch for sources we track)
+  const clinicDays = tracksClinic ? db.all(
     `SELECT bill_date as date, COUNT(*) as row_count, COALESCE(SUM(item_price),0) as revenue
      FROM clinic_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where} GROUP BY bill_date`,
     firstDay, lastDay, ...bf.params
-  );
-  const salesDays = db.all(
+  ) : [];
+  const salesDays = tracksSales ? db.all(
     `SELECT bill_date as date, COUNT(*) as row_count, COALESCE(SUM(sales_amount),0) as revenue
      FROM pharmacy_sales_actuals WHERE bill_date >= ? AND bill_date <= ?${bf.where} GROUP BY bill_date`,
     firstDay, lastDay, ...bf.params
-  );
-  const purchaseDays = db.all(
+  ) : [];
+  const purchaseDays = tracksPurchase ? db.all(
     `SELECT invoice_date as date, COUNT(*) as row_count, COALESCE(SUM(purchase_value),0) as total
      FROM pharmacy_purchase_actuals WHERE invoice_date >= ? AND invoice_date <= ?${bf.where} GROUP BY invoice_date`,
     firstDay, lastDay, ...bf.params
-  );
+  ) : [];
+  // Transfers don't have a strict daily-coverage expectation (they happen
+  // when stock moves, not on a schedule), but we still surface "any
+  // transfers this period?" + the latest sync time. Filter scope follows
+  // branchTo for satellites and branchFrom for central stores.
+  const transferDays = tracksTransfer && req.branchId ? db.all(
+    role === 'satellite'
+      ? `SELECT invoice_date as date, COUNT(*) as row_count, COALESCE(SUM(total_value),0) as total
+           FROM pharmacy_stock_transfers
+          WHERE invoice_date >= ? AND invoice_date <= ? AND branch_to_id = ?
+          GROUP BY invoice_date`
+      : `SELECT invoice_date as date, COUNT(*) as row_count, COALESCE(SUM(total_value),0) as total
+           FROM pharmacy_stock_transfers
+          WHERE invoice_date >= ? AND invoice_date <= ? AND branch_from_id = ?
+          GROUP BY invoice_date`,
+    firstDay, lastDay, req.branchId,
+  ) : [];
 
   // Q4: last sync timestamps
   const syncRows = db.all(
@@ -696,10 +736,10 @@ router.get('/sync-tracker', async (req, res) => {
   );
 
   // Q5: latest stock snapshot
-  const stockRow = db.get(
+  const stockRow = tracksStock ? db.get(
     `SELECT MAX(snapshot_date) as latest FROM pharmacy_stock_actuals WHERE 1=1${bf.where}`,
     ...bf.params
-  );
+  ) : null;
 
   // Build lookup maps
   const clinicMap: Record<string, any> = {};
@@ -708,6 +748,8 @@ router.get('/sync-tracker', async (req, res) => {
   for (const r of salesDays) if (r.date) salesMap[r.date] = { has: true, rows: r.row_count, rev: r.revenue };
   const purchaseMap: Record<string, any> = {};
   for (const r of purchaseDays) if (r.date) purchaseMap[r.date] = { has: true, rows: r.row_count, total: r.total };
+  const transferMap: Record<string, any> = {};
+  for (const r of transferDays) if (r.date) transferMap[r.date] = { has: true, rows: r.row_count, total: r.total };
 
   // Sync timestamps — merge HP/HP_SYNC etc. into single per-integration latest
   const syncMap: Record<string, string> = {};
@@ -716,9 +758,11 @@ router.get('/sync-tracker', async (req, res) => {
     if (!syncMap[key] || r.last_sync_at > syncMap[key]) syncMap[key] = r.last_sync_at;
   }
 
-  // Build per-day response + compute gaps
+  // Build per-day response + compute gaps. Only count expectations for
+  // sources this branch actually tracks — that's what makes the "Pharma
+  // Purchase missing every day" noise on satellites go away.
   const days: Record<string, any> = {};
-  const gaps: Record<string, string[]> = { clinic: [], sales: [], purchase: [] };
+  const gaps: Record<string, string[]> = { clinic: [], sales: [], purchase: [], transfer: [] };
   let clinicCovered = 0, clinicExpected = 0;
   let salesCovered = 0, salesExpected = 0;
   let purchaseCovered = 0, purchaseExpected = 0;
@@ -734,35 +778,47 @@ router.get('/sync-tracker', async (req, res) => {
       clinic: clinicMap[dateStr] || { ...noData },
       sales: salesMap[dateStr] || { ...noData },
       purchase: purchaseMap[dateStr] || { has: false, rows: 0, total: 0 },
+      transfer: transferMap[dateStr] || { has: false, rows: 0, total: 0 },
     };
 
     if (isPast) {
-      // Clinic: skip Sundays
-      if (dow !== 0) {
+      // Clinic: skip Sundays. Only track if applicable to this role.
+      if (tracksClinic && dow !== 0) {
         clinicExpected++;
         if (clinicMap[dateStr]) clinicCovered++;
         else gaps.clinic.push(dateStr);
       }
-      // Sales & Purchase: every day
-      salesExpected++;
-      purchaseExpected++;
-      if (salesMap[dateStr]) salesCovered++;
-      else gaps.sales.push(dateStr);
-      if (purchaseMap[dateStr]) purchaseCovered++;
-      else gaps.purchase.push(dateStr);
+      if (tracksSales) {
+        salesExpected++;
+        if (salesMap[dateStr]) salesCovered++;
+        else gaps.sales.push(dateStr);
+      }
+      if (tracksPurchase) {
+        purchaseExpected++;
+        if (purchaseMap[dateStr]) purchaseCovered++;
+        else gaps.purchase.push(dateStr);
+      }
+      // Transfers don't have a daily expectation — we don't push to
+      // gaps.transfer for missing days, only track the dates that have
+      // activity (the UI uses presence/latest sync, not coverage %).
     }
   }
 
   res.json({
     month: monthParam,
     today: todayStr,
+    role,
+    tracks: {
+      clinic: tracksClinic, sales: tracksSales, purchase: tracksPurchase,
+      stock: tracksStock, transfer: tracksTransfer,
+    },
     days,
     summary: {
-      clinic: { covered: clinicCovered, expected: clinicExpected, pct: clinicExpected ? Math.round(clinicCovered / clinicExpected * 1000) / 10 : 100, lastSync: syncMap['HEALTHPLIX'] || null },
-      sales: { covered: salesCovered, expected: salesExpected, pct: salesExpected ? Math.round(salesCovered / salesExpected * 1000) / 10 : 100, lastSync: syncMap['ONEGLANCE_SALES'] || null },
-      purchase: { covered: purchaseCovered, expected: purchaseExpected, pct: purchaseExpected ? Math.round(purchaseCovered / purchaseExpected * 1000) / 10 : 100, lastSync: syncMap['ONEGLANCE_PURCHASE'] || null },
-      stock: { latestSnapshot: stockRow?.latest || null, lastSync: syncMap['ONEGLANCE_STOCK'] || null },
-      transfer: { lastSync: syncMap['ONEGLANCE_TRANSFER'] || null },
+      clinic: tracksClinic ? { covered: clinicCovered, expected: clinicExpected, pct: clinicExpected ? Math.round(clinicCovered / clinicExpected * 1000) / 10 : 100, lastSync: syncMap['HEALTHPLIX'] || null } : null,
+      sales: tracksSales ? { covered: salesCovered, expected: salesExpected, pct: salesExpected ? Math.round(salesCovered / salesExpected * 1000) / 10 : 100, lastSync: syncMap['ONEGLANCE_SALES'] || null } : null,
+      purchase: tracksPurchase ? { covered: purchaseCovered, expected: purchaseExpected, pct: purchaseExpected ? Math.round(purchaseCovered / purchaseExpected * 1000) / 10 : 100, lastSync: syncMap['ONEGLANCE_PURCHASE'] || null } : null,
+      stock: tracksStock ? { latestSnapshot: stockRow?.latest || null, lastSync: syncMap['ONEGLANCE_STOCK'] || null } : null,
+      transfer: tracksTransfer ? { lastSync: syncMap['ONEGLANCE_TRANSFER'] || null } : null,
       turia: { lastSync: syncMap['TURIA'] || null },
     },
     gaps,

@@ -755,14 +755,18 @@ export default function ImportPage() {
         const firstDow = new Date(yr, mo - 1, 1).getDay();
         const startOffset = firstDow === 0 ? 6 : firstDow - 1; // Mon-start
         const monthLabel = new Date(yr, mo - 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
-        const cells: (null | { day: number; date: string; dow: number; clinic: any; sales: any; purchase: any })[] = [];
+        const cells: (null | { day: number; date: string; dow: number; clinic: any; sales: any; purchase: any; transfer: any })[] = [];
         for (let i = 0; i < startOffset; i++) cells.push(null);
         for (let d = 1; d <= daysInMonth; d++) {
           const dateStr = `${trackerMonth}-${String(d).padStart(2, '0')}`;
-          const dd = trackerData.days[dateStr] || { dow: new Date(yr, mo - 1, d).getDay(), clinic: { has: false }, sales: { has: false }, purchase: { has: false } };
+          const dd = trackerData.days[dateStr] || { dow: new Date(yr, mo - 1, d).getDay(), clinic: { has: false }, sales: { has: false }, purchase: { has: false }, transfer: { has: false } };
           cells.push({ day: d, date: dateStr, ...dd });
         }
         const s = trackerData.summary;
+        // Role-aware "tracks" map from the API. Falls back to today's
+        // assumptions (everything tracked) for older deploys that haven't
+        // shipped the role-aware payload yet.
+        const tracks = trackerData.tracks || { clinic: true, sales: true, purchase: true, stock: true, transfer: false };
 
         return (
           <div className="mt-card p-4 mb-4">
@@ -802,9 +806,10 @@ export default function ImportPage() {
                       const isFuture = cell.date > trackerData.today;
                       const isSunday = cell.dow === 0;
                       const isToday = cell.date === trackerData.today;
-                      const clinicGap = !cell.clinic?.has && !isSunday && !isFuture && showHpSync;
-                      const salesGap = !cell.sales?.has && !isFuture && showOgSync;
-                      const purchaseGap = !cell.purchase?.has && !isFuture && showOgSync;
+                      // Only flag gaps for sources this branch role actually tracks.
+                      const clinicGap = !cell.clinic?.has && !isSunday && !isFuture && showHpSync && tracks.clinic;
+                      const salesGap = !cell.sales?.has && !isFuture && showOgSync && tracks.sales;
+                      const purchaseGap = !cell.purchase?.has && !isFuture && showOgSync && tracks.purchase;
                       const hasGap = clinicGap || salesGap || purchaseGap;
                       const cellStyle: React.CSSProperties = isFuture
                         ? { background: 'var(--mt-bg-app)', opacity: 0.3 }
@@ -829,7 +834,7 @@ export default function ImportPage() {
                           >{cell.day}</span>
                           {!isFuture && (
                             <div className="flex gap-[3px] mt-1">
-                              {showHpSync && (
+                              {showHpSync && tracks.clinic && (
                                 <div
                                   className="w-[5px] h-[5px] rounded-full"
                                   style={{
@@ -838,23 +843,34 @@ export default function ImportPage() {
                                   }}
                                 />
                               )}
-                              {showOgSync && (
-                                <>
-                                  <div
-                                    className="w-[5px] h-[5px] rounded-full"
-                                    style={{
-                                      background: cell.sales?.has ? '#8b5cf6' : 'var(--mt-bg-muted)',
-                                      boxShadow: !cell.sales?.has ? '0 0 0 1px var(--mt-danger-border)' : 'none',
-                                    }}
-                                  />
-                                  <div
-                                    className="w-[5px] h-[5px] rounded-full"
-                                    style={{
-                                      background: cell.purchase?.has ? '#f59e0b' : 'var(--mt-bg-muted)',
-                                      boxShadow: !cell.purchase?.has ? '0 0 0 1px var(--mt-danger-border)' : 'none',
-                                    }}
-                                  />
-                                </>
+                              {showOgSync && tracks.sales && (
+                                <div
+                                  className="w-[5px] h-[5px] rounded-full"
+                                  style={{
+                                    background: cell.sales?.has ? '#8b5cf6' : 'var(--mt-bg-muted)',
+                                    boxShadow: !cell.sales?.has ? '0 0 0 1px var(--mt-danger-border)' : 'none',
+                                  }}
+                                />
+                              )}
+                              {showOgSync && tracks.purchase && (
+                                <div
+                                  className="w-[5px] h-[5px] rounded-full"
+                                  style={{
+                                    background: cell.purchase?.has ? '#f59e0b' : 'var(--mt-bg-muted)',
+                                    boxShadow: !cell.purchase?.has ? '0 0 0 1px var(--mt-danger-border)' : 'none',
+                                  }}
+                                />
+                              )}
+                              {showOgSync && tracks.transfer && (
+                                // Transfers don't have a daily expectation —
+                                // dot is only shown when there's activity, no
+                                // missing-day outline.
+                                <div
+                                  className="w-[5px] h-[5px] rounded-full"
+                                  style={{
+                                    background: cell.transfer?.has ? '#06b6d4' : 'var(--mt-bg-muted)',
+                                  }}
+                                />
                               )}
                             </div>
                           )}
@@ -865,9 +881,10 @@ export default function ImportPage() {
                 </div>
                 {/* Legend */}
                 <div className="flex gap-4 mt-2.5 text-[10px]" style={{ color: 'var(--mt-text-faint)' }}>
-                  {showHpSync && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: '#10b981' }} /> Clinic</span>}
-                  {showOgSync && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: '#8b5cf6' }} /> Pharma Sales</span>}
-                  {showOgSync && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: '#f59e0b' }} /> Pharma Purchase</span>}
+                  {showHpSync && tracks.clinic && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: '#10b981' }} /> Clinic</span>}
+                  {showOgSync && tracks.sales && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: '#8b5cf6' }} /> Pharma Sales</span>}
+                  {showOgSync && tracks.purchase && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: '#f59e0b' }} /> Pharma Purchase</span>}
+                  {showOgSync && tracks.transfer && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: '#06b6d4' }} /> Stock Transfer</span>}
                   <span className="flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full" style={{ background: 'var(--mt-bg-muted)', boxShadow: '0 0 0 1px var(--mt-danger-border)' }} />
                     Missing
@@ -877,7 +894,7 @@ export default function ImportPage() {
 
               {/* Summary Cards */}
               <div className="space-y-2">
-                {showHpSync && (
+                {showHpSync && tracks.clinic && s.clinic && (
                   <SyncMetricCard
                     label="Clinic"
                     Icon={Stethoscope}
@@ -889,7 +906,7 @@ export default function ImportPage() {
                     gaps={trackerData.gaps.clinic}
                   />
                 )}
-                {showOgSync && (
+                {showOgSync && tracks.sales && s.sales && (
                   <SyncMetricCard
                     label="Pharma Sales"
                     Icon={Pill}
@@ -901,7 +918,7 @@ export default function ImportPage() {
                     gaps={trackerData.gaps.sales}
                   />
                 )}
-                {showOgSync && (
+                {showOgSync && tracks.purchase && s.purchase && (
                   <SyncMetricCard
                     label="Pharma Purchase"
                     Icon={ShoppingCart}
@@ -913,8 +930,30 @@ export default function ImportPage() {
                     gaps={trackerData.gaps.purchase}
                   />
                 )}
+                {showOgSync && tracks.transfer && s.transfer && (
+                  // Stock Transfer doesn't have a daily expectation, so we
+                  // surface only the last-sync timestamp (no covered/expected
+                  // bar). Hidden for standalone branches.
+                  <div
+                    className="rounded-lg p-2.5"
+                    style={{ background: 'var(--mt-bg-raised)', border: '1px solid var(--mt-border)' }}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <ArrowLeftRight size={12} style={{ color: '#06b6d4' }} />
+                        <span className="text-[11px] font-medium" style={{ color: 'var(--mt-text-heading)' }}>
+                          {trackerData.role === 'central_store' ? 'Outgoing transfers' : 'Incoming transfers'}
+                        </span>
+                      </div>
+                      <span className="text-[10px]" style={{ color: 'var(--mt-text-faint)' }}>{relativeTime(s.transfer.lastSync)}</span>
+                    </div>
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--mt-text-secondary)' }}>
+                      Tracked when transfers are uploaded
+                    </p>
+                  </div>
+                )}
 
-                {showOgSync && s.stock && (
+                {showOgSync && tracks.stock && s.stock && (
                   <div
                     className="rounded-lg p-2.5"
                     style={{ background: 'var(--mt-bg-raised)', border: '1px solid var(--mt-border)' }}
