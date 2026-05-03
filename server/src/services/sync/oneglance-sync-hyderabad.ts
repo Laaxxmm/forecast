@@ -399,42 +399,114 @@ async function downloadStoreReport(
   // narrow the dropdown quickly.
   if (centerName) {
     progress(opts, stepKey, `Selecting Center: ${centerName}...`, 46);
-    // Find the Center input. The filter form labels it "Center".
-    const centerInput = page.locator(
-      'input[name*="enter" i], input[id*="enter" i], input[placeholder*="enter" i], input[aria-label*="enter" i]'
-    ).first();
-    let centerInputVisible = await centerInput.isVisible({ timeout: 2_000 }).catch(() => false);
-    let centerHandle = centerInputVisible ? centerInput : null;
-    if (!centerHandle) {
-      // Fallback: find input that's positioned to the right of a "Center"
-      // label cell. Walks the DOM to identify it without relying on
-      // attributes that may not be present.
-      const centerSelector = await page.evaluate(() => {
-        const all = Array.from(document.querySelectorAll('input[type="text"], input:not([type])'));
-        for (let i = 0; i < all.length; i++) {
-          const el = all[i] as HTMLInputElement;
-          // Walk up to find a parent / sibling whose text mentions "Center"
-          let p: Element | null = el.parentElement;
-          for (let depth = 0; depth < 4 && p; depth++) {
-            const txt = (p.textContent || '').trim();
-            if (/^\s*Center\s*$/i.test(txt) || /\bCenter\b/.test(txt.split('\n')[0])) {
-              el.setAttribute('data-mt-center', '1');
-              return true;
-            }
-            p = p.parentElement;
+
+    // Locate the Center input. OneGlance's filter form is a label-on-
+    // the-left layout; the input might not have a name/id/placeholder
+    // attribute matching "center" so we hunt for any element whose
+    // visible text equals "Center" or "Center:" and grab the nearest
+    // input sibling/descendant.
+    const tagged = await page.evaluate(() => {
+      // Strategy A: clear any prior tag
+      document.querySelectorAll('[data-mt-center="1"]').forEach(el => el.removeAttribute('data-mt-center'));
+
+      // Strategy B: search common label-bearing tags for exact "Center"
+      // text, then find the closest input.
+      const labelSelectors = ['label', 'th', 'td', 'dt', 'span', 'div', 'p'];
+      const labelEls = document.querySelectorAll(labelSelectors.join(','));
+
+      function findNearbyInput(el: Element): HTMLInputElement | null {
+        // Look at right siblings of `el` and their input descendants.
+        let sib = el.nextElementSibling;
+        let hops = 0;
+        while (sib && hops < 5) {
+          if (sib.tagName === 'INPUT') return sib as HTMLInputElement;
+          const inp = sib.querySelector('input[type="text"], input:not([type]), input[type="search"]');
+          if (inp) return inp as HTMLInputElement;
+          sib = sib.nextElementSibling;
+          hops++;
+        }
+        // If not in a sibling, try the parent's right siblings (table-row case).
+        let p: Element | null = el.parentElement;
+        for (let depth = 0; depth < 3 && p; depth++) {
+          let sib2 = p.nextElementSibling;
+          while (sib2) {
+            if (sib2.tagName === 'INPUT') return sib2 as HTMLInputElement;
+            const inp = sib2.querySelector('input[type="text"], input:not([type]), input[type="search"]');
+            if (inp) return inp as HTMLInputElement;
+            sib2 = sib2.nextElementSibling;
+          }
+          p = p.parentElement;
+        }
+        return null;
+      }
+
+      for (const el of labelEls) {
+        // Use ownText (not textContent) so we don't match parent containers
+        // that include "Center" via a child label.
+        const direct = Array.from(el.childNodes)
+          .filter(n => n.nodeType === Node.TEXT_NODE)
+          .map(n => (n.textContent || '').trim())
+          .join(' ').trim();
+        if (/^Center:?\s*$/i.test(direct)) {
+          const input = findNearbyInput(el);
+          if (input) {
+            input.setAttribute('data-mt-center', '1');
+            return { method: 'label-text', tag: el.tagName, label: direct };
           }
         }
-        return false;
-      });
-      if (centerSelector) {
-        centerHandle = page.locator('input[data-mt-center="1"]').first();
-        centerInputVisible = true;
       }
-    }
-    if (!centerInputVisible || !centerHandle) {
+
+      // Strategy C: any input/textarea whose attributes mention "center"
+      // (case-insensitive). Catches forms where labels are wired via
+      // for/id or aria-labelledby that we haven't traced.
+      const inputs = document.querySelectorAll<HTMLInputElement>('input, textarea');
+      for (const inp of inputs) {
+        const blob = `${inp.name || ''} ${inp.id || ''} ${inp.placeholder || ''} ${inp.getAttribute('aria-label') || ''} ${inp.getAttribute('data-name') || ''}`.toLowerCase();
+        if (blob.includes('center')) {
+          inp.setAttribute('data-mt-center', '1');
+          return { method: 'attr', tag: inp.tagName, blob };
+        }
+      }
+
+      // Strategy D: positional — last text input in the filter form,
+      // since "Center" is the bottom-most filter field per the user's
+      // screenshots (above the Detailed/Drug wise/Batch wise buttons).
+      const filterInputs = Array.from(document.querySelectorAll<HTMLInputElement>(
+        'input[type="text"], input:not([type]), input[type="search"]'
+      )).filter(el => {
+        const r = el.getBoundingClientRect();
+        return r.width > 50 && r.height > 10 && el.offsetParent !== null;
+      });
+      if (filterInputs.length > 0) {
+        // Prefer the input closest above the Detailed button if we can find it.
+        const detailedBtn = Array.from(document.querySelectorAll('button, input'))
+          .find(el => /^\s*Detailed\s*$/i.test((el.textContent || '').trim()) || (el as HTMLInputElement).value === 'Detailed');
+        if (detailedBtn) {
+          const btnY = detailedBtn.getBoundingClientRect().top;
+          const above = filterInputs
+            .map(el => ({ el, dy: btnY - el.getBoundingClientRect().bottom }))
+            .filter(x => x.dy > 0)
+            .sort((a, b) => a.dy - b.dy);
+          if (above.length > 0) {
+            above[0].el.setAttribute('data-mt-center', '1');
+            return { method: 'positional-above-detailed', tag: 'INPUT' };
+          }
+        }
+        // Fallback: take the last filter input in document order.
+        const last = filterInputs[filterInputs.length - 1];
+        last.setAttribute('data-mt-center', '1');
+        return { method: 'positional-last', tag: 'INPUT' };
+      }
+
+      return null;
+    });
+
+    if (!tagged) {
       await debugScreenshot(page, `07b-FAILED-center-input-not-found-${stepKey}`);
       throw new Error('Could not locate the Center field on the Purchase/Sales Report filter.');
     }
+    console.log(`[oneglance-hyderabad] Center field located via ${tagged.method}:`, JSON.stringify(tagged));
+    const centerHandle = page.locator('input[data-mt-center="1"]').first();
 
     // Type the full center name and wait for the typeahead dropdown.
     await centerHandle.click({ timeout: 3_000 });
