@@ -245,6 +245,26 @@ export default function ImportPage() {
     if (s.roles && !s.roles.includes(currentBranchRole)) return false;
     return true;
   });
+
+  // Auto Sync source visibility — same role-aware rules as the upload
+  // tabs above. The Healthplix sync tab on a Hyderabad central_store
+  // would kick off a clinic scrape against the wrong OneGlance instance,
+  // so it's hidden along with Turia. Standalone branches keep all tabs.
+  const allowHpInSync = currentBranchRole === 'standalone';
+  const allowTuriaInSync = currentBranchRole === 'standalone';
+  // The OneGlance "Report" type buttons need to match what's actually
+  // implemented for the current role. Central stores only download
+  // Purchase today; satellites have nothing wired yet (Sales / Stock /
+  // Transfer land in subsequent rounds). Standalone uses the historical
+  // Sales+Purchase / Sales / Purchase / Stock / All set.
+  const allowedOgReports: Array<'both' | 'sales' | 'purchase' | 'stock' | 'all'> =
+    currentBranchRole === 'central_store' ? ['purchase']
+      : currentBranchRole === 'satellite' ? ['sales', 'stock']
+      : ['both', 'sales', 'purchase', 'stock', 'all'];
+  // The Auto-Sync defaults useEffect that auto-corrects `syncSource` and
+  // `ogReportType` when the role-aware allow lists change is declared
+  // further down in the file, after `useState` for those state slots —
+  // otherwise we'd hit a TDZ error.
   const showHpSync = enabledIntegrations.includes('healthplix');
   const showOgSync = enabledIntegrations.includes('oneglance');
   const showTuriaSync = enabledIntegrations.includes('turia');
@@ -262,6 +282,20 @@ export default function ImportPage() {
   const [turiaFY, setTuriaFY] = useState('2025-26');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const hasCredentials = syncSource === 'healthplix' ? hasHpCreds : syncSource === 'oneglance' ? hasOgCreds : hasTuriaCreds;
+
+  // Re-sync the default Auto-Sync source + report type whenever the
+  // role-aware allow lists change. Without this, switching from a
+  // standalone branch to a Hyderabad central_store leaves
+  // `syncSource = 'healthplix'` (now hidden) and the green "Sync Now"
+  // button would silently kick off a clinic scrape that doesn't apply.
+  // Declared here (not at the top of the component) so it lives AFTER
+  // `useState` for `syncSource` / `ogReportType` — JS const hoisting
+  // would otherwise throw a TDZ error on first render.
+  useEffect(() => {
+    if (syncSource === 'healthplix' && !allowHpInSync && showOgSync) setSyncSource('oneglance');
+    else if (syncSource === 'turia' && !allowTuriaInSync && showOgSync) setSyncSource('oneglance');
+    if (!allowedOgReports.includes(ogReportType)) setOgReportType(allowedOgReports[0] || 'purchase');
+  }, [allowHpInSync, allowTuriaInSync, allowedOgReports.join(','), syncSource, ogReportType, showOgSync]);
 
   // Sync Tracker state
   const [trackerMonth, setTrackerMonth] = useState(() => new Date().toISOString().slice(0, 7));
@@ -511,9 +545,9 @@ export default function ImportPage() {
       {mode === 'sync' && !result && (
         <div className="mt-card p-4 mb-4">
           {/* Source tabs */}
-          {([showHpSync, showOgSync, showTuriaSync].filter(Boolean).length > 1) && (
+          {([showHpSync && allowHpInSync, showOgSync, showTuriaSync && allowTuriaInSync].filter(Boolean).length > 1) && (
             <div className="flex gap-2 mb-3">
-              {showHpSync && (() => {
+              {showHpSync && allowHpInSync && (() => {
                 const active = syncSource === 'healthplix';
                 return (
                   <button
@@ -549,7 +583,7 @@ export default function ImportPage() {
                   </button>
                 );
               })()}
-              {showTuriaSync && (() => {
+              {showTuriaSync && allowTuriaInSync && (() => {
                 const active = syncSource === 'turia';
                 return (
                   <button
@@ -633,7 +667,7 @@ export default function ImportPage() {
                     { key: 'purchase' as const, label: 'Purchase' },
                     { key: 'stock' as const, label: 'Stock' },
                     { key: 'all' as const, label: 'All' },
-                  ]).map(rt => {
+                  ]).filter(rt => allowedOgReports.includes(rt.key)).map(rt => {
                     const active = ogReportType === rt.key;
                     return (
                       <button key={rt.key} onClick={() => setOgReportType(rt.key)} disabled={syncing}
