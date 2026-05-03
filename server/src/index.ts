@@ -319,7 +319,8 @@ app.get('/api/branches', requireAuth, resolveTenant, resolveBranch, async (req, 
       `SELECT id, name, code, city, state, manager_name, sort_order,
               COALESCE(branch_role, 'standalone') as branch_role,
               parent_branch_id,
-              COALESCE(is_user_visible, 1) as is_user_visible
+              COALESCE(is_user_visible, 1) as is_user_visible,
+              COALESCE(oneglance_center, '') as oneglance_center
          FROM branches WHERE client_id = ? AND is_active = 1
         ORDER BY sort_order, name`,
       req.clientId
@@ -330,6 +331,7 @@ app.get('/api/branches', requireAuth, resolveTenant, resolveBranch, async (req, 
               COALESCE(b.branch_role, 'standalone') as branch_role,
               b.parent_branch_id,
               COALESCE(b.is_user_visible, 1) as is_user_visible,
+              COALESCE(b.oneglance_center, '') as oneglance_center,
               uba.can_view_consolidated
          FROM branches b
          JOIN user_branch_access uba ON uba.branch_id = b.id

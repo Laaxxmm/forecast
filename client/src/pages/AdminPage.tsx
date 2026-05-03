@@ -2372,6 +2372,21 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
                           </label>
                         </div>
                       </div>
+                      {editingBranch.branch_role === 'satellite' && (
+                        <div className="mb-3">
+                          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--mt-text-muted)' }}>OneGlance Center Name</label>
+                          <input
+                            type="text"
+                            value={editingBranch.oneglance_center || ''}
+                            onChange={e => setEditingBranch({ ...editingBranch, oneglance_center: e.target.value })}
+                            placeholder="MAGNACODE - FILM NAGAR"
+                            className="mt-input text-sm"
+                          />
+                          <p className="text-[10px] mt-1" style={{ color: 'var(--mt-text-faint)' }}>
+                            Exactly as shown in OneGlance's Center dropdown. Used by Auto Sync to filter Sales / Stock / Transfer reports for this satellite.
+                          </p>
+                        </div>
+                      )}
                       <div className="flex gap-2">
                         <button
                           onClick={async () => {
@@ -2383,6 +2398,9 @@ function BranchesSection({ slug, client, branches, users, onReload }: {
                                 ? (editingBranch.parent_branch_id || null)
                                 : null,
                               is_user_visible: editingBranch.is_user_visible === 0 || editingBranch.is_user_visible === false ? 0 : 1,
+                              oneglance_center: editingBranch.branch_role === 'satellite'
+                                ? (editingBranch.oneglance_center || '')
+                                : '',
                             });
                             setEditingBranch(null); onReload();
                           }}

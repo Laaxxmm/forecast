@@ -32,14 +32,23 @@ export interface OneglanceHyderabadSyncOptions {
   fromDate: string;  // YYYY-MM-DD
   toDate: string;    // YYYY-MM-DD
   /** Which reports to download in this run. Subset progressively grows. */
-  reports: Array<'purchase'>;
+  reports: Array<'purchase' | 'sales'>;
+  /**
+   * OneGlance "Center" filter value for satellite Sales / Stock / Transfer
+   * runs (e.g. "MAGNACODE - FILM NAGAR" for Jubliee Hills). Required when
+   * `reports` includes 'sales'. Ignored for Purchase at the central
+   * Store (which leaves the Center field blank to capture all
+   * procurement).
+   */
+  oneglanceCenter?: string;
   onProgress?: (step: string, message: string, pct: number) => void;
 }
 
 export interface OneglanceHyderabadSyncResult {
   purchaseFile?: { filePath: string; filename: string };
+  salesFile?: { filePath: string; filename: string };
   // Future entries (one per supported report):
-  //   salesFile?, stockFile?, transferFile?
+  //   stockFile?, transferFile?
 }
 
 const TIMEOUT = 45_000;
@@ -313,16 +322,24 @@ async function navigateToStorePurchaseSalesReport(
 }
 
 /**
- * On the Purchase/Sales Report - Store page: set Period dates, ensure
- * Type=Purchase, click Detailed, wait for the report to render, click
- * the csv button, save the download.
+ * Shared filter+download helper for the Purchase/Sales Report - Store
+ * page. Both Purchase (at central Store) and Sales (at satellite) flow
+ * through here — they only differ in the Type radio + the Center field.
+ *
+ * - Purchase at Store:    type='Purchase', centerName=null (Center blank,
+ *                                                          captures all)
+ * - Sales at satellite:   type='Sales',    centerName='MAGNACODE - …'
+ *                                          (filters to that satellite)
  */
-async function downloadPurchaseReport(
+async function downloadStoreReport(
   page: Page,
   opts: OneglanceHyderabadSyncOptions,
   downloadDir: string,
+  type: 'Purchase' | 'Sales',
+  centerName: string | null,
 ): Promise<{ filePath: string; filename: string }> {
-  progress(opts, 'purchase', 'Setting Purchase Report filters...', 35);
+  const stepKey = type.toLowerCase();
+  progress(opts, stepKey, `Setting ${type} Report filters...`, 35);
 
   const fromDateStr = toOneglanceDate(opts.fromDate);
   const toDateStr = toOneglanceDate(opts.toDate);
@@ -333,7 +350,7 @@ async function downloadPurchaseReport(
   const dateInputs = page.locator('input.dateclass, input[placeholder="DD/MM/YYYY"]');
   const dateCount = await dateInputs.count();
   if (dateCount < 2) {
-    await debugScreenshot(page, '07-FAILED-no-date-inputs');
+    await debugScreenshot(page, `07-FAILED-no-date-inputs-${stepKey}`);
     throw new Error(`Expected at least 2 date inputs on the Purchase/Sales Report filter, found ${dateCount}.`);
   }
   const fromInput = dateInputs.first();
@@ -353,33 +370,117 @@ async function downloadPurchaseReport(
 
   await setDateInput(fromInput, fromDateStr);
   await setDateInput(toInput, toDateStr);
-  progress(opts, 'purchase', `Dates: ${fromDateStr} → ${toDateStr}`, 40);
+  progress(opts, stepKey, `Dates: ${fromDateStr} → ${toDateStr}`, 40);
 
-  // Ensure Type = Purchase. Default is already Purchase per the user's
-  // confirmation, but click defensively in case the previous session
-  // left it on Sales.
-  const radioClicked = await page.evaluate(() => {
+  // Ensure Type radio is on the requested value. Click defensively in
+  // case the previous session left it on the other option.
+  const targetTypeLower = type.toLowerCase();
+  const radioClicked = await page.evaluate((wanted: string) => {
     const radios = document.querySelectorAll('input[type="radio"]');
     for (const r of radios) {
       const value = (r as HTMLInputElement).value?.trim().toLowerCase() || '';
       const labelText = (r.parentElement?.textContent || r.nextSibling?.textContent || '').trim().toLowerCase();
-      if (value === 'purchase' || labelText.includes('purchase')) {
+      if (value === wanted || labelText.includes(wanted)) {
         (r as HTMLInputElement).click();
         return true;
       }
     }
     return false;
-  });
+  }, targetTypeLower);
   if (!radioClicked) {
-    await page.locator('label:has-text("Purchase")').first().click({ timeout: 3000 }).catch(() => {});
+    await page.locator(`label:has-text("${type}")`).first().click({ timeout: 3000 }).catch(() => {});
   }
   await page.waitForTimeout(400);
-  progress(opts, 'purchase', 'Type set to Purchase', 44);
+  progress(opts, stepKey, `Type set to ${type}`, 44);
 
-  await debugScreenshot(page, '08-filters-set');
+  // Center field: only used when filtering by satellite. The field is
+  // a typeahead — type the name, wait for the dropdown, click the
+  // matching option. We type only the suffix after "MAGNACODE - " to
+  // narrow the dropdown quickly.
+  if (centerName) {
+    progress(opts, stepKey, `Selecting Center: ${centerName}...`, 46);
+    // Find the Center input. The filter form labels it "Center".
+    const centerInput = page.locator(
+      'input[name*="enter" i], input[id*="enter" i], input[placeholder*="enter" i], input[aria-label*="enter" i]'
+    ).first();
+    let centerInputVisible = await centerInput.isVisible({ timeout: 2_000 }).catch(() => false);
+    let centerHandle = centerInputVisible ? centerInput : null;
+    if (!centerHandle) {
+      // Fallback: find input that's positioned to the right of a "Center"
+      // label cell. Walks the DOM to identify it without relying on
+      // attributes that may not be present.
+      const centerSelector = await page.evaluate(() => {
+        const all = Array.from(document.querySelectorAll('input[type="text"], input:not([type])'));
+        for (let i = 0; i < all.length; i++) {
+          const el = all[i] as HTMLInputElement;
+          // Walk up to find a parent / sibling whose text mentions "Center"
+          let p: Element | null = el.parentElement;
+          for (let depth = 0; depth < 4 && p; depth++) {
+            const txt = (p.textContent || '').trim();
+            if (/^\s*Center\s*$/i.test(txt) || /\bCenter\b/.test(txt.split('\n')[0])) {
+              el.setAttribute('data-mt-center', '1');
+              return true;
+            }
+            p = p.parentElement;
+          }
+        }
+        return false;
+      });
+      if (centerSelector) {
+        centerHandle = page.locator('input[data-mt-center="1"]').first();
+        centerInputVisible = true;
+      }
+    }
+    if (!centerInputVisible || !centerHandle) {
+      await debugScreenshot(page, `07b-FAILED-center-input-not-found-${stepKey}`);
+      throw new Error('Could not locate the Center field on the Purchase/Sales Report filter.');
+    }
+
+    // Type the full center name and wait for the typeahead dropdown.
+    await centerHandle.click({ timeout: 3_000 });
+    await centerHandle.fill('');
+    await page.waitForTimeout(200);
+    // Type a short prefix that's still discriminating (skip the
+    // "MAGNACODE - " part since every option starts with that).
+    const typeable = centerName.replace(/^MAGNACODE\s*-\s*/i, '').trim();
+    await page.keyboard.type(typeable, { delay: 30 });
+    await page.waitForTimeout(700);
+    await debugScreenshot(page, `07c-center-typeahead-${stepKey}`);
+
+    // Click the matching dropdown option. The dropdown items show the
+    // full center name (e.g. "MAGNACODE - MARREDPALLY"). We try
+    // Playwright text locator first, then a DOM search as a fallback.
+    const optionLoc = page.locator(`text=${centerName}`).first();
+    let optionClicked = await optionLoc.isVisible({ timeout: 2_500 }).catch(() => false);
+    if (optionClicked) {
+      await optionLoc.click({ timeout: 5_000 });
+    } else {
+      const found = await page.evaluate((name: string) => {
+        const all = document.querySelectorAll('li, div, span, button, a');
+        for (const el of all) {
+          const txt = (el.textContent || '').trim();
+          if (txt === name && (el as HTMLElement).offsetParent !== null) {
+            (el as HTMLElement).click();
+            return true;
+          }
+        }
+        return false;
+      }, centerName);
+      if (!found) {
+        // Last resort: press Enter to accept the first dropdown option
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(300);
+      }
+    }
+    await page.waitForTimeout(400);
+    await debugScreenshot(page, `07d-center-selected-${stepKey}`);
+    progress(opts, stepKey, `Center: ${centerName}`, 47);
+  }
+
+  await debugScreenshot(page, `08-filters-set-${stepKey}`);
 
   // Click Detailed to render the report
-  progress(opts, 'purchase', 'Generating report...', 48);
+  progress(opts, stepKey, `Generating ${type.toLowerCase()} report...`, 48);
   await page.locator(
     'button:has-text("Detailed"), a:has-text("Detailed"), input[value="Detailed"]'
   ).first().click({ timeout: TIMEOUT });
@@ -389,13 +490,13 @@ async function downloadPurchaseReport(
   try {
     await page.waitForLoadState('networkidle', { timeout: 30_000 });
   } catch {
-    console.log('[oneglance-hyderabad] networkidle timeout while loading Purchase Report; proceeding');
+    console.log(`[oneglance-hyderabad] networkidle timeout while loading ${type} Report; proceeding`);
   }
-  await debugScreenshot(page, '09-report-loaded');
-  progress(opts, 'purchase', 'Report rendered', 65);
+  await debugScreenshot(page, `09-report-loaded-${stepKey}`);
+  progress(opts, stepKey, 'Report rendered', 65);
 
   // Download the CSV. The header has csv + pdf buttons; we only want csv.
-  progress(opts, 'purchase', 'Downloading CSV...', 70);
+  progress(opts, stepKey, 'Downloading CSV...', 70);
   const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
   await page.locator(
     'button:has-text("csv"), a:has-text("csv"), input[value="csv"]'
@@ -403,11 +504,11 @@ async function downloadPurchaseReport(
   const download = await downloadPromise;
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const filename = `oneglance-hyderabad-purchase-${timestamp}.csv`;
+  const filename = `oneglance-hyderabad-${type.toLowerCase()}-${timestamp}.csv`;
   const filePath = path.join(downloadDir, filename);
   await download.saveAs(filePath);
-  progress(opts, 'purchase', 'CSV downloaded', 80);
-  await debugScreenshot(page, '10-after-csv-click');
+  progress(opts, stepKey, 'CSV downloaded', 80);
+  await debugScreenshot(page, `10-after-csv-click-${stepKey}`);
 
   return { filePath, filename };
 }
@@ -459,7 +560,21 @@ export async function syncOneglanceHyderabad(
 
     if (opts.reports.includes('purchase')) {
       await navigateToStorePurchaseSalesReport(page, opts);
-      result.purchaseFile = await downloadPurchaseReport(page, opts, downloadDir);
+      result.purchaseFile = await downloadStoreReport(page, opts, downloadDir, 'Purchase', null);
+    }
+
+    if (opts.reports.includes('sales')) {
+      if (!opts.oneglanceCenter) {
+        throw new Error(
+          'Sales sync requires the satellite\'s OneGlance Center Name. Set it on the satellite branch in Admin → Branches.',
+        );
+      }
+      // Re-navigate to the report page so we land on a clean filter
+      // form. After a Purchase download we'd be on the rendered report
+      // table — clicking Filter would also work, but a fresh nav is
+      // simpler and the perf cost is negligible (one page load).
+      await navigateToStorePurchaseSalesReport(page, opts);
+      result.salesFile = await downloadStoreReport(page, opts, downloadDir, 'Sales', opts.oneglanceCenter);
     }
 
     return result;

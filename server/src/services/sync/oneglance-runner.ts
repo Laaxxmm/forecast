@@ -47,15 +47,17 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
 
   const db = await getClientHelper(tenantSlug);
 
-  // Look up branch role + city + parent so we can:
+  // Look up branch role + city + parent + oneglance_center so we can:
   // - dispatch between the existing emr7 scraper and the new emr25 / Hyderabad
   //   scraper without touching the rest of the pipeline
   // - resolve credentials from the parent Store when called from a satellite
   //   (Hyderabad uses a single shared OneGlance login for the whole city)
+  // - pass the satellite's OneGlance Center filter to the scraper
   // - skip parsing reports that don't apply to the branch role
   const platformDbForRole = await getPlatformHelper();
   const branchRow = branchId ? platformDbForRole.get(
-    `SELECT branch_role, parent_branch_id, city
+    `SELECT branch_role, parent_branch_id, city,
+            COALESCE(oneglance_center, '') as oneglance_center
        FROM branches WHERE id = ?`,
     branchId,
   ) : null;
@@ -66,6 +68,7 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
   const cityNorm = (branchRow?.city || '').toString().trim().toLowerCase();
   const isHyderabad = cityNorm === 'hyderabad';
   const useHyderabadScraper = isHyderabad && (branchRole === 'central_store' || branchRole === 'satellite');
+  const oneglanceCenter = (branchRow?.oneglance_center || '').toString().trim();
 
   // Credential lookup. For Hyderabad satellites the credentials live on the
   // parent central_store (one shared OneGlance login for the whole city);
@@ -104,20 +107,28 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
   let result: ResultShape;
 
   if (useHyderabadScraper) {
-    // Decide which Hyderabad reports to download for this run. Only
-    // 'purchase' is implemented today (central_store only); the other
-    // role/report combinations get added one at a time.
-    const reports: Array<'purchase'> = [];
+    // Decide which Hyderabad reports to download for this run.
+    // Coverage today:
+    //   central_store → Purchase
+    //   satellite     → Sales
+    // (Stock + Stock Transfer at satellites land in subsequent rounds.)
+    const reports: Array<'purchase' | 'sales'> = [];
     if (branchRole === 'central_store') {
       if (reportType === 'purchase' || reportType === 'both' || reportType === 'all' || !reportType) {
         reports.push('purchase');
       }
+    } else if (branchRole === 'satellite') {
+      if (reportType === 'sales' || reportType === 'both' || reportType === 'all' || !reportType) {
+        if (!oneglanceCenter) {
+          throw new Error(
+            'OneGlance Center Name not configured for this satellite. Set it on the branch in Admin → Branches before syncing.',
+          );
+        }
+        reports.push('sales');
+      }
     }
-    // satellite + Hyderabad: no reports wired yet — return an empty run
-    // rather than fall through to the emr7 scraper which doesn't know
-    // the emr25 navigation.
     if (reports.length === 0) {
-      progress('complete', 'No Hyderabad reports configured for this branch yet', 100);
+      progress('complete', 'No Hyderabad reports configured for this branch / report type combination', 100);
       return { totalRows: 0, importIds: {} };
     }
 
@@ -125,9 +136,13 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
     const hydResult = await syncOneglanceHyderabad({
       username, password, fromDate, toDate,
       reports,
+      oneglanceCenter: oneglanceCenter || undefined,
       onProgress: progress,
     });
-    result = { purchaseFile: hydResult.purchaseFile };
+    result = {
+      purchaseFile: hydResult.purchaseFile,
+      salesFile: hydResult.salesFile,
+    };
   } else {
     const { syncOneglance } = await import('./oneglance-sync.js');
     result = await syncOneglance({
