@@ -12,6 +12,7 @@ import { getPlatformHelper } from '../../db/platform-connection.js';
 import { parseOneglanceSales } from '../parsers/oneglance-sales.js';
 import { parseOneglancePurchase } from '../parsers/oneglance-purchase.js';
 import { parseOneglanceStock } from '../parsers/oneglance-stock.js';
+import { parseOneglanceTransfer } from '../parsers/oneglance-transfer.js';
 import { recomputeBranchCogs } from '../pharmacy/cogs.js';
 
 export type ProgressFn = (step: string, message: string, pct: number) => void;
@@ -30,7 +31,7 @@ export interface OneglanceRunOpts {
 
 export interface OneglanceRunResult {
   totalRows: number;
-  importIds: { sales?: number; purchase?: number; stock?: number };
+  importIds: { sales?: number; purchase?: number; stock?: number; transfer?: number };
   /**
    * Partial-success: when the stock report failed (commonly a renderer
    * crash on huge-inventory branches) but sales+purchase succeeded, the
@@ -102,6 +103,7 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
     salesFile?: { filePath: string; filename: string };
     purchaseFile?: { filePath: string; filename: string };
     stockFile?: { filePath: string; filename: string };
+    transferFile?: { filePath: string; filename: string };
     stockError?: string;
   };
   let result: ResultShape;
@@ -110,35 +112,37 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
     // Decide which Hyderabad reports to download for this run.
     // Coverage today:
     //   central_store → Purchase
-    //   satellite     → Sales
-    // (Stock + Stock Transfer at satellites are surfaced as buttons in
-    // the Auto Sync UI but the Playwright is not yet wired — we throw a
+    //   satellite     → Sales, Stock Transfer
+    // Stock Report auto-sync at satellites is still pending — surface a
     // clear actionable error instead of silently no-op'ing so the user
-    // knows what's missing.)
+    // knows what's missing.
     if (branchRole === 'satellite' && reportType === 'stock') {
       throw new Error(
         'Stock Report auto-sync for Hyderabad satellites is not yet wired. Walk Claude through the OneGlance navigation for the Stock Report and it will be enabled in the next round.',
       );
     }
-    if (branchRole === 'satellite' && reportType === 'transfer') {
-      throw new Error(
-        'Stock Transfer auto-sync for Hyderabad satellites is not yet wired. Walk Claude through the OneGlance navigation for Stock Transfer Details and it will be enabled in the next round.',
-      );
-    }
 
-    const reports: Array<'purchase' | 'sales'> = [];
+    const reports: Array<'purchase' | 'sales' | 'transfer'> = [];
     if (branchRole === 'central_store') {
       if (reportType === 'purchase' || reportType === 'both' || reportType === 'all' || !reportType) {
         reports.push('purchase');
       }
     } else if (branchRole === 'satellite') {
-      if (reportType === 'sales' || reportType === 'both' || reportType === 'all' || !reportType) {
+      // Sales: 'sales' | 'both' | 'all' | undefined → include sales
+      // Transfer: 'transfer' | 'all' | undefined → include transfer
+      // 'both' is treated as Sales-only (legacy alias) so manual users
+      // who pick "both" don't suddenly start downloading transfers
+      // they didn't expect.
+      const wantSales = reportType === 'sales' || reportType === 'both' || reportType === 'all' || !reportType;
+      const wantTransfer = reportType === 'transfer' || reportType === 'all' || !reportType;
+      if (wantSales || wantTransfer) {
         if (!oneglanceCenter) {
           throw new Error(
             'OneGlance Center Name not configured for this satellite. Set it on the branch in Admin → Branches before syncing.',
           );
         }
-        reports.push('sales');
+        if (wantSales) reports.push('sales');
+        if (wantTransfer) reports.push('transfer');
       }
     }
     if (reports.length === 0) {
@@ -156,6 +160,7 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
     result = {
       purchaseFile: hydResult.purchaseFile,
       salesFile: hydResult.salesFile,
+      transferFile: hydResult.transferFile,
     };
   } else {
     if (reportType === 'transfer') {
@@ -337,6 +342,120 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
       db.endBatch();
     } catch (e) { db.rollbackBatch(); throw e; }
     totalRows += rows.length;
+  }
+
+  // ── Stock Transfer Details ───────────────────────────────────────────
+  // Hyderabad-only flow: a satellite's downloaded "Stock Transfer
+  // Details" report lists rows transferred IN from the central Store.
+  // Mirror the manual /import/oneglance-transfer endpoint logic — same
+  // counterparty resolution, same dedup pattern, same insert columns.
+  // Today this only runs for satellites (the Hyderabad scraper only
+  // downloads transfer for satellites), but the role-aware branch_from
+  // / branch_to assignment matches the manual endpoint so a future
+  // central_store transfer flow would Just Work.
+  if (result.transferFile) {
+    progress('parsing', 'Parsing stock transfer report...', 93);
+    const { rows: parsedRows, summary } = parseOneglanceTransfer(result.transferFile.filePath);
+
+    const platformDb = await getPlatformHelper();
+    const allBranches = platformDb.all(
+      'SELECT id, name, code FROM branches WHERE client_id = ?',
+      clientId,
+    );
+    const norm = (s: string) => String(s || '').toUpperCase().replace(/MAGNACODE\s*-\s*/i, '').trim();
+    const nameIndex = new Map<string, number>();
+    for (const b of allBranches) {
+      if (b.name) nameIndex.set(norm(b.name), b.id);
+      if (b.code) nameIndex.set(norm(b.code), b.id);
+    }
+    const parentBranchId: number | null = branchRow?.parent_branch_id || null;
+    const resolveCounterparty = (raw: string | null): number | null => {
+      if (!raw) return parentBranchId;
+      const hit = nameIndex.get(norm(raw));
+      if (hit) return hit;
+      return parentBranchId;
+    };
+
+    const insertRows = parsedRows.map(r => {
+      const counterpartyId = resolveCounterparty(r.counterparty_raw);
+      const branchFrom = branchRole === 'central_store'
+        ? branchId!
+        : (counterpartyId || parentBranchId || branchId!);
+      const branchTo = branchRole === 'central_store'
+        ? (counterpartyId || branchId!)
+        : branchId!;
+      return { ...r, branch_from_id: branchFrom, branch_to_id: branchTo };
+    });
+
+    // Dedup by (branch_to_id, invoice_date) so re-syncs cleanly replace
+    // the previous data window. Mirrors the sales/purchase dedup pattern.
+    const datesByDest = new Map<number, Set<string>>();
+    for (const r of insertRows) {
+      if (!r.invoice_date) continue;
+      if (!datesByDest.has(r.branch_to_id)) datesByDest.set(r.branch_to_id, new Set());
+      datesByDest.get(r.branch_to_id)!.add(r.invoice_date);
+    }
+    for (const [destId, dateSet] of datesByDest) {
+      const dates = [...dateSet];
+      const ph = dates.map(() => '?').join(',');
+      db.run(
+        `DELETE FROM pharmacy_stock_transfers WHERE branch_to_id = ? AND invoice_date IN (${ph})`,
+        destId, ...dates,
+      );
+    }
+
+    db.run(
+      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      'ONEGLANCE_TRANSFER_SYNC', result.transferFile.filename, insertRows.length,
+      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId, result.transferFile.filePath,
+    );
+    const transferImportId = db.get("SELECT id FROM import_logs WHERE source = 'ONEGLANCE_TRANSFER_SYNC' ORDER BY id DESC LIMIT 1")?.id || 0;
+    importIds.transfer = transferImportId;
+
+    db.beginBatch();
+    try {
+      for (const r of insertRows) {
+        db.run(
+          `INSERT INTO pharmacy_stock_transfers (
+            import_id, branch_from_id, branch_to_id,
+            invoice_no, invoice_date, invoice_month, indent_no, indent_date,
+            drug_name, drug_name_normalized, batch_no,
+            qty, rate, mrp,
+            gst_5, cgst_5, sgst_5, gst_12, cgst_12, sgst_12,
+            gst_18, cgst_18, sgst_18, gst_28, cgst_28, sgst_28,
+            gst_other, cgst_other, sgst_other,
+            gst_total, cgst_total, sgst_total,
+            total_value, purchase_value, purchase_price, counterparty_raw
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          transferImportId, r.branch_from_id, r.branch_to_id,
+          r.invoice_no, r.invoice_date, r.invoice_month, r.indent_no, r.indent_date,
+          r.drug_name, r.drug_name_normalized, r.batch_no,
+          r.qty, r.rate, r.mrp,
+          r.gst_5, r.cgst_5, r.sgst_5, r.gst_12, r.cgst_12, r.sgst_12,
+          r.gst_18, r.cgst_18, r.sgst_18, r.gst_28, r.cgst_28, r.sgst_28,
+          r.gst_other, r.cgst_other, r.sgst_other,
+          r.gst_total, r.cgst_total, r.sgst_total,
+          r.total_value, r.purchase_value, r.purchase_price, r.counterparty_raw,
+        );
+      }
+      db.endBatch();
+    } catch (e) { db.rollbackBatch(); throw e; }
+    totalRows += insertRows.length;
+
+    // COGS for the destination branch(es) needs to be refreshed since
+    // satellite COGS is derived from incoming-transfer purchase_price.
+    const monthsTouched = [...new Set(insertRows.map(r => r.invoice_month).filter(Boolean))];
+    const destBranchIds = [...new Set(insertRows.map(r => r.branch_to_id))];
+    for (const destId of destBranchIds) {
+      try {
+        await recomputeBranchCogs(db, destId, monthsTouched);
+      } catch (e: any) {
+        console.warn(`[oneglance-runner] COGS recompute for branch ${destId} skipped:`, e?.message);
+      }
+    }
+
+    console.log(`[oneglance-runner] Stock Transfer: ${insertRows.length} rows imported, ${destBranchIds.length} destination branch(es)`);
   }
 
   // ── Stock snapshot ───────────────────────────────────────────────────
