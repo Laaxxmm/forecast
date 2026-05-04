@@ -414,88 +414,87 @@ async function downloadStoreReport(
       // Clear any prior tag so a re-run doesn't pick up the previous match.
       document.querySelectorAll('[data-mt-center="1"]').forEach(el => el.removeAttribute('data-mt-center'));
 
-      // Inline helper: walk siblings + ancestors looking for the nearest
-      // text/search input. Arrow expression to avoid the __name decoration.
-      const findNearbyInput = (el: Element): HTMLInputElement | null => {
-        let sib = el.nextElementSibling;
-        let hops = 0;
-        while (sib && hops < 5) {
-          if (sib.tagName === 'INPUT') return sib as HTMLInputElement;
-          const inp = sib.querySelector('input[type="text"], input:not([type]), input[type="search"]');
-          if (inp) return inp as HTMLInputElement;
-          sib = sib.nextElementSibling;
-          hops++;
-        }
-        let p: Element | null = el.parentElement;
-        for (let depth = 0; depth < 3 && p; depth++) {
-          let sib2 = p.nextElementSibling;
-          while (sib2) {
-            if (sib2.tagName === 'INPUT') return sib2 as HTMLInputElement;
-            const inp = sib2.querySelector('input[type="text"], input:not([type]), input[type="search"]');
-            if (inp) return inp as HTMLInputElement;
-            sib2 = sib2.nextElementSibling;
-          }
-          p = p.parentElement;
-        }
-        return null;
-      };
+      // Strategy A (the real fix): visual-order label match. Build a
+      // sorted list of every visible label-bearing element AND every
+      // visible text input on the page, sorted by Y then X. The Center
+      // input is the input whose IMMEDIATELY-PRECEDING label (in
+      // visual order) has own-text exactly "Center" / "Center:". This
+      // beats sibling-walking because it doesn't depend on parent/
+      // child structure — only on what the user sees on screen.
+      type Item = { kind: 'label' | 'input'; el: Element; text: string; x: number; y: number };
+      const items: Item[] = [];
 
-      // Strategy A: label-text match. Find any label / th / td / dt /
-      // span / div / p whose own text (children's text only, not nested
-      // labels) is "Center" or "Center:".
-      const labelSelectors = ['label', 'th', 'td', 'dt', 'span', 'div', 'p'];
-      const labelEls = document.querySelectorAll(labelSelectors.join(','));
-      for (const el of labelEls) {
-        const direct = Array.from(el.childNodes)
-          .filter(n => n.nodeType === Node.TEXT_NODE)
-          .map(n => (n.textContent || '').trim())
-          .join(' ').trim();
-        if (/^Center:?\s*$/i.test(direct)) {
-          const input = findNearbyInput(el);
-          if (input) {
-            input.setAttribute('data-mt-center', '1');
-            return { method: 'label-text', tag: el.tagName, label: direct };
+      const labelTags = ['label', 'th', 'td', 'dt', 'span', 'div', 'p'];
+      for (const sel of labelTags) {
+        for (const el of document.querySelectorAll(sel)) {
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0 || (el as HTMLElement).offsetParent === null) continue;
+          const ownText = Array.from(el.childNodes)
+            .filter(n => n.nodeType === Node.TEXT_NODE)
+            .map(n => (n.textContent || '').trim())
+            .join(' ').trim();
+          if (ownText && ownText.length < 60) {
+            items.push({ kind: 'label', el, text: ownText, x: Math.round(r.x), y: Math.round(r.y) });
           }
         }
       }
-
-      // Strategy B: any input/textarea whose attributes mention "center"
-      // (name/id/placeholder/aria-label/data-name).
-      const inputs = document.querySelectorAll<HTMLInputElement>('input, textarea');
-      for (const inp of inputs) {
-        const blob = `${inp.name || ''} ${inp.id || ''} ${inp.placeholder || ''} ${inp.getAttribute('aria-label') || ''} ${inp.getAttribute('data-name') || ''}`.toLowerCase();
-        if (blob.includes('center')) {
-          inp.setAttribute('data-mt-center', '1');
-          return { method: 'attr', tag: inp.tagName, blob };
-        }
-      }
-
-      // Strategy C: positional — the input vertically closest above the
-      // "Detailed" button. Per the user's screenshot, Center is the
-      // bottom-most filter field.
-      const filterInputs = Array.from(document.querySelectorAll<HTMLInputElement>(
-        'input[type="text"], input:not([type]), input[type="search"]'
-      )).filter(el => {
+      for (const el of document.querySelectorAll<HTMLInputElement>(
+        'input[type="text"], input[type="search"], input:not([type])'
+      )) {
         const r = el.getBoundingClientRect();
-        return r.width > 50 && r.height > 10 && el.offsetParent !== null;
-      });
-      if (filterInputs.length > 0) {
-        const detailedBtn = Array.from(document.querySelectorAll('button, input'))
-          .find(el => /^\s*Detailed\s*$/i.test((el.textContent || '').trim()) || (el as HTMLInputElement).value === 'Detailed');
-        if (detailedBtn) {
-          const btnY = detailedBtn.getBoundingClientRect().top;
-          const above = filterInputs
-            .map(el => ({ el, dy: btnY - el.getBoundingClientRect().bottom }))
-            .filter(x => x.dy > 0)
-            .sort((a, b) => a.dy - b.dy);
-          if (above.length > 0) {
-            above[0].el.setAttribute('data-mt-center', '1');
-            return { method: 'positional-above-detailed', tag: 'INPUT' };
+        if (r.width < 50 || r.height < 10 || el.offsetParent === null) continue;
+        items.push({ kind: 'input', el, text: '', x: Math.round(r.x), y: Math.round(r.y) });
+      }
+
+      items.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind !== 'input') continue;
+        for (let j = i - 1; j >= 0; j--) {
+          if (items[j].kind !== 'label') continue;
+          const t = items[j].text;
+          if (/^Center:?\s*$/i.test(t)) {
+            (items[i].el as HTMLInputElement).setAttribute('data-mt-center', '1');
+            return { method: 'visual-order-label', label: t, x: items[i].x, y: items[i].y };
           }
+          // Stop at the FIRST label preceding this input — if it's
+          // not "Center", this input belongs to a different field.
+          break;
         }
-        const last = filterInputs[filterInputs.length - 1];
-        last.setAttribute('data-mt-center', '1');
-        return { method: 'positional-last', tag: 'INPUT' };
+      }
+
+      // Strategy B: any input/textarea whose attributes literally mention
+      // "center" with word boundaries (avoids false positives like
+      // "centered" or "center-align" CSS classes).
+      for (const inp of document.querySelectorAll<HTMLInputElement>('input, textarea')) {
+        const r = inp.getBoundingClientRect();
+        if (r.width < 50 || r.height < 10 || inp.offsetParent === null) continue;
+        const blob = `${inp.name || ''} ${inp.id || ''} ${inp.placeholder || ''} ${inp.getAttribute('aria-label') || ''} ${inp.getAttribute('data-name') || ''}`.toLowerCase();
+        if (/\bcenter\b/.test(blob) || /\bcentre\b/.test(blob)) {
+          inp.setAttribute('data-mt-center', '1');
+          return { method: 'attr-word-boundary', blob };
+        }
+      }
+
+      // Strategy C: positional — the first text input below the Type
+      // radio group (Purchase / Sales). Per the user's screenshot,
+      // Center sits directly under Type. This is more specific than
+      // "input above Detailed" which previously matched Batch No.
+      const radios = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="radio"]'))
+        .filter(r => r.offsetParent !== null);
+      if (radios.length > 0) {
+        const radioBottom = Math.max(...radios.map(r => r.getBoundingClientRect().bottom));
+        const textInputs = Array.from(document.querySelectorAll<HTMLInputElement>(
+          'input[type="text"], input[type="search"], input:not([type])'
+        )).filter(el => {
+          const r = el.getBoundingClientRect();
+          return r.width > 50 && r.height > 10 && el.offsetParent !== null && r.top > radioBottom;
+        });
+        if (textInputs.length > 0) {
+          textInputs.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+          textInputs[0].setAttribute('data-mt-center', '1');
+          return { method: 'visual-position-below-radios' };
+        }
       }
 
       return null;
