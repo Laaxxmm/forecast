@@ -410,7 +410,30 @@ async function downloadStoreReport(
     // them with `__name(fn, "...")` decorations that don't exist in
     // the browser, throwing `ReferenceError: __name is not defined`.
     // Use only arrow expressions, ternaries, and inline lookups.
-    const tagged = await page.evaluate(() => {
+    // Strategy 0 — Playwright's native label resolution. This handles
+    // <label for=...>, aria-labelledby, and implicit <label><input/></label>
+    // containment all at once. Tag whatever it finds with data-mt-center
+    // so the rest of the flow can locate it.
+    let tagged: any = null;
+    try {
+      const byLabel = page.getByLabel(/^\s*Center\s*:?\s*$/i, { exact: false }).first();
+      if (await byLabel.count() > 0) {
+        // Confirm it's actually an input (could be a select etc — we'd
+        // adapt later if so) and visible.
+        const ok = await byLabel.evaluate(el => {
+          if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return false;
+          const r = el.getBoundingClientRect();
+          if (r.width < 30 || r.height < 10) return false;
+          el.setAttribute('data-mt-center', '1');
+          return true;
+        }).catch(() => false);
+        if (ok) tagged = { method: 'playwright-getByLabel' };
+      }
+    } catch {
+      // getByLabel not available or threw — fall through.
+    }
+
+    if (!tagged) tagged = await page.evaluate(() => {
       // Clear any prior tag so a re-run doesn't pick up the previous match.
       document.querySelectorAll('[data-mt-center="1"]').forEach(el => el.removeAttribute('data-mt-center'));
 
@@ -502,7 +525,54 @@ async function downloadStoreReport(
 
     if (!tagged) {
       await debugScreenshot(page, `07b-FAILED-center-input-not-found-${stepKey}`);
-      throw new Error('Could not locate the Center field on the Purchase/Sales Report filter.');
+      // Dump the form's visible labels + inputs to a JSON file the user
+      // can share — far more actionable than just "not found".
+      try {
+        const dump = await page.evaluate(() => {
+          const out: any = { url: location.href, items: [] as any[] };
+          for (const sel of ['label', 'th', 'td', 'dt', 'span', 'div', 'p']) {
+            for (const el of document.querySelectorAll(sel)) {
+              const r = el.getBoundingClientRect();
+              if (r.width === 0 || r.height === 0 || (el as HTMLElement).offsetParent === null) continue;
+              const ownText = Array.from(el.childNodes)
+                .filter(n => n.nodeType === Node.TEXT_NODE)
+                .map(n => (n.textContent || '').trim())
+                .join(' ').trim();
+              if (ownText && ownText.length < 60) {
+                out.items.push({ kind: 'label', tag: el.tagName, text: ownText, x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) });
+              }
+            }
+          }
+          for (const el of document.querySelectorAll<HTMLInputElement>('input, textarea, select')) {
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0 || (el as HTMLElement).offsetParent === null) continue;
+            out.items.push({
+              kind: 'input', tag: el.tagName,
+              type: (el as HTMLInputElement).type || '',
+              name: (el as HTMLInputElement).name || '',
+              id: el.id || '',
+              placeholder: (el as HTMLInputElement).placeholder || '',
+              ariaLabel: el.getAttribute('aria-label') || '',
+              cls: (el.className || '').toString().slice(0, 80),
+              x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height),
+            });
+          }
+          out.items.sort((a: any, b: any) => (a.y - b.y) || (a.x - b.x));
+          return out;
+        });
+        const dumpPath = path.join(DEBUG_DIR, `07c-form-dump-${stepKey}.json`);
+        fs.writeFileSync(dumpPath, JSON.stringify(dump, null, 2));
+        console.log(`[oneglance-hyderabad] Center detection failed. Form dump saved to ${dumpPath}`);
+        console.log(`[oneglance-hyderabad] Visible items near "Center":`,
+          JSON.stringify(dump.items.filter((it: any) => /center/i.test(it.text || '') || /center/i.test(it.id || '') || /center/i.test(it.name || '')), null, 2));
+      } catch (e: any) {
+        console.warn('[oneglance-hyderabad] Form dump failed:', e?.message);
+      }
+      throw new Error(
+        'Could not locate the Center field on the Purchase/Sales Report filter. ' +
+        'A diagnostic dump of every visible label + input has been saved under data/uploads/debug-hyderabad/ ' +
+        '(filename starts with 07c-form-dump). Download it via /api/debug/hyderabad/file?path=07c-form-dump-sales.json',
+      );
     }
     console.log(`[oneglance-hyderabad] Center field located via ${tagged.method}:`, JSON.stringify(tagged));
     const centerHandle = page.locator('input[data-mt-center="1"]').first();
