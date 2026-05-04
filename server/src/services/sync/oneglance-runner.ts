@@ -112,30 +112,23 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
     // Decide which Hyderabad reports to download for this run.
     // Coverage today:
     //   central_store → Purchase
-    //   satellite     → Sales, Stock Transfer
-    // Stock Report auto-sync at satellites is still pending — surface a
-    // clear actionable error instead of silently no-op'ing so the user
-    // knows what's missing.
-    if (branchRole === 'satellite' && reportType === 'stock') {
-      throw new Error(
-        'Stock Report auto-sync for Hyderabad satellites is not yet wired. Walk Claude through the OneGlance navigation for the Stock Report and it will be enabled in the next round.',
-      );
-    }
-
-    const reports: Array<'purchase' | 'sales' | 'transfer'> = [];
+    //   satellite     → Sales, Stock Transfer, Stock Report
+    const reports: Array<'purchase' | 'sales' | 'transfer' | 'stock'> = [];
     if (branchRole === 'central_store') {
       if (reportType === 'purchase' || reportType === 'both' || reportType === 'all' || !reportType) {
         reports.push('purchase');
       }
     } else if (branchRole === 'satellite') {
-      // Sales: 'sales' | 'both' | 'all' | undefined → include sales
-      // Transfer: 'transfer' | 'all' | undefined → include transfer
+      // Sales:    'sales'    | 'both' | 'all' | undefined → include
+      // Transfer: 'transfer' |          'all' | undefined → include
+      // Stock:    'stock'    |          'all' | undefined → include
       // 'both' is treated as Sales-only (legacy alias) so manual users
-      // who pick "both" don't suddenly start downloading transfers
-      // they didn't expect.
+      // who pick "both" don't suddenly start downloading transfers /
+      // stock they didn't expect.
       const wantSales = reportType === 'sales' || reportType === 'both' || reportType === 'all' || !reportType;
       const wantTransfer = reportType === 'transfer' || reportType === 'all' || !reportType;
-      if (wantSales || wantTransfer) {
+      const wantStock = reportType === 'stock' || reportType === 'all' || !reportType;
+      if (wantSales || wantTransfer || wantStock) {
         if (!oneglanceCenter) {
           throw new Error(
             'OneGlance Center Name not configured for this satellite. Set it on the branch in Admin → Branches before syncing.',
@@ -143,6 +136,7 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
         }
         if (wantSales) reports.push('sales');
         if (wantTransfer) reports.push('transfer');
+        if (wantStock) reports.push('stock');
       }
     }
     if (reports.length === 0) {
@@ -161,6 +155,7 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
       purchaseFile: hydResult.purchaseFile,
       salesFile: hydResult.salesFile,
       transferFile: hydResult.transferFile,
+      stockFile: hydResult.stockFile,
     };
   } else {
     if (reportType === 'transfer') {

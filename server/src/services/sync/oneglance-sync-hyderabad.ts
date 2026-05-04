@@ -18,7 +18,7 @@
 //   Purchase Report at central Store           ✅
 //   Sales Report at satellite                  ✅
 //   Stock Transfer Details at satellite        ✅
-//   Stock Report at satellite                  ⏳ next
+//   Stock Report at satellite                  ✅
 //
 // All reports share the same login + Reports-icon / STORE-expand prefix
 // — that's `openStoreSubmenu`. They differ in (a) which sub-menu item
@@ -36,13 +36,13 @@ export interface OneglanceHyderabadSyncOptions {
   fromDate: string;  // YYYY-MM-DD
   toDate: string;    // YYYY-MM-DD
   /** Which reports to download in this run. Subset progressively grows. */
-  reports: Array<'purchase' | 'sales' | 'transfer'>;
+  reports: Array<'purchase' | 'sales' | 'transfer' | 'stock'>;
   /**
    * OneGlance "Center" filter value for satellite Sales / Stock /
    * Transfer runs (e.g. "MAGNACODE - FILM NAGAR" for Jubliee Hills).
-   * Required when `reports` includes 'sales' or 'transfer'. Ignored for
-   * Purchase at the central Store (which leaves the Center field blank
-   * to capture all procurement).
+   * Required when `reports` includes 'sales', 'transfer' or 'stock'.
+   * Ignored for Purchase at the central Store (which leaves the Center
+   * field blank to capture all procurement).
    */
   oneglanceCenter?: string;
   onProgress?: (step: string, message: string, pct: number) => void;
@@ -52,8 +52,7 @@ export interface OneglanceHyderabadSyncResult {
   purchaseFile?: { filePath: string; filename: string };
   salesFile?: { filePath: string; filename: string };
   transferFile?: { filePath: string; filename: string };
-  // Future entries (one per supported report):
-  //   stockFile?
+  stockFile?: { filePath: string; filename: string };
 }
 
 const TIMEOUT = 45_000;
@@ -367,6 +366,27 @@ async function navigateToTransferedStocks(
     page, opts,
     /Trans?ferr?ed\s+Stocks?/i,
     'Transfered Stocks',
+  );
+}
+
+/**
+ * Stock Report lives under STORE → "Stock Report - store" (note the
+ * lowercase 's' on store — OneGlance's labelling is inconsistent).
+ *
+ * Carefully crafted regex to NOT match "Stock Slow Moving Report -
+ * Store" / "Stock Slow Moving Report - center" which sit below it in
+ * the same menu — anchoring on `Stock` followed directly by `Report`
+ * (whitespace only) does the trick.
+ */
+async function navigateToStockReport(
+  page: Page,
+  opts: OneglanceHyderabadSyncOptions,
+): Promise<void> {
+  await openStoreSubmenu(page, opts);
+  await clickStoreReportLink(
+    page, opts,
+    /Stock\s+Report\s*-?\s*store/i,
+    'Stock Report - store',
   );
 }
 
@@ -1179,6 +1199,41 @@ async function downloadTransferReport(
 }
 
 /**
+ * Stock Report flow at a satellite. Filter form has many optional
+ * fields (Product Name / Generic Name / Brand Name / stockiest Name /
+ * Type / Order By) plus the Center typeahead and Period date range —
+ * we leave the optional fields blank to capture the satellite's full
+ * stock snapshot. Three action buttons: Batch wise / Drug wise /
+ * Stock values. We click "Stock values" — that's the format the
+ * existing `parseOneglanceStock` parser knows how to consume.
+ */
+async function downloadStockReport(
+  page: Page,
+  opts: OneglanceHyderabadSyncOptions,
+  downloadDir: string,
+  centerName: string,
+): Promise<{ filePath: string; filename: string }> {
+  const stepKey = 'stock';
+  progress(opts, stepKey, 'Setting Stock Report filters...', 35);
+
+  await setDateRange(page, opts, stepKey);
+  await setCenterField(page, opts, stepKey, centerName);
+  // setCenterField now calls dismissTypeaheadDropdown internally, so
+  // the action button below is reachable.
+  await debugScreenshot(page, `08-filters-set-${stepKey}`);
+
+  progress(opts, stepKey, 'Generating Stock values report...', 48);
+  // Action buttons: Batch wise / Drug wise / Stock values. Stock values
+  // produces the snapshot CSV with avl_qty / strips / purchase_price /
+  // purchase_value / stock_value columns that pharmacy_stock_actuals
+  // expects.
+  await clickActionButton(page, opts, stepKey, 'Stock values');
+
+  await waitForRenderedReport(page, opts, stepKey);
+  return await captureCsvAndSave(page, opts, downloadDir, stepKey, 'stock');
+}
+
+/**
  * Main entry. Spawns Chromium, runs the requested set of Hyderabad
  * downloads, returns file paths. Browser is always closed in `finally`
  * even when a step throws so we don't leak processes.
@@ -1338,6 +1393,18 @@ export async function syncOneglanceHyderabad(
       // inherit state from a prior Purchase/Sales render.
       await navigateToTransferedStocks(page, opts);
       result.transferFile = await downloadTransferReport(page, opts, downloadDir, opts.oneglanceCenter);
+    }
+
+    if (opts.reports.includes('stock')) {
+      if (!opts.oneglanceCenter) {
+        throw new Error(
+          'Stock Report sync requires the satellite\'s OneGlance Center Name. Set it on the satellite branch in Admin → Branches.',
+        );
+      }
+      // Fresh navigation each time — the Stock Report filter form is
+      // distinct from the Sales/Transfer ones we may have just used.
+      await navigateToStockReport(page, opts);
+      result.stockFile = await downloadStockReport(page, opts, downloadDir, opts.oneglanceCenter);
     }
 
     return result;
