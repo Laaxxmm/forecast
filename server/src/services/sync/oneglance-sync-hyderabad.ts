@@ -982,6 +982,153 @@ async function downloadTransferReport(
 }
 
 /**
+ * Click an action button (e.g. "Detailed", "Transfer Report") that
+ * generates the report. OneGlance's Center typeahead, after a value is
+ * selected, renders the selection as a `<textarea readonly>` grid row
+ * that on smaller filter forms (notably Stock Transfer Details, which
+ * only has Period + Center) can visually overlap the button area
+ * below — Playwright's strict actionability check then refuses the
+ * click with `<textarea ...> from <tr>...</tr> subtree intercepts
+ * pointer events`.
+ *
+ * Strategies, in order:
+ *   1. scrollIntoViewIfNeeded so the button is at least in viewport
+ *      (sometimes it just needs to scroll past the expanded grid)
+ *   2. Playwright force-click — bypasses actionability, still produces
+ *      a real isTrusted=true DOM event
+ *   3. JS .click() in page.evaluate — synthetic event but works when
+ *      something is genuinely overlapping
+ */
+async function clickActionButton(
+  page: Page,
+  _opts: OneglanceHyderabadSyncOptions,
+  stepKey: string,
+  buttonText: string,
+): Promise<void> {
+  const sel = `button:has-text("${buttonText}"), a:has-text("${buttonText}"), input[value="${buttonText}"]`;
+  const loc = page.locator(sel).first();
+  await loc.scrollIntoViewIfNeeded({ timeout: 5_000 }).catch(() => {});
+
+  try {
+    await loc.click({ timeout: TIMEOUT, force: true, noWaitAfter: true });
+    console.log(`[oneglance-hyderabad] Action button "${buttonText}" clicked via force`);
+    return;
+  } catch (e1: any) {
+    console.log(`[oneglance-hyderabad] Force-click on "${buttonText}" failed: ${e1?.message}; falling back to JS click`);
+  }
+
+  const clicked = await page.evaluate((text: string) => {
+    const wanted = text.trim().toUpperCase();
+    const cands = document.querySelectorAll('button, a, input[type="button"], input[type="submit"]');
+    for (const b of cands) {
+      const v = ((b as HTMLInputElement).value || b.textContent || '').trim().toUpperCase();
+      if (v === wanted) {
+        try { (b as HTMLElement).click(); return true; } catch {}
+      }
+    }
+    return false;
+  }, buttonText);
+
+  if (!clicked) {
+    await debugScreenshot(page, `08b-FAILED-action-button-not-clickable-${stepKey}`);
+    throw new Error(`Could not click "${buttonText}" — both Playwright force-click and JS .click() failed.`);
+  }
+  console.log(`[oneglance-hyderabad] Action button "${buttonText}" clicked via JS fallback`);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Per-report download flows. Each composes the helpers above with the
+// page-specific bits (Type radio yes/no, action button label).
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Purchase/Sales Report - Store flow. Used for:
+ *   - Purchase at central Store    (type='Purchase', centerName=null)
+ *   - Sales at satellite           (type='Sales',    centerName='MAGNACODE - …')
+ *
+ * Filter form has Period + Stockist + Invoice No + Batch No + Product
+ * Name + Brand Name + Type radio (Purchase/Sales) + Center. The action
+ * button is "Detailed".
+ */
+async function downloadStoreReport(
+  page: Page,
+  opts: OneglanceHyderabadSyncOptions,
+  downloadDir: string,
+  type: 'Purchase' | 'Sales',
+  centerName: string | null,
+): Promise<{ filePath: string; filename: string }> {
+  const stepKey = type.toLowerCase();
+  progress(opts, stepKey, `Setting ${type} Report filters...`, 35);
+
+  await setDateRange(page, opts, stepKey);
+
+  // Ensure Type radio is on the requested value. Click defensively in
+  // case the previous session left it on the other option.
+  const targetTypeLower = type.toLowerCase();
+  const radioClicked = await page.evaluate((wanted: string) => {
+    const radios = document.querySelectorAll('input[type="radio"]');
+    for (const r of radios) {
+      const value = (r as HTMLInputElement).value?.trim().toLowerCase() || '';
+      const labelText = (r.parentElement?.textContent || r.nextSibling?.textContent || '').trim().toLowerCase();
+      if (value === wanted || labelText.includes(wanted)) {
+        (r as HTMLInputElement).click();
+        return true;
+      }
+    }
+    return false;
+  }, targetTypeLower);
+  if (!radioClicked) {
+    await page.locator(`label:has-text("${type}")`).first().click({ timeout: 3000 }).catch(() => {});
+  }
+  await page.waitForTimeout(400);
+  progress(opts, stepKey, `Type set to ${type}`, 44);
+
+  if (centerName) {
+    await setCenterField(page, opts, stepKey, centerName);
+  }
+
+  await debugScreenshot(page, `08-filters-set-${stepKey}`);
+
+  // Click Detailed to render the report.
+  progress(opts, stepKey, `Generating ${type.toLowerCase()} report...`, 48);
+  await clickActionButton(page, opts, stepKey, 'Detailed');
+
+  await waitForRenderedReport(page, opts, stepKey);
+  return await captureCsvAndSave(page, opts, downloadDir, stepKey, type.toLowerCase());
+}
+
+/**
+ * Stock Transfer Details flow at a satellite. Filter form is simpler:
+ * Period + Center only. Three action buttons (Transfer Report / Return
+ * Report / Invoice Wise) — we click "Transfer Report" to get the
+ * incoming-transfers view.
+ */
+async function downloadTransferReport(
+  page: Page,
+  opts: OneglanceHyderabadSyncOptions,
+  downloadDir: string,
+  centerName: string,
+): Promise<{ filePath: string; filename: string }> {
+  const stepKey = 'transfer';
+  progress(opts, stepKey, 'Setting Stock Transfer filters...', 35);
+
+  await setDateRange(page, opts, stepKey);
+  await setCenterField(page, opts, stepKey, centerName);
+  await debugScreenshot(page, `08-filters-set-${stepKey}`);
+
+  progress(opts, stepKey, 'Generating Transfer Report...', 48);
+  // Action buttons on this page: Transfer Report / Return Report /
+  // Invoice Wise. We want "Transfer Report" — the incoming-transfers
+  // listing that the parser knows how to consume. The exact-match in
+  // clickActionButton ensures we don't accidentally hit "Return Report"
+  // or "Invoice Wise".
+  await clickActionButton(page, opts, stepKey, 'Transfer Report');
+
+  await waitForRenderedReport(page, opts, stepKey);
+  return await captureCsvAndSave(page, opts, downloadDir, stepKey, 'transfer');
+}
+
+/**
  * Main entry. Spawns Chromium, runs the requested set of Hyderabad
  * downloads, returns file paths. Browser is always closed in `finally`
  * even when a step throws so we don't leak processes.
