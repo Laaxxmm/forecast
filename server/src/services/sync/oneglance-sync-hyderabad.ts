@@ -629,12 +629,50 @@ async function downloadStoreReport(
     'button:has-text("Detailed"), a:has-text("Detailed"), input[value="Detailed"]'
   ).first().click({ timeout: TIMEOUT });
 
-  // Wait for the data + csv/pdf header to appear
-  await page.waitForTimeout(3000);
+  // Wait for the actual report content to render. networkidle is
+  // unreliable here because OneGlance fires a session keep-alive ping
+  // every 5 seconds — the network is never truly idle. Instead watch
+  // for distinctive markers that only appear AFTER the report data
+  // has been rendered:
+  //   1. The "(Filter by Period:" header that OneGlance prepends to a
+  //      successfully generated report.
+  //   2. The csv button (#csvbtn) becoming attached to the DOM.
+  //   3. At least one data <tr> with multiple <td>s in the rendered
+  //      table (rules out the loading-spinner state where the
+  //      structure exists but has no rows yet).
+  // If none of these appear in 90 seconds we proceed anyway with a
+  // warning — the click + blob interceptor downstream will still
+  // produce a useful failure message.
+  progress(opts, stepKey, 'Waiting for report to render...', 55);
   try {
-    await page.waitForLoadState('networkidle', { timeout: 30_000 });
-  } catch {
-    console.log(`[oneglance-hyderabad] networkidle timeout while loading ${type} Report; proceeding`);
+    await page.waitForFunction(
+      () => {
+        const text = document.body?.textContent || '';
+        if (!/Filter\s+by\s+Period\s*:/i.test(text)) return false;
+        const csvBtn = document.querySelector('#csvbtn');
+        if (!csvBtn) return false;
+        // At least one row with 5+ cells (rules out empty header-only state)
+        const rows = document.querySelectorAll('tr');
+        for (const tr of rows) {
+          const cells = tr.querySelectorAll('td');
+          if (cells.length >= 5) {
+            // also ensure the row is visible (some templates pre-render
+            // hidden skeleton rows during loading)
+            const r = (tr as HTMLElement).getBoundingClientRect();
+            if (r.height > 0 && (tr as HTMLElement).offsetParent !== null) return true;
+          }
+        }
+        return false;
+      },
+      null,
+      { timeout: 90_000, polling: 500 }
+    );
+    // Small settle time for any post-render animations / late row injection
+    await page.waitForTimeout(1200);
+    console.log(`[oneglance-hyderabad] Report rendered, csv button + data rows detected`);
+  } catch (e: any) {
+    console.log(`[oneglance-hyderabad] Report-render wait timed out after 90s: ${e?.message}`);
+    console.log(`[oneglance-hyderabad] Proceeding anyway — downstream click + blob interceptor will surface the actual issue.`);
   }
   await debugScreenshot(page, `09-report-loaded-${stepKey}`);
   progress(opts, stepKey, 'Report rendered', 65);
