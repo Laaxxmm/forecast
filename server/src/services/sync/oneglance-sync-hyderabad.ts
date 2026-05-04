@@ -461,8 +461,12 @@ async function downloadStoreReport(
           }
         }
       }
-      for (const el of document.querySelectorAll<HTMLInputElement>(
-        'input[type="text"], input[type="search"], input:not([type])'
+      // Include <textarea> too — OneGlance's typeahead fields (Stockist,
+      // Product Name, Brand Name, Center) are textareas with class
+      // `editctrl rpinput_edit`, not standard <input>s. Single-line
+      // inputs (Invoice No, Batch No, dates) are real inputs.
+      for (const el of document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+        'input[type="text"], input[type="search"], input:not([type]), textarea'
       )) {
         const r = el.getBoundingClientRect();
         if (r.width < 50 || r.height < 10 || el.offsetParent === null) continue;
@@ -499,16 +503,15 @@ async function downloadStoreReport(
         }
       }
 
-      // Strategy C: positional — the first text input below the Type
-      // radio group (Purchase / Sales). Per the user's screenshot,
-      // Center sits directly under Type. This is more specific than
-      // "input above Detailed" which previously matched Batch No.
+      // Strategy C: positional — the first text-input-OR-textarea below
+      // the Type radio group (Purchase / Sales). OneGlance's Center
+      // typeahead is a <textarea>, not <input>. Includes both.
       const radios = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="radio"]'))
         .filter(r => r.offsetParent !== null);
       if (radios.length > 0) {
         const radioBottom = Math.max(...radios.map(r => r.getBoundingClientRect().bottom));
-        const textInputs = Array.from(document.querySelectorAll<HTMLInputElement>(
-          'input[type="text"], input[type="search"], input:not([type])'
+        const textInputs = Array.from(document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+          'input[type="text"], input[type="search"], input:not([type]), textarea'
         )).filter(el => {
           const r = el.getBoundingClientRect();
           return r.width > 50 && r.height > 10 && el.offsetParent !== null && r.top > radioBottom;
@@ -575,7 +578,7 @@ async function downloadStoreReport(
       );
     }
     console.log(`[oneglance-hyderabad] Center field located via ${tagged.method}:`, JSON.stringify(tagged));
-    const centerHandle = page.locator('input[data-mt-center="1"]').first();
+    const centerHandle = page.locator('[data-mt-center="1"]').first();
 
     // Type the full center name and wait for the typeahead dropdown.
     await centerHandle.click({ timeout: 3_000 });
