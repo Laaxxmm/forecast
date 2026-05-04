@@ -262,7 +262,7 @@ export default function ImportPage() {
   // Sales+Purchase / Sales / Purchase / Stock / All set.
   const allowedOgReports: Array<'both' | 'sales' | 'purchase' | 'stock' | 'transfer' | 'all'> =
     currentBranchRole === 'central_store' ? ['purchase']
-      : currentBranchRole === 'satellite' ? ['sales', 'stock', 'transfer']
+      : currentBranchRole === 'satellite' ? ['sales', 'stock', 'transfer', 'all']
       : ['both', 'sales', 'purchase', 'stock', 'all'];
   // The Auto-Sync defaults useEffect that auto-corrects `syncSource` and
   // `ogReportType` when the role-aware allow lists change is declared
@@ -696,7 +696,16 @@ export default function ImportPage() {
                       // step that matches the user's selection. The
                       // generic steps (login/navigate/parsing/saving/
                       // complete) always pass through.
-                      if (ogReportType === 'all') return true;
+                      // For 'all', show only the steps that will actually
+                      // fire for this branch role — central_store does
+                      // Purchase only; satellite does Sales/Transfer/Stock
+                      // (no Purchase); standalone does Sales/Purchase/Stock
+                      // (no Transfer).
+                      if (ogReportType === 'all') {
+                        if (currentBranchRole === 'central_store') return s.key !== 'sales' && s.key !== 'stock' && s.key !== 'transfer';
+                        if (currentBranchRole === 'satellite') return s.key !== 'purchase';
+                        return s.key !== 'transfer';
+                      }
                       if (ogReportType === 'both') return s.key !== 'stock' && s.key !== 'transfer';
                       if (ogReportType === 'stock') return s.key !== 'sales' && s.key !== 'purchase' && s.key !== 'transfer';
                       if (ogReportType === 'sales') return s.key !== 'purchase' && s.key !== 'stock' && s.key !== 'transfer';
