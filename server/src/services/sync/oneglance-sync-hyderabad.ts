@@ -658,6 +658,63 @@ async function setCenterField(
   await page.waitForTimeout(400);
   await debugScreenshot(page, `07d-center-selected-${stepKey}`);
   progress(opts, stepKey, `Center: ${centerName}`, 47);
+
+  // Dismiss the typeahead popup. OneGlance leaves the dropdown open
+  // after a value is selected — on smaller filter forms (Stock
+  // Transfer especially) the popup overlaps the action buttons below
+  // it, and the popup's z-index intercepts our action-button click
+  // even with force:true. The user-confirmed workaround in the manual
+  // flow is "click anywhere on the filter panel after selecting the
+  // Center" so the dropdown collapses. We replicate it.
+  await dismissTypeaheadDropdown(page, stepKey);
+}
+
+/**
+ * Close any open typeahead/datepicker popup left over from filling a
+ * filter field. Tries multiple no-op interactions in order; whichever
+ * one collapses the popup first wins. All best-effort — failures are
+ * swallowed because the action-button click downstream has its own
+ * fallback.
+ */
+async function dismissTypeaheadDropdown(page: Page, stepKey: string): Promise<void> {
+  // 1. Press Escape — OneGlance's typeahead listens for it on most
+  //    forms but not all.
+  try { await page.keyboard.press('Escape'); } catch {}
+  await page.waitForTimeout(150);
+
+  // 2. Click on a non-interactive element. Try the page's "Filter"
+  //    title chip first (top-right of the panel), then the form's
+  //    "Period From" label, then the report header text. All are
+  //    visible on every Hyderabad report page and not buttons/inputs.
+  const tryClick = async (selector: string): Promise<boolean> => {
+    const loc = page.locator(selector).first();
+    if ((await loc.count()) === 0) return false;
+    try {
+      await loc.click({ force: true, timeout: 2_000, noWaitAfter: true });
+      return true;
+    } catch { return false; }
+  };
+
+  let dismissed = false;
+  for (const sel of [
+    'text=/^Period\\s+From\\s*$/i',
+    'text=/^Period\\s*$/i',
+    'text=/Stock\\s+Transfer\\s+Details/i',
+    'text=/Purchase\\s*\\/\\s*Sales\\s+Report/i',
+  ]) {
+    if (await tryClick(sel)) { dismissed = true; break; }
+  }
+
+  // 3. Coordinate fallback. Click on the gray filter-panel background
+  //    at a point that's clearly not over any input. The panel sits on
+  //    the right side of the viewport (1400px wide context); ~(1450, 600)
+  //    is filter-panel background space on every page we've seen.
+  if (!dismissed) {
+    try { await page.mouse.click(1450, 600); } catch {}
+  }
+
+  await page.waitForTimeout(400);
+  await debugScreenshot(page, `07e-typeahead-dismissed-${stepKey}`);
 }
 
 /**
@@ -710,8 +767,11 @@ async function waitForRenderedReport(
       null,
       { timeout: 90_000, polling: 500 }
     );
-    // Small settle time for any post-render animations / late row injection
-    await page.waitForTimeout(1200);
+    // Settle time for any post-render animations / late row injection.
+    // OneGlance can take several seconds to fully populate larger
+    // reports — bumped from 1.2s to 3s after Stock Transfer testing
+    // showed the csv handler firing on a still-rendering report.
+    await page.waitForTimeout(3000);
     console.log(`[oneglance-hyderabad] Report rendered (${stepKey}), csv button + data rows detected`);
   } catch (e: any) {
     console.log(`[oneglance-hyderabad] Report-render wait timed out after 90s (${stepKey}): ${e?.message}`);
