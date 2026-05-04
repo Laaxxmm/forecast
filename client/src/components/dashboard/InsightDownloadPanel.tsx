@@ -2004,7 +2004,7 @@ function drawStreamSection(
   const rows = computeScorecardRows(stream);
   autoTable(doc, {
     startY: y,
-    head: [['Metric', 'MTD', 'Target', 'Projected EOM', 'Status']],
+    head: [['Metric', 'MTD', 'Target', 'On track for', 'Status']],
     body: rows.map(r => [r.label, r.mtd, r.target, r.projected, '']),
     theme: 'grid',
     styles: { fontSize: 8.8, cellPadding: 2.3, lineColor: CARD_BORDER, lineWidth: 0.1 },
@@ -2891,7 +2891,7 @@ function generateMonthlyPDF(
   if (clinicS && clinicPrimary) {
     // Narrative
     const visits = clinicS.cards.find(c => /visits|patients/i.test(c.label));
-    const clinicNarr = `Clinic recorded ${fmtCount(visits?.mtd || 0)} visits at ${fmtRsLakh(clinicPrimary.mtd)} (${clinicPrimary.target > 0 ? `${Math.round((clinicPrimary.mtd / clinicPrimary.target) * 100)}% of target` : 'no target set'}). Avg ticket ${visits && visits.mtd > 0 ? fmtRsLakh(Math.round(clinicPrimary.mtd / visits.mtd)) : '--'}. Projected EOM ${fmtRsLakh(clinicPrimary.projected)}.`;
+    const clinicNarr = `Clinic recorded ${fmtCount(visits?.mtd || 0)} visits at ${fmtRsLakh(clinicPrimary.mtd)} (${clinicPrimary.target > 0 ? `${Math.round((clinicPrimary.mtd / clinicPrimary.target) * 100)}% of target` : 'no target set'}). Avg ticket ${visits && visits.mtd > 0 ? fmtRsLakh(Math.round(clinicPrimary.mtd / visits.mtd)) : '--'}. On track to finish at ${fmtRsLakh(clinicPrimary.projected)}.`;
     doc.setFontSize(9.5);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(...TEXT_DARK);
@@ -2912,7 +2912,7 @@ function generateMonthlyPDF(
     });
     autoTable(doc, {
       startY: y,
-      head: [['Metric', 'MTD', 'Target', 'Projected EOM', 'Status']],
+      head: [['Metric', 'MTD', 'Target', 'On track for', 'Status']],
       body: sRows.map(r => [r.metric, r.mtd, r.target, r.projected, '']),
       theme: 'plain',
       styles: { fontSize: 8.5, cellPadding: { top: 2, bottom: 2, left: 2, right: 2 }, textColor: TEXT_DARK },
@@ -2963,7 +2963,7 @@ function generateMonthlyPDF(
 
   if (pharmaS && pharmaPrimary) {
     const profit = pharmaProfitCard?.mtd || 0;
-    const pharmaNarr = `Pharmacy delivered ${fmtRsLakh(pharmaPrimary.mtd)} in sales (${pharmaPrimary.target > 0 ? `${Math.round((pharmaPrimary.mtd / pharmaPrimary.target) * 100)}% of target` : 'no target set'}) with gross profit ${fmtRsLakh(profit)} at ${pharmaMargin.toFixed(1)}% margin. ${marginGap < -2 ? `Margin is ${Math.abs(marginGap).toFixed(1)}pp below the ${pharmaMarginTarget.toFixed(1)}% forecast - investigate pricing.` : 'Margin held at or above forecast.'} Projected EOM ${fmtRsLakh(pharmaPrimary.projected)}.`;
+    const pharmaNarr = `Pharmacy delivered ${fmtRsLakh(pharmaPrimary.mtd)} in sales (${pharmaPrimary.target > 0 ? `${Math.round((pharmaPrimary.mtd / pharmaPrimary.target) * 100)}% of target` : 'no target set'}) with gross profit ${fmtRsLakh(profit)} at ${pharmaMargin.toFixed(1)}% margin. ${marginGap < -2 ? `Margin is ${Math.abs(marginGap).toFixed(1)}pp below the ${pharmaMarginTarget.toFixed(1)}% forecast - investigate pricing.` : 'Margin held at or above forecast.'} On track to finish at ${fmtRsLakh(pharmaPrimary.projected)}.`;
     doc.setFontSize(9.5);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(...TEXT_DARK);
@@ -2983,7 +2983,7 @@ function generateMonthlyPDF(
     });
     autoTable(doc, {
       startY: y,
-      head: [['Metric', 'MTD', 'Target', 'Projected EOM', 'Status']],
+      head: [['Metric', 'MTD', 'Target', 'On track for', 'Status']],
       body: pRows.map(r => [r.metric, r.mtd, r.target, r.projected, '']),
       theme: 'plain',
       styles: { fontSize: 8.5, cellPadding: { top: 2, bottom: 2, left: 2, right: 2 }, textColor: TEXT_DARK },
