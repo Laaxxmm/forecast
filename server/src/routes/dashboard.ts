@@ -1,7 +1,11 @@
 import { Router } from 'express';
+import fs from 'fs';
+import path from 'path';
 import { branchFilter, streamFilter } from '../utils/branch.js';
 import { requireRole } from '../middleware/auth.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
+import { reportDateIst, todayIst, nowIstHHMM } from '../utils/ist-date.js';
+import { getClientLogosDir } from '../middleware/upload.js';
 
 const router = Router();
 
@@ -1100,19 +1104,36 @@ router.get('/operational-insights', async (req, res) => {
     req.clientId
   );
 
-  // Date calculations. The endpoint accepts an optional ?month=YYYY-MM
-  // query param so the user can view a past month's snapshot. When
-  // omitted (or invalid) it falls back to today's month — preserving the
-  // existing live-current-month behaviour.
+  // Date calculations. The endpoint accepts:
+  //   • ?month=YYYY-MM      — view a specific past/current month snapshot
+  //   • ?asOf=last_synced   — anchor "today" to the last fully-synced day
+  //                           in IST (PDF callers only — see below)
   //
+  // When both are omitted the endpoint preserves its original
+  // live-current-month behaviour, which the live dashboard depends on.
+  //
+  // ── ?asOf=last_synced ─────────────────────────────────────────────
+  // The Insight PDF reports on the last fully-synced day, not today's
+  // calendar day. The nightly auto-sync runs at 23:00 IST, so before
+  // 23:00 the report's reference day is yesterday-IST; after 23:00 it's
+  // today-IST. The dashboard UI continues to use the local-time path so
+  // mid-day users still see today's partial numbers in the live view.
+  //
+  // ── Past months ───────────────────────────────────────────────────
   // For PAST months we treat the period as complete: daysElapsed =
   // daysInMonth, daysRemaining = 0. The week-anchor moves to the last
   // day of the selected month so "this week vs last week" reflects the
   // final two weeks of that month rather than today's calendar week.
-  // For the LIVE current month we use today's date as the anchor (same
-  // behaviour as before).
+  const asOfLastSynced = req.query.asOf === 'last_synced';
+  const reportAnchor = asOfLastSynced ? reportDateIst() : null;
   const now = new Date();
-  const todayMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  // todayMonth uses the same anchor convention as `now` so the
+  // "isLiveMonth" comparison stays consistent — for asOf=last_synced
+  // callers, "today's month" is the month the report-anchor lands in.
+  const todayMonth = reportAnchor
+    ? reportAnchor.month
+    : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const monthParam = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month)
     ? req.query.month
     : null;
@@ -1121,10 +1142,10 @@ router.get('/operational-insights', async (req, res) => {
   const [cmYear, cmMonth] = currentMonth.split('-').map(Number);
   const daysInMonth = new Date(cmYear, cmMonth, 0).getDate();
   const isLiveMonth = currentMonth === todayMonth;
-  // For live month → today's day; past month → end-of-month;
-  // future month → not started (0).
+  // For live month → today's day (or the report-anchor's day for PDF
+  // callers); past month → end-of-month; future month → not started (0).
   const dayOfMonth = isLiveMonth
-    ? now.getDate()
+    ? (reportAnchor ? reportAnchor.dayOfMonth : now.getDate())
     : (currentMonth < todayMonth ? daysInMonth : 0);
   const daysElapsed = dayOfMonth;
   const daysRemaining = Math.max(0, daysInMonth - dayOfMonth);
@@ -1140,8 +1161,12 @@ router.get('/operational-insights', async (req, res) => {
 
   // Week boundaries (Monday-based). Anchor moves to the last day of the
   // selected month for past views so "this week" = last calendar week
-  // of the selected month rather than today's week.
-  const weekAnchor = isLiveMonth ? now : new Date(cmYear, cmMonth - 1, daysInMonth);
+  // of the selected month rather than today's week. For asOf=last_synced
+  // callers, the anchor follows the report date (yesterday-IST before
+  // 23:00) so "this week" matches the day-N the rest of the report uses.
+  const weekAnchor = isLiveMonth
+    ? (reportAnchor ? new Date(cmYear, cmMonth - 1, reportAnchor.dayOfMonth) : now)
+    : new Date(cmYear, cmMonth - 1, daysInMonth);
   const anchorDay = weekAnchor.getDay(); // 0=Sun
   const mondayOffset = anchorDay === 0 ? 6 : anchorDay - 1;
   const thisMonday = new Date(weekAnchor);
@@ -1525,10 +1550,111 @@ router.get('/operational-insights', async (req, res) => {
   // of the handler.
   const monthLabelDate = new Date(cmYear, cmMonth - 1, 1);
 
+  // ── Insight-PDF metadata block ────────────────────────────────────
+  // PDF callers (?asOf=last_synced) need: the explicit report date,
+  // the actual sync state (so the header can show "Reflecting data
+  // through X · Last synced 11 PM" or warn on a sync gap), and
+  // pre-resolved logo URLs so the panel doesn't probe extensions.
+  // Live-dashboard callers don't strictly need any of this but it's
+  // cheap to include so a future redesign can use it without a new
+  // round-trip.
+  const reportDateStr = reportAnchor
+    ? reportAnchor.date
+    : (isLiveMonth
+        ? `${currentMonth}-${String(now.getDate()).padStart(2, '0')}`
+        : `${currentMonth}-${String(daysInMonth).padStart(2, '0')}`);
+
+  // Pull the most recent auto_sync_runs row scoped to the branch
+  // context (or the whole tenant when consolidated). Failed/skipped
+  // rows still count for "last attempted" so the UI can warn properly.
+  let lastSync: { dateIst: string; finishedAtIst: string | null; status: string; source: string | null; ageDays: number } | null = null;
+  try {
+    const lastSyncRow = db.get(
+      `SELECT run_date_ist, finished_at, status, source
+       FROM auto_sync_runs
+       WHERE status IN ('success','failed','skipped')${bf.where}
+       ORDER BY run_date_ist DESC, finished_at DESC
+       LIMIT 1`,
+      ...bf.params,
+    );
+    if (lastSyncRow) {
+      // finished_at is a UTC ISO timestamp; render the HH:MM in IST.
+      let finishedAtIst: string | null = null;
+      if (lastSyncRow.finished_at) {
+        try {
+          const d = new Date(lastSyncRow.finished_at);
+          if (!isNaN(d.getTime())) {
+            finishedAtIst = new Intl.DateTimeFormat('en-GB', {
+              timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false,
+            }).format(d);
+          }
+        } catch { /* malformed — leave null */ }
+      }
+      const today = todayIst();
+      const ageDays = Math.max(0, Math.floor(
+        (Date.parse(today + 'T00:00:00Z') - Date.parse(lastSyncRow.run_date_ist + 'T00:00:00Z')) / 86400000
+      ));
+      lastSync = {
+        dateIst: lastSyncRow.run_date_ist,
+        finishedAtIst,
+        status: lastSyncRow.status,
+        source: lastSyncRow.source,
+        ageDays,
+      };
+    }
+  } catch {
+    // auto_sync_runs may not exist on very old tenants — silently skip.
+  }
+
+  // reportSource: classifies how to interpret the report date.
+  //   sync_completed     — last successful sync covers reportDate
+  //   sync_pending_today — pre-23:00 IST and yesterday's sync exists
+  //   sync_gap           — yesterday's sync is missing/failed
+  //                        (PDF header should show an amber warning)
+  let reportSource: 'sync_completed' | 'sync_pending_today' | 'sync_gap' = 'sync_completed';
+  if (asOfLastSynced && reportAnchor) {
+    if (!lastSync || lastSync.status !== 'success') {
+      reportSource = 'sync_gap';
+    } else if (lastSync.dateIst < reportAnchor.date) {
+      reportSource = 'sync_gap';
+    } else {
+      reportSource = nowIstHHMM() < '23:00' ? 'sync_pending_today' : 'sync_completed';
+    }
+  }
+
+  // Pre-resolve the client logo URL by probing the on-disk filename
+  // once. Eliminates the InsightDownloadPanel's HEAD-probe loop over
+  // five extensions. Returns null when no logo is uploaded.
+  let clientLogoUrl: string | null = null;
+  try {
+    const platformRow = req.clientId ? platformDb.get('SELECT slug FROM clients WHERE id = ?', req.clientId) : null;
+    const slug = platformRow?.slug;
+    if (slug) {
+      const dir = getClientLogosDir();
+      for (const ext of ['png', 'jpg', 'jpeg', 'webp', 'svg']) {
+        const p = path.join(dir, `${slug}.${ext}`);
+        if (fs.existsSync(p)) {
+          clientLogoUrl = `/api/logos/clients/${slug}.${ext}`;
+          break;
+        }
+      }
+    }
+  } catch {
+    // Filesystem probe failed — leave null; client falls back to initials.
+  }
+
+  const indefineLogoUrl = process.env.INDEFINE_LOGO_URL || null;
+
   res.json({
     month: currentMonth,
     monthLabel: monthLabelDate.toLocaleString('en-IN', { month: 'long', year: 'numeric' }),
     daysElapsed, daysInMonth, daysRemaining,
+    reportDate: reportDateStr,
+    reportDayOfMonth: dayOfMonth,
+    reportSource,
+    lastSync,
+    clientLogoUrl,
+    indefineLogoUrl,
     streams: streamsResult,
     combined: {
       mtdRevenue: combinedMtdRevenue,
