@@ -1,9 +1,28 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
+import fs from 'fs';
+import path from 'path';
 import { getPlatformHelper } from '../db/platform-connection.js';
 import { createToken, removeToken, getTokenData, requireAuth } from '../middleware/auth.js';
 import { hashAgentKey, mintAgentKeyPlaintext } from '../middleware/agentKey.js';
+import { getClientLogosDir } from '../middleware/upload.js';
+
+/** Probe the on-disk logo filename for a client slug. Mirrors the
+ *  resolution logic embedded in /dashboard/operational-insights so the
+ *  Insight PDF panel can pre-warm without a HEAD-probe loop. */
+function resolveClientLogoUrl(slug: string | null | undefined): string | null {
+  if (!slug) return null;
+  try {
+    const dir = getClientLogosDir();
+    for (const ext of ['png', 'jpg', 'jpeg', 'webp', 'svg']) {
+      if (fs.existsSync(path.join(dir, `${slug}.${ext}`))) {
+        return `/api/logos/clients/${slug}.${ext}`;
+      }
+    }
+  } catch { /* fall through to null */ }
+  return null;
+}
 
 const router = Router();
 
@@ -221,6 +240,12 @@ router.post('/logout', (req, res) => {
 });
 
 router.get('/me', (req, res) => {
+  // Branding URLs returned alongside the user profile so client modules
+  // (Insight PDF panel, sidebar, login screen) can render the right
+  // wordmark without an extra round-trip. INDEFINE_LOGO_URL is read once
+  // per request so an env var rotation takes effect on the next /me call.
+  const indefineLogoUrl = process.env.INDEFINE_LOGO_URL || null;
+
   // Check Bearer token
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith('Bearer ')) {
@@ -236,6 +261,8 @@ router.get('/me', (req, res) => {
         isOwner: data.isOwner,
         clientSlug: data.clientSlug,
         clientName: data.clientName,
+        clientLogoUrl: resolveClientLogoUrl(data.clientSlug),
+        indefineLogoUrl,
       });
     }
   }
@@ -247,6 +274,8 @@ router.get('/me', (req, res) => {
       username: req.session.username,
       displayName: req.session.displayName,
       role: req.session.role,
+      clientLogoUrl: resolveClientLogoUrl((req.session as any).clientSlug),
+      indefineLogoUrl,
     });
   }
 
