@@ -886,6 +886,61 @@ async function captureCsvAndSave(
   return { filePath, filename };
 }
 
+/**
+ * Click an action button (e.g. "Detailed", "Transfer Report") that
+ * generates the report. OneGlance's Center typeahead, after a value is
+ * selected, renders the selection as a `<textarea readonly>` grid row
+ * that on smaller filter forms (notably Stock Transfer Details, which
+ * only has Period + Center) can visually overlap the button area
+ * below — Playwright's strict actionability check then refuses the
+ * click with `<textarea ...> from <tr>...</tr> subtree intercepts
+ * pointer events`.
+ *
+ * Strategies, in order:
+ *   1. scrollIntoViewIfNeeded so the button is at least in viewport
+ *      (sometimes it just needs to scroll past the expanded grid)
+ *   2. Playwright force-click — bypasses actionability, still produces
+ *      a real isTrusted=true DOM event
+ *   3. JS .click() in page.evaluate — synthetic event but works when
+ *      something is genuinely overlapping
+ */
+async function clickActionButton(
+  page: Page,
+  _opts: OneglanceHyderabadSyncOptions,
+  stepKey: string,
+  buttonText: string,
+): Promise<void> {
+  const sel = `button:has-text("${buttonText}"), a:has-text("${buttonText}"), input[value="${buttonText}"]`;
+  const loc = page.locator(sel).first();
+  await loc.scrollIntoViewIfNeeded({ timeout: 5_000 }).catch(() => {});
+
+  try {
+    await loc.click({ timeout: TIMEOUT, force: true, noWaitAfter: true });
+    console.log(`[oneglance-hyderabad] Action button "${buttonText}" clicked via force`);
+    return;
+  } catch (e1: any) {
+    console.log(`[oneglance-hyderabad] Force-click on "${buttonText}" failed: ${e1?.message}; falling back to JS click`);
+  }
+
+  const clicked = await page.evaluate((text: string) => {
+    const wanted = text.trim().toUpperCase();
+    const cands = document.querySelectorAll('button, a, input[type="button"], input[type="submit"]');
+    for (const b of cands) {
+      const v = ((b as HTMLInputElement).value || b.textContent || '').trim().toUpperCase();
+      if (v === wanted) {
+        try { (b as HTMLElement).click(); return true; } catch {}
+      }
+    }
+    return false;
+  }, buttonText);
+
+  if (!clicked) {
+    await debugScreenshot(page, `08b-FAILED-action-button-not-clickable-${stepKey}`);
+    throw new Error(`Could not click "${buttonText}" — both Playwright force-click and JS .click() failed.`);
+  }
+  console.log(`[oneglance-hyderabad] Action button "${buttonText}" clicked via JS fallback`);
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Per-report download flows. Each composes the helpers above with the
 // page-specific bits (Type radio yes/no, action button label).
@@ -941,9 +996,7 @@ async function downloadStoreReport(
 
   // Click Detailed to render the report.
   progress(opts, stepKey, `Generating ${type.toLowerCase()} report...`, 48);
-  await page.locator(
-    'button:has-text("Detailed"), a:has-text("Detailed"), input[value="Detailed"]'
-  ).first().click({ timeout: TIMEOUT });
+  await clickActionButton(page, opts, stepKey, 'Detailed');
 
   await waitForRenderedReport(page, opts, stepKey);
   return await captureCsvAndSave(page, opts, downloadDir, stepKey, type.toLowerCase());
@@ -971,11 +1024,10 @@ async function downloadTransferReport(
   progress(opts, stepKey, 'Generating Transfer Report...', 48);
   // Action buttons on this page: Transfer Report / Return Report /
   // Invoice Wise. We want "Transfer Report" — the incoming-transfers
-  // listing that the parser knows how to consume. Use a precise text
-  // match so we don't accidentally hit "Return Report" or "Invoice Wise".
-  await page.locator(
-    'button:has-text("Transfer Report"), a:has-text("Transfer Report"), input[value="Transfer Report"]'
-  ).first().click({ timeout: TIMEOUT });
+  // listing that the parser knows how to consume. The exact-match in
+  // clickActionButton ensures we don't accidentally hit "Return Report"
+  // or "Invoice Wise".
+  await clickActionButton(page, opts, stepKey, 'Transfer Report');
 
   await waitForRenderedReport(page, opts, stepKey);
   return await captureCsvAndSave(page, opts, downloadDir, stepKey, 'transfer');
