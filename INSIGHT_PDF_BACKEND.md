@@ -54,7 +54,20 @@ a one-commit polish pass once the team picks a font.
 
 ## 2. Monthly Page 3 + Page 4 — cross-tab insights
 
-**Status — rendered as "Cross-tab insight pending" empty states.**
+**Status — RESOLVED.** The Insight PDF panel now parallel-fetches
+`/dashboard/clinic-analytics` and `/dashboard/pharmacy-analytics` on
+dialog open and threads the bundle through to all three `generate*PDF`
+entry points via the new `crossBundle` parameter. The Daily report's
+new "Stream deep-dive" section consumes this bundle. Monthly Pages 3-4
+can drop the "pending" empty states and start populating from the same
+bundle (the data is now in scope).
+
+The historical context of this section is kept below for the next
+implementer.
+
+---
+
+### Original deferral notes (now resolved)
 
 ### What's blocked
 
@@ -220,12 +233,31 @@ section can be slotted in without restructuring.
 
 ### What's still deferred
 
-#### 5a. Client logo + Indefine logo fetching
+#### 5a. Client logo + Indefine logo fetching — RESOLVED
 
-The brief asks for a client-logo image in the header (with text-initials
-fallback) and a real Indefine wordmark image in the footer (with text
-fallback). The text-only fallbacks ship today — both render as the
-client name and the literal "indefine." wordmark text respectively.
+The Insight PDF rebuild (May 2026) addresses this in full:
+
+- `/api/auth/me` now returns `clientLogoUrl` (pre-resolved server-side
+  via `fs.existsSync` against the same five extensions the panel used
+  to probe with HEAD) and `indefineLogoUrl` (read once from the
+  `INDEFINE_LOGO_URL` env var).
+- `/dashboard/operational-insights` returns the same two fields so the
+  PDF panel doesn't need a separate /me round-trip.
+- The panel's `useEffect` now: (a) prefers the pre-resolved URL and
+  skips the HEAD-probe loop; (b) renders an initials-circle in the
+  header when fetch fails; (c) `console.error`'s every failure with
+  the URL + error context.
+- `addFooter` accepts a pre-loaded Indefine wordmark image — the
+  panel calls `loadIndefineLogo(data.indefineLogoUrl)` on open and
+  passes the result through. On failure (or when the env var is
+  unset), the existing text wordmark "indefine." renders as the
+  fallback.
+
+The historical deferral notes are kept below.
+
+---
+
+### Original deferral notes (now resolved)
 
 To swap text for images:
 
@@ -321,3 +353,77 @@ lands, 5e is straightforward composition over the same data.
   consistent verdicts.
 - All deferred items above are **independent**. Each can land in its
   own commit without touching the others.
+
+---
+
+## 7. The 11 PM IST sync contract (Insight PDF rebuild)
+
+Documenting the sync-aware report-date logic that the May 2026 rebuild
+introduced. The whole point: the dashboard at `/insights` shows
+"today's" partial-day numbers because users want to see what's
+happening right now; the PDF reports represent a finished day, so they
+must anchor to the last fully-synced day instead.
+
+### How it works
+
+`reportDateIst()` in [server/src/utils/ist-date.ts](server/src/utils/ist-date.ts)
+returns yesterday-IST when `nowIstHHMM() < '23:00'`, today-IST
+otherwise. The 23:00 IST cutoff is the `auto-sync.ts` schedule.
+
+`/dashboard/operational-insights` accepts a `?asOf=last_synced` query
+param (PDF callers only — the live dashboard sends nothing and stays
+on its today's-calendar behaviour). When the flag is set, the
+endpoint:
+
+1. Calls `reportDateIst()` to compute the report's reference day.
+2. Routes the same day-of-month into all the existing aggregations
+   (MTD totals, last-month-MTD cumulative cap, weekly anchor, daily
+   pace math). `lastMonthMtd` per card was already day-N cumulative
+   cap'd, so Frame 2 ("vs same point last month") needed no further
+   server work.
+3. Looks up the latest row in `auto_sync_runs` (scoped via
+   `branchFilter`) and computes a `reportSource` enum:
+   - `'sync_completed'` — last successful sync covers the report day.
+   - `'sync_pending_today'` — current-day sync hasn't run yet
+     (pre-23:00 IST after a previous-day sync_completed). Header
+     renders neutrally.
+   - `'sync_gap'` — yesterday's expected sync is missing or failed.
+     Header renders an amber warning line with the age in days.
+4. Emits `lastSync: { dateIst, finishedAtIst, status, source, ageDays }`
+   so the PDF can show "Last synced 11 PM" exactly.
+
+### Edge cases
+
+- **Brand-new tenant (day 1, no prior data):** Frame-2 section renders
+  "No data for this period — same-point comparison unavailable" rather
+  than hiding. Frame-1 renders "No prior-day comparison available —
+  first day of period".
+- **Sync gap (auto_sync_runs missing yesterday's row):** The header
+  shows the amber warning. Today's data is still rendered with whatever
+  the database has — the PDF doesn't fall back to a different report
+  date because `reportDateIst()` is purely time-based, not data-based.
+  The amber line tells the user the freshness is stale.
+- **Past-month snapshot (`?month=2026-04`):** `asOf=last_synced` is
+  ignored because the period is closed; `dayOfMonth` resolves to
+  `daysInMonth` as before. `reportDate` returns the last day of that
+  month.
+
+### Related env / config
+
+- `INDEFINE_LOGO_URL` — optional. When set, `/auth/me` and
+  `/dashboard/operational-insights` return it as `indefineLogoUrl`;
+  the PDF footer fetches and renders the image (falls back to the
+  text wordmark on any failure).
+- `auto_sync_runs` table — required. Contains `run_date_ist`,
+  `finished_at`, `status`, `source`, `branch_id`. The dashboard
+  endpoint scopes its lookup with the request's branch filter.
+
+### What's NOT in this rebuild
+
+- The 3-month trend on Monthly Page 2 (§3 above) is still pending.
+  Per the plan, this needs a `?lookbackMonths=2` extension to the
+  operational-insights endpoint or a parallel-fetch on the client.
+- Monthly Pages 3-4 cross-tab insight cards now have the data
+  (resolved §2) but the layout still uses the older two-page
+  structure rather than the spec's consolidated "Where the money
+  came from" page. Pure layout work; no data dependency.

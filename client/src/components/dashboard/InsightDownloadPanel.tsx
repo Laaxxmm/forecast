@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { X, Download, Calendar, CalendarDays, CalendarRange } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import api from '../../api/client';
 
 /* ──────── Types ──────── */
 
@@ -17,12 +18,44 @@ interface StreamData {
   cards: CardData[]; thisWeek: WeekData; lastWeek: WeekData;
   daily: { date: string; patients?: number; revenue: number; transactions?: number; profit?: number }[];
 }
+
+/** Sync-state metadata returned by /dashboard/operational-insights so the
+ *  PDF header can show "Reflecting data through X · Last synced 11 PM"
+ *  and warn on a sync gap. Server populates this from auto_sync_runs. */
+export interface LastSyncMeta {
+  dateIst: string;             // YYYY-MM-DD of the run
+  finishedAtIst: string | null;// HH:MM (24h) when the run completed
+  status: string;              // 'success' | 'failed' | 'skipped' | …
+  source: string | null;       // 'healthplix' | 'oneglance' | …
+  ageDays: number;             // days between today-IST and dateIst
+}
+
+export type ReportSource = 'sync_completed' | 'sync_pending_today' | 'sync_gap';
+
 export interface InsightsData {
   month: string; monthLabel: string;
   daysElapsed: number; daysInMonth: number; daysRemaining: number;
   streams: StreamData[];
   combined: { mtdRevenue: number; targetRevenue: number; projectedRevenue: number; rag: string };
   actions: { severity: string; stream: string; message: string }[];
+  /* ── Insight-PDF metadata (populated by /dashboard/operational-insights
+   *    when called with ?asOf=last_synced) ────────────────────────────── */
+  reportDate?: string;            // YYYY-MM-DD — the day this report covers
+  reportDayOfMonth?: number;      // numeric day-of-month for "Day N of M"
+  reportSource?: ReportSource;    // sync_completed | sync_pending_today | sync_gap
+  lastSync?: LastSyncMeta | null;
+  clientLogoUrl?: string | null;  // pre-resolved (skip the HEAD probe loop)
+  indefineLogoUrl?: string | null;// branding wordmark URL or null → text fallback
+}
+
+/** Cross-tab analytics bundle the PDF panel pre-fetches so the "stream
+ *  deep-dive" sections (top doctor, top SKU, cross-sell rate, margin) on
+ *  Daily Page 2 and Monthly Pages 3-4 populate without server changes.
+ *  Shape mirrors /dashboard/clinic-analytics + /dashboard/pharmacy-analytics
+ *  responses; consumed loosely so missing fields drop bullets gracefully. */
+export interface CrossBundle {
+  clinic: any | null;
+  pharmacy: any | null;
 }
 
 interface Props {
@@ -40,10 +73,26 @@ interface Props {
 
 /** Holds the client logo as an in-memory PNG data URL plus its aspect ratio
  *  (width / height). The data URL is what jspdf's addImage accepts. We
- *  always normalise to PNG via canvas so SVG/JPEG/WEBP all just work. */
-interface LogoState {
-  dataUrl: string;
-  aspect: number;
+ *  always normalise to PNG via canvas so SVG/JPEG/WEBP all just work.
+ *
+ *  Discriminated union: when the image fetch fails (or no logo is
+ *  configured), the loader returns a `kind: 'initials'` sentinel so the
+ *  header can draw a coloured initials circle instead of collapsing to
+ *  text-only. The previous `null` path silently dropped the logo slot
+ *  and made it look like the PDF was rendering broken. */
+type LogoState =
+  | { kind: 'image'; dataUrl: string; aspect: number }
+  | { kind: 'initials'; initials: string; color: [number, number, number] };
+
+/** Pull a 2-letter initials code from a client/business name. "MagnaCode
+ *  Healthcare" → "MC", "Indefine." → "IN", single-word fallback to the
+ *  first 2 letters. Always uppercase. */
+function deriveInitials(name: string | undefined | null): string {
+  const s = (name || '').trim();
+  if (!s) return '??';
+  const parts = s.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return s.slice(0, 2).toUpperCase();
 }
 
 type ReportVariant = 'daily' | 'weekly' | 'monthly';
@@ -289,6 +338,206 @@ function safeText(s: string | undefined | null): string {
     .replace(/\u00A0/g, ' ')         // nbsp → space
     .replace(/\u2192/g, '->')        // right arrow → ->
     .replace(/\u2190/g, '<-');       // left arrow → <-
+}
+
+/** Display value when a metric exists, an explicit caption when it doesn't.
+ *  Replaces the bare `'--'` literals at table cell sites — the spec
+ *  ("no — zombies") is firm that empty data must read as a meaningful
+ *  empty state, not a row of dashes. The convention is: pass the value
+ *  AND a concrete caption ("No prior-day data", "On pace", "First day
+ *  of period") so the reader understands WHY the cell is blank. */
+function valueOrEmptyState(value: number | string | null | undefined, fallback: string): string {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'number' && (!isFinite(value) || value === 0)) return fallback;
+  if (typeof value === 'string' && (value.trim() === '' || value === '--' || value === '-')) return fallback;
+  return typeof value === 'number' ? String(value) : value;
+}
+
+/* ──────── Three-frame comparison helpers ────────
+ *
+ * The PDF rebuild structures every section around three frames:
+ *   Frame 1 — vs yesterday (day-over-day momentum)
+ *   Frame 2 — vs same point last month (catch-up perspective)
+ *   Frame 3 — vs target pace (where you should have been)
+ *
+ * The functions below take the existing operational-insights payload
+ * and produce the labels/tones each frame contributes to the rendered
+ * PDF. They're pure (no jspdf imports) so they're easy to reason about
+ * and to test in isolation. */
+
+type FrameTone = 'positive' | 'negative' | 'neutral' | 'amber';
+
+interface Frame1Result {
+  /** Today's value (numeric, for downstream formatting). */
+  today: number;
+  /** Yesterday's value, or null when no prior-day data exists. */
+  yesterday: number | null;
+  /** Absolute change (today - yesterday); null when missing. */
+  deltaAbs: number | null;
+  /** Percent change (signed); null when missing or yesterday===0. */
+  deltaPct: number | null;
+  /** Pre-formatted label like "+12%" or "-21%"; "—" replaced by message. */
+  label: string;
+  tone: FrameTone;
+  /** Why the comparison can't be made, when applicable. */
+  missing: 'first-day' | 'sync-gap' | null;
+}
+
+/** Compose Frame-1 (vs yesterday) for a single metric. Caller picks the
+ *  metric (revenue, visits, bills, profit) and passes the daily values
+ *  for today and yesterday — typically pulled from stream.daily[].
+ *
+ *  When `yesterday` is null/undefined OR not finite, returns a missing
+ *  result so the caller can render the spec's "No prior-day comparison
+ *  available — first day of period" empty state instead of "--". */
+function composeFrame1(
+  today: number | null | undefined,
+  yesterday: number | null | undefined,
+  options: { missingReason?: 'first-day' | 'sync-gap' } = {},
+): Frame1Result {
+  const t = typeof today === 'number' && isFinite(today) ? today : 0;
+  const hasPrev = typeof yesterday === 'number' && isFinite(yesterday);
+  if (!hasPrev) {
+    return {
+      today: t, yesterday: null, deltaAbs: null, deltaPct: null,
+      label: '', tone: 'neutral',
+      missing: options.missingReason || 'first-day',
+    };
+  }
+  const y = yesterday as number;
+  const deltaAbs = t - y;
+  const deltaPct = y === 0 ? null : (deltaAbs / y) * 100;
+  const label = deltaPct === null
+    ? (deltaAbs > 0 ? '+' + indianNumber(deltaAbs) : indianNumber(deltaAbs))
+    : (deltaPct >= 0 ? '+' : '') + deltaPct.toFixed(1) + '%';
+  // Tone: green when up, red when down, neutral when flat (within 0.5%).
+  const tone: FrameTone = deltaPct === null
+    ? (deltaAbs >= 0 ? 'positive' : 'negative')
+    : Math.abs(deltaPct) < 0.5 ? 'neutral'
+    : deltaPct >= 0 ? 'positive' : 'negative';
+  return { today: t, yesterday: y, deltaAbs, deltaPct, label, tone, missing: null };
+}
+
+interface Frame2Result {
+  /** This month's day-N cumulative value. */
+  thisMtd: number;
+  /** Same-day-N cumulative value from last month (server-cap'd). */
+  lastMtd: number;
+  /** Percent change vs same point last month (signed); null when no last-month data. */
+  deltaPct: number | null;
+  /** Verdict label per spec lines 308–313. */
+  verdict: string;
+  tone: FrameTone;
+  /** True when there's no comparable last-month data — caller should
+   *  render the section with a "No data for this period" placeholder
+   *  rather than hiding it (per spec line 315). */
+  missing: boolean;
+}
+
+/** Compose Frame-2 (vs same point last month) from a CardData. The
+ *  server already cumulative-cap's lastMonthMtd at the same day-of-
+ *  month (dashboard.ts line ~1295), so we read directly from the card.
+ *
+ *  Verdict thresholds per spec lines 308–313:
+ *   • ≥ +10%   → "Strong, ahead of pace"   (positive)
+ *   • 0..+10%  → "Ahead of last-month pace" (positive)
+ *   • -10..0%  → "Slightly behind"          (amber)
+ *   • <  -10%  → "Behind - investigate"     (negative)
+ *   When last-month data is genuinely missing → "No prior-month data" (neutral). */
+function composeFrame2(card: { mtd: number; lastMonthMtd: number }): Frame2Result {
+  const thisMtd = card.mtd || 0;
+  const lastMtd = card.lastMonthMtd || 0;
+  if (lastMtd <= 0) {
+    return {
+      thisMtd, lastMtd: 0, deltaPct: null,
+      verdict: 'No prior-month data',
+      tone: 'neutral', missing: true,
+    };
+  }
+  const deltaPct = ((thisMtd - lastMtd) / lastMtd) * 100;
+  let verdict: string;
+  let tone: FrameTone;
+  if (deltaPct >= 10)        { verdict = 'Strong, ahead of pace';      tone = 'positive'; }
+  else if (deltaPct >= 0)    { verdict = 'Ahead of last-month pace';   tone = 'positive'; }
+  else if (deltaPct >= -10)  { verdict = 'Slightly behind';            tone = 'amber'; }
+  else                        { verdict = 'Behind - investigate';       tone = 'negative'; }
+  return { thisMtd, lastMtd, deltaPct, verdict, tone, missing: false };
+}
+
+interface Frame3Result {
+  /** Pace target for the elapsed days (target × elapsed / total). */
+  paceTarget: number;
+  /** Daily pace already established. */
+  dailyRate: number;
+  /** Daily rate needed for remaining days to hit the monthly target. */
+  requiredRate: number;
+  /** Absolute gap between current MTD and pace-target (positive = behind). */
+  gap: number;
+  /** Status band per the existing statusFromProjection ladder. */
+  band: StatusBand;
+  /** Short copy: "On pace", "Behind", etc. */
+  copy: string;
+}
+
+/** Compose Frame-3 (pace to target) from a CardData. Extracts the
+ *  inline math previously scattered across generate*PDF flows. */
+function composeFrame3(
+  card: { mtd: number; target: number; projected: number; dailyRate: number; requiredRate: number },
+  daysElapsed: number,
+  daysInMonth: number,
+): Frame3Result {
+  const target = card.target || 0;
+  const elapsed = Math.max(daysElapsed, 0);
+  const total = Math.max(daysInMonth, 1);
+  const paceTarget = target > 0 ? (target * elapsed) / total : 0;
+  const gap = paceTarget - card.mtd;
+  const projPct = target > 0 ? (card.projected / target) * 100 : 0;
+  const band = statusFromProjection(projPct);
+  let copy: string;
+  if (target <= 0) copy = 'No target set';
+  else if (gap <= 0) copy = 'On pace';
+  else if (band === 'on_track' || band === 'on_pace') copy = 'On pace';
+  else if (band === 'behind' || band === 'behind_target') copy = 'Behind pace';
+  else copy = 'At risk';
+  return { paceTarget, dailyRate: card.dailyRate || 0, requiredRate: card.requiredRate || 0, gap, band, copy };
+}
+
+/** Compose the hero block headline as a single sentence combining all
+ *  three frames. Per spec lines 226-228 the headline must be composed
+ *  dynamically — the previous one-frame composeStatusHeadline() is
+ *  retained for headers that don't need the full picture. */
+function composeHeroHeadline(
+  kind: 'daily' | 'weekly' | 'monthly_mtd' | 'monthly_final',
+  combined: { mtdRevenue: number; targetRevenue: number; projectedRevenue: number },
+  frame1?: Frame1Result | null,
+  frame2?: Frame2Result | null,
+  frame3?: Frame3Result | null,
+): string {
+  const tgt = combined.targetRevenue;
+  const proj = combined.projectedRevenue;
+  const projPct = tgt > 0 ? (proj / tgt) * 100 : 0;
+  const band = statusFromProjection(projPct);
+  // Fall back to the simpler one-frame headline when frame data is
+  // missing — keeps the hero block populated even on day-1 reports.
+  if (!frame1 && !frame2 && !frame3) {
+    return composeStatusHeadline(kind, projPct, band, {});
+  }
+  const f1 = frame1 && !frame1.missing && frame1.deltaPct !== null
+    ? `${frame1.deltaPct >= 0 ? 'up' : 'down'} ${Math.abs(frame1.deltaPct).toFixed(0)}% vs yesterday`
+    : null;
+  const f2 = frame2 && !frame2.missing && frame2.deltaPct !== null
+    ? `${frame2.deltaPct >= 0 ? 'tracking' : 'lagging'} ${Math.abs(frame2.deltaPct).toFixed(0)}% vs same point last month`
+    : null;
+  const f3 = frame3 && tgt > 0
+    ? `need ${fmtRsLakh(frame3.requiredRate)}/day to hit target`
+    : null;
+  const verb = kind === 'monthly_final' ? 'You closed at' : 'You\'re at';
+  const period = kind === 'daily' ? 'today' : kind === 'weekly' ? 'this week' : 'this month';
+  const lead = tgt > 0
+    ? `${verb} ${Math.round(projPct)}% of target ${period}`
+    : `${verb} ${fmtRsLakh(combined.mtdRevenue)} ${period}`;
+  const tail = [f1, f2, f3].filter(Boolean).join(', ');
+  return tail ? `${lead} - ${tail}.` : `${lead}.`;
 }
 
 /** Resolve the stream's primary revenue card. Top-level Revenue/Sales when
@@ -696,7 +945,7 @@ function addHeader(
   // logo, we promote the company name into the logo's slot.
   let rightTextY = 14;
 
-  if (logo && logo.dataUrl) {
+  if (logo && logo.kind === 'image') {
     const LOGO_MAX_W = 38;
     const LOGO_MAX_H = 22;
     const aspect = logo.aspect && isFinite(logo.aspect) && logo.aspect > 0 ? logo.aspect : 1;
@@ -777,17 +1026,21 @@ function addParagraph(doc: jsPDF, text: string, y: number, options?: { bold?: bo
   return y + lines.length * ((options?.size ?? 10) * 0.42) + 1;
 }
 
-function addFooter(doc: jsPDF, label: string) {
+function addFooter(
+  doc: jsPDF,
+  label: string,
+  indefineLogo: { dataUrl: string; aspect: number } | null = null,
+) {
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
   const n = doc.getNumberOfPages();
 
-  // Newsletter-voice addendum: every page footer carries the report
-  // identity on the left and a subtle "Powered by indefine. · Page N
-  // of M" co-branding strip on the right. The Indefine logo image is
-  // deferred to a follow-up (see INSIGHT_PDF_BACKEND.md §5a) — for
-  // now the wordmark renders as plain text with a small red period
-  // accent matching the brief's brand callout.
+  // Every page footer carries the report identity on the left and a
+  // subtle "Powered by indefine. · Page N of M" co-branding strip on
+  // the right. When INDEFINE_LOGO_URL is configured AND the image
+  // fetched OK at panel-open time, we render the wordmark as an image;
+  // otherwise we fall back to the lowercase "indefine" + red period
+  // text wordmark (visually equivalent, no font dependency).
   for (let p = 1; p <= n; p++) {
     doc.setPage(p);
 
@@ -806,24 +1059,88 @@ function addFooter(doc: jsPDF, label: string) {
     doc.text(pageLabel, pageW - 14, pageH - 8, { align: 'right' });
     const pageLabelW = doc.getTextWidth(pageLabel);
 
-    // "indefine." wordmark — lowercase brand text + red period accent.
-    // The period sits flush after the "e" so the eye reads it as part
-    // of the wordmark, not a sentence terminator.
-    const wordmarkX = pageW - 14 - pageLabelW - 6;
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'bold');
-    const dotW = doc.getTextWidth('.');
-    doc.setTextColor(...TEXT_DARK);
-    doc.text('indefine', wordmarkX - dotW, pageH - 8, { align: 'right' });
-    const indefineW = doc.getTextWidth('indefine');
-    doc.setTextColor(...STATUS_RED_BORDER);
-    doc.text('.', wordmarkX, pageH - 8, { align: 'right' });
+    const wordmarkRightX = pageW - 14 - pageLabelW - 6;
+    let leadInX: number;
+
+    if (indefineLogo) {
+      // Image variant — render at 4mm height; aspect chosen by the
+      // file (typical wordmarks are 3-4× wider than tall).
+      const imgH = 4;
+      const imgW = imgH * (indefineLogo.aspect && isFinite(indefineLogo.aspect) ? indefineLogo.aspect : 3.5);
+      const imgX = wordmarkRightX - imgW;
+      const imgY = pageH - 8 - imgH + 1; // baseline-align
+      try {
+        doc.addImage(indefineLogo.dataUrl, 'PNG', imgX, imgY, imgW, imgH, undefined, 'FAST');
+        leadInX = imgX - 2;
+      } catch (err) {
+        console.error('[InsightPDF] indefine footer addImage failed', err);
+        // Fall back to text wordmark for this page only.
+        leadInX = renderIndefineWordmark(doc, wordmarkRightX, pageH - 8);
+      }
+    } else {
+      leadInX = renderIndefineWordmark(doc, wordmarkRightX, pageH - 8);
+    }
 
     // "Powered by" lead-in
     doc.setFontSize(7.5);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(...TEXT_FAINT);
-    doc.text('Powered by', wordmarkX - dotW - indefineW - 4, pageH - 8, { align: 'right' });
+    doc.text('Powered by', leadInX, pageH - 8, { align: 'right' });
+  }
+}
+
+/** Draw the lowercase "indefine" wordmark + red period accent, right-
+ *  aligned at (rightX, baseY). Returns the leftmost x consumed so the
+ *  caller can position the "Powered by" lead-in. Used both as the
+ *  primary footer wordmark (when no image is configured) and as the
+ *  fallback when image rendering fails. */
+function renderIndefineWordmark(doc: jsPDF, rightX: number, baseY: number): number {
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  const dotW = doc.getTextWidth('.');
+  doc.setTextColor(...TEXT_DARK);
+  doc.text('indefine', rightX - dotW, baseY, { align: 'right' });
+  const indefineW = doc.getTextWidth('indefine');
+  doc.setTextColor(...STATUS_RED_BORDER);
+  doc.text('.', rightX, baseY, { align: 'right' });
+  return rightX - dotW - indefineW - 4;
+}
+
+/** Module-level cache for the Indefine wordmark image so successive
+ *  page footers don't re-fetch. Cleared by the panel useEffect when the
+ *  dialog closes (so a re-open after env-var rotation re-fetches). */
+let indefineLogoCache: { url: string; img: { dataUrl: string; aspect: number } | null } | null = null;
+
+/** Fetch + rasterize the Indefine wordmark from `url` (typically
+ *  data.indefineLogoUrl). Returns null when the URL is unset, the
+ *  fetch fails, or the cache says we already tried this URL and it
+ *  failed. Logged on failure so operators see the issue. */
+async function loadIndefineLogo(url: string | null | undefined): Promise<{ dataUrl: string; aspect: number } | null> {
+  if (!url) return null;
+  if (indefineLogoCache && indefineLogoCache.url === url) return indefineLogoCache.img;
+  try {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = (e) => reject(e);
+      img.src = url;
+    });
+    const w = img.naturalWidth || img.width || 256;
+    const h = img.naturalHeight || img.height || 80;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('canvas 2d unavailable');
+    ctx.drawImage(img, 0, 0, w, h);
+    const result = { dataUrl: canvas.toDataURL('image/png'), aspect: w / h };
+    indefineLogoCache = { url, img: result };
+    return result;
+  } catch (err) {
+    console.error('[InsightPDF] indefine logo fetch failed', { url, err });
+    indefineLogoCache = { url, img: null };
+    return null;
   }
 }
 
@@ -921,9 +1238,113 @@ function composeStatusHeadline(
   return `You're materially behind -- projected at ${pct}% of target if today's pace holds`;
 }
 
+/** Filled circle with 2-letter initials in white. Used as the logo
+ *  fallback when the client logo URL is unset or fails to load (so the
+ *  PDF header never collapses to a blank slot). Diameter is the
+ *  bounding box; text auto-fits to ~55% of diameter for legibility. */
+function drawInitialsCircle(
+  doc: jsPDF,
+  cx: number, cy: number, diameter: number,
+  initials: string,
+  bg: [number, number, number] = [24, 95, 165],
+) {
+  const r = diameter / 2;
+  doc.setFillColor(...bg);
+  doc.circle(cx, cy, r, 'F');
+  // White text, slightly under-sized so 2 letters always fit comfortably.
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(diameter * 0.42);
+  doc.text(initials, cx, cy + diameter * 0.14, { align: 'center' });
+}
+
+/** Render the client logo (image OR initials fallback) into a bounding
+ *  box at (x, y) with maximum width/height. Returns the actual width
+ *  consumed so callers can position adjacent text. Image variants
+ *  preserve aspect ratio; initials always fill a square. */
+function renderClientLogoBox(
+  doc: jsPDF,
+  logo: LogoState | null,
+  x: number, y: number,
+  maxW: number, maxH: number,
+  fallbackInitials: string,
+): number {
+  if (logo && logo.kind === 'image') {
+    const aspect = logo.aspect && isFinite(logo.aspect) && logo.aspect > 0 ? logo.aspect : 1;
+    let w: number, h: number;
+    if (aspect >= maxW / maxH) { w = maxW; h = maxW / aspect; }
+    else                       { h = maxH; w = maxH * aspect; }
+    try {
+      doc.addImage(logo.dataUrl, 'PNG', x, y, w, h, undefined, 'FAST');
+      return w;
+    } catch (err) {
+      console.error('[InsightPDF] addImage failed', err);
+      // fall through to initials
+    }
+  }
+  // Initials variant (or addImage failure). Square circle sized to the
+  // smaller of the two bounds, centered vertically inside the box.
+  const d = Math.min(maxW, maxH);
+  const initials = (logo && logo.kind === 'initials') ? logo.initials : fallbackInitials;
+  const bg = (logo && logo.kind === 'initials') ? logo.color : [24, 95, 165] as [number, number, number];
+  drawInitialsCircle(doc, x + d / 2, y + d / 2, d, initials, bg);
+  return d;
+}
+
+/** Format a long-form report date (YYYY-MM-DD → "3 May 2026") for the
+ *  primary header line. Falls back to the input string when malformed. */
+function fmtReportDate(d: string | undefined | null): string {
+  if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return safeText(d || '');
+  const [y, m, day] = d.split('-');
+  const months = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+                  'July', 'August', 'September', 'October', 'November', 'December'];
+  return `${parseInt(day, 10)} ${months[parseInt(m, 10)]} ${y}`;
+}
+
+/** Compose the sync-indicator line shown beneath the header subtitle.
+ *  The text and tone vary with reportSource:
+ *    sync_completed     — neutral tertiary text, "Last synced 11 PM"
+ *    sync_pending_today — neutral, "Sync runs at 11 PM"
+ *    sync_gap           — amber warning, "Sync gap: last successful sync N days ago"
+ *
+ *  Returns the text + color so the caller can draw it inline. */
+function formatSyncIndicator(
+  reportDate: string | undefined,
+  lastSync: LastSyncMeta | null | undefined,
+  reportSource: ReportSource | undefined,
+): { text: string; color: [number, number, number] } {
+  const dateLabel = reportDate ? fmtReportDate(reportDate) : '';
+  const through = dateLabel ? `Reflecting data through ${dateLabel}` : 'Reflecting most recent synced day';
+
+  if (reportSource === 'sync_gap') {
+    const ageStr = lastSync && lastSync.ageDays > 0
+      ? `${lastSync.ageDays} day${lastSync.ageDays === 1 ? '' : 's'} ago`
+      : 'unavailable';
+    return {
+      text: `Sync gap: last successful sync ${ageStr} - data may be stale`,
+      color: STATUS_AMBER_BODY,
+    };
+  }
+  if (reportSource === 'sync_pending_today') {
+    const at = lastSync?.finishedAtIst ? `${lastSync.finishedAtIst} IST` : '11 PM';
+    return { text: `${through} - next sync at 11 PM IST (last ${at})`, color: TEXT_TERTIARY };
+  }
+  // sync_completed (default) and the no-asOf path
+  const at = lastSync?.finishedAtIst ? `${lastSync.finishedAtIst} IST` : '11 PM';
+  return { text: `${through} - last synced ${at}`, color: TEXT_TERTIARY };
+}
+
 /** Outline header per brief: dark green title under a 3px green underline,
  *  no banner fill. Replaces the previous teal-bar treatment. The org/branch
- *  block sits on the right. Returns the y after the underline. */
+ *  block sits on the right. Returns the y after the underline.
+ *
+ *  When `logo` is non-null, a small client logo (or initials circle
+ *  fallback) renders at top-left next to the section label. The
+ *  primary date should be the report's covered day (data.reportDate),
+ *  not the calendar day — the header carries a "Generated …" timestamp
+ *  on the right to make the distinction clear. The optional `syncLine`
+ *  arg renders a tertiary line beneath the subtitle (use
+ *  formatSyncIndicator to compose it). */
 function drawOutlineHeader(
   doc: jsPDF,
   label: string,        // e.g. "DAILY OPERATIONAL INSIGHT"
@@ -932,20 +1353,36 @@ function drawOutlineHeader(
   clientName: string,
   branchName: string,
   branchState: string,
+  logo: LogoState | null = null,
+  syncLine: { text: string; color: [number, number, number] } | null = null,
 ): number {
   const pageW = doc.internal.pageSize.getWidth();
   const RIGHT_X = pageW - PAGE_INNER_X;
 
+  // Vertical layout — bumped down 4mm when a sync line is present so it
+  // doesn't crowd the underline.
   const labelY    = PAGE_TOP + 4;
-  const titleY    = PAGE_TOP + 13;
-  const subtitleY = PAGE_TOP + 21;
-  const ruleY     = PAGE_TOP + 28;
+  const titleY    = PAGE_TOP + 14;
+  const subtitleY = PAGE_TOP + 22;
+  const syncY     = PAGE_TOP + 28;
+  const ruleY     = syncLine ? PAGE_TOP + 33 : PAGE_TOP + 28;
+
+  // Logo slot (left of the section label) — square ~10mm tall so it
+  // doesn't dominate the header. Renders an initials circle when the
+  // image isn't available; only skipped entirely when caller passes null.
+  let labelX = PAGE_INNER_X;
+  if (logo) {
+    const logoSize = 10;
+    const logoY = labelY - 7; // align with the label baseline
+    const consumed = renderClientLogoBox(doc, logo, PAGE_INNER_X, logoY, logoSize, logoSize, deriveInitials(clientName));
+    labelX = PAGE_INNER_X + consumed + 3;
+  }
 
   // Left side
   doc.setFontSize(8);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...TEXT_TERTIARY);
-  doc.text(safeText(label), PAGE_INNER_X, labelY, { charSpace: 0.6 });
+  doc.text(safeText(label), labelX, labelY, { charSpace: 0.6 });
 
   doc.setFontSize(20);
   doc.setFont('helvetica', 'bold');
@@ -956,6 +1393,16 @@ function drawOutlineHeader(
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...TEXT_SECONDARY);
   doc.text(safeText(subtitle), PAGE_INNER_X, subtitleY);
+
+  // Sync indicator — small tertiary (or amber) line below the subtitle.
+  // Distinct from "Generated" because it describes the report's data
+  // freshness, not when the file was created.
+  if (syncLine) {
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...syncLine.color);
+    doc.text(safeText(syncLine.text), PAGE_INNER_X, syncY);
+  }
 
   // Right side — org / branch / generated-at
   doc.setFontSize(10);
@@ -1261,6 +1708,264 @@ function drawDayBarChart(
   }
 }
 
+/** Full-month progression chart for Daily Page 2. Past days render as
+ *  solid green bars sized to actual revenue; the active day renders
+ *  hatched (in-progress); future days render as ghost gray bars so the
+ *  reader sees the whole month at a glance. A dashed amber target line
+ *  marks the per-day need-to-hit rate. Returns y after the chart.
+ *
+ *  `dailyByDate` is a Map of YYYY-MM-DD → revenue. `month` is YYYY-MM
+ *  (used to enumerate every day; missing days render at 0). `activeDay`
+ *  is the day-of-month that's "today" for the report (1-based). */
+function drawDailyProgressionChart(
+  doc: jsPDF,
+  x: number, y: number, w: number, h: number,
+  dailyByDate: Map<string, number>,
+  month: string,
+  daysInMonth: number,
+  activeDay: number,
+  dailyTarget: number,
+): number {
+  if (daysInMonth <= 0) return y;
+  const labelStripH = 4;
+  const chartH = h - labelStripH;
+  const gap = 0.5;
+  const barW = Math.max((w - gap * (daysInMonth - 1)) / daysInMonth, 0.6);
+
+  const values: number[] = [];
+  for (let d = 1; d <= daysInMonth; d++) {
+    const key = `${month}-${String(d).padStart(2, '0')}`;
+    values.push(dailyByDate.get(key) || 0);
+  }
+  const maxV = Math.max(...values, dailyTarget) || 1;
+
+  // Hairline baseline
+  doc.setDrawColor(...HAIRLINE);
+  doc.setLineWidth(0.15);
+  doc.line(x, y + chartH, x + w, y + chartH);
+
+  for (let i = 0; i < daysInMonth; i++) {
+    const day = i + 1;
+    const v = values[i];
+    const bx = x + i * (barW + gap);
+    const bh = (v / maxV) * chartH;
+    const by = y + chartH - bh;
+    if (day < activeDay) {
+      // Past day — solid green
+      doc.setFillColor(...STATUS_GREEN_BORDER);
+      doc.rect(bx, by, barW, bh, 'F');
+    } else if (day === activeDay) {
+      // Active day — solid amber to mark "in progress"
+      doc.setFillColor(...STATUS_AMBER_BORDER);
+      doc.rect(bx, by, barW, bh, 'F');
+    } else {
+      // Future day — full-height ghost (light gray) so the eye sees
+      // the remaining runway against past days.
+      doc.setFillColor(...HAIRLINE);
+      doc.rect(bx, y + chartH - chartH * 0.08, barW, chartH * 0.08, 'F');
+    }
+  }
+
+  // Dashed amber target line
+  if (dailyTarget > 0 && dailyTarget <= maxV) {
+    const ty = y + chartH - (dailyTarget / maxV) * chartH;
+    doc.setDrawColor(...STATUS_AMBER_BORDER);
+    doc.setLineWidth(0.4);
+    doc.setLineDashPattern([1.5, 1.5], 0);
+    doc.line(x, ty, x + w, ty);
+    doc.setLineDashPattern([], 0);
+    doc.setLineWidth(0.2);
+
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...STATUS_AMBER_BODY);
+    doc.text(`Need ${fmtRsLakh(dailyTarget)}/day`, x + w, ty - 1.2, { align: 'right' });
+  }
+
+  // Day-of-month axis labels: 1, 5, 10, 15, 20, 25, last
+  doc.setFontSize(6.5);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...TEXT_TERTIARY);
+  const labelDays = [1, 5, 10, 15, 20, 25, daysInMonth].filter((d, i, a) => a.indexOf(d) === i);
+  for (const d of labelDays) {
+    const cx = x + (d - 1) * (barW + gap) + barW / 2;
+    doc.text(String(d), cx, y + h - 0.5, { align: 'center' });
+  }
+
+  return y + h + 4;
+}
+
+/** 7-day bar chart for Daily Page 2. Replaces the old line-sparkline
+ *  with proper bars per spec change 4 ("Last 7 days mini-chart"). Each
+ *  bar gets a day-of-week label below it (e.g. "27 Apr", "28 Apr", …).
+ *  `dates` are the YYYY-MM-DD keys; `valuesByDate` is the lookup. */
+function drawSevenDayBarChart(
+  doc: jsPDF,
+  x: number, y: number, w: number, h: number,
+  dates: string[],
+  valuesByDate: Map<string, number>,
+  dailyTarget: number,
+): number {
+  if (dates.length === 0) {
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'italic');
+    doc.setTextColor(...TEXT_TERTIARY);
+    doc.text('No data for the last 7 days', x + w / 2, y + h / 2, { align: 'center' });
+    return y + h + 4;
+  }
+  const labelStripH = 5;
+  const chartH = h - labelStripH;
+  const gap = 1.4;
+  const barW = (w - gap * (dates.length - 1)) / dates.length;
+  const values = dates.map(d => valuesByDate.get(d) || 0);
+  const maxV = Math.max(...values, dailyTarget) || 1;
+
+  doc.setDrawColor(...HAIRLINE);
+  doc.setLineWidth(0.15);
+  doc.line(x, y + chartH, x + w, y + chartH);
+
+  for (let i = 0; i < dates.length; i++) {
+    const v = values[i];
+    const bx = x + i * (barW + gap);
+    const bh = (v / maxV) * chartH;
+    doc.setFillColor(...STATUS_GREEN_BORDER);
+    doc.roundedRect(bx, y + chartH - bh, barW, bh, 0.6, 0.6, 'F');
+
+    // Day label — "27 Apr"
+    const [, mm, dd] = dates[i].split('-');
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const lbl = `${parseInt(dd, 10)} ${months[parseInt(mm, 10) - 1]}`;
+    doc.setFontSize(6.8);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...TEXT_TERTIARY);
+    doc.text(safeText(lbl), bx + barW / 2, y + h - 0.5, { align: 'center' });
+  }
+
+  if (dailyTarget > 0 && dailyTarget <= maxV) {
+    const ty = y + chartH - (dailyTarget / maxV) * chartH;
+    doc.setDrawColor(...STATUS_AMBER_BORDER);
+    doc.setLineWidth(0.4);
+    doc.setLineDashPattern([1.5, 1.5], 0);
+    doc.line(x, ty, x + w, ty);
+    doc.setLineDashPattern([], 0);
+    doc.setLineWidth(0.2);
+  }
+  return y + h + 4;
+}
+
+/** Stream deep-dive bullets pulled from the cross-tab analytics
+ *  bundle. Two-column layout (Clinic | Pharmacy). Bullets drop when
+ *  underlying data is missing rather than rendering "—". Returns y
+ *  after the section. Spec change 4 page 2 "Stream deep-dive".
+ *
+ *  The crossBundle shapes are loose because /clinic-analytics and
+ *  /pharmacy-analytics return slightly different field names per
+ *  branch; we feature-detect properties rather than asserting types. */
+function drawStreamDeepDive(
+  doc: jsPDF,
+  x: number, y: number, w: number,
+  crossBundle: CrossBundle | null,
+): number {
+  const padX = 8;
+  const colW = (w - 6) / 2;
+  const leftX  = x;
+  const rightX = x + colW + 6;
+
+  // Build per-side bullet arrays. Drop bullets where source data is
+  // missing — never render "—".
+  const clinicBullets: string[] = [];
+  const c = crossBundle?.clinic || null;
+  if (c) {
+    if (typeof c.totalVisits === 'number' && c.totalVisits > 0) {
+      const docCount = (c.doctorBreakdown?.length || c.doctors?.length || 0);
+      clinicBullets.push(`${indianNumber(c.totalVisits)} visits${docCount ? ` across ${docCount} doctors` : ''}`);
+    }
+    const topDoc = c.topDoctor || (c.doctorBreakdown && c.doctorBreakdown[0]) || (c.doctors && c.doctors[0]);
+    if (topDoc) {
+      const name = topDoc.name || topDoc.doctor || topDoc.doctorName || '';
+      const visits = topDoc.visits ?? topDoc.patients ?? topDoc.encounters;
+      const rev = topDoc.revenue ?? topDoc.totalRevenue;
+      if (name && (typeof visits === 'number' || typeof rev === 'number')) {
+        const parts: string[] = [];
+        if (typeof visits === 'number') parts.push(`${indianNumber(visits)} visits`);
+        if (typeof rev === 'number')    parts.push(fmtRsLakh(rev));
+        clinicBullets.push(`Top doctor: ${name} - ${parts.join(', ')}`);
+      }
+    }
+    if (typeof c.crossSellRate === 'number') {
+      clinicBullets.push(`Cross-sell rate: ${c.crossSellRate.toFixed(0)}%`);
+    } else if (typeof c.crossSellPct === 'number') {
+      clinicBullets.push(`Cross-sell rate: ${c.crossSellPct.toFixed(0)}%`);
+    }
+    if (typeof c.avgTicket === 'number' && c.avgTicket > 0) {
+      clinicBullets.push(`Avg ticket: ${fmtRsLakh(Math.round(c.avgTicket))}`);
+    }
+  }
+
+  const pharmaBullets: string[] = [];
+  const p = crossBundle?.pharmacy || null;
+  if (p) {
+    if (typeof p.totalBills === 'number' && p.totalBills > 0) {
+      const totalSales = typeof p.totalSales === 'number' ? p.totalSales : (p.netSales || 0);
+      pharmaBullets.push(`${indianNumber(p.totalBills)} bills${totalSales ? `, ${fmtRsLakh(totalSales)} sales` : ''}`);
+    }
+    const topSku = p.topSKU || (p.topSKUs && p.topSKUs[0]) || p.topProduct;
+    if (topSku) {
+      const name = topSku.name || topSku.drug || topSku.product || '';
+      const qty = topSku.quantity ?? topSku.units ?? topSku.qty;
+      const rev = topSku.revenue ?? topSku.salesAmount ?? topSku.value;
+      if (name) {
+        const parts: string[] = [];
+        if (typeof qty === 'number') parts.push(`${indianNumber(qty)} units`);
+        if (typeof rev === 'number') parts.push(fmtRsLakh(rev));
+        pharmaBullets.push(`Top SKU: ${name}${parts.length ? ` - ${parts.join(', ')}` : ''}`);
+      }
+    }
+    if (typeof p.avgTicket === 'number' && p.avgTicket > 0) {
+      pharmaBullets.push(`Avg ticket: ${fmtRsLakh(Math.round(p.avgTicket))}`);
+    }
+    const margin = p.grossMargin ?? p.marginPct ?? p.margin;
+    if (typeof margin === 'number' && isFinite(margin)) {
+      pharmaBullets.push(`Margin: ${margin.toFixed(1)}%`);
+    }
+  }
+
+  // If both sides are empty, the section is just an empty-state card.
+  if (clinicBullets.length === 0 && pharmaBullets.length === 0) {
+    return drawCalloutCard(doc, x, y, w, 'Cross-tab data unavailable - clinic and pharmacy analytics endpoints did not return values for this period.', 'neutral');
+  }
+
+  const renderColumn = (cx: number, cy: number, title: string, bullets: string[]): number => {
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...TEXT_TERTIARY);
+    doc.text(safeText(title.toUpperCase()), cx, cy, { charSpace: 0.6 });
+    let by = cy + 5;
+    if (bullets.length === 0) {
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'italic');
+      doc.setTextColor(...TEXT_TERTIARY);
+      doc.text(safeText('Awaiting cross-tab data for this stream'), cx, by);
+      return by + 4.5;
+    }
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.6);
+    doc.setTextColor(...TEXT_DARK);
+    for (const b of bullets) {
+      drawBullet(doc, cx + 1, by, STATUS_GREEN_BORDER);
+      const lines = doc.splitTextToSize(safeText(b), colW - 6);
+      doc.text(lines, cx + 4, by);
+      by += lines.length * 4.2 + 1;
+    }
+    return by;
+  };
+
+  const ly = renderColumn(leftX, y, 'Clinic - yesterday', clinicBullets);
+  const ry = renderColumn(rightX, y, 'Pharmacy - yesterday', pharmaBullets);
+  const finalY = Math.max(ly, ry);
+  return finalY + 4;
+}
+
 /** Numbered alert card used in the redesigned alert block. Returns y after. */
 function drawNumberedAlert(
   doc: jsPDF,
@@ -1454,34 +2159,131 @@ function drawActionCard(
   return y + h + 4;
 }
 
-/** Compose three story cards from the alerts array, padding with a
- *  positive observation when fewer than 3 negatives exist so the
- *  section is always exactly 3 cards (per the brief).
+interface ThingCardSeed { headline: string; body: string; tone?: ThingTone }
+
+/** Compose three story cards per spec lines 75-88. The rule is firm:
+ *  always render exactly 3 cards unless the tenant has literally zero
+ *  data (in which case caller hides the section).
  *
- *  Inputs:
- *  - alerts:   narrative.alerts[] from the existing engine, ranked by
- *              impact. Strings of the form "headline - body" or just
- *              "headline".
- *  - positive: optional string to use as a green-toned story card if
- *              fewer than 3 alerts exist. Caller composes this from
- *              the data (e.g. top performer, week improvement).
+ *  Composition order (best signal first):
+ *    1. Critical alerts (red, ranked by impact) — `alerts[]`
+ *    2. Positive observations (green) — `positives[]`
+ *    3. Structural insights (blue/neutral) — `structurals[]` —
+ *       things like "pharmacy is now 56% of revenue, up from 41%
+ *       three months ago" or "first reporting day this month".
  *
- *  Returns up to 3 cards in the form { headline, body, tone }. */
+ *  Returns 3 cards or 0 when all three input arrays are empty. The
+ *  caller is responsible for not rendering the section header when 0.
+ *
+ *  Backwards-compat: a single `positive` object (the previous v2 API)
+ *  is still accepted via the `positives` array. Callers that haven't
+ *  migrated continue to work, just with one positive max.
+ */
 function composeThreeThings(
   alerts: string[],
-  positive?: { headline: string; body: string },
+  positivesOrLegacy?: { headline: string; body: string } | ThingCardSeed[],
+  structurals: ThingCardSeed[] = [],
 ): { headline: string; body: string; tone: ThingTone }[] {
+  // Normalize the v2 (single positive) and v3 (positives array) call
+  // shapes into a single array.
+  const positives: ThingCardSeed[] = !positivesOrLegacy
+    ? []
+    : Array.isArray(positivesOrLegacy)
+      ? positivesOrLegacy
+      : [positivesOrLegacy];
+
   const out: { headline: string; body: string; tone: ThingTone }[] = [];
+
+  // 1. Negatives — first one is critical, rest are watch-level.
   for (let i = 0; i < Math.min(3, alerts.length); i++) {
     const parts = alerts[i].split(' - ');
-    const headline = parts[0];
-    const body = parts.slice(1).join(' - ') || '';
+    const headline = parts[0]?.trim() || '';
+    const body = parts.slice(1).join(' - ').trim();
+    if (!headline) continue; // skip malformed entries
     out.push({ headline, body, tone: i === 0 ? 'critical' : 'watch' });
   }
-  if (out.length < 3 && positive) {
-    out.push({ headline: positive.headline, body: positive.body, tone: 'positive' });
+
+  // 2. Positives — fill the slot only when the seed has a real
+  // headline so we never render "Volume play"-style placeholders.
+  for (const p of positives) {
+    if (out.length >= 3) break;
+    const head = (p.headline || '').trim();
+    if (!head) continue;
+    out.push({ headline: head, body: (p.body || '').trim(), tone: p.tone || 'positive' });
   }
+
+  // 3. Structural insights — last-resort filler when both alerts and
+  // positives can't reach 3. Examples per spec lines 84-87.
+  for (const s of structurals) {
+    if (out.length >= 3) break;
+    const head = (s.headline || '').trim();
+    if (!head) continue;
+    out.push({ headline: head, body: (s.body || '').trim(), tone: s.tone || 'watch' });
+  }
+
+  // Spec line 81: "Never produce fewer than 3 cards unless the tenant
+  // has literally zero data." Returning [] signals "hide the section
+  // entirely" to the caller.
+  if (out.length === 0) return [];
+  // If we still don't have 3, render whatever we managed — better than
+  // padding with weak filler. The caller draws a footer note in this
+  // case (per spec line 71).
   return out.slice(0, 3);
+}
+
+/** Build the structural-insights array from raw data — used by all
+ *  three reports as the fallback when alerts + positives can't fill
+ *  the "Three things" section. The insights are intentionally
+ *  observational ("you're heading into …", "X is now Y% of revenue")
+ *  rather than action-oriented; the action cards section is where
+ *  decisions live. */
+function buildStructuralInsights(data: InsightsData): ThingCardSeed[] {
+  const out: ThingCardSeed[] = [];
+
+  // Insight 1 — first reporting day of the month
+  if (data.daysElapsed === 1) {
+    out.push({
+      headline: 'Today is your first reporting day this month',
+      body: 'Patterns will emerge over the coming days. Day-over-day comparisons unlock from tomorrow onwards.',
+      tone: 'watch',
+    });
+  }
+
+  // Insight 2 — stream-share-of-revenue when more than one stream is active
+  const totalRevenue = data.streams.reduce((s, x) => {
+    const prim = getStreamPrimary(x);
+    return s + (prim?.mtd || 0);
+  }, 0);
+  if (totalRevenue > 0 && data.streams.length > 1) {
+    let topShareStream = data.streams[0];
+    let topSharePct = 0;
+    for (const s of data.streams) {
+      const prim = getStreamPrimary(s);
+      const share = prim ? (prim.mtd / totalRevenue) * 100 : 0;
+      if (share > topSharePct) { topSharePct = share; topShareStream = s; }
+    }
+    if (topSharePct >= 30) {
+      out.push({
+        headline: `${topShareStream.name} is now ${Math.round(topSharePct)}% of revenue`,
+        body: `${topShareStream.name} contributed ${fmtRsLakh((getStreamPrimary(topShareStream)?.mtd) || 0)} of ${fmtRsLakh(totalRevenue)} this month - the dominant revenue source.`,
+        tone: 'watch',
+      });
+    }
+  }
+
+  // Insight 3 — heading into the home stretch when >=70% of month elapsed
+  if (data.daysInMonth > 0) {
+    const pctElapsed = (data.daysElapsed / data.daysInMonth) * 100;
+    if (pctElapsed >= 70 && data.daysRemaining > 0) {
+      out.push({
+        headline: `${data.daysRemaining} days left to close the month`,
+        body: `You're ${Math.round(pctElapsed)}% through ${data.monthLabel}. Final-week execution drives the closing number.`,
+        tone: 'watch',
+      });
+    }
+  }
+
+  return out;
 }
 
 /** Pattern-match a narrative action string into the right action-card
@@ -2270,7 +3072,9 @@ function generateDailyPDF(
   clientName: string,
   branchName: string,
   branchState: string,
-  _logo: LogoState | null,
+  logo: LogoState | null,
+  crossBundle: CrossBundle | null = null,
+  indefineLogo: { dataUrl: string; aspect: number } | null = null,
 ) {
   const doc = new jsPDF({ orientation: 'portrait', format: 'a4', unit: 'mm' });
   const pageW = doc.internal.pageSize.getWidth();
@@ -2283,81 +3087,159 @@ function generateDailyPDF(
   const narrative  = buildNarrative(data, 'daily');
 
   // ── PAGE 1 — Decision page ────────────────────────────────────────
+  // Primary date: prefer the server-supplied reportDate (sync-anchored)
+  // over latestDate (last bill date in the data). They're often equal,
+  // but reportDate stays correct when the latest day had no bills.
+  const primaryDateStr = data.reportDate
+    ? fmtReportDate(data.reportDate)
+    : (latestDate ? prettyDate(latestDate) : data.monthLabel);
+  const dailySync = formatSyncIndicator(data.reportDate, data.lastSync, data.reportSource);
   let y = drawOutlineHeader(
     doc,
     'DAILY OPERATIONAL INSIGHT',
-    latestDate ? prettyDate(latestDate) : data.monthLabel,
+    primaryDateStr,
     `Day ${data.daysElapsed} of ${data.daysInMonth} - ${data.daysRemaining} days remaining`,
     clientName, branchName, branchState,
+    logo, dailySync,
   );
 
-  // Hero status block — sentence-form headline driven by projection vs target
+  // ── Three-frame composition ──────────────────────────────────────
+  // Build the three comparison frames at the combined-revenue level so
+  // both the hero headline and the KPI strip can speak the same
+  // language. Per-stream / per-card frames are computed per-section
+  // below, and the spec is firm: every section runs through the same
+  // three lenses.
   const tgt = data.combined.targetRevenue;
   const proj = data.combined.projectedRevenue;
   const mtd = data.combined.mtdRevenue;
   const projPct = tgt > 0 ? (proj / tgt) * 100 : 0;
   const band = statusFromProjection(projPct);
-  const expectedPct = (data.daysElapsed / Math.max(data.daysInMonth, 1)) * 100;
-  const headline = composeStatusHeadline('daily', projPct, band, {});
   const dailyNeed = data.daysRemaining > 0 ? Math.max(0, tgt - mtd) / data.daysRemaining : 0;
   const dailyRun  = mtd / Math.max(data.daysElapsed, 1);
-  // Newsletter voice (May 2026 addendum): the body opens like a
-  // letter and frames numbers in plain words. We address the reader
-  // directly with "you" / "your" and bold the rupee values via the
-  // hero block's own typography (font-weight 500 across).
+
+  // Frame 1 — combined revenue today vs combined revenue yesterday
+  const combinedDailyByDate = new Map<string, number>();
+  for (const s of data.streams) {
+    for (const d of s.daily) combinedDailyByDate.set(d.date, (combinedDailyByDate.get(d.date) || 0) + (d.revenue || 0));
+  }
+  const todayRev = latestDate ? combinedDailyByDate.get(latestDate) || 0 : 0;
+  const yesterdayRev = prevDate ? combinedDailyByDate.get(prevDate) : null;
+  const heroFrame1 = composeFrame1(todayRev, yesterdayRev);
+
+  // Frame 2 — combined MTD this month vs combined MTD last month
+  const combinedLastMonthMtd = data.streams.reduce((s, x) => {
+    const prim = getStreamPrimary(x);
+    return s + (prim?.lastMonthMtd || 0);
+  }, 0);
+  const heroFrame2 = composeFrame2({ mtd, lastMonthMtd: combinedLastMonthMtd });
+
+  // Frame 3 — combined pace math
+  const heroFrame3 = composeFrame3(
+    { mtd, target: tgt, projected: proj, dailyRate: dailyRun, requiredRate: dailyNeed },
+    data.daysElapsed, data.daysInMonth,
+  );
+
+  // Hero headline — single sentence combining all three frames per spec
+  // lines 226-228. Falls back to the simple one-frame headline when the
+  // frames have no data to contribute (day-1, no last-month, etc.).
+  const headline = composeHeroHeadline('daily', data.combined, heroFrame1, heroFrame2, heroFrame3);
   const body = tgt > 0
-    ? `Dear team -- here's where you stand today. You've earned ${fmtRsLakh(mtd)} so far, ${Math.round((mtd / tgt) * 100)}% of the monthly target with ${Math.round(expectedPct)}% of the month elapsed. Today's pace is ${fmtRsLakh(dailyRun)}/day; you need ${fmtRsLakh(dailyNeed)}/day for the remaining ${data.daysRemaining} days.`
-    : `Dear team -- here's where you stand today. You've earned ${fmtRsLakh(mtd)} so far. No monthly target is configured yet.`;
+    ? `Dear team -- here's where you stand today. You've earned ${fmtRsLakh(mtd)} so far${combinedLastMonthMtd > 0 ? ` (vs ${fmtRsLakh(combinedLastMonthMtd)} at the same point last month)` : ''}. Today's pace is ${fmtRsLakh(dailyRun)}/day; you need ${fmtRsLakh(dailyNeed)}/day for the remaining ${data.daysRemaining} days to hit ${fmtRsLakh(tgt)}.`
+    : `Dear team -- here's where you stand today. You've earned ${fmtRsLakh(mtd)} so far. No monthly target is configured yet - pace math will populate once the forecast is set.`;
   y = drawHeroStatus(doc, INNER_X, y, INNER_W, `DAY ${data.daysElapsed} OF ${data.daysInMonth}`, 'Updates daily', headline, body, band);
 
-  // KPI strip — newsletter-voice labels per the May 2026 addendum.
-  // "Earned MTD" / "Projected EOM" / "Gap to target" / "Daily need"
-  // become "You earned" / "On track to finish at" / "Short by" /
-  // "Need per day" — same data, plain language.
+  // KPI strip — newsletter-voice labels with Frame-1 deltas as the
+  // primary sub-line per spec line 200 ("KPI snapshot strip shows
+  // deltas using Frame 1 (day-over-day) as the primary delta").
   const gap = Math.max(0, tgt - proj);
+  const earnedSub = heroFrame1.missing
+    ? (data.daysElapsed === 1 ? 'first reporting day' : 'no prior-day data')
+    : `${heroFrame1.label} vs yesterday`;
+  const earnedSubTone = heroFrame1.missing
+    ? 'neutral' as const
+    : heroFrame1.tone === 'positive' ? 'positive' as const
+    : heroFrame1.tone === 'negative' ? 'negative' as const : 'neutral' as const;
   y = drawKpiStrip(doc, INNER_X, y, INNER_W, [
-    { label: 'You earned',           value: fmtRsLakh(mtd) },
-    { label: 'On track to finish at', value: tgt > 0 ? fmtRsLakh(proj) : '--', sub: tgt > 0 ? `${Math.round(projPct)}% of target` : undefined },
-    { label: 'Short by',             value: tgt > 0 ? fmtRsLakh(gap)  : '--', sub: gap > 0 ? 'shortfall' : 'on target', subTone: gap > 0 ? 'negative' : 'positive' },
-    { label: 'Need per day',         value: dailyNeed > 0 ? fmtRsLakh(dailyNeed) : '--', sub: data.daysRemaining > 0 ? `for ${data.daysRemaining} days left` : 'period closed' },
+    { label: 'You earned',           value: fmtRsLakh(mtd), sub: earnedSub, subTone: earnedSubTone },
+    { label: 'On track to finish at', value: valueOrEmptyState(tgt > 0 ? fmtRsLakh(proj) : null, 'No target'), sub: tgt > 0 ? `${Math.round(projPct)}% of target` : undefined },
+    { label: 'Short by',             value: valueOrEmptyState(tgt > 0 ? fmtRsLakh(gap) : null, 'No target'), sub: tgt > 0 ? (gap > 0 ? 'shortfall' : 'on target') : undefined, subTone: gap > 0 ? 'negative' : 'positive' },
+    { label: 'Need per day',         value: valueOrEmptyState(dailyNeed > 0 ? fmtRsLakh(dailyNeed) : null, data.daysRemaining > 0 ? 'On target' : 'Period closed'), sub: data.daysRemaining > 0 ? `for ${data.daysRemaining} days left` : undefined },
   ]);
 
-  // Critical alerts — top 3, ranked
   // ── Three things to focus on today ─────────────────────────────
-  // Newsletter-voice rebuild of the previous "Critical alerts" block.
-  // Always exactly 3 numbered story cards, padded with a positive
-  // observation if fewer than 3 alerts exist. Each card carries a
-  // rupee or volume number so the story is grounded in real data.
+  // composeThreeThings now takes positives + structurals fallback so
+  // the section ALWAYS produces 3 cards (or 0 when literally empty)
+  // per spec lines 75-88.
   const dailyTopStream = data.streams.reduce((p, x) => {
     const xPrim = getStreamPrimary(x);
     const pPrim = getStreamPrimary(p);
     return (xPrim?.mtd || 0) > (pPrim?.mtd || 0) ? x : p;
   }, data.streams[0]);
   const dailyTopPrim = dailyTopStream ? getStreamPrimary(dailyTopStream) : null;
-  const positiveDaily = dailyTopPrim && dailyTopPrim.mtd > 0
-    ? { headline: `${dailyTopStream.name} is your strongest stream so far`, body: `${dailyTopStream.name} has earned ${fmtRsLakh(dailyTopPrim.mtd)} this month${dailyTopPrim.target > 0 ? `, ${Math.round((dailyTopPrim.mtd / dailyTopPrim.target) * 100)}% of its target` : ''}. Keep the pace and it'll carry the headline number.` }
-    : undefined;
-  const things = composeThreeThings(narrative.alerts, positiveDaily);
+  const positives: ThingCardSeed[] = [];
+  if (dailyTopPrim && dailyTopPrim.mtd > 0) {
+    positives.push({
+      headline: `${dailyTopStream.name} is your strongest stream so far`,
+      body: `${dailyTopStream.name} has earned ${fmtRsLakh(dailyTopPrim.mtd)} this month${dailyTopPrim.target > 0 ? `, ${Math.round((dailyTopPrim.mtd / dailyTopPrim.target) * 100)}% of its target` : ''}. Keep the pace and it'll carry the headline number.`,
+    });
+  }
+  // Frame-2-driven positive: when something is materially ahead of
+  // last month, surface it as a card.
+  for (const s of data.streams) {
+    if (positives.length >= 2) break;
+    const prim = getStreamPrimary(s);
+    if (!prim) continue;
+    const f2 = composeFrame2(prim);
+    if (!f2.missing && f2.deltaPct !== null && f2.deltaPct >= 10) {
+      positives.push({
+        headline: `${s.name} is up ${Math.round(f2.deltaPct)}% vs same point last month`,
+        body: `${s.name} earned ${fmtRsLakh(f2.thisMtd)} so far this month vs ${fmtRsLakh(f2.lastMtd)} at the same point in the previous month - ${f2.verdict.toLowerCase()}.`,
+      });
+    }
+  }
+  const structurals = buildStructuralInsights(data);
+  const things = composeThreeThings(narrative.alerts, positives, structurals);
   if (things.length > 0) {
     y = drawSectionBar(doc, INNER_X, y + 2, 'Three things to focus on today', SECTION_RED);
     for (let i = 0; i < things.length; i++) {
       y = drawThingCard(doc, INNER_X, y, INNER_W, i + 1, things[i].headline, things[i].body, things[i].tone);
     }
+    if (things.length < 3) {
+      doc.setFontSize(7.5);
+      doc.setFont('helvetica', 'italic');
+      doc.setTextColor(...TEXT_TERTIARY);
+      doc.text(safeText(`${things.length} priority observation${things.length === 1 ? '' : 's'} identified for today. More will appear as patterns emerge.`), INNER_X, y);
+      y += 5;
+    }
   }
 
   // ── What today calls for ───────────────────────────────────────
   // Action cards with category-coloured left border + rupee-impact
-  // pill, replacing the previous flat numbered list.
-  const actions = narrative.actions.slice(0, 3);
-  if (actions.length > 0 && y < pageH - 80) {
-    y = drawSectionBar(doc, INNER_X, y + 4, 'What today calls for', SECTION_AMBER);
-    for (const a of actions) {
+  // pill. Spec lines 67-72: skip empty/placeholder cards rather than
+  // rendering "Volume play" with no body. Empty action arrays drop the
+  // section entirely so the page doesn't end on a dangling header.
+  const rawActions = narrative.actions.slice(0, 3);
+  const validActions = rawActions
+    .map(a => {
       const parts = a.split(' - ');
-      const head = parts[0];
-      const body = parts.slice(1).join(' - ') || '';
-      const cat = categoriseAction(head + ' ' + body);
-      const pill = extractImpactPill(body, cat);
-      y = drawActionCard(doc, INNER_X, y, INNER_W, cat, head, body, pill);
+      const head = (parts[0] || '').trim();
+      const body = parts.slice(1).join(' - ').trim();
+      return { head, body };
+    })
+    .filter(a => a.head.length > 0 && a.body.length > 0);
+  if (validActions.length > 0 && y < pageH - 80) {
+    y = drawSectionBar(doc, INNER_X, y + 4, 'What today calls for', SECTION_AMBER);
+    for (const a of validActions) {
+      const cat = categoriseAction(a.head + ' ' + a.body);
+      const pill = extractImpactPill(a.body, cat);
+      y = drawActionCard(doc, INNER_X, y, INNER_W, cat, a.head, a.body, pill);
+    }
+    if (validActions.length < 3) {
+      doc.setFontSize(7.5);
+      doc.setFont('helvetica', 'italic');
+      doc.setTextColor(...TEXT_TERTIARY);
+      doc.text(safeText(`${validActions.length} priority action${validActions.length === 1 ? '' : 's'} identified for today. Additional actions will appear as more patterns become visible in the data.`), INNER_X, y);
+      y += 5;
     }
   }
 
@@ -2372,7 +3254,99 @@ function generateDailyPDF(
   doc.text('PAGE 2 - DETAIL', INNER_X, y, { charSpace: 0.6 });
   y += 8;
 
-  // Pace to monthly target — full scorecard (per-stream rows grouped)
+  // ── Frame 2 — vs same point last month ──────────────────────────
+  // Per-stream + totals comparison. The section ALWAYS renders (even
+  // when last-month data is missing) per spec line 315 — caller sees a
+  // "No data for this period" placeholder rather than a hidden gap.
+  const dayOfMonth = data.reportDayOfMonth || data.daysElapsed;
+  const monthName = data.monthLabel.split(' ')[0];
+  const lastMonthName = (() => {
+    const [y_, m_] = data.month.split('-').map(Number);
+    const d = new Date(y_, m_ - 2, 1);
+    return d.toLocaleString('en-US', { month: 'long' });
+  })();
+  y = drawSectionBar(doc, INNER_X, y, `Day ${dayOfMonth} ${monthName} vs Day ${dayOfMonth} ${lastMonthName} - same point comparison`, SECTION_BLUE);
+
+  const f2Rows: { stream: string; thisMtd: number; lastMtd: number; deltaPct: number | null; verdict: string; band: StatusBand; missing: boolean }[] = [];
+  let totalThis = 0;
+  let totalLast = 0;
+  for (const s of data.streams) {
+    const prim = getStreamPrimary(s);
+    if (!prim) continue;
+    const f2 = composeFrame2(prim);
+    totalThis += f2.thisMtd;
+    totalLast += f2.lastMtd;
+    f2Rows.push({
+      stream: s.name,
+      thisMtd: f2.thisMtd,
+      lastMtd: f2.lastMtd,
+      deltaPct: f2.deltaPct,
+      verdict: f2.verdict,
+      band: f2.tone === 'positive' ? 'on_pace' : f2.tone === 'amber' ? 'behind' : f2.tone === 'negative' ? 'at_risk' : 'on_pace',
+      missing: f2.missing,
+    });
+  }
+  // Append totals row
+  const totalsF2 = composeFrame2({ mtd: totalThis, lastMonthMtd: totalLast });
+  if (totalLast > 0 || totalThis > 0) {
+    f2Rows.push({
+      stream: 'TOTAL',
+      thisMtd: totalsF2.thisMtd,
+      lastMtd: totalsF2.lastMtd,
+      deltaPct: totalsF2.deltaPct,
+      verdict: totalsF2.verdict,
+      band: totalsF2.tone === 'positive' ? 'on_pace' : totalsF2.tone === 'amber' ? 'behind' : totalsF2.tone === 'negative' ? 'at_risk' : 'on_pace',
+      missing: totalsF2.missing,
+    });
+  }
+
+  // Render — empty-state placeholder when ALL rows are missing.
+  const allMissing = f2Rows.every(r => r.missing);
+  if (allMissing || f2Rows.length === 0) {
+    y = drawCalloutCard(doc, INNER_X, y, INNER_W,
+      'No data for this period - same-point comparison unavailable. Becomes available after the first full month of data.',
+      'neutral');
+  } else {
+    autoTable(doc, {
+      startY: y,
+      head: [['Stream', `Day ${dayOfMonth} ${monthName}`, `Day ${dayOfMonth} ${lastMonthName}`, 'Change', 'Verdict']],
+      body: f2Rows.map(r => [
+        r.stream,
+        r.thisMtd > 0 ? fmtRsLakh(r.thisMtd) : '0',
+        r.missing ? 'No data' : (r.lastMtd > 0 ? fmtRsLakh(r.lastMtd) : '0'),
+        r.missing || r.deltaPct === null ? '-' : `${r.deltaPct >= 0 ? '+' : ''}${r.deltaPct.toFixed(1)}%`,
+        '',
+      ]),
+      theme: 'plain',
+      styles: { fontSize: 8.5, cellPadding: { top: 2, bottom: 2, left: 2, right: 2 }, lineColor: HAIRLINE, lineWidth: 0 },
+      headStyles: { fillColor: [255, 255, 255], textColor: TEXT_SECONDARY, fontStyle: 'bold', fontSize: 7.5, lineColor: TEXT_DARK, lineWidth: 0.4 },
+      bodyStyles: { lineColor: HAIRLINE, lineWidth: 0.1, textColor: TEXT_DARK },
+      columnStyles: {
+        0: { cellWidth: 40, fontStyle: 'bold' },
+        1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' },
+        4: { halign: 'left', cellWidth: 50 },
+      },
+      didParseCell: (cell) => {
+        const r = f2Rows[cell.row.index];
+        // Bold the totals row
+        if (r && r.stream === 'TOTAL') cell.cell.styles.fontStyle = 'bold';
+        if (cell.section === 'body' && cell.column.index === 3 && r && !r.missing && r.deltaPct !== null) {
+          if (r.deltaPct >= 0) cell.cell.styles.textColor = STATUS_GREEN_BODY;
+          else cell.cell.styles.textColor = STATUS_RED_BODY;
+        }
+      },
+      didDrawCell: (hook) => {
+        if (hook.section === 'body' && hook.column.index === 4) {
+          const r = f2Rows[hook.row.index];
+          if (r && !r.missing) drawStatusPill3(doc, hook.cell.x + 1, hook.cell.y + hook.cell.height / 2 + 1.4, r.band, r.verdict);
+        }
+      },
+      margin: { left: INNER_X, right: pageW - (INNER_X + INNER_W) },
+    });
+    y = (doc as any).lastAutoTable.finalY + 6;
+  }
+
+  // ── Pace to monthly target (Frame 3) ─────────────────────────────
   y = drawSectionBar(doc, INNER_X, y, 'Pace to monthly target', SECTION_BLUE);
   for (const stream of data.streams) {
     const paceCards = stream.cards.filter(c => c.target > 0 && c.unit !== 'percent');
@@ -2390,11 +3364,17 @@ function generateDailyPDF(
       const onPace = card.requiredRate <= card.dailyRate;
       const projPctRow = card.target > 0 ? (card.projected / card.target) * 100 : 0;
       const rowBand = statusFromProjection(projPctRow);
+      // Need/d cell: spec change 1 ("no - zombies"). When the stream
+      // is already at/above target, render "On pace" rather than '-'.
+      let needCell: string;
+      if (aheadMtd) needCell = 'Met target';
+      else if (card.requiredRate <= 0) needCell = 'On pace';
+      else needCell = fmtValue(card.requiredRate, card.unit);
       return {
         label: card.category ? `${card.category} - ${card.label}` : card.label,
         mtd: fmtValue(card.mtd, card.unit),
         actualDay: fmtValue(card.dailyRate, card.unit),
-        required: aheadMtd ? '-' : fmtValue(Math.max(card.requiredRate, 0), card.unit),
+        required: needCell,
         band: aheadMtd ? 'on_track' : onPace ? 'on_pace' : rowBand,
       };
     });
@@ -2422,81 +3402,137 @@ function generateDailyPDF(
     y = (doc as any).lastAutoTable.finalY + 5;
   }
 
-  // Today vs yesterday — two side-by-side mini tables
-  y = drawSectionBar(doc, INNER_X, y + 2, 'Today vs yesterday', SECTION_BLUE);
-  const halfW = (INNER_W - 6) / 2;
-  const renderMini = (xCol: number, label: string, rows: { metric: string; today: string; yesterday: string; pct: { label: string; positive: boolean | null } }[]) => {
+  // Aggregate combined daily revenue (used by the progression chart +
+  // the 7-day chart below).
+  const dailyByDate = combinedDailyByDate;
+  const dates = [...dailyByDate.keys()].sort();
+  const dailyTarget = tgt > 0 ? tgt / data.daysInMonth : 0;
+
+  // Auto-paginate when the rest of the page would overflow.
+  if (y > pageH - 90) {
+    doc.addPage();
+    y = PAGE_TOP + 6;
     doc.setFontSize(8);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(...TEXT_TERTIARY);
-    doc.text(safeText(label), xCol, y, { charSpace: 0.6 });
-    autoTable(doc, {
-      startY: y + 1.5,
-      head: [['Metric', 'Today', 'Yesterday', 'Change']],
-      body: rows.map(r => [r.metric, r.today, r.yesterday, r.pct.label]),
-      theme: 'plain',
-      styles: { fontSize: 8, cellPadding: { top: 1.6, bottom: 1.6, left: 1.5, right: 1.5 }, textColor: TEXT_DARK },
-      headStyles: { fillColor: [255, 255, 255], textColor: TEXT_SECONDARY, fontStyle: 'bold', fontSize: 7, lineColor: TEXT_DARK, lineWidth: 0.3 },
-      bodyStyles: { lineColor: HAIRLINE, lineWidth: 0.1 },
-      columnStyles: {
-        0: { cellWidth: halfW * 0.34 },
-        1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' },
-      },
-      didParseCell: (cell) => {
-        if (cell.section === 'body' && cell.column.index === 3) {
-          const txt = String(cell.cell.raw || '');
-          if (txt.startsWith('+'))      cell.cell.styles.textColor = STATUS_GREEN_BODY;
-          else if (txt.startsWith('-')) cell.cell.styles.textColor = STATUS_RED_BODY;
-        }
-      },
-      margin: { left: xCol, right: pageW - (xCol + halfW) },
-      tableWidth: halfW,
-    });
-  };
-  for (const stream of data.streams) {
-    const today     = latestDate ? stream.daily.find(d => d.date === latestDate) : null;
-    const yesterday = prevDate   ? stream.daily.find(d => d.date === prevDate)   : null;
-    const isClinic = stream.name.toLowerCase().includes('clinic') || stream.name.toLowerCase().includes('health');
-    const rows = isClinic ? [
-      { metric: 'Visits',  today: today ? fmtCount(today.patients || 0) : '--', yesterday: yesterday ? fmtCount(yesterday.patients || 0) : '--', pct: fmtChange(today?.patients || 0, yesterday?.patients || 0) },
-      { metric: 'Revenue', today: today ? fmtRsLakh(today.revenue || 0) : '--', yesterday: yesterday ? fmtRsLakh(yesterday.revenue || 0) : '--', pct: fmtChange(today?.revenue || 0, yesterday?.revenue || 0) },
-    ] : [
-      { metric: 'Bills',   today: today ? fmtCount(today.transactions || 0) : '--', yesterday: yesterday ? fmtCount(yesterday.transactions || 0) : '--', pct: fmtChange(today?.transactions || 0, yesterday?.transactions || 0) },
-      { metric: 'Sales',   today: today ? fmtRsLakh(today.revenue || 0) : '--', yesterday: yesterday ? fmtRsLakh(yesterday.revenue || 0) : '--', pct: fmtChange(today?.revenue || 0, yesterday?.revenue || 0) },
-    ];
-    const xCol = stream === data.streams[0] ? INNER_X : INNER_X + halfW + 6;
-    renderMini(xCol, stream.name.toUpperCase(), rows);
+    doc.text('PAGE 2 (CONT.) - DETAIL', INNER_X, y, { charSpace: 0.6 });
+    y += 8;
   }
-  y = (doc as any).lastAutoTable.finalY + 5;
 
-  // Last 7 days sparkline (combined revenue)
+  // ── Daily progression chart (full month) ─────────────────────────
+  y = drawSectionBar(doc, INNER_X, y + 2, 'Daily progression - full month', SECTION_BLUE);
+  y = drawDailyProgressionChart(doc, INNER_X, y, INNER_W, 30, dailyByDate, data.month, data.daysInMonth, dayOfMonth, dailyTarget);
+  // 3 inline stats — best day / avg / days above target
+  const completedValues = dates.map(d => dailyByDate.get(d) || 0).filter(v => v > 0);
+  if (completedValues.length > 0) {
+    const peak = Math.max(...completedValues);
+    const peakDate = dates.find(d => (dailyByDate.get(d) || 0) === peak) || '';
+    const avg = completedValues.reduce((a, b) => a + b, 0) / completedValues.length;
+    const above = dailyTarget > 0 ? completedValues.filter(v => v >= dailyTarget).length : 0;
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...TEXT_TERTIARY);
+    const statsTxt = [
+      peakDate ? `Best day: ${prettyDate(peakDate)} (${fmtRsLakh(peak)})` : null,
+      `Avg/day: ${fmtRsLakh(avg)}`,
+      dailyTarget > 0 ? `Days above target: ${above} of ${completedValues.length}` : null,
+    ].filter(Boolean).join('   |   ');
+    doc.text(safeText(statsTxt), INNER_X, y);
+    y += 5;
+  }
+
+  // ── Last 7 days bar chart ────────────────────────────────────────
+  if (y > pageH - 60) {
+    doc.addPage();
+    y = PAGE_TOP + 6;
+  }
   y = drawSectionBar(doc, INNER_X, y + 2, 'Last 7 days', SECTION_BLUE);
-  // Aggregate combined daily revenue from all streams
-  const dailyByDate = new Map<string, number>();
-  for (const s of data.streams) {
-    for (const d of s.daily) dailyByDate.set(d.date, (dailyByDate.get(d.date) || 0) + (d.revenue || 0));
-  }
-  const dates = [...dailyByDate.keys()].sort();
   const last7Dates = dates.slice(-7);
-  const last7Vals  = last7Dates.map(d => dailyByDate.get(d) || 0);
-  const dailyTarget = tgt > 0 ? tgt / data.daysInMonth : 0;
+  y = drawSevenDayBarChart(doc, INNER_X, y, INNER_W, 28, last7Dates, dailyByDate, dailyTarget);
 
-  drawSparkline(doc, INNER_X, y, INNER_W, 28, last7Vals, dailyTarget);
-  // X-axis labels: first, middle, last
-  doc.setFontSize(7);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(...TEXT_TERTIARY);
-  if (last7Dates.length > 0) {
-    doc.text(safeText(prettyDate(last7Dates[0])), INNER_X, y + 32);
-    if (last7Dates.length > 2) {
-      const mid = last7Dates[Math.floor(last7Dates.length / 2)];
-      doc.text(safeText(prettyDate(mid)), INNER_X + INNER_W / 2, y + 32, { align: 'center' });
+  // ── Today vs yesterday (Frame 1, two-column) ─────────────────────
+  if (y > pageH - 60) {
+    doc.addPage();
+    y = PAGE_TOP + 6;
+  }
+  y = drawSectionBar(doc, INNER_X, y + 2, 'Today vs yesterday', SECTION_BLUE);
+  const halfW = (INNER_W - 6) / 2;
+  // Per-stream Frame-1 mini tables. When NO stream has yesterday data
+  // (start of period or sync gap), render the spec's missing-data copy
+  // instead of two empty tables.
+  const noYesterday = !prevDate;
+  if (noYesterday) {
+    y = drawCalloutCard(doc, INNER_X, y, INNER_W,
+      'No prior-day comparison available - first day of period (or yesterday\'s sync did not complete). Will populate from tomorrow onwards.',
+      'neutral');
+  } else {
+    const renderMini = (xCol: number, label: string, rows: { metric: string; today: string; yesterday: string; change: string; tone: FrameTone | 'neutral'; missing: boolean }[]) => {
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...TEXT_TERTIARY);
+      doc.text(safeText(label), xCol, y, { charSpace: 0.6 });
+      autoTable(doc, {
+        startY: y + 1.5,
+        head: [['Metric', 'Today', 'Yesterday', 'Change']],
+        body: rows.map(r => [r.metric, r.today, r.yesterday, r.change]),
+        theme: 'plain',
+        styles: { fontSize: 8, cellPadding: { top: 1.6, bottom: 1.6, left: 1.5, right: 1.5 }, textColor: TEXT_DARK },
+        headStyles: { fillColor: [255, 255, 255], textColor: TEXT_SECONDARY, fontStyle: 'bold', fontSize: 7, lineColor: TEXT_DARK, lineWidth: 0.3 },
+        bodyStyles: { lineColor: HAIRLINE, lineWidth: 0.1 },
+        columnStyles: {
+          0: { cellWidth: halfW * 0.34 },
+          1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' },
+        },
+        didParseCell: (cell) => {
+          if (cell.section === 'body' && cell.column.index === 3) {
+            const tone = rows[cell.row.index]?.tone;
+            if (tone === 'positive')      cell.cell.styles.textColor = STATUS_GREEN_BODY;
+            else if (tone === 'negative') cell.cell.styles.textColor = STATUS_RED_BODY;
+            else if (tone === 'amber')    cell.cell.styles.textColor = STATUS_AMBER_BODY;
+          }
+        },
+        margin: { left: xCol, right: pageW - (xCol + halfW) },
+        tableWidth: halfW,
+      });
+    };
+    for (const stream of data.streams) {
+      const today     = stream.daily.find(d => d.date === latestDate);
+      const yesterday = stream.daily.find(d => d.date === prevDate);
+      const isClinic = stream.name.toLowerCase().includes('clinic') || stream.name.toLowerCase().includes('health');
+      const buildRow = (metric: string, todayV: number | undefined, prevV: number | undefined, fmt: (n: number) => string) => {
+        const f1 = composeFrame1(todayV, prevV);
+        return {
+          metric,
+          today: typeof todayV === 'number' ? fmt(todayV) : 'No data',
+          yesterday: typeof prevV === 'number' ? fmt(prevV) : 'No data',
+          change: f1.missing ? 'No prior data' : f1.label,
+          tone: f1.tone,
+          missing: f1.missing !== null,
+        };
+      };
+      const rows = isClinic ? [
+        buildRow('Visits',  today?.patients, yesterday?.patients, n => fmtCount(n)),
+        buildRow('Revenue', today?.revenue,  yesterday?.revenue,  n => fmtRsLakh(n)),
+      ] : [
+        buildRow('Bills', today?.transactions, yesterday?.transactions, n => fmtCount(n)),
+        buildRow('Sales', today?.revenue,      yesterday?.revenue,      n => fmtRsLakh(n)),
+      ];
+      const xCol = stream === data.streams[0] ? INNER_X : INNER_X + halfW + 6;
+      renderMini(xCol, stream.name.toUpperCase(), rows);
     }
-    doc.text(safeText(prettyDate(last7Dates[last7Dates.length - 1])), INNER_X + INNER_W, y + 32, { align: 'right' });
+    y = (doc as any).lastAutoTable.finalY + 5;
   }
 
-  addFooter(doc, footerLabel('Daily Insight', data.monthLabel, clientName, branchName, branchState));
-  doc.save(filename('Daily_Insight', data.month, branchName, latestDate || 'today'));
+  // ── Stream deep-dive (cross-tab data) ────────────────────────────
+  if (y > pageH - 50) {
+    doc.addPage();
+    y = PAGE_TOP + 6;
+  }
+  y = drawSectionBar(doc, INNER_X, y + 2, 'Stream deep-dive', SECTION_PURPLE);
+  y = drawStreamDeepDive(doc, INNER_X, y, INNER_W, crossBundle);
+
+  addFooter(doc, footerLabel('Daily Insight', data.monthLabel, clientName, branchName, branchState), indefineLogo);
+  doc.save(filename('Daily_Insight', data.month, branchName, latestDate || data.reportDate || 'today'));
 }
 
 /* ──────── Weekly PDF ──────── */
@@ -2506,7 +3542,9 @@ function generateWeeklyPDF(
   clientName: string,
   branchName: string,
   branchState: string,
-  _logo: LogoState | null,
+  logo: LogoState | null,
+  crossBundle: CrossBundle | null = null,
+  indefineLogo: { dataUrl: string; aspect: number } | null = null,
 ) {
   const doc = new jsPDF({ orientation: 'portrait', format: 'a4', unit: 'mm' });
   const pageW = doc.internal.pageSize.getWidth();
@@ -2531,12 +3569,14 @@ function generateWeeklyPDF(
   const marginPct = tw.revenue > 0 ? (tw.profit / tw.revenue) * 100 : 0;
 
   // ── PAGE 1 — Week summary ─────────────────────────────────────────
+  const weeklySync = formatSyncIndicator(data.reportDate, data.lastSync, data.reportSource);
   let y = drawOutlineHeader(
     doc,
     'WEEKLY OPERATIONAL INSIGHT',
     `Week of ${data.monthLabel}`,
     `Day ${data.daysElapsed} of ${data.daysInMonth} - compared to prior week`,
     clientName, branchName, branchState,
+    logo, weeklySync,
   );
 
   // Hero status — newsletter voice: salutation, sentence headline,
@@ -2585,16 +3625,25 @@ function generateWeeklyPDF(
   }
 
   // ── Three things from this week ────────────────────────────────
-  // Newsletter-voice section: 3 numbered story cards covering the
-  // week's biggest signals. Pads with a positive observation when
-  // fewer than 3 alerts exist (e.g. peak day callout).
-  const positiveWeekly = bars.length > 0
-    ? (() => {
-        const best = bars.reduce((p, x) => x.value > p.value ? x : p, bars[0]);
-        return { headline: `${best.label} was your best day of the week`, body: `${best.label} closed at ${fmtRsLakh(best.value)} -- the high-water mark of the week. Worth understanding what worked so you can repeat it.` };
-      })()
-    : undefined;
-  const weeklyThings = composeThreeThings(narrative.alerts, positiveWeekly);
+  // composeThreeThings now takes positives[] + structurals[] so the
+  // section always produces 3 cards (or 0 when literally empty). Per
+  // spec lines 75-88: critical → watch → positive → structural.
+  const weeklyPositives: ThingCardSeed[] = [];
+  if (bars.length > 0) {
+    const best = bars.reduce((p, x) => x.value > p.value ? x : p, bars[0]);
+    weeklyPositives.push({
+      headline: `${best.label} was your best day of the week`,
+      body: `${best.label} closed at ${fmtRsLakh(best.value)} - the high-water mark of the week. Worth understanding what worked so you can repeat it.`,
+    });
+  }
+  if (wow >= 5) {
+    weeklyPositives.push({
+      headline: `Revenue is up ${wow.toFixed(0)}% vs last week`,
+      body: `You earned ${fmtRsLakh(tw.revenue)} this week vs ${fmtRsLakh(lw.revenue)} last week - a ${fmtRsLakh(tw.revenue - lw.revenue)} swing in the right direction.`,
+    });
+  }
+  const weeklyStructurals = buildStructuralInsights(data);
+  const weeklyThings = composeThreeThings(narrative.alerts, weeklyPositives, weeklyStructurals);
   if (weeklyThings.length > 0) {
     y = drawSectionBar(doc, INNER_X, y + 2, 'Three things from this week', SECTION_RED);
     for (let i = 0; i < weeklyThings.length; i++) {
@@ -2709,13 +3758,65 @@ function generateWeeklyPDF(
   y += 8;
 
   y = drawSectionBar(doc, INNER_X, y, 'Priority actions', SECTION_AMBER);
-  const wkActions = narrative.actions.slice(0, 3);
-  for (let i = 0; i < wkActions.length; i++) {
-    const parts = wkActions[i].split(' - ');
-    y = drawNumberedAlert(doc, INNER_X, y, INNER_W, i + 1, parts[0], parts.slice(1).join(' - '), i === 0 ? 'critical' : 'watch');
+  // Filter out malformed actions (no headline OR no body) so the
+  // section never renders an empty card per spec change 1 line 67-72.
+  const validWkActions = narrative.actions
+    .slice(0, 3)
+    .map(a => {
+      const parts = a.split(' - ');
+      return { head: (parts[0] || '').trim(), body: parts.slice(1).join(' - ').trim() };
+    })
+    .filter(a => a.head.length > 0 && a.body.length > 0);
+  for (let i = 0; i < validWkActions.length; i++) {
+    y = drawNumberedAlert(doc, INNER_X, y, INNER_W, i + 1, validWkActions[i].head, validWkActions[i].body, i === 0 ? 'critical' : 'watch');
   }
-  if (wkActions.length === 0) {
+  if (validWkActions.length === 0) {
     y = drawCalloutCard(doc, INNER_X, y, INNER_W, 'No outstanding priority actions for next week. Maintain current pace and watch the leading indicators below.', 'neutral');
+  } else if (validWkActions.length < 3) {
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'italic');
+    doc.setTextColor(...TEXT_TERTIARY);
+    doc.text(safeText(`${validWkActions.length} priority action${validWkActions.length === 1 ? '' : 's'} identified for next week. More will appear as patterns emerge.`), INNER_X, y);
+    y += 5;
+  }
+
+  // ── Frame 2 — this week vs same week of last month ───────────────
+  // Client-side derivation: take this week's date range, shift by ~28
+  // days (4 weeks) to land on the same week-of-month-ish in the prior
+  // month, then sum revenue from each stream's daily[] over that span.
+  // Day-aligned anchor — documented in INSIGHT_PDF_BACKEND.md §7.
+  if (last7.length >= 1) {
+    const thisStart = last7[0];
+    const thisEnd   = last7[last7.length - 1];
+    const shiftDays = (d: string, n: number) => {
+      const dt = new Date(d + 'T00:00:00Z');
+      dt.setUTCDate(dt.getUTCDate() + n);
+      return dt.toISOString().slice(0, 10);
+    };
+    const prevStart = shiftDays(thisStart, -28);
+    const prevEnd   = shiftDays(thisEnd,   -28);
+
+    let thisSum = 0;
+    let prevSum = 0;
+    for (const s of data.streams) {
+      for (const d of s.daily) {
+        if (d.date >= thisStart && d.date <= thisEnd) thisSum += d.revenue || 0;
+        if (d.date >= prevStart && d.date <= prevEnd) prevSum += d.revenue || 0;
+      }
+    }
+    const wkF2 = composeFrame2({ mtd: thisSum, lastMonthMtd: prevSum });
+    y = drawSectionBar(doc, INNER_X, y + 2, `This week vs same week last month`, SECTION_BLUE);
+    if (wkF2.missing) {
+      y = drawCalloutCard(doc, INNER_X, y, INNER_W,
+        'No data for the equivalent week of last month - same-week comparison unavailable for this period.',
+        'neutral');
+    } else {
+      const tone: 'amber' | 'red' | 'neutral' = wkF2.tone === 'positive' ? 'neutral' : wkF2.tone === 'amber' ? 'amber' : 'red';
+      const arrow = (wkF2.deltaPct ?? 0) >= 0 ? 'up' : 'down';
+      y = drawCalloutCard(doc, INNER_X, y, INNER_W,
+        `${prettyDate(thisStart)}-${prettyDate(thisEnd)}: ${fmtRsLakh(thisSum)} | Same week last month (${prettyDate(prevStart)}-${prettyDate(prevEnd)}): ${fmtRsLakh(prevSum)}. You are ${arrow} ${Math.abs(wkF2.deltaPct ?? 0).toFixed(1)}% - ${wkF2.verdict.toLowerCase()}.`,
+        tone);
+    }
   }
 
   y = drawSectionBar(doc, INNER_X, y + 2, 'Forward indicators', SECTION_BLUE);
@@ -2730,7 +3831,7 @@ function generateWeeklyPDF(
     fwdGap > 0 ? 'amber' : 'neutral'
   );
 
-  addFooter(doc, footerLabel('Weekly Insight', data.monthLabel, clientName, branchName, branchState));
+  addFooter(doc, footerLabel('Weekly Insight', data.monthLabel, clientName, branchName, branchState), indefineLogo);
   doc.save(filename('Weekly_Insight', data.month, branchName));
 }
 
@@ -2741,7 +3842,9 @@ function generateMonthlyPDF(
   clientName: string,
   branchName: string,
   branchState: string,
-  _logo: LogoState | null,
+  logo: LogoState | null,
+  crossBundle: CrossBundle | null = null,
+  indefineLogo: { dataUrl: string; aspect: number } | null = null,
 ) {
   const doc = new jsPDF({ orientation: 'portrait', format: 'a4', unit: 'mm' });
   const pageW = doc.internal.pageSize.getWidth();
@@ -2766,12 +3869,14 @@ function generateMonthlyPDF(
   const weakStream = streamPct.reduce((p, x) => x.pct < p.pct ? x : p, streamPct[0] || { name: '', pct: 0, mtd: 0 });
 
   // ── PAGE 1 — Executive summary ────────────────────────────────────
+  const monthlySync = formatSyncIndicator(data.reportDate, data.lastSync, data.reportSource);
   let y = drawOutlineHeader(
     doc,
     'MONTHLY OPERATIONAL INSIGHT',
     data.monthLabel,
     isFinal ? `Final - Day ${data.daysInMonth} of ${data.daysInMonth}` : `MTD - Day ${data.daysElapsed} of ${data.daysInMonth}`,
     clientName, branchName, branchState,
+    logo, monthlySync,
   );
 
   const monthlyKind = isFinal ? 'monthly_final' : 'monthly_mtd';
@@ -2807,14 +3912,32 @@ function generateMonthlyPDF(
   ]);
 
   // ── Three things you should know about [Month] ────────────────
-  // Newsletter-voice section: 3 numbered story cards covering the
-  // month's biggest signals. Mixes positive + negative -- e.g. when
-  // the combined number is on track, the top alert sits alongside a
-  // green positive observation about the strongest stream.
-  const positiveMonthly = topStream && topStream.pct > 0
-    ? { headline: `${topStream.name} carried the headline number`, body: `${topStream.name} hit ${Math.round(topStream.pct)}% of its target with ${fmtRsLakh(topStream.mtd)} earned. That's the engine you want to keep tuned.` }
-    : undefined;
-  const monthlyThings = composeThreeThings(narrative.alerts, positiveMonthly);
+  // composeThreeThings now takes positives[] + structurals[] so the
+  // section always produces 3 cards (or 0 when literally empty). Per
+  // spec lines 75-88: critical → watch → positive → structural.
+  const monthlyPositives: ThingCardSeed[] = [];
+  if (topStream && topStream.pct > 0) {
+    monthlyPositives.push({
+      headline: `${topStream.name} carried the headline number`,
+      body: `${topStream.name} hit ${Math.round(topStream.pct)}% of its target with ${fmtRsLakh(topStream.mtd)} earned. That's the engine you want to keep tuned.`,
+    });
+  }
+  // Frame-2 monthly positive: streams up materially vs same point last
+  // month go onto the positives stack as well.
+  for (const s of data.streams) {
+    if (monthlyPositives.length >= 2) break;
+    const prim = getStreamPrimary(s);
+    if (!prim) continue;
+    const f2 = composeFrame2(prim);
+    if (!f2.missing && f2.deltaPct !== null && f2.deltaPct >= 10) {
+      monthlyPositives.push({
+        headline: `${s.name} is up ${Math.round(f2.deltaPct)}% vs same point last month`,
+        body: `${fmtRsLakh(f2.thisMtd)} this month vs ${fmtRsLakh(f2.lastMtd)} same point last month - ${f2.verdict.toLowerCase()}.`,
+      });
+    }
+  }
+  const monthlyStructurals = buildStructuralInsights(data);
+  const monthlyThings = composeThreeThings(narrative.alerts, monthlyPositives, monthlyStructurals);
   if (monthlyThings.length > 0) {
     y = drawSectionBar(doc, INNER_X, y + 2, `Three things you should know about ${monthName}`, SECTION_RED);
     for (let i = 0; i < monthlyThings.length; i++) {
@@ -3041,18 +4164,31 @@ function generateMonthlyPDF(
     'neutral'
   );
 
-  // Top 3 management actions
+  // Top 3 management actions — filter empty/placeholder cards per
+  // spec change 1 line 67-72 ("never render a card with just a
+  // category label and no headline or body").
   y = drawSectionBar(doc, INNER_X, y + 2, 'Top management actions for next month', SECTION_AMBER);
-  const mgmtActions = narrative.actions.slice(0, 3);
-  for (let i = 0; i < mgmtActions.length; i++) {
-    const parts = mgmtActions[i].split(' - ');
-    y = drawNumberedAlert(doc, INNER_X, y, INNER_W, i + 1, parts[0], parts.slice(1).join(' - '), i === 0 ? 'critical' : 'watch');
+  const validMgmtActions = narrative.actions
+    .slice(0, 3)
+    .map(a => {
+      const parts = a.split(' - ');
+      return { head: (parts[0] || '').trim(), body: parts.slice(1).join(' - ').trim() };
+    })
+    .filter(a => a.head.length > 0 && a.body.length > 0);
+  for (let i = 0; i < validMgmtActions.length; i++) {
+    y = drawNumberedAlert(doc, INNER_X, y, INNER_W, i + 1, validMgmtActions[i].head, validMgmtActions[i].body, i === 0 ? 'critical' : 'watch');
   }
-  if (mgmtActions.length === 0) {
+  if (validMgmtActions.length === 0) {
     y = drawCalloutCard(doc, INNER_X, y, INNER_W, 'No outstanding management actions. Maintain current course.', 'neutral');
+  } else if (validMgmtActions.length < 3) {
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'italic');
+    doc.setTextColor(...TEXT_TERTIARY);
+    doc.text(safeText(`${validMgmtActions.length} priority action${validMgmtActions.length === 1 ? '' : 's'} identified. More will appear as patterns emerge.`), INNER_X, y);
+    y += 5;
   }
 
-  addFooter(doc, footerLabel('Monthly Insight', data.monthLabel, clientName, branchName, branchState));
+  addFooter(doc, footerLabel('Monthly Insight', data.monthLabel, clientName, branchName, branchState), indefineLogo);
   doc.save(filename('Monthly_Insight', data.month, branchName));
 }
 
@@ -3065,67 +4201,162 @@ export default function InsightDownloadPanel({
   const [variant, setVariant] = useState<ReportVariant>('monthly');
   const [generating, setGenerating] = useState(false);
   const [logo, setLogo] = useState<LogoState | null>(null);
+  // PDF-specific data: the live dashboard's `data` prop is anchored to
+  // today's calendar; for the PDF we re-fetch with ?asOf=last_synced so
+  // the report covers the last fully-synced day (per the 23:00 IST sync
+  // contract). Falls back to the prop when the fetch is in-flight or
+  // fails so the user still gets a downloadable PDF.
+  const [pdfData, setPdfData] = useState<InsightsData | null>(null);
+  // Cross-tab analytics for the stream deep-dive sections. Pre-fetched
+  // on dialog open in parallel with the operational-insights re-fetch so
+  // they're warm when the user clicks Download.
+  const [crossBundle, setCrossBundle] = useState<CrossBundle | null>(null);
+  // Indefine wordmark image for the footer. Pre-loaded from the env-
+  // configured INDEFINE_LOGO_URL so the synchronous addFooter() pass
+  // can render it without an await mid-flow. Null = use text wordmark.
+  const [indefineLogo, setIndefineLogo] = useState<{ dataUrl: string; aspect: number } | null>(null);
 
-  // Load the client logo when the panel opens. The logo lives at
-  // `/api/logos/clients/{slug}.{ext}` (same pattern Sidebar uses) — we try a
-  // handful of common extensions, the first one that 200s wins.
-  //
-  // We render the image to an offscreen <canvas> and serialise it as PNG
-  // before passing to jspdf. Two reasons:
-  //   1. jspdf's addImage doesn't natively understand SVG; rasterising via
-  //      canvas converts it for free (the browser handles the vector → bitmap
-  //      step).
-  //   2. Some clients upload JPEG / WEBP and listing every encoder in jspdf
-  //      is fiddly. Normalising to PNG keeps the PDF code path uniform.
-  //
-  // If no logo is found we leave `logo` as null and the header collapses
-  // gracefully to its text-only layout.
+  /** Convert a logo URL → in-memory PNG via offscreen canvas. Returns
+   *  the data URL + aspect ratio (jspdf needs both). Throws on any
+   *  failure so callers can fall through to the initials sentinel. */
+  async function imgToDataUrl(url: string): Promise<{ dataUrl: string; aspect: number }> {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = (e) => reject(e);
+      img.src = url;
+    });
+    const w = img.naturalWidth || img.width || 256;
+    const h = img.naturalHeight || img.height || 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('canvas 2d context unavailable');
+    ctx.drawImage(img, 0, 0, w, h);
+    return { dataUrl: canvas.toDataURL('image/png'), aspect: w / h };
+  }
+
+  // ── Fetch the PDF-specific data + cross-bundle + logo when the
+  //    Download dialog opens. Three parallel HTTP requests; the dialog
+  //    renders immediately and the user can choose a variant while
+  //    network resolves. handleDownload waits for pdfData before firing.
   useEffect(() => {
     if (!open) return;
-    const slug = typeof window !== 'undefined' ? localStorage.getItem('client_slug') : null;
-    if (!slug) return;
-
     let cancelled = false;
+
+    // 1. Re-fetch operational-insights with ?asOf=last_synced so the
+    //    report date is anchored to the last fully-synced day rather
+    //    than the dashboard's "today" view. Also kicks off the Indefine
+    //    logo fetch chained on the response since the URL comes back in
+    //    the payload.
+    api.get('/dashboard/operational-insights', { params: { month: data.month, asOf: 'last_synced' } })
+      .then(r => {
+        if (cancelled) return;
+        setPdfData(r.data);
+        // Pre-load the Indefine wordmark image so addFooter can render
+        // it synchronously. Failures are logged inside loadIndefineLogo
+        // and surface as the text-wordmark fallback.
+        loadIndefineLogo(r.data?.indefineLogoUrl).then(img => {
+          if (!cancelled) setIndefineLogo(img);
+        });
+      })
+      .catch(err => {
+        console.error('[InsightPDF] re-fetch with asOf=last_synced failed', err);
+        // Fall back to the live dashboard data so the user still gets
+        // a downloadable PDF — header will use today's calendar date.
+        if (!cancelled) setPdfData(data);
+        // Try the prop's URL too in case the live data carries it.
+        loadIndefineLogo(data.indefineLogoUrl).then(img => {
+          if (!cancelled) setIndefineLogo(img);
+        });
+      });
+
+    // 2. Cross-tab analytics for the stream deep-dive sections (top
+    //    doctor, top SKU, cross-sell rate, margin-leak SKUs). Failures
+    //    are non-fatal — sections render their empty state.
+    const startMonth = data.month;
+    const endMonth   = data.month;
+    Promise.allSettled([
+      api.get('/dashboard/clinic-analytics',   { params: { startMonth, endMonth } }),
+      api.get('/dashboard/pharmacy-analytics', { params: { startMonth, endMonth } }),
+    ]).then(([c, p]) => {
+      if (cancelled) return;
+      setCrossBundle({
+        clinic:   c.status === 'fulfilled' ? c.value.data : null,
+        pharmacy: p.status === 'fulfilled' ? p.value.data : null,
+      });
+      if (c.status === 'rejected') console.error('[InsightPDF] clinic-analytics fetch failed', c.reason);
+      if (p.status === 'rejected') console.error('[InsightPDF] pharmacy-analytics fetch failed', p.reason);
+    });
+
+    // 3. Client logo. Prefer the server's pre-resolved URL (from
+    //    operational-insights) so we skip the HEAD-probe loop. If the
+    //    re-fetch hasn't landed yet we fall back to the live data's
+    //    URL or the legacy slug-based probe. On any failure we surface
+    //    an initials-circle sentinel so the header always renders
+    //    something — the previous silent-catch path made it look like
+    //    the PDF was broken.
     (async () => {
-      for (const ext of ['png', 'jpg', 'jpeg', 'webp', 'svg']) {
-        const url = `/api/logos/clients/${slug}.${ext}`;
-        try {
-          const head = await fetch(url, { method: 'HEAD' });
-          if (!head.ok) continue;
-
-          const img = new Image();
-          img.crossOrigin = 'anonymous';
-          await new Promise<void>((resolve, reject) => {
-            img.onload = () => resolve();
-            img.onerror = (e) => reject(e);
-            img.src = url;
-          });
-
-          const w = img.naturalWidth || img.width || 256;
-          const h = img.naturalHeight || img.height || 256;
-          const canvas = document.createElement('canvas');
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) return;
-          ctx.drawImage(img, 0, 0, w, h);
-          const dataUrl = canvas.toDataURL('image/png');
-          if (!cancelled) setLogo({ dataUrl, aspect: w / h });
-          return;
-        } catch {
-          // try next extension
+      const initialsFallback: LogoState = {
+        kind: 'initials',
+        initials: deriveInitials(clientName),
+        // Brand-blue per spec change 1 — falls back uniformly across
+        // tenants until per-tenant theming lands.
+        color: [24, 95, 165],
+      };
+      const seedUrl = data.clientLogoUrl || pdfData?.clientLogoUrl || null;
+      const tryUrls: string[] = [];
+      if (seedUrl) tryUrls.push(seedUrl);
+      // Legacy probe: only if the server didn't pre-resolve.
+      if (tryUrls.length === 0) {
+        const slug = typeof window !== 'undefined' ? localStorage.getItem('client_slug') : null;
+        if (slug) {
+          for (const ext of ['png', 'jpg', 'jpeg', 'webp', 'svg']) {
+            tryUrls.push(`/api/logos/clients/${slug}.${ext}`);
+          }
         }
       }
+      for (const url of tryUrls) {
+        try {
+          const out = await imgToDataUrl(url);
+          if (!cancelled) setLogo({ kind: 'image', dataUrl: out.dataUrl, aspect: out.aspect });
+          return;
+        } catch (err) {
+          // Logged but non-fatal — try the next URL or fall through to initials.
+          console.error('[InsightPDF] client logo fetch failed', { url, err });
+        }
+      }
+      if (!cancelled) setLogo(initialsFallback);
     })();
+
     return () => { cancelled = true; };
+    // We intentionally DON'T re-run when `pdfData` changes mid-flight —
+    // the logo loader reads it inline as a best-effort hint. open + month
+    // are the durable triggers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, data.month]);
+
+  // Reset state when the dialog closes so a re-open re-fetches fresh
+  // data (in case the user kept the page open across the 23:00 boundary).
+  useEffect(() => {
+    if (open) return;
+    setPdfData(null);
+    setCrossBundle(null);
+    setLogo(null);
+    setIndefineLogo(null);
   }, [open]);
 
   const handleDownload = async () => {
     setGenerating(true);
     try {
-      if (variant === 'daily') generateDailyPDF(data, clientName, branchName, branchState, logo);
-      else if (variant === 'weekly') generateWeeklyPDF(data, clientName, branchName, branchState, logo);
-      else generateMonthlyPDF(data, clientName, branchName, branchState, logo);
+      // Use the sync-anchored PDF data when available; fall back to the
+      // live dashboard data so the button never blocks indefinitely.
+      const effective = pdfData || data;
+      if (variant === 'daily') generateDailyPDF(effective, clientName, branchName, branchState, logo, crossBundle, indefineLogo);
+      else if (variant === 'weekly') generateWeeklyPDF(effective, clientName, branchName, branchState, logo, crossBundle, indefineLogo);
+      else generateMonthlyPDF(effective, clientName, branchName, branchState, logo, crossBundle, indefineLogo);
       setTimeout(() => { setGenerating(false); onClose(); }, 400);
     } catch (err) {
       console.error('PDF generation error:', err);
