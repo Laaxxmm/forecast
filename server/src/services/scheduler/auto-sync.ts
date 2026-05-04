@@ -210,7 +210,7 @@ export async function runAutoSyncForTarget(target: Target, trigger: Trigger): Pr
           state.progress = { step, message, pct };
         },
       });
-      const firstImportId = res.importIds.sales || res.importIds.purchase || res.importIds.stock || 0;
+      const firstImportId = res.importIds.sales || res.importIds.purchase || res.importIds.stock || res.importIds.transfer || 0;
       tenantDb.run(
         `UPDATE auto_sync_runs SET status = 'success', finished_at = ?, rows_imported = ?, import_id = ? WHERE id = ?`,
         new Date().toISOString(), res.totalRows, firstImportId, runId
