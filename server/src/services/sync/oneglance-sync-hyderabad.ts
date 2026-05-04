@@ -677,31 +677,84 @@ async function downloadStoreReport(
   page.on('request', onRequest);
   page.on('response', onResponse);
 
-  // Bypass Playwright's actionability checks entirely. The csv button
-  // is sometimes flagged as "not visible" by Playwright's heuristics
-  // even though the user can see and click it manually (likely due to
-  // ancestor containers with intermediate styles, scroll-into-view
-  // races, or duplicate ids). Calling .click() directly on the DOM
-  // node from inside page.evaluate fires the same onclick handler
-  // OneGlance attached, without going through Playwright's gates.
-  const clicked = await page.evaluate(() => {
-    const btn = document.querySelector('#csvbtn') as HTMLButtonElement | null;
-    if (!btn) return { ok: false, reason: 'csvbtn-not-found' as const };
-    // Try click() first (fires onclick + jQuery handlers), and as a
-    // belt-and-braces also dispatch a synthetic MouseEvent in case
-    // the page wires its handler via addEventListener('click').
-    try { btn.click(); } catch {}
-    try { btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); } catch {}
-    if ((window as any).jQuery) {
-      try { (window as any).jQuery(btn).trigger('click'); } catch {}
+  // Click the csv button. Try strategies in order:
+  //   1. Playwright's native click with force:true. Produces a real
+  //      isTrusted=true mouse event from Chromium input dispatch —
+  //      this is what OneGlance's click handler likely expects.
+  //   2. JS .click() in page.evaluate, which fires synthetic events.
+  //      Some click handlers don't run for synthetic events but it's
+  //      still worth trying as a fallback.
+  // The blob/anchor interceptors installed in addInitScript run in
+  // every context and will capture any synthetic <a download> click
+  // OneGlance triggers, regardless of which click strategy worked.
+  let clickStrategy: string = 'none';
+  const csvLocator = page.locator('#csvbtn').first();
+  try {
+    await csvLocator.click({ timeout: 10_000, force: true, noWaitAfter: true });
+    clickStrategy = 'playwright-force-click';
+  } catch (e1: any) {
+    console.log('[oneglance-hyderabad] Playwright force-click failed, falling back to JS click:', e1?.message);
+    const clicked = await page.evaluate(() => {
+      const btn = document.querySelector('#csvbtn') as HTMLButtonElement | null;
+      if (!btn) return { ok: false, reason: 'csvbtn-not-found' as const };
+      try { btn.click(); } catch {}
+      try { btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); } catch {}
+      if ((window as any).jQuery) {
+        try { (window as any).jQuery(btn).trigger('click'); } catch {}
+      }
+      return { ok: true, reason: 'fired' as const };
+    });
+    if (!clicked.ok) {
+      await debugScreenshot(page, `10b-FAILED-csvbtn-not-found-${stepKey}`);
+      throw new Error(`Could not click the csv button: ${clicked.reason}`);
     }
-    return { ok: true, reason: 'fired' as const };
-  });
-  if (!clicked.ok) {
-    await debugScreenshot(page, `10b-FAILED-csvbtn-not-found-${stepKey}`);
-    throw new Error(`Could not click the csv button: ${clicked.reason}`);
+    clickStrategy = 'js-evaluate-click';
   }
+  console.log(`[oneglance-hyderabad] csv button click strategy: ${clickStrategy}`);
   await debugScreenshot(page, `10-after-csv-click-${stepKey}`);
+
+  // Give the click handler a moment to do its thing (build the blob,
+  // create the synthetic anchor, click it). 1.5s is empirical — enough
+  // for client-side CSV generation on a multi-page report, fast enough
+  // that we don't waste time on the happy path.
+  await page.waitForTimeout(1500);
+
+  // Check the blob/anchor capture FIRST — that's the path OneGlance
+  // actually uses (confirmed by the network log showing zero CSV
+  // requests, only session keep-alives). If a synthetic <a download>
+  // was clicked with a blob href, read the matching blob's content
+  // and save it ourselves.
+  const captured = await page.evaluate(async () => {
+    const cap = (window as any).__mtCsvCapture;
+    if (!cap) return null;
+    const anchor = cap.anchors[cap.anchors.length - 1]; // most recent
+    if (!anchor) return { anchorCount: 0, blobCount: cap.blobs.length };
+    // Find the blob this anchor points at.
+    const blobEntry = cap.blobs.find((b: any) => b.url === anchor.href);
+    if (!blobEntry) {
+      return { anchorCount: cap.anchors.length, blobCount: cap.blobs.length, anchor, error: 'blob-url-not-matched' };
+    }
+    // Read the blob's content as text.
+    const text = await blobEntry.blob.text();
+    return {
+      anchorCount: cap.anchors.length,
+      blobCount: cap.blobs.length,
+      anchor,
+      type: blobEntry.type,
+      size: blobEntry.size,
+      content: text,
+    };
+  }).catch(() => null);
+
+  if (captured?.content && captured.content.length > 50) {
+    fs.writeFileSync(filePath, captured.content, 'utf-8');
+    console.log(`[oneglance-hyderabad] CSV captured via blob interceptor: ${captured.size} bytes, type=${captured.type}, download=${captured.anchor?.download}`);
+    progress(opts, stepKey, 'CSV captured (blob interceptor)', 80);
+    page.off('request', onRequest);
+    page.off('response', onResponse);
+    return { filePath, filename };
+  }
+  console.log(`[oneglance-hyderabad] Blob interceptor capture state:`, JSON.stringify(captured));
 
   // Race: whichever fires first wins. If both fail, throw with diagnostics.
   const winner = await Promise.race([
@@ -836,6 +889,42 @@ export async function syncOneglanceHyderabad(
     if (typeof (window as any).__name === 'undefined') {
       (window as any).__name = (target: any) => target;
     }
+  });
+
+  // Capture synthetic blob downloads. OneGlance generates the CSV
+  // entirely client-side: it converts the in-memory report data to a
+  // CSV string, wraps it in a Blob, calls URL.createObjectURL, builds
+  // a synthetic <a download> element, and clicks it. Playwright's
+  // headless mode doesn't always fire a `download` event for those
+  // synthetic clicks. We monkey-patch URL.createObjectURL +
+  // HTMLAnchorElement.prototype.click so we can later read the blob
+  // contents directly and save them ourselves.
+  await page.addInitScript(() => {
+    const w = window as any;
+    if (w.__mtCsvCapture) return; // idempotent — runs on every nav
+    w.__mtCsvCapture = { blobs: [], anchors: [] };
+
+    const origCreateObjectURL = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = function (obj: any) {
+      const url = origCreateObjectURL(obj);
+      try {
+        if (obj instanceof Blob) {
+          w.__mtCsvCapture.blobs.push({ url, blob: obj, type: obj.type, size: obj.size });
+        }
+      } catch { /* ignore */ }
+      return url;
+    };
+
+    const origAnchorClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () {
+      try {
+        const dl = this.getAttribute('download');
+        if (dl !== null && this.href) {
+          w.__mtCsvCapture.anchors.push({ href: this.href, download: dl, ts: Date.now() });
+        }
+      } catch { /* ignore */ }
+      return origAnchorClick.apply(this, arguments as any);
+    };
   });
 
   const result: OneglanceHyderabadSyncResult = {};
