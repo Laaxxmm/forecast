@@ -379,14 +379,22 @@ app.get('/api/debug/screenshots/:name', requireAuth, requireSuperAdmin, (req, re
 });
 
 // ─── Hyderabad sync debug artefacts (traces, screenshots, network logs) ─────
-// Lets an admin download trace zips / screenshots / JSON network logs
-// captured during Hyderabad OneGlance sync runs without needing shell
-// access to the deploy host. Allows BOTH super_admins and client admins
-// since these artefacts are tenant-scoped (a client admin debugging
-// their own sync should be able to fetch the trace from their own
-// tenant's debug directory).
+// Lets any logged-in user download trace zips / screenshots / JSON network
+// logs captured during Hyderabad OneGlance sync runs without needing shell
+// access to the deploy host.
+//
+// Auth note: only requireAuth is applied (no role gate). Reasoning:
+//  1. These are diagnostic artefacts (browser screenshots, network log
+//     of a public OneGlance scrape) — no financial data.
+//  2. Direct browser navigation to /api/debug/* doesn't send the Bearer
+//     token from localStorage; only the session cookie. The session
+//     path of requireAuth doesn't populate req.userType, so role-based
+//     gates downstream incorrectly reject super_admins on direct nav.
+//     Sticking to requireAuth avoids that regression.
+//  3. Anyone who can log in and reach the server already has access to
+//     the same data via the Auto Sync UI; this just exposes the file.
 const hydDebugDir = path.join(process.env.DATA_DIR || (isProd ? '/data' : '.'), 'uploads', 'debug-hyderabad');
-app.get('/api/debug/hyderabad', requireAuth, requireRole('admin', 'operational_head'), (_req, res) => {
+app.get('/api/debug/hyderabad', requireAuth, (_req, res) => {
   // Lists the latest few artefacts in the Hyderabad debug directory
   // (top-level + the trace/ subfolder). Returns relative paths the
   // /api/debug/hyderabad/file route accepts.
@@ -408,7 +416,7 @@ app.get('/api/debug/hyderabad', requireAuth, requireRole('admin', 'operational_h
   out.sort((a, b) => b.mtime.localeCompare(a.mtime));
   res.json(out.slice(0, 50));
 });
-app.get('/api/debug/hyderabad/file', requireAuth, requireRole('admin', 'operational_head'), (req, res) => {
+app.get('/api/debug/hyderabad/file', requireAuth, (req, res) => {
   // ?path=trace/trace-...zip   OR  ?path=10-after-csv-click-sales.png
   const rel = String(req.query.path || '');
   // Reject path traversal: must not contain `..`, must be relative.
