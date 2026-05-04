@@ -149,6 +149,86 @@ async function openStoreSubmenu(page: Page, opts: OneglanceHyderabadSyncOptions)
     return;
   }
 
+  // After a report renders, OneGlance COLLAPSES the sidebar to give
+  // the report more screen space — only a small "»" expand button
+  // remains visible on the left edge. The Reports icon is hidden
+  // inside that collapsed sidebar. The user-confirmed flow is to click
+  // the "»" button to slide the sidebar back out, at which point STORE
+  // is still expanded (OneGlance preserves that state) and we can
+  // click the next sub-item directly.
+  //
+  // Try detect-and-click of the expand button BEFORE falling through
+  // to the Reports-icon strategies. If the click reveals "Bill
+  // Collection - Store" (proof the sidebar slid out + STORE was
+  // preserved-expanded), we're done — caller can click the next
+  // sub-item.
+  const expandClicked = await page.evaluate(() => {
+    // Look for a small visible button on the LEFT EDGE of the page
+    // whose text/class/aria identify it as a sidebar-expand control.
+    // Trying multiple signals because OneGlance doesn't label this
+    // button consistently across builds.
+    const candidates = Array.from(document.querySelectorAll(
+      'button, a, div, span, i, [role="button"], [onclick]'
+    ));
+    for (const el of candidates) {
+      const r = (el as HTMLElement).getBoundingClientRect();
+      // Left edge only (sidebar-expand button never lives in the main
+      // pane). Visible.
+      if (r.x > 200 || r.width < 8 || r.height < 8 || (el as HTMLElement).offsetParent === null) continue;
+      // Skip obvious main-content elements (rendered table cells, etc.)
+      // by requiring the element be reasonably small (a chevron icon
+      // is typically < 80px in either dimension).
+      if (r.width > 120 || r.height > 80) continue;
+
+      const ownText = Array.from(el.childNodes)
+        .filter(n => n.nodeType === Node.TEXT_NODE)
+        .map(n => (n.textContent || '').trim())
+        .join('').trim();
+      const cls = ((el as HTMLElement).className || '').toString().toLowerCase();
+      const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+      const title = (el.getAttribute('title') || '').toLowerCase();
+
+      // Match by visible text: "»" (U+00BB) or ">>"
+      if (ownText === '»' || ownText === '>>' || ownText === '»') {
+        (el as HTMLElement).click();
+        return { matched: 'text', text: ownText, x: Math.round(r.x), y: Math.round(r.y) };
+      }
+      // Match by class — Font Awesome / generic chevron-double-right
+      if (/(angle|chevron)-double-right/i.test(cls)) {
+        (el as HTMLElement).click();
+        return { matched: 'class-chevron', cls: cls.slice(0, 60), x: Math.round(r.x), y: Math.round(r.y) };
+      }
+      // Match by class — sidebar-toggle / menu-expand patterns
+      if (/menu.*expand|sidebar.*toggle|expand.*menu|show.*sidebar/i.test(cls)) {
+        (el as HTMLElement).click();
+        return { matched: 'class-toggle', cls: cls.slice(0, 60), x: Math.round(r.x), y: Math.round(r.y) };
+      }
+      // Match by aria/title
+      if (aria.includes('expand') || title.includes('expand') ||
+          aria.includes('show menu') || title.includes('show menu')) {
+        (el as HTMLElement).click();
+        return { matched: 'aria-title', aria, title, x: Math.round(r.x), y: Math.round(r.y) };
+      }
+    }
+    return null;
+  });
+
+  if (expandClicked) {
+    console.log('[oneglance-hyderabad] sidebar-expand button clicked:', JSON.stringify(expandClicked));
+    // Wait up to 4s for "Bill Collection - Store" — proves the sidebar
+    // slid out AND STORE was preserved-expanded by OneGlance.
+    const expandedNow = await page.locator(
+      'text=/Bill\\s+Collection\\s*-?\\s*Store/i'
+    ).first().waitFor({ state: 'visible', timeout: 4_000 }).then(() => true).catch(() => false);
+    if (expandedNow) {
+      console.log('[oneglance-hyderabad] sidebar expanded, STORE submenu visible — skipping full Reports/STORE navigation');
+      progress(opts, 'navigate', 'Sidebar re-opened, STORE preserved', 22);
+      await debugScreenshot(page, '04-sidebar-re-expanded');
+      return;
+    }
+    console.log('[oneglance-hyderabad] expand-button click did not reveal STORE sub-items — falling through to Reports-icon strategies');
+  }
+
   // Step 1: click the Reports icon. The sidebar has a column of icons
   // (Home, Calendar, +Note, Lab, Pill, User, Tools/Reports, Building).
   // The Reports icon sits 7th from top in the user's screenshots, but
