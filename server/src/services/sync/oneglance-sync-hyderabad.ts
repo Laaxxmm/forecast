@@ -765,39 +765,104 @@ async function captureCsvAndSave(
   page.on('request', onRequest);
   page.on('response', onResponse);
 
+  // Diagnostic dump: every visible <button>, <a> and input[type=button]
+  // on the page when we go looking for the csv button. Logged so we can
+  // see whether the csv button has a different ID on this page (we know
+  // #csvbtn works for Sales/Purchase, but Stock Transfer might differ).
+  const buttonsDump = await page.evaluate(() => {
+    const all = Array.from(document.querySelectorAll('button, a, input[type="button"], input[type="submit"]'));
+    return all.map((el: any) => {
+      const r = el.getBoundingClientRect();
+      return {
+        tag: el.tagName,
+        id: el.id || '',
+        type: el.type || '',
+        text: ((el.value || el.textContent || '') + '').trim().slice(0, 30),
+        cls: ((el.className || '') + '').toString().slice(0, 60),
+        x: Math.round(r.x), y: Math.round(r.y),
+        visible: r.width > 0 && r.height > 0 && el.offsetParent !== null,
+      };
+    }).filter((b: any) => b.visible && (
+      /csv|pdf|export|download/i.test(b.text) || /csv|pdf|export|download/i.test(b.id) || /uti_btn|btn-info/i.test(b.cls)
+    ));
+  });
+  console.log(`[oneglance-hyderabad] csv/export button candidates on ${stepKey}:`, JSON.stringify(buttonsDump, null, 2));
+
   // Click the csv button. Try strategies in order:
-  //   1. Playwright's native click with force:true. Produces a real
-  //      isTrusted=true mouse event from Chromium input dispatch.
-  //   2. JS .click() in page.evaluate, which fires synthetic events.
+  //   1. Playwright force-click on #csvbtn (the known-good selector for
+  //      Sales/Purchase pages).
+  //   2. Playwright force-click on any visible button/a whose own text is
+  //      exactly "csv" (case-insensitive). Catches the case where the
+  //      Stock Transfer page reuses the same button label but a
+  //      different id.
+  //   3. JS .click() in page.evaluate over the same set.
   // The blob/anchor interceptors installed in addInitScript run in
   // every context and will capture any synthetic <a download> click
   // OneGlance triggers, regardless of which click strategy worked.
   let clickStrategy: string = 'none';
-  const csvLocator = page.locator('#csvbtn').first();
-  try {
-    await csvLocator.click({ timeout: 10_000, force: true, noWaitAfter: true });
-    clickStrategy = 'playwright-force-click';
-  } catch (e1: any) {
-    console.log('[oneglance-hyderabad] Playwright force-click failed, falling back to JS click:', e1?.message);
+  let clickTarget: any = null;
+  const tryPlaywrightClick = async (selector: string): Promise<string | null> => {
+    const loc = page.locator(selector).first();
+    const count = await loc.count();
+    if (count === 0) return null;
+    try {
+      await loc.scrollIntoViewIfNeeded({ timeout: 3_000 }).catch(() => {});
+      await loc.click({ timeout: 8_000, force: true, noWaitAfter: true });
+      return selector;
+    } catch (e: any) {
+      console.log(`[oneglance-hyderabad] Force-click on ${selector} failed: ${e?.message}`);
+      return null;
+    }
+  };
+
+  clickStrategy = (await tryPlaywrightClick('#csvbtn')) || '';
+  if (!clickStrategy) {
+    // Try by text content. button:has-text("csv") matches if "csv" is
+    // anywhere in the text — we want exact-match. Use evaluate to find.
+    const textBased = await page.evaluate(() => {
+      const all = Array.from(document.querySelectorAll('button, a, input[type="button"], input[type="submit"]'));
+      const csvBtns = all.filter((el: any) => {
+        const t = ((el.value || el.textContent || '') + '').trim().toLowerCase();
+        const r = el.getBoundingClientRect();
+        return t === 'csv' && r.width > 0 && r.height > 0 && el.offsetParent !== null;
+      });
+      if (csvBtns.length === 0) return null;
+      const tgt = csvBtns[0] as HTMLElement;
+      tgt.setAttribute('data-mt-csvbtn', '1');
+      return { tag: tgt.tagName, id: tgt.id || '', cls: ((tgt.className || '') + '').toString().slice(0, 60) };
+    });
+    if (textBased) {
+      console.log(`[oneglance-hyderabad] csv button found by text: ${JSON.stringify(textBased)}`);
+      clickTarget = textBased;
+      const ok = await tryPlaywrightClick('[data-mt-csvbtn="1"]');
+      if (ok) clickStrategy = 'playwright-force-click-by-text';
+    }
+  }
+  if (!clickStrategy) {
+    // Last resort: JS .click() on whatever we found.
     const clicked = await page.evaluate(() => {
-      const btn = document.querySelector('#csvbtn') as HTMLButtonElement | null;
-      if (!btn) return { ok: false, reason: 'csvbtn-not-found' as const };
+      const tagged = document.querySelector('[data-mt-csvbtn="1"]') as HTMLElement | null;
+      const btn = tagged || (document.querySelector('#csvbtn') as HTMLElement | null);
+      if (!btn) return { ok: false, reason: 'no-csv-button-found' };
       try { btn.click(); } catch {}
       try { btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); } catch {}
       if ((window as any).jQuery) {
         try { (window as any).jQuery(btn).trigger('click'); } catch {}
       }
-      return { ok: true, reason: 'fired' as const };
+      return { ok: true, reason: 'js-click-fired', id: btn.id || '', tag: btn.tagName };
     });
     if (!clicked.ok) {
       await debugScreenshot(page, `10b-FAILED-csvbtn-not-found-${stepKey}`);
       page.off('request', onRequest);
       page.off('response', onResponse);
-      throw new Error(`Could not click the csv button: ${clicked.reason}`);
+      throw new Error(
+        `Could not click the csv button: ${clicked.reason}. ` +
+        `Visible csv/export buttons on the page (${buttonsDump.length} candidates): ${JSON.stringify(buttonsDump.slice(0, 5))}`,
+      );
     }
     clickStrategy = 'js-evaluate-click';
   }
-  console.log(`[oneglance-hyderabad] csv button click strategy: ${clickStrategy}`);
+  console.log(`[oneglance-hyderabad] csv button click strategy: ${clickStrategy} target: ${JSON.stringify(clickTarget)}`);
   await debugScreenshot(page, `10-after-csv-click-${stepKey}`);
 
   // Give the click handler a moment to do its thing (build the blob,
@@ -871,13 +936,33 @@ async function captureCsvAndSave(
     try {
       fs.writeFileSync(logPath, JSON.stringify(networkLog, null, 2));
     } catch {}
-    console.log(`[oneglance-hyderabad] No download/popup fired. Network log saved to ${logPath}`);
+
+    // Persist the blob interceptor's full state too — even if no usable
+    // CSV came out, the captured shape (anchorCount / blobCount / type)
+    // tells us whether OneGlance even fired its handler.
+    const captureStatePath = path.join(DEBUG_DIR, `10e-blob-capture-${stepKey}.json`);
+    try {
+      fs.writeFileSync(captureStatePath, JSON.stringify({
+        captureSummary: captured,
+        clickStrategy,
+        clickTarget,
+        buttonsDump,
+      }, null, 2));
+    } catch {}
+
+    console.log(`[oneglance-hyderabad] No download/popup fired. Network log: ${logPath}`);
+    console.log(`[oneglance-hyderabad] Blob capture state: ${captureStatePath}`);
     console.log(`[oneglance-hyderabad] Network log (${networkLog.length} entries):`);
     console.log(JSON.stringify(networkLog.slice(0, 30), null, 2));
 
     throw new Error(
-      `CSV download never fired within 90s. The csv button click was dispatched but produced no download event AND no popup tab. ` +
-      `Network log saved to ${logPath} (${networkLog.length} requests captured).`,
+      `CSV download never fired within 90s. The csv button click (${clickStrategy}) was dispatched but produced no download event, no popup tab, and no captured blob. ` +
+      `Captured: blobs=${captured?.blobCount ?? 0}, anchors=${captured?.anchorCount ?? 0}. ` +
+      `Network log: ${networkLog.length} requests. ` +
+      `To diagnose: GET /api/debug/hyderabad to list debug artefacts (look for trace/trace-*.zip). ` +
+      `Download via /api/debug/hyderabad/file?path=trace/<file>.zip and replay with ` +
+      `\`npx playwright show-trace <file>.zip\` for a full timeline + DOM snapshots + network. ` +
+      `Also screenshots 09-report-loaded-${stepKey} and 10-after-csv-click-${stepKey}.`,
     );
   }
   page.off('request', onRequest);
@@ -1069,14 +1154,15 @@ export async function syncOneglanceHyderabad(
   const wantVideo = process.env.ONEGLANCE_HYDERABAD_VIDEO === '1';
   if (wantVideo && !fs.existsSync(videoDir)) fs.mkdirSync(videoDir, { recursive: true });
 
-  // Tracing is opt-in too, but doesn't need ffmpeg — it's just
-  // screenshots + DOM snapshots packaged as a zip. Set
-  // ONEGLANCE_HYDERABAD_TRACE=1 to enable. The zip can be replayed
-  // locally with `npx playwright show-trace <path-to-trace.zip>`,
+  // Tracing is enabled BY DEFAULT for Hyderabad runs — these still need
+  // active debugging and the cost is small (a zip per run on disk, no
+  // ffmpeg dependency). Set ONEGLANCE_HYDERABAD_TRACE=0 to opt out.
+  // The zip can be replayed locally with
+  //   `npx playwright show-trace <path-to-trace.zip>`
   // which opens an interactive timeline + DOM snapshots + network +
-  // console.
+  // console — same diagnostic value as a video.
   const traceDir = path.join(DATA_DIR, 'uploads', 'debug-hyderabad', 'trace');
-  const wantTrace = process.env.ONEGLANCE_HYDERABAD_TRACE === '1';
+  const wantTrace = process.env.ONEGLANCE_HYDERABAD_TRACE !== '0';
   if (wantTrace && !fs.existsSync(traceDir)) fs.mkdirSync(traceDir, { recursive: true });
 
   const context: BrowserContext = await browser.newContext({
