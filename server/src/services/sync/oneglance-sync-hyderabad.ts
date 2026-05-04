@@ -130,13 +130,30 @@ async function login(page: Page, opts: OneglanceHyderabadSyncOptions): Promise<v
  * trying to interact with a page that didn't load.
  */
 async function openStoreSubmenu(page: Page, opts: OneglanceHyderabadSyncOptions): Promise<void> {
+  progress(opts, 'navigate', 'Opening Reports section...', 16);
+  await debugScreenshot(page, '03a-before-reports-click');
+
+  // Idempotent fast-path: if STORE submenu is already EXPANDED (we're
+  // already on the Reports page from a previous iteration in the same
+  // run, e.g. the second report in an "All" sync), skip everything and
+  // return. We detect "already expanded" by looking for any STORE
+  // sub-item — "Bill Collection - Store" is the first one in the list
+  // and is a stable marker.
+  const alreadyExpanded = await page.locator(
+    'text=/Bill\\s+Collection\\s*-?\\s*Store/i'
+  ).first().isVisible({ timeout: 1_500 }).catch(() => false);
+  if (alreadyExpanded) {
+    console.log('[oneglance-hyderabad] STORE submenu already expanded — skipping Reports/STORE navigation');
+    progress(opts, 'navigate', 'STORE menu already open', 22);
+    await debugScreenshot(page, '04-store-already-expanded');
+    return;
+  }
+
   // Step 1: click the Reports icon. The sidebar has a column of icons
   // (Home, Calendar, +Note, Lab, Pill, User, Tools/Reports, Building).
   // The Reports icon sits 7th from top in the user's screenshots, but
   // OneGlance doesn't put text labels on the icons — we have to find
   // the wrench/tools icon by other means.
-  progress(opts, 'navigate', 'Opening Reports section...', 16);
-  await debugScreenshot(page, '03a-before-reports-click');
 
   // Diagnostic dump: every clickable element in the leftmost ~100px,
   // sorted by Y position. Logged so we can debug structure mismatches
@@ -163,33 +180,43 @@ async function openStoreSubmenu(page: Page, opts: OneglanceHyderabadSyncOptions)
 
   let reportsOpened = false;
 
-  // Strategy 1: any element whose href / onclick / id mentions "report"
-  // or "utility" (the route name OneGlance uses for the reports page).
+  // Strategy 1: any SIDEBAR element whose href / onclick / id mentions
+  // "report" or "utility". CRITICAL: filter by x-position (sidebar only,
+  // x < 120) BEFORE matching — otherwise on report-rendered pages we
+  // accidentally match a row inside the rendered table and navigate
+  // somewhere unintended. The Reports icon is always in the leftmost
+  // sidebar; main-pane elements never are.
   if (!reportsOpened) {
     const hrefClicked = await page.evaluate(() => {
-      const all = document.querySelectorAll('a, button, [role="button"], [onclick]');
+      const all = Array.from(document.querySelectorAll('a, button, [role="button"], [onclick]'));
       for (const el of all) {
+        const r = el.getBoundingClientRect();
+        // Sidebar-only filter: x<120 and visible.
+        if (r.x >= 120 || r.width < 10 || r.height < 10 || (el as HTMLElement).offsetParent === null) continue;
         const href = ((el as HTMLAnchorElement).href || '').toLowerCase();
         const onclick = (el.getAttribute('onclick') || '').toLowerCase();
         const id = (el.id || '').toLowerCase();
         if (href.match(/utility|report/i) || onclick.match(/utility|report/i) || id.match(/report/i)) {
           (el as HTMLElement).click();
-          return { href, onclick, id };
+          return { href, onclick, id, x: Math.round(r.x), y: Math.round(r.y) };
         }
       }
       return null;
     });
     if (hrefClicked) {
-      console.log('[oneglance-hyderabad] clicked via href/onclick:', JSON.stringify(hrefClicked));
+      console.log('[oneglance-hyderabad] clicked via href/onclick (sidebar-filtered):', JSON.stringify(hrefClicked));
       reportsOpened = true;
     }
   }
 
   // Strategy 2: aria/title attribute equals "reports" / "report"
+  // (also sidebar-filtered, same reasoning).
   if (!reportsOpened) {
     const ariaClicked = await page.evaluate(() => {
       const candidates = document.querySelectorAll('[title], [aria-label]');
       for (const el of candidates) {
+        const r = (el as HTMLElement).getBoundingClientRect();
+        if (r.x >= 120 || r.width < 10 || r.height < 10 || (el as HTMLElement).offsetParent === null) continue;
         const label = (el.getAttribute('aria-label') || el.getAttribute('title') || '').toLowerCase();
         if (label === 'reports' || label === 'report') {
           (el as HTMLElement).click();
@@ -216,9 +243,7 @@ async function openStoreSubmenu(page: Page, opts: OneglanceHyderabadSyncOptions)
 
   // Strategy 4: positional fallback. The user's screenshots show the
   // sidebar icons in a fixed column on the very left (x ≈ 0–80) with
-  // 8 icons stacked vertically. Reports is the 7th. Click it by Y
-  // position — using the diagnostic dump above we already have the
-  // sorted list.
+  // 8 icons stacked vertically. Reports is the 7th.
   if (!reportsOpened && sidebarDump.length >= 7) {
     const target = sidebarDump[6]; // 7th icon (0-indexed)
     console.log('[oneglance-hyderabad] positional fallback — clicking idx 6:', JSON.stringify(target));
@@ -254,15 +279,20 @@ async function openStoreSubmenu(page: Page, opts: OneglanceHyderabadSyncOptions)
   await debugScreenshot(page, '03d-reports-view-loaded');
   progress(opts, 'navigate', 'Reports view loaded', 20);
 
-  // Step 2: click STORE to expand its sub-items. STORE is a category
-  // header — clicking it should reveal its full set of report links.
-  // We don't verify a specific sub-item here (that's the caller's job)
-  // because different report flows want different links. We just give
-  // the menu a moment to expand.
+  // Step 2: click STORE to expand its sub-items — but ONLY if it isn't
+  // already expanded. Clicking an already-expanded category collapses
+  // it, which would then hide the sub-items we want to click next.
   progress(opts, 'navigate', 'Expanding STORE menu...', 22);
-  const storeHeader = page.locator('text=/^STORE$/i').first();
-  await storeHeader.click({ timeout: 5_000, force: true });
-  await page.waitForTimeout(800);
+  const storeAlreadyExpandedAfterClick = await page.locator(
+    'text=/Bill\\s+Collection\\s*-?\\s*Store/i'
+  ).first().isVisible({ timeout: 1_500 }).catch(() => false);
+  if (!storeAlreadyExpandedAfterClick) {
+    const storeHeader = page.locator('text=/^STORE$/i').first();
+    await storeHeader.click({ timeout: 5_000, force: true });
+    await page.waitForTimeout(800);
+  } else {
+    console.log('[oneglance-hyderabad] STORE already expanded — skipping header click');
+  }
   await debugScreenshot(page, '04-after-store-click');
 }
 
