@@ -80,6 +80,7 @@ const OG_SYNC_STEPS = [
   { key: 'sales',    label: 'Sales report',         desc: 'Downloading sales CSV',            icon: Download },
   { key: 'purchase', label: 'Purchase report',      desc: 'Downloading purchase CSV',         icon: Download },
   { key: 'stock',    label: 'Stock report',         desc: 'Downloading stock CSV',            icon: Package },
+  { key: 'transfer', label: 'Stock Transfer report', desc: 'Downloading transfer CSV',         icon: ArrowLeftRight },
   { key: 'parsing',  label: 'Parsing data',         desc: 'Reading rows from CSV',            icon: FileSearch },
   { key: 'saving',   label: 'Saving to database',   desc: 'Importing records',                icon: Database },
   { key: 'complete', label: 'Complete',              desc: 'Sync finished successfully',       icon: Check },
@@ -691,11 +692,15 @@ export default function ImportPage() {
                   status={syncStatus}
                   steps={syncSource === 'healthplix' ? HP_SYNC_STEPS : syncSource === 'turia' ? TURIA_SYNC_STEPS :
                     OG_SYNC_STEPS.filter(s => {
+                      // Per-report filters: only show the report-specific
+                      // step that matches the user's selection. The
+                      // generic steps (login/navigate/parsing/saving/
+                      // complete) always pass through.
                       if (ogReportType === 'all') return true;
-                      if (ogReportType === 'both') return s.key !== 'stock';
-                      if (ogReportType === 'stock') return s.key !== 'sales' && s.key !== 'purchase';
-                      if (ogReportType === 'sales') return s.key !== 'purchase' && s.key !== 'stock';
-                      if (ogReportType === 'purchase') return s.key !== 'sales' && s.key !== 'stock';
+                      if (ogReportType === 'both') return s.key !== 'stock' && s.key !== 'transfer';
+                      if (ogReportType === 'stock') return s.key !== 'sales' && s.key !== 'purchase' && s.key !== 'transfer';
+                      if (ogReportType === 'sales') return s.key !== 'purchase' && s.key !== 'stock' && s.key !== 'transfer';
+                      if (ogReportType === 'purchase') return s.key !== 'sales' && s.key !== 'stock' && s.key !== 'transfer';
                       if (ogReportType === 'transfer') return s.key !== 'sales' && s.key !== 'purchase' && s.key !== 'stock';
                       return true;
                     })
