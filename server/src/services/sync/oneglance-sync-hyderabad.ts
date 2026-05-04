@@ -157,59 +157,144 @@ async function openStoreSubmenu(page: Page, opts: OneglanceHyderabadSyncOptions)
   // is still expanded (OneGlance preserves that state) and we can
   // click the next sub-item directly.
   //
-  // Try detect-and-click of the expand button BEFORE falling through
-  // to the Reports-icon strategies. If the click reveals "Bill
-  // Collection - Store" (proof the sidebar slid out + STORE was
-  // preserved-expanded), we're done — caller can click the next
-  // sub-item.
-  const expandClicked = await page.evaluate(() => {
-    // Look for a small visible button on the LEFT EDGE of the page
-    // whose text/class/aria identify it as a sidebar-expand control.
-    // Trying multiple signals because OneGlance doesn't label this
-    // button consistently across builds.
-    const candidates = Array.from(document.querySelectorAll(
+  // Diagnostic dump first: every clickable element in the leftmost
+  // 100px, with its children's classes too (the chevron icon is
+  // commonly on a child <i> while the click handler is on the parent
+  // <button>). Logged so we can see exactly what the DOM looks like
+  // when the sidebar is collapsed and refine detection if needed.
+  const leftEdgeDump = await page.evaluate(() => {
+    const all = Array.from(document.querySelectorAll(
       'button, a, div, span, i, [role="button"], [onclick]'
     ));
-    for (const el of candidates) {
+    return all.map(el => {
       const r = (el as HTMLElement).getBoundingClientRect();
-      // Left edge only (sidebar-expand button never lives in the main
-      // pane). Visible.
-      if (r.x > 200 || r.width < 8 || r.height < 8 || (el as HTMLElement).offsetParent === null) continue;
-      // Skip obvious main-content elements (rendered table cells, etc.)
-      // by requiring the element be reasonably small (a chevron icon
-      // is typically < 80px in either dimension).
+      const ownText = Array.from(el.childNodes)
+        .filter(n => n.nodeType === Node.TEXT_NODE)
+        .map(n => (n.textContent || '').trim())
+        .join('').trim();
+      return {
+        tag: el.tagName,
+        text: (el.textContent || '').trim().slice(0, 30),
+        ownText: ownText.slice(0, 30),
+        cls: ((el as HTMLElement).className || '').toString().slice(0, 100),
+        childCls: Array.from(el.children)
+          .map(c => ((c as HTMLElement).className || '').toString().slice(0, 60))
+          .filter(s => s.length > 0).join(' | ').slice(0, 200),
+        id: el.id || '',
+        onclick: (el.getAttribute('onclick') || '').slice(0, 80),
+        aria: el.getAttribute('aria-label') || '',
+        title: el.getAttribute('title') || '',
+        x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height),
+        visible: r.width > 0 && r.height > 0 && (el as HTMLElement).offsetParent !== null,
+      };
+    }).filter(e => e.visible && e.x < 100 && e.w > 4 && e.w < 100 && e.h > 4 && e.h < 80)
+      .sort((a, b) => a.y - b.y).slice(0, 20);
+  });
+  console.log('[oneglance-hyderabad] LEFT-EDGE elements when sidebar may be collapsed:', JSON.stringify(leftEdgeDump, null, 2));
+
+  // Try detect-and-click of the expand button. Order of attempts:
+  //   1. Text/class/aria match on element OR its children. Walk up to
+  //      a clickable parent (<button>/<a>/[onclick]) before clicking
+  //      so we trigger the actual handler instead of just the icon.
+  //   2. Coordinate-based fallback: click the topmost small element
+  //      on the very-left edge (x < 30). When sidebar is collapsed,
+  //      the » button is essentially the only thing there.
+  const expandClicked = await page.evaluate(() => {
+    const isClickable = (el: Element): boolean => {
+      const tag = el.tagName;
+      return tag === 'BUTTON' || tag === 'A' || el.hasAttribute('onclick') ||
+             el.getAttribute('role') === 'button';
+    };
+    const findClickableAncestor = (el: Element): Element | null => {
+      let cur: Element | null = el;
+      while (cur) {
+        if (isClickable(cur)) return cur;
+        cur = cur.parentElement;
+      }
+      return null;
+    };
+
+    // Strategy A: text/class/aria match. Scan all left-edge candidates
+    // (including icon <i> elements) and check both self AND children.
+    const all = Array.from(document.querySelectorAll(
+      'button, a, div, span, i, [role="button"], [onclick]'
+    ));
+    for (const el of all) {
+      const r = (el as HTMLElement).getBoundingClientRect();
+      if (r.x > 100 || r.width < 4 || r.height < 4 || (el as HTMLElement).offsetParent === null) continue;
       if (r.width > 120 || r.height > 80) continue;
 
       const ownText = Array.from(el.childNodes)
         .filter(n => n.nodeType === Node.TEXT_NODE)
         .map(n => (n.textContent || '').trim())
         .join('').trim();
-      const cls = ((el as HTMLElement).className || '').toString().toLowerCase();
+      const selfCls = ((el as HTMLElement).className || '').toString().toLowerCase();
+      const childCls = Array.from(el.querySelectorAll('*'))
+        .map(c => ((c as HTMLElement).className || '').toString().toLowerCase())
+        .join(' ');
+      const blob = `${selfCls} ${childCls}`;
       const aria = (el.getAttribute('aria-label') || '').toLowerCase();
       const title = (el.getAttribute('title') || '').toLowerCase();
 
-      // Match by visible text: "»" (U+00BB) or ">>"
-      if (ownText === '»' || ownText === '>>' || ownText === '»') {
-        (el as HTMLElement).click();
-        return { matched: 'text', text: ownText, x: Math.round(r.x), y: Math.round(r.y) };
-      }
-      // Match by class — Font Awesome / generic chevron-double-right
-      if (/(angle|chevron)-double-right/i.test(cls)) {
-        (el as HTMLElement).click();
-        return { matched: 'class-chevron', cls: cls.slice(0, 60), x: Math.round(r.x), y: Math.round(r.y) };
-      }
-      // Match by class — sidebar-toggle / menu-expand patterns
-      if (/menu.*expand|sidebar.*toggle|expand.*menu|show.*sidebar/i.test(cls)) {
-        (el as HTMLElement).click();
-        return { matched: 'class-toggle', cls: cls.slice(0, 60), x: Math.round(r.x), y: Math.round(r.y) };
-      }
-      // Match by aria/title
-      if (aria.includes('expand') || title.includes('expand') ||
-          aria.includes('show menu') || title.includes('show menu')) {
-        (el as HTMLElement).click();
-        return { matched: 'aria-title', aria, title, x: Math.round(r.x), y: Math.round(r.y) };
+      let why: string | null = null;
+      // Visible text: "»" (U+00BB) / ">>" / "&raquo;"
+      if (ownText === '»' || ownText === '»' || ownText === '>>') why = `text=${ownText}`;
+      // Class match on self OR children (covers <button><i class="fa-angle-double-right"/></button>)
+      else if (/(angle|chevron|caret)-double-right/i.test(blob)) why = 'class-chevron';
+      else if (/(angle|chevron)-right/i.test(blob) && r.x < 30) why = 'class-chevron-edge';
+      else if (/menu.*expand|sidebar.*toggle|expand.*menu|show.*sidebar|nav.*toggle|toggle.*nav/i.test(blob)) why = 'class-toggle';
+      else if (aria.includes('expand') || title.includes('expand') ||
+               aria.includes('show menu') || title.includes('show menu') ||
+               aria.includes('open menu') || title.includes('open menu')) why = 'aria-title';
+
+      if (why) {
+        const target = findClickableAncestor(el) || (el as HTMLElement);
+        (target as HTMLElement).click();
+        return {
+          strategy: 'A-match',
+          why,
+          tag: target.tagName,
+          targetCls: ((target as HTMLElement).className || '').toString().slice(0, 60),
+          x: Math.round(r.x), y: Math.round(r.y),
+        };
       }
     }
+
+    // Strategy B: coordinate fallback. When the sidebar is collapsed,
+    // the » button is typically the SOLE small clickable element at
+    // x < 30 (very-left edge). Pick the topmost one.
+    const veryLeft = all.map(el => ({
+      el, r: (el as HTMLElement).getBoundingClientRect()
+    })).filter(e =>
+      e.r.x < 30 && e.r.width > 4 && e.r.width < 60 &&
+      e.r.height > 4 && e.r.height < 60 &&
+      (e.el as HTMLElement).offsetParent !== null
+    ).sort((a, b) => a.r.y - b.r.y);
+    if (veryLeft.length > 0) {
+      // Skip the very topmost ones IF they look like sidebar nav icons
+      // (Home/Calendar/etc.) — those typically have icon classes like
+      // fa-home, fa-calendar. We want a » or chevron-style button.
+      // For safety, click the FIRST one that isn't one of the obvious
+      // navigation icons.
+      const navIconRegex = /(home|house|calendar|cal|note|file-medical|flask|pill|capsule|user|wrench|tool|building|hospital)/i;
+      for (const cand of veryLeft) {
+        const blob = `${((cand.el as HTMLElement).className || '').toString()} ${
+          Array.from(cand.el.querySelectorAll('*'))
+            .map(c => ((c as HTMLElement).className || '').toString())
+            .join(' ')
+        }`.toLowerCase();
+        if (navIconRegex.test(blob)) continue; // skip nav icons
+        const target = findClickableAncestor(cand.el) || (cand.el as HTMLElement);
+        (target as HTMLElement).click();
+        return {
+          strategy: 'B-coord-fallback',
+          tag: target.tagName,
+          targetCls: ((target as HTMLElement).className || '').toString().slice(0, 60),
+          x: Math.round(cand.r.x), y: Math.round(cand.r.y),
+        };
+      }
+    }
+
     return null;
   });
 
@@ -227,6 +312,8 @@ async function openStoreSubmenu(page: Page, opts: OneglanceHyderabadSyncOptions)
       return;
     }
     console.log('[oneglance-hyderabad] expand-button click did not reveal STORE sub-items — falling through to Reports-icon strategies');
+  } else {
+    console.log('[oneglance-hyderabad] no sidebar-expand button matched — falling through to Reports-icon strategies');
   }
 
   // Step 1: click the Reports icon. The sidebar has a column of icons
