@@ -113,9 +113,27 @@ async function enumerateTargets(): Promise<Target[]> {
   return targets;
 }
 
-function isLocked(slug: string, source: Source): boolean {
+/**
+ * The lock state is shared per (tenant, source) — it's the same field
+ * the manual-sync UI uses. For auto-sync we want to be conservative
+ * about MANUAL locks (don't trample on someone's in-flight run) but
+ * NOT about other auto-sync's leftover locks. Auto-sync IDs are
+ * prefixed with 'auto-'; manual IDs are bare timestamp strings.
+ *
+ * If the lock is held by an auto-sync, we treat it as not held —
+ * otherwise sequential branch iteration would skip every branch after
+ * the first because of the 60s post-success hangover (see the
+ * setTimeout in releaseLockOnComplete, kept for the manual-sync UI).
+ */
+function getLockHolderKind(slug: string, source: Source): 'manual' | 'auto' | 'none' {
   const state = source === 'healthplix' ? getHpState(slug) : getOgState(slug);
-  return !!state.activeSyncId;
+  if (!state.activeSyncId) return 'none';
+  return String(state.activeSyncId).startsWith('auto-') ? 'auto' : 'manual';
+}
+
+function isLocked(slug: string, source: Source): boolean {
+  // Only manual runs block auto-sync. Auto leftovers don't.
+  return getLockHolderKind(slug, source) === 'manual';
 }
 
 /** Set a syncing lock + reset progress. Returns the syncId so callers can release it. */
@@ -135,12 +153,26 @@ function releaseLockOnError(slug: string, source: Source, syncId: string, errMsg
   }
 }
 
+/**
+ * Release the lock IMMEDIATELY on success. The 60s hangover that lived
+ * here previously was meant for the manual-sync UI to keep showing the
+ * "complete" message after a run; for auto-sync there's no UI being
+ * watched and the hangover only served to block the next branch in the
+ * same tenant from starting (see comment on getLockHolderKind). The
+ * progress message is still cleared after 60s via a separate timer
+ * that doesn't gate the lock.
+ */
 function releaseLockOnComplete(slug: string, source: Source, syncId: string, message: string, result: any) {
   const state = source === 'healthplix' ? getHpState(slug) : getOgState(slug);
   state.progress = { step: 'complete', message, pct: 100, result };
+  if (state.activeSyncId === syncId) {
+    state.activeSyncId = null;
+  }
   setTimeout(() => {
-    if (state.activeSyncId === syncId) {
-      state.activeSyncId = null;
+    // Only clear the progress if it's still the same one we wrote —
+    // otherwise we'd erase a newer run's "starting..." progress that
+    // queued up immediately after we released the lock.
+    if (state.progress?.message === message) {
       state.progress = null;
     }
   }, 60_000);
@@ -188,7 +220,14 @@ export async function runAutoSyncForTarget(target: Target, trigger: Trigger): Pr
   console.log(`${logTag} starting (window ${yesterday}..${today})`);
 
   if (isLocked(slug, source)) {
-    const msg = 'manual run in progress';
+    // Distinguishes a real manual-run conflict from an auto-sync
+    // lingering after success. With the lock-release fix in this file
+    // the auto-sync case shouldn't happen anymore, but keep the
+    // distinction so future regressions are obvious in the matrix.
+    const kind = getLockHolderKind(slug, source);
+    const msg = kind === 'auto'
+      ? 'previous auto-sync run still finishing (lock not yet released)'
+      : 'manual run in progress';
     console.log(`${logTag} skipped — ${msg}`);
     tenantDb.run(
       `UPDATE auto_sync_runs SET status = 'skipped', finished_at = ?, error = ? WHERE id = ?`,
