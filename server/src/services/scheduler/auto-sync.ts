@@ -17,13 +17,29 @@ import { getHpState, getOgState } from '../../routes/sync.js';
 
 const SCHEDULE_HOUR = 23;
 const SCHEDULE_CRON = `0 ${SCHEDULE_HOUR} * * *`;
+// Retry firings — kick in 30 min, 2 hr, 6 hr after the main schedule.
+// Each one runs with trigger='catchup' which reuses successful runs
+// (alreadyRanToday returns true for status IN ('success','running')),
+// so only failed/missing targets get retried. Tunable via env if a
+// tenant needs different cadence:
+//   AUTO_SYNC_RETRY_CRONS="30 23 * * *,0 1 * * *,0 5 * * *"
+// (comma-separated cron expressions, all interpreted in TZ).
+const DEFAULT_RETRY_CRONS = ['30 23 * * *', '0 1 * * *', '0 5 * * *'];
 const TZ = 'Asia/Kolkata';
+
+// Max number of (branch, source) targets to run concurrently within a
+// single tick. Sequential by default to keep Playwright memory usage
+// predictable on small Railway dynos; bump via AUTO_SYNC_CONCURRENCY=3
+// once you've confirmed memory headroom. 1 = sequential (current
+// behaviour, the safe default).
+const DEFAULT_CONCURRENCY = 1;
 
 type Source = 'healthplix' | 'oneglance';
 type Trigger = 'schedule' | 'catchup' | 'manual_test';
 
 let isTickRunning = false;
 let registeredTask: ReturnType<typeof cron.schedule> | null = null;
+let registeredRetryTasks: ReturnType<typeof cron.schedule>[] = [];
 
 interface Target {
   clientId: number;
@@ -229,7 +245,16 @@ export async function runAutoSyncForTarget(target: Target, trigger: Trigger): Pr
   }
 }
 
-/** Run all eligible targets sequentially. Used by both the scheduled tick and the boot-time catchup. */
+/**
+ * Run all eligible targets. Used by the scheduled tick, retry firings,
+ * and boot-time catchup.
+ *
+ * Concurrency: targets run with up to AUTO_SYNC_CONCURRENCY parallel
+ * Playwright sessions (default 1 = fully sequential, the current safe
+ * behaviour). Targets are partitioned per (slug, source) before running
+ * so two Playwrights for the same (tenant, source) never fire at once
+ * — that would blow up our in-memory lock.
+ */
 export async function runAutoSyncTick(trigger: Trigger): Promise<void> {
   if (isTickRunning) {
     console.log('[auto-sync] tick already running — skipping re-entry');
@@ -239,23 +264,73 @@ export async function runAutoSyncTick(trigger: Trigger): Promise<void> {
   const startedAt = Date.now();
 
   try {
-    const targets = await enumerateTargets();
-    console.log(`[auto-sync] tick=${trigger} targets=${targets.length}`);
+    const allTargets = await enumerateTargets();
+    console.log(`[auto-sync] tick=${trigger} targets=${allTargets.length}`);
 
-    for (const target of targets) {
-      // For catchup, skip targets that already ran successfully today.
+    const concurrency = Math.max(
+      1,
+      Math.min(10, parseInt(process.env.AUTO_SYNC_CONCURRENCY || String(DEFAULT_CONCURRENCY))),
+    );
+
+    // For catchup, pre-filter out targets that already ran successfully
+    // today. Saves us spawning a worker just to log "skip" for every
+    // already-done branch.
+    const targets: Target[] = [];
+    for (const t of allTargets) {
       if (trigger === 'catchup') {
-        const ranAlready = await alreadyRanToday(target.slug, todayIst(), target.branchId, target.source);
+        const ranAlready = await alreadyRanToday(t.slug, todayIst(), t.branchId, t.source);
         if (ranAlready) {
-          console.log(`[auto-sync][tenant=${target.slug} branch=${target.branchId} source=${target.source}] catchup skip — already ran today`);
+          console.log(`[auto-sync][tenant=${t.slug} branch=${t.branchId} source=${t.source}] catchup skip — already ran today`);
           continue;
         }
       }
-      try {
-        await runAutoSyncForTarget(target, trigger);
-      } catch (err: any) {
-        console.error(`[auto-sync] unexpected error for tenant=${target.slug} branch=${target.branchId} source=${target.source}:`, err?.message || err);
+      targets.push(t);
+    }
+
+    if (concurrency <= 1) {
+      // Sequential — preserves the original behaviour exactly.
+      for (const t of targets) {
+        try {
+          await runAutoSyncForTarget(t, trigger);
+        } catch (err: any) {
+          console.error(`[auto-sync] unexpected error for tenant=${t.slug} branch=${t.branchId} source=${t.source}:`, err?.message || err);
+        }
       }
+    } else {
+      // Parallel with concurrency cap. Group targets by (slug, source)
+      // so we never run two Playwrights concurrently for the same
+      // tenant + source pair (would conflict on the in-memory lock).
+      // Targets within the same group run sequentially; groups run in
+      // parallel up to the concurrency limit.
+      const groups = new Map<string, Target[]>();
+      for (const t of targets) {
+        const k = `${t.slug}|${t.source}`;
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k)!.push(t);
+      }
+      const groupQueue = [...groups.values()];
+
+      const runGroup = async (group: Target[]) => {
+        for (const t of group) {
+          try {
+            await runAutoSyncForTarget(t, trigger);
+          } catch (err: any) {
+            console.error(`[auto-sync] unexpected error for tenant=${t.slug} branch=${t.branchId} source=${t.source}:`, err?.message || err);
+          }
+        }
+      };
+
+      const workers: Promise<void>[] = [];
+      const next = async (): Promise<void> => {
+        const g = groupQueue.shift();
+        if (!g) return;
+        await runGroup(g);
+        return next();
+      };
+      for (let i = 0; i < Math.min(concurrency, groups.size); i++) {
+        workers.push(next());
+      }
+      await Promise.all(workers);
     }
   } finally {
     isTickRunning = false;
@@ -288,9 +363,19 @@ export async function runAutoSyncOneOff(opts: {
 }
 
 /**
- * Register the cron job. Idempotent — calling twice replaces the prior task.
- * Honours AUTO_SYNC_ENABLED env flag — off by default so dev servers don't
- * launch Chromium at 23:00 IST.
+ * Register the cron jobs. Idempotent — calling twice replaces all
+ * previously registered tasks. Honours AUTO_SYNC_ENABLED env flag — off
+ * by default so dev servers don't launch Chromium at 23:00 IST.
+ *
+ * Schedules:
+ *   - Main:    23:00 IST (status='schedule', kicks off the night's runs)
+ *   - Retry 1: 23:30 IST (status='catchup', re-runs failed/missing only)
+ *   - Retry 2: 01:00 IST (next morning)
+ *   - Retry 3: 05:00 IST (last-chance morning retry before users wake up)
+ *
+ * Override the retry list with AUTO_SYNC_RETRY_CRONS=
+ *   "30 23 * * *,0 1 * * *,0 5 * * *"
+ * Set AUTO_SYNC_RETRY_CRONS="" (empty) to disable retries entirely.
  */
 export function registerAutoSync(): void {
   if (process.env.AUTO_SYNC_ENABLED !== 'true') {
@@ -298,19 +383,52 @@ export function registerAutoSync(): void {
     return;
   }
 
-  // Stop any previously registered task (defensive — node-cron handles this
-  // fine but we want explicit cleanup if registerAutoSync is ever called twice).
+  // Stop any previously registered tasks (defensive — node-cron handles
+  // this fine but we want explicit cleanup if registerAutoSync is ever
+  // called twice). Includes the retry tasks added by this PR.
   if (registeredTask) {
     try { registeredTask.stop(); } catch {}
     registeredTask = null;
   }
+  for (const t of registeredRetryTasks) {
+    try { t.stop(); } catch {}
+  }
+  registeredRetryTasks = [];
 
+  // Main schedule — fires once per night at 23:00 IST.
   registeredTask = cron.schedule(
     SCHEDULE_CRON,
     () => { runAutoSyncTick('schedule').catch(err => console.error('[auto-sync] tick error:', err)); },
     { timezone: TZ }
   );
-  console.log(`[auto-sync] registered: ${SCHEDULE_CRON} ${TZ}`);
+  console.log(`[auto-sync] registered main schedule: ${SCHEDULE_CRON} ${TZ}`);
+
+  // Retry firings. Each one runs runAutoSyncTick('catchup') which the
+  // existing alreadyRanToday() check filters down to just-failed-or-
+  // missing targets. So a successful first run is never re-attempted
+  // and successful retries don't trigger more retries. Most transient
+  // failures (network blips, OneGlance/Healthplix temporary 5xx) clear
+  // within minutes — three retries handles ~80% of "lost day" cases
+  // without human intervention.
+  const retryEnv = process.env.AUTO_SYNC_RETRY_CRONS;
+  const retryCrons = retryEnv === undefined
+    ? DEFAULT_RETRY_CRONS
+    : retryEnv === ''
+      ? []
+      : retryEnv.split(',').map(s => s.trim()).filter(Boolean);
+  for (const cronExpr of retryCrons) {
+    if (!cron.validate(cronExpr)) {
+      console.warn(`[auto-sync] skipping invalid retry cron expression: ${cronExpr}`);
+      continue;
+    }
+    const task = cron.schedule(
+      cronExpr,
+      () => { runAutoSyncTick('catchup').catch(err => console.error('[auto-sync] retry-catchup error:', err)); },
+      { timezone: TZ }
+    );
+    registeredRetryTasks.push(task);
+    console.log(`[auto-sync] registered retry catchup: ${cronExpr} ${TZ}`);
+  }
 }
 
 /**

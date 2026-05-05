@@ -4,6 +4,7 @@ import { Menu, BarChart3, HelpCircle } from 'lucide-react';
 import Sidebar from './Sidebar';
 import { TourProvider, useTour } from '../../contexts/TourContext';
 import { getTourSteps, getPageKey } from '../../config/tourSteps';
+import AutoSyncFailureBanner from '../common/AutoSyncFailureBanner';
 
 export default function Layout() {
   return (
@@ -108,6 +109,7 @@ function LayoutInner() {
           </div>
         )}
         <div className={isMobile ? 'p-4' : 'p-8'}>
+          <AutoSyncFailureBanner />
           <Outlet />
         </div>
         {/* Floating help button */}
