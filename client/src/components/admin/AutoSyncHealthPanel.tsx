@@ -378,16 +378,21 @@ function RunDetailModal({ tenantSlug: _tenantSlug, branch, source, run, onClose 
   const [traceFiles, setTraceFiles] = useState<Array<{ name: string; mtime: string; size: number }>>([]);
   const [tracesLoading, setTracesLoading] = useState(false);
 
-  // Best-effort trace listing — only for OneGlance / Hyderabad runs that
-  // have tracing enabled. Healthplix doesn't currently emit traces; the
-  // empty list is a fine UX (we just don't show the trace section).
-  const isOneglanceOnly = source.key === 'oneglance';
+  // Best-effort trace listing. Tracing is only emitted by the Hyderabad
+  // emr25 scraper (central_store + satellite branches), NOT by the
+  // legacy emr7 OneGlance scraper used for standalone branches like
+  // BTM Layout / Ashok Nagar / Mysore / Noida. Healthplix doesn't emit
+  // traces at all yet. We hide the trace section when it isn't relevant
+  // so users don't see Hyderabad traces in a Bangalore modal.
+  const tracingApplies =
+    source.key === 'oneglance' &&
+    (branch.role === 'central_store' || branch.role === 'satellite');
   useEffect(() => {
-    if (!isOneglanceOnly || !run.cell) return;
+    if (!tracingApplies || !run.cell) return;
     setTracesLoading(true);
     api.get('/debug/hyderabad').then(resp => {
-      // Filter to traces matching this run's date roughly. Trace
-      // filenames look like "trace/trace-2026-05-04T17-31-38.zip".
+      // Filter to traces matching this run's date. Trace filenames
+      // look like "trace/trace-2026-05-04T17-31-38.zip".
       const dayPrefix = run.date; // YYYY-MM-DD
       const matches = (resp.data || []).filter((f: any) =>
         typeof f.name === 'string' &&
@@ -397,7 +402,7 @@ function RunDetailModal({ tenantSlug: _tenantSlug, branch, source, run, onClose 
       setTraceFiles(matches);
     }).catch(() => { /* ignore — admin may not have access */ })
       .finally(() => setTracesLoading(false));
-  }, [isOneglanceOnly, run.date, run.cell]);
+  }, [tracingApplies, run.date, run.cell]);
 
   const cell = run.cell;
   const branchLabel = branch.code ? `${branch.name} (${branch.code})` : branch.name;
@@ -478,8 +483,9 @@ function RunDetailModal({ tenantSlug: _tenantSlug, branch, source, run, onClose 
             </>
           )}
 
-          {/* Trace files (OneGlance only) */}
-          {isOneglanceOnly && cell && (
+          {/* Trace files (Hyderabad OneGlance only — legacy emr7 scraper
+              for standalone branches doesn't emit traces) */}
+          {tracingApplies && cell && (
             <div className="pt-2 border-t" style={{ borderColor: 'var(--mt-border)' }}>
               <div className="text-xs mb-2" style={{ color: 'var(--mt-text-faint)' }}>
                 Playwright traces for this date
