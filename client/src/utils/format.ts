@@ -54,3 +54,80 @@ export function ragColor(rag: string): string {
     default: return 'text-theme-muted bg-dark-500';
   }
 }
+
+const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * Smart formatter for an import-log date range. Inputs are typed as
+ * stored in `import_logs` — either YYYY-MM (when the upstream parser
+ * aggregates by month, e.g. OneGlance Sales/Purchase) or YYYY-MM-DD
+ * (when it reports specific days, e.g. Stock snapshots).
+ *
+ * Output:
+ *   YYYY-MM only:
+ *     start === end          →  "May 2026"
+ *     start !== end          →  "Apr 2026 → May 2026"
+ *   YYYY-MM-DD:
+ *     start === end          →  "4 May 2026"
+ *     same month, range      →  "1–31 May 2026"
+ *     cross-month range      →  "1 Apr 2026 → 31 May 2026"
+ */
+export function formatImportRange(start: string | null | undefined, end: string | null | undefined): string {
+  if (!start) return '-';
+
+  const isMonthly = (s: string): boolean => /^\d{4}-\d{2}$/.test(s);
+  const monthLabel = (s: string): string => {
+    const [y, m] = s.split('-');
+    const idx = Math.max(1, Math.min(12, parseInt(m, 10))) - 1;
+    return `${SHORT_MONTHS[idx]} ${y}`;
+  };
+  const dayLabel = (s: string): string => {
+    const [y, m, d] = s.split('-');
+    const idx = Math.max(1, Math.min(12, parseInt(m, 10))) - 1;
+    return `${parseInt(d, 10)} ${SHORT_MONTHS[idx]} ${y}`;
+  };
+
+  if (isMonthly(start)) {
+    if (!end || start === end) return monthLabel(start);
+    return `${monthLabel(start)} → ${monthLabel(end)}`;
+  }
+
+  // Daily form
+  if (!end || start === end) return dayLabel(start);
+  const [sy, sm, sd] = start.split('-');
+  const [ey, em, ed] = end.split('-');
+  if (sy === ey && sm === em) {
+    const idx = Math.max(1, Math.min(12, parseInt(sm, 10))) - 1;
+    return `${parseInt(sd, 10)}–${parseInt(ed, 10)} ${SHORT_MONTHS[idx]} ${sy}`;
+  }
+  return `${dayLabel(start)} → ${dayLabel(end)}`;
+}
+
+/**
+ * Format an import-log timestamp as IST. SQLite `datetime('now')`
+ * stores UTC in "YYYY-MM-DD HH:MM:SS" form (no timezone marker), which
+ * `new Date()` mis-parses as local time on most browsers. We append a
+ * `Z` to force UTC parsing, then format with `timeZone: 'Asia/Kolkata'`
+ * so the displayed time is unambiguously IST regardless of the user's
+ * machine timezone.
+ *
+ * Output: "4 May 2026, 5:32 PM IST"
+ */
+export function formatIstTimestamp(dateStr: string | null | undefined): string {
+  if (!dateStr) return '-';
+  // Already-marked timezone? Leave as-is. Otherwise treat as UTC.
+  const hasTz = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(dateStr);
+  const iso = hasTz ? dateStr.replace(' ', 'T') : (dateStr.replace(' ', 'T') + 'Z');
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return dateStr;
+  const formatted = d.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+  return `${formatted} IST`;
+}

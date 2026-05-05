@@ -6,6 +6,7 @@ import { Stethoscope, Pill, ShoppingCart, Upload, CheckCircle, AlertCircle, Tras
          Phone, KeyRound, Briefcase, Package, ArrowLeftRight, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { downloadXlsx, CLINIC_EXPORT_COLUMNS, PHARMA_SALES_EXPORT_COLUMNS, PHARMA_PURCHASE_EXPORT_COLUMNS, STOCK_COLUMNS } from '../utils/xlsxExport';
+import { formatImportRange, formatIstTimestamp } from '../utils/format';
 import DataTable, { type ColumnDef } from '../components/common/DataTable';
 
 type Source = 'healthplix' | 'oneglance-sales' | 'oneglance-purchase' | 'oneglance-stock' | 'oneglance-transfer' | 'turia';
@@ -198,7 +199,16 @@ function SyncStepTracker({ status, steps }: { status: { step: string; message: s
 
 function relativeTime(dateStr: string | null): string {
   if (!dateStr) return 'Never';
-  const diff = Date.now() - new Date(dateStr).getTime();
+  // SQLite datetime('now') stores UTC in "YYYY-MM-DD HH:MM:SS" form
+  // (no timezone marker). Without the trailing 'Z' most browsers parse
+  // it as local time, which makes "X minutes ago" off by the user's
+  // UTC offset. Force UTC parsing.
+  const hasTz = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(dateStr);
+  const iso = hasTz ? dateStr.replace(' ', 'T') : (dateStr.replace(' ', 'T') + 'Z');
+  const ts = new Date(iso).getTime();
+  if (isNaN(ts)) return 'Never';
+  const diff = Date.now() - ts;
+  if (diff < 0) return 'Just now'; // future timestamps shouldn't happen but be safe
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return 'Just now';
   if (mins < 60) return `${mins}m ago`;
@@ -1074,13 +1084,15 @@ export default function ImportPage() {
             { key: 'filename', header: 'File', cellClassName: 'truncate max-w-[180px]' },
             { key: 'rows_imported', header: 'Rows', type: 'number', format: 'number',
               render: log => <span className="font-medium mt-num" style={{ color: 'var(--mt-text-secondary)' }}>{log.rows_imported.toLocaleString('en-IN')}</span> },
-            { key: 'range', header: 'Range', accessor: log => log.date_range_start || '',
-              render: log => <span style={{ color: 'var(--mt-text-faint)' }}>
-                {log.date_range_start && log.date_range_end ? `${log.date_range_start} → ${log.date_range_end}` : '-'}
+            { key: 'range', header: 'Data range', accessor: log => log.date_range_start || '',
+              render: log => <span style={{ color: 'var(--mt-text-faint)' }} title={
+                log.date_range_start && log.date_range_end ? `${log.date_range_start} → ${log.date_range_end}` : ''
+              }>
+                {formatImportRange(log.date_range_start, log.date_range_end)}
               </span> },
-            { key: 'created_at', header: 'When', type: 'date',
-              render: log => <span style={{ color: 'var(--mt-text-faint)' }}>
-                {new Date(log.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}
+            { key: 'created_at', header: 'Imported (IST)', type: 'date',
+              render: log => <span style={{ color: 'var(--mt-text-faint)' }} title={log.created_at}>
+                {formatIstTimestamp(log.created_at)}
               </span> },
             { key: '_delete', header: '', type: 'custom', align: 'right', render: log => (
               <button
