@@ -608,6 +608,21 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
     geolocation: { latitude: 12.9716, longitude: 77.5946 }, // Bangalore
     permissions: ['geolocation'],
   });
+
+  // tsx/esbuild emits `__name(fn, "name")` decorations to preserve
+  // function names in stack traces. Those references get serialized
+  // into page.evaluate scripts as part of the captured function
+  // source, but the browser context doesn't have __name —
+  // result is `ReferenceError: __name is not defined`. Register a
+  // no-op shim on the context so it applies to every page created
+  // from it (including the secondary `stockPage` opened later for
+  // the Stock report).
+  await context.addInitScript(() => {
+    if (typeof (window as any).__name === 'undefined') {
+      (window as any).__name = (target: any) => target;
+    }
+  });
+
   const page = await context.newPage();
 
   try {
