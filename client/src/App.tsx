@@ -28,7 +28,19 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     api.get('/auth/me')
-      .then(() => setAuth(true))
+      .then(res => {
+        // Refresh localStorage from the live profile so role-gated UI
+        // (download buttons, edit toolbars, admin tabs) stays in sync
+        // when role assignments change server-side without a re-login.
+        // Login also sets these, but only on the login response —
+        // sessions from before a role change would otherwise stay
+        // stale until logout.
+        const d = res.data || {};
+        if (d.role) localStorage.setItem('user_role', d.role);
+        if (d.userType) localStorage.setItem('user_type', d.userType);
+        if (d.isOwner !== undefined) localStorage.setItem('is_owner', d.isOwner ? '1' : '0');
+        setAuth(true);
+      })
       .catch(() => setAuth(false));
   }, []);
 

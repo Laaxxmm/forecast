@@ -112,9 +112,16 @@ export function canWipeVcfoData(): boolean {
  * who shouldn't be exporting tenant-wide operational data. Admin
  * (CFO/owner), Operational Head (their right hand), and super_admin
  * (platform team) keep the button.
+ *
+ * Defensive matching: trim + lowercase the stored role and accept a
+ * couple of common variants ('operational_head', 'operational-head',
+ * 'operational head') so a slight DB drift doesn't silently revoke
+ * access. The canonical value the server emits is 'operational_head'.
  */
 export function canDownloadInsight(): boolean {
   if (isSuperAdmin()) return true;
-  const r = getUserRole();
-  return r === 'admin' || r === 'operational_head';
+  const r = getUserRole().trim().toLowerCase();
+  if (r === 'admin') return true;
+  // Accept any reasonable spelling of "operational head".
+  return /^operational[\s_-]?head$/.test(r);
 }
