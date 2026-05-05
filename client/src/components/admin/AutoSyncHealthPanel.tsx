@@ -16,7 +16,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   CheckCircle2, XCircle, Minus, Loader2, RefreshCw, Activity, Clock,
-  AlertTriangle, ExternalLink, X,
+  AlertTriangle, ExternalLink, X, Play,
 } from 'lucide-react';
 import api from '../../api/client';
 import { formatIstTimestamp } from '../../utils/format';
@@ -76,6 +76,9 @@ export default function AutoSyncHealthPanel() {
   const [selected, setSelected] = useState<{
     branch: BranchData; source: SourceData; run: DayRun;
   } | null>(null);
+  const [catchupRunning, setCatchupRunning] = useState(false);
+  const [catchupConfirm, setCatchupConfirm] = useState(false);
+  const [catchupNotice, setCatchupNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -92,9 +95,33 @@ export default function AutoSyncHealthPanel() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Auto-refresh while a catchup is running so the user sees cells
+  // flip from skipped/failed → running → success in near-real time.
+  useEffect(() => {
+    if (!catchupRunning) return;
+    const t = setInterval(() => { load(); }, 15_000);
+    return () => clearInterval(t);
+  }, [catchupRunning, load]);
+
+  const startCatchup = async () => {
+    setCatchupConfirm(false);
+    setCatchupRunning(true);
+    setCatchupNotice('Catchup started. Each enabled (branch × source) will run sequentially — this can take 10–30 minutes depending on how many branches you have. The matrix below auto-refreshes every 15s.');
+    try {
+      await api.post('/sync/auto/run-tick-now');
+      // Stop the auto-refresh after ~20 min — enough for a typical run,
+      // and the user can refresh manually if it's still going.
+      setTimeout(() => setCatchupRunning(false), 20 * 60 * 1000);
+      load();
+    } catch (e: any) {
+      setCatchupNotice(`Failed to start catchup: ${e?.response?.data?.error || e?.message || 'unknown error'}`);
+      setCatchupRunning(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h2 className="mt-heading text-lg flex items-center gap-2">
             <Activity size={18} style={{ color: 'var(--mt-accent)' }} />
@@ -106,7 +133,7 @@ export default function AutoSyncHealthPanel() {
             cell to see details and download the run's trace.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <select
             value={days}
             onChange={e => setDays(parseInt(e.target.value))}
@@ -135,8 +162,78 @@ export default function AutoSyncHealthPanel() {
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             Refresh
           </button>
+          <button
+            onClick={() => setCatchupConfirm(true)}
+            disabled={catchupRunning}
+            className="px-3 py-1 rounded text-sm flex items-center gap-1.5 font-medium"
+            style={{
+              background: catchupRunning
+                ? 'var(--mt-bg-raised)'
+                : 'color-mix(in srgb, #10b981 14%, transparent)',
+              color: catchupRunning ? 'var(--mt-text-faint)' : '#10b981',
+              border: `1px solid ${catchupRunning ? 'var(--mt-border)' : 'color-mix(in srgb, #10b981 30%, transparent)'}`,
+              opacity: catchupRunning ? 0.6 : 1,
+              cursor: catchupRunning ? 'not-allowed' : 'pointer',
+            }}
+            title="Run a catchup tick across every enabled (branch × source) right now. Already-successful targets are skipped."
+          >
+            {catchupRunning ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+            {catchupRunning ? 'Catchup running' : 'Run catchup now'}
+          </button>
         </div>
       </div>
+
+      {/* Catchup notice + confirm dialog */}
+      {catchupNotice && (
+        <div className="p-3 rounded text-sm" style={{
+          background: 'color-mix(in srgb, #10b981 8%, transparent)',
+          border: '1px solid color-mix(in srgb, #10b981 25%, transparent)',
+          color: 'var(--mt-text-secondary)',
+        }}>
+          {catchupNotice}
+        </div>
+      )}
+      {catchupConfirm && (
+        <div className="p-3 rounded text-sm space-y-2" style={{
+          background: 'var(--mt-bg-raised)',
+          border: '1px solid var(--mt-border)',
+        }}>
+          <div style={{ color: 'var(--mt-text-heading)' }}>
+            Run catchup across every enabled (branch × source)?
+          </div>
+          <div style={{ color: 'var(--mt-text-faint)' }} className="text-xs">
+            This fires the same logic as the 23:30 / 01:00 / 05:00 IST retry crons,
+            immediately. Already-successful targets are skipped, so it's safe to run
+            anytime. Each branch's data window is yesterday → today (matching the
+            scheduled cron). Tonight's 23:00 IST main schedule will skip targets that
+            succeed during this catchup — the data is already pulled, so there's
+            nothing to re-fetch.
+          </div>
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              onClick={startCatchup}
+              className="px-3 py-1 rounded text-sm font-medium"
+              style={{
+                background: '#10b981',
+                color: 'white',
+              }}
+            >
+              Yes, run catchup
+            </button>
+            <button
+              onClick={() => setCatchupConfirm(false)}
+              className="px-3 py-1 rounded text-sm"
+              style={{
+                background: 'var(--mt-bg)',
+                color: 'var(--mt-text-secondary)',
+                border: '1px solid var(--mt-border)',
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="p-3 rounded text-sm flex items-start gap-2" style={{
