@@ -34,6 +34,7 @@ import api from '../api/client';
 import { formatINR, formatNumber, formatCompact } from '../utils/format';
 import { Activity, Download } from 'lucide-react';
 import InsightDownloadPanel from '../components/dashboard/InsightDownloadPanel';
+import { canDownloadInsight } from '../utils/roles';
 import SyncIndicator from '../components/common/SyncIndicator';
 
 // ─── Types (server contract) ─────────────────────────────────────────────────
@@ -154,6 +155,7 @@ export default function OperationalInsightsPage() {
   const [pharmaData, setPharmaData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [downloadOpen, setDownloadOpen] = useState(false);
+  const showDownload = canDownloadInsight();
   const clientName = typeof window !== 'undefined' ? (localStorage.getItem('client_name') || '') : '';
   const branchName = typeof window !== 'undefined' ? (localStorage.getItem('branch_name') || '') : '';
   const branchState = typeof window !== 'undefined' ? (localStorage.getItem('branch_state') || '') : '';
@@ -372,7 +374,7 @@ export default function OperationalInsightsPage() {
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>
-          <DownloadButton onClick={() => setDownloadOpen(true)} />
+          {showDownload && <DownloadButton onClick={() => setDownloadOpen(true)} />}
           <div
             className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm"
             style={{
