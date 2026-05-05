@@ -4,7 +4,7 @@
 import { Router, type Request, type Response } from 'express';
 import { requireRole, requireIntegration } from '../middleware/auth.js';
 import { branchSettingsKey, branchFilter, getBranchIdForInsert } from '../utils/branch.js';
-import { runAutoSyncOneOff } from '../services/scheduler/auto-sync.js';
+import { runAutoSyncOneOff, runAutoSyncTick } from '../services/scheduler/auto-sync.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
 
 const router = Router();
@@ -114,6 +114,29 @@ router.post('/run-now', requireRole('admin', 'operational_head'), async (req: Re
     isMultiBranch: !!req.isMultiBranch,
     source,
   }).catch(err => console.error('[auto-sync] /run-now error:', err));
+});
+
+// ─── Run catchup tick NOW (across all tenants) ─────────────────────────
+// Fires the same `runAutoSyncTick('catchup')` the scheduled retries fire
+// at 23:30 / 01:00 / 05:00 IST, but immediately. Used to fill in
+// branches whose scheduled run was skipped (e.g. by the per-tenant
+// lock-hangover bug fixed in PR #50) without waiting for the retry
+// firings. trigger='catchup' means already-successful targets are
+// skipped, so this is safe to fire repeatedly.
+//
+// Auth: admin / operational_head / super_admin. The underlying
+// runAutoSyncTick walks all active tenants — practically a super-admin
+// concern, but tenant admins triggering it just causes their own
+// tenant's catchup to fire faster (other tenants' eligibility is
+// unchanged, governed by their own per-branch enablement flags).
+router.post('/run-tick-now', requireRole('admin', 'operational_head'), async (_req: Request, res: Response) => {
+  // Fire-and-forget. The runner manages its own logging + auto_sync_runs
+  // rows, so the caller doesn't need to wait — they can poll /health
+  // (or just refresh the matrix) to see progress.
+  res.json({ status: 'started' });
+  runAutoSyncTick('catchup').catch(err =>
+    console.error('[auto-sync] /run-tick-now error:', err?.message || err)
+  );
 });
 
 // ─── Auto-Sync Health: tenant-wide last-N-days matrix ──────────────────
