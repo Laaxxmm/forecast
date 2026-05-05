@@ -103,3 +103,18 @@ export function canWipeVcfoData(): boolean {
   if (isSuperAdmin()) return true;
   return getUserRole() === 'admin';
 }
+
+// ── Insight download gate ──────────────────────────────────────────────────
+
+/**
+ * Operational Insights download (PDF / Excel) — owner/leadership only.
+ * Hides the "Download Insight" button for accountants and regular users
+ * who shouldn't be exporting tenant-wide operational data. Admin
+ * (CFO/owner), Operational Head (their right hand), and super_admin
+ * (platform team) keep the button.
+ */
+export function canDownloadInsight(): boolean {
+  if (isSuperAdmin()) return true;
+  const r = getUserRole();
+  return r === 'admin' || r === 'operational_head';
+}
