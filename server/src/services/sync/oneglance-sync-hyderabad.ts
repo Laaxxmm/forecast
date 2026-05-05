@@ -951,32 +951,78 @@ async function dismissTypeaheadDropdown(page: Page, stepKey: string): Promise<vo
  * warning — the click + blob interceptor downstream will surface a
  * clearer failure than this wait could.
  */
+/**
+ * Wait result:
+ *   'rendered' — report data is visible, csv button reachable, proceed
+ *                to download.
+ *   'empty'    — OneGlance opened a "No records" alert dialog because
+ *                no transactions exist in the requested date window.
+ *                Treated as a successful run with 0 rows; the popup is
+ *                dismissed automatically.
+ *   'timeout'  — neither rendered markers nor the No-records dialog
+ *                appeared within the timeout. Caller proceeds with the
+ *                download attempt and lets the blob interceptor surface
+ *                the actual failure.
+ */
+type RenderStatus = 'rendered' | 'empty' | 'timeout';
+
 async function waitForRenderedReport(
   page: Page,
   opts: OneglanceHyderabadSyncOptions,
   stepKey: string,
-): Promise<void> {
+): Promise<RenderStatus> {
   progress(opts, stepKey, 'Waiting for report to render...', 55);
   try {
-    await page.waitForFunction(
+    const handle = await page.waitForFunction(
       () => {
         const text = document.body?.textContent || '';
-        // Relaxed regex: matches "Filter by Period:" AND
-        // "Filter by Period From:" — the latter shows up on the
-        // Stock Transfer Details rendered report.
+
+        // (A) "No records" alert dialog. OneGlance shows a centered
+        //     modal with the literal text "No records" and an OK
+        //     button when the filter window has zero matching rows.
+        //     Detect via: visible element whose own-text is exactly
+        //     "No records" (or "No Records") AND a visible OK button
+        //     somewhere on the page. The combination rules out false
+        //     positives in the rendered-report state (which never
+        //     contains an "OK" button).
+        const all = Array.from(document.querySelectorAll('div, span, p, label, td, h1, h2, h3'));
+        const noRecordsVisible = all.some(el => {
+          const r = (el as HTMLElement).getBoundingClientRect();
+          if (r.width === 0 || r.height === 0 || (el as HTMLElement).offsetParent === null) return false;
+          const ownText = Array.from(el.childNodes)
+            .filter(n => n.nodeType === Node.TEXT_NODE)
+            .map(n => (n.textContent || '').trim())
+            .join('').trim();
+          return /^No\s+records?\s*\.?$/i.test(ownText);
+        });
+        if (noRecordsVisible) {
+          const buttons = Array.from(document.querySelectorAll(
+            'button, input[type="button"], input[type="submit"], a, [role="button"]'
+          ));
+          const hasOk = buttons.some(el => {
+            const r = (el as HTMLElement).getBoundingClientRect();
+            if (r.width === 0 || r.height === 0 || (el as HTMLElement).offsetParent === null) return false;
+            const t = ((el as HTMLInputElement).value || el.textContent || '').trim();
+            return /^OK$/i.test(t);
+          });
+          if (hasOk) return 'empty';
+        }
+
+        // (B) Rendered-report markers. Relaxed regex matches both
+        //     "Filter by Period:" and "Filter by Period From:" (the
+        //     Stock Transfer Details report uses the latter).
         if (!/Filter\s+by\s+Period/i.test(text)) return false;
         const csvBtn = document.querySelector('#csvbtn');
         if (!csvBtn) return false;
-        // At least one row with 5+ cells (rules out empty header-only state).
-        // Note: Stock Transfer's summary table at the top has 5 cells
-        // (Total Products / Total Qty / Net Value / Purchase Value /
-        // Purchase Price) which itself proves render — that's fine.
+        // At least one row with 5+ cells, visible (rules out empty
+        // header-only state). Stock Transfer's summary table at the
+        // top counts.
         const rows = document.querySelectorAll('tr');
         for (const tr of rows) {
           const cells = tr.querySelectorAll('td');
           if (cells.length >= 5) {
             const r = (tr as HTMLElement).getBoundingClientRect();
-            if (r.height > 0 && (tr as HTMLElement).offsetParent !== null) return true;
+            if (r.height > 0 && (tr as HTMLElement).offsetParent !== null) return 'rendered';
           }
         }
         return false;
@@ -984,18 +1030,58 @@ async function waitForRenderedReport(
       null,
       { timeout: 90_000, polling: 500 }
     );
+    const status = (await handle.jsonValue()) as 'rendered' | 'empty';
+
+    if (status === 'empty') {
+      console.log(`[oneglance-hyderabad] "No records" alert detected for ${stepKey} — empty result, dismissing`);
+      await debugScreenshot(page, `09-empty-result-${stepKey}`);
+      // Dismiss the popup so the page is in a clean state for the
+      // next report (matters for "All" runs where multiple flows
+      // chain through openStoreSubmenu).
+      await dismissNoRecordsPopup(page);
+      progress(opts, stepKey, 'No records for this period', 80);
+      return 'empty';
+    }
+
     // Settle time for any post-render animations / late row injection.
     // OneGlance can take several seconds to fully populate larger
-    // reports — bumped from 1.2s to 3s after Stock Transfer testing
-    // showed the csv handler firing on a still-rendering report.
+    // reports.
     await page.waitForTimeout(3000);
     console.log(`[oneglance-hyderabad] Report rendered (${stepKey}), csv button + data rows detected`);
+    await debugScreenshot(page, `09-report-loaded-${stepKey}`);
+    progress(opts, stepKey, 'Report rendered', 65);
+    return 'rendered';
   } catch (e: any) {
     console.log(`[oneglance-hyderabad] Report-render wait timed out after 90s (${stepKey}): ${e?.message}`);
     console.log(`[oneglance-hyderabad] Proceeding anyway — downstream click + blob interceptor will surface the actual issue.`);
+    await debugScreenshot(page, `09-report-loaded-${stepKey}`);
+    progress(opts, stepKey, 'Report render timed out, proceeding', 65);
+    return 'timeout';
   }
-  await debugScreenshot(page, `09-report-loaded-${stepKey}`);
-  progress(opts, stepKey, 'Report rendered', 65);
+}
+
+/**
+ * Click the OK button on a "No records" alert dialog. Liberal
+ * detection — looks for any visible button-like element whose label
+ * is exactly "OK" (case-insensitive).
+ */
+async function dismissNoRecordsPopup(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const candidates = Array.from(document.querySelectorAll(
+      'button, input[type="button"], input[type="submit"], a, [role="button"]'
+    ));
+    for (const el of candidates) {
+      const r = (el as HTMLElement).getBoundingClientRect();
+      if (r.width === 0 || r.height === 0 || (el as HTMLElement).offsetParent === null) continue;
+      const text = ((el as HTMLInputElement).value || el.textContent || '').trim();
+      if (/^OK$/i.test(text)) {
+        (el as HTMLElement).click();
+        return true;
+      }
+    }
+    return false;
+  });
+  await page.waitForTimeout(500);
 }
 
 /**
@@ -1323,7 +1409,7 @@ async function downloadStoreReport(
   downloadDir: string,
   type: 'Purchase' | 'Sales',
   centerName: string | null,
-): Promise<{ filePath: string; filename: string }> {
+): Promise<{ filePath: string; filename: string } | null> {
   const stepKey = type.toLowerCase();
   progress(opts, stepKey, `Setting ${type} Report filters...`, 35);
 
@@ -1360,7 +1446,14 @@ async function downloadStoreReport(
   progress(opts, stepKey, `Generating ${type.toLowerCase()} report...`, 48);
   await clickActionButton(page, opts, stepKey, 'Detailed');
 
-  await waitForRenderedReport(page, opts, stepKey);
+  const status = await waitForRenderedReport(page, opts, stepKey);
+  if (status === 'empty') {
+    // No transactions in this date window — treat as success with 0
+    // rows. Caller stores the file as undefined so the runner skips
+    // parsing/inserting and the auto_sync_runs row is recorded as
+    // 'success' rather than 'failed'.
+    return null;
+  }
   return await captureCsvAndSave(page, opts, downloadDir, stepKey, type.toLowerCase());
 }
 
@@ -1375,7 +1468,7 @@ async function downloadTransferReport(
   opts: OneglanceHyderabadSyncOptions,
   downloadDir: string,
   centerName: string,
-): Promise<{ filePath: string; filename: string }> {
+): Promise<{ filePath: string; filename: string } | null> {
   const stepKey = 'transfer';
   progress(opts, stepKey, 'Setting Stock Transfer filters...', 35);
 
@@ -1391,7 +1484,8 @@ async function downloadTransferReport(
   // or "Invoice Wise".
   await clickActionButton(page, opts, stepKey, 'Transfer Report');
 
-  await waitForRenderedReport(page, opts, stepKey);
+  const status = await waitForRenderedReport(page, opts, stepKey);
+  if (status === 'empty') return null;
   return await captureCsvAndSave(page, opts, downloadDir, stepKey, 'transfer');
 }
 
@@ -1409,7 +1503,7 @@ async function downloadStockReport(
   opts: OneglanceHyderabadSyncOptions,
   downloadDir: string,
   centerName: string,
-): Promise<{ filePath: string; filename: string }> {
+): Promise<{ filePath: string; filename: string } | null> {
   const stepKey = 'stock';
   progress(opts, stepKey, 'Setting Stock Report filters...', 35);
 
@@ -1426,7 +1520,8 @@ async function downloadStockReport(
   // expects.
   await clickActionButton(page, opts, stepKey, 'Stock values');
 
-  await waitForRenderedReport(page, opts, stepKey);
+  const status = await waitForRenderedReport(page, opts, stepKey);
+  if (status === 'empty') return null;
   return await captureCsvAndSave(page, opts, downloadDir, stepKey, 'stock');
 }
 
@@ -1561,9 +1656,15 @@ export async function syncOneglanceHyderabad(
 
     await login(page, opts);
 
+    // For each report: a null return means "OneGlance had no records
+    // in this date window" — treated as success with 0 rows. Leave the
+    // corresponding result field undefined so the runner's `if
+    // (result.xFile)` parse blocks no-op and the auto_sync_runs row
+    // is recorded as 'success'.
     if (opts.reports.includes('purchase')) {
       await navigateToStorePurchaseSalesReport(page, opts);
-      result.purchaseFile = await downloadStoreReport(page, opts, downloadDir, 'Purchase', null);
+      const f = await downloadStoreReport(page, opts, downloadDir, 'Purchase', null);
+      if (f) result.purchaseFile = f;
     }
 
     if (opts.reports.includes('sales')) {
@@ -1577,7 +1678,8 @@ export async function syncOneglanceHyderabad(
       // table — clicking Filter would also work, but a fresh nav is
       // simpler and the perf cost is negligible (one page load).
       await navigateToStorePurchaseSalesReport(page, opts);
-      result.salesFile = await downloadStoreReport(page, opts, downloadDir, 'Sales', opts.oneglanceCenter);
+      const f = await downloadStoreReport(page, opts, downloadDir, 'Sales', opts.oneglanceCenter);
+      if (f) result.salesFile = f;
     }
 
     if (opts.reports.includes('transfer')) {
@@ -1589,7 +1691,8 @@ export async function syncOneglanceHyderabad(
       // Always fresh-navigate to "Transfered Stocks" so we don't
       // inherit state from a prior Purchase/Sales render.
       await navigateToTransferedStocks(page, opts);
-      result.transferFile = await downloadTransferReport(page, opts, downloadDir, opts.oneglanceCenter);
+      const f = await downloadTransferReport(page, opts, downloadDir, opts.oneglanceCenter);
+      if (f) result.transferFile = f;
     }
 
     if (opts.reports.includes('stock')) {
@@ -1601,7 +1704,8 @@ export async function syncOneglanceHyderabad(
       // Fresh navigation each time — the Stock Report filter form is
       // distinct from the Sales/Transfer ones we may have just used.
       await navigateToStockReport(page, opts);
-      result.stockFile = await downloadStockReport(page, opts, downloadDir, opts.oneglanceCenter);
+      const f = await downloadStockReport(page, opts, downloadDir, opts.oneglanceCenter);
+      if (f) result.stockFile = f;
     }
 
     return result;
