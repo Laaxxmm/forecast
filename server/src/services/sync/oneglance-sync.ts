@@ -80,6 +80,60 @@ function toOneglanceDate(dateStr: string): string {
 }
 
 /**
+ * After clicking the action button (Detailed / Stock values / etc.),
+ * OneGlance may pop a centered "No records" alert dialog when there
+ * are no transactions in the requested date window. Detect it,
+ * dismiss it, and let the caller treat the run as success-with-zero-
+ * rows instead of waiting 60+ seconds for a csv-button click that
+ * was never going to fire.
+ *
+ * Returns true if the popup was found and dismissed; false if the
+ * page is in a normal state (rendered report or still loading).
+ *
+ * Detection is conservative — requires a visible element whose own-
+ * text is exactly "No records" (or "No Records.") AND a visible
+ * OK-labelled button somewhere on the page. The combination doesn't
+ * false-positive on the rendered-report state which has csv + pdf
+ * buttons but never an OK button.
+ */
+async function dismissNoRecordsPopupIfPresent(page: Page): Promise<boolean> {
+  return await page.evaluate(() => {
+    const visibleOwnText = (el: Element): string => {
+      const r = (el as HTMLElement).getBoundingClientRect();
+      if (r.width === 0 || r.height === 0 || (el as HTMLElement).offsetParent === null) return '';
+      return Array.from(el.childNodes)
+        .filter(n => n.nodeType === Node.TEXT_NODE)
+        .map(n => (n.textContent || '').trim())
+        .join('').trim();
+    };
+    const NO_RECORDS = /^No\s+records?\s*\.?$/i;
+
+    // Find a visible element whose OWN text (not descendant text) is
+    // "No records". Scoping to text-bearing tags only avoids picking
+    // up wrapper divs whose nested text contains the phrase.
+    let foundNoRecords = false;
+    for (const el of document.querySelectorAll('div, span, p, label, td, h1, h2, h3, h4')) {
+      if (NO_RECORDS.test(visibleOwnText(el))) { foundNoRecords = true; break; }
+    }
+    if (!foundNoRecords) return false;
+
+    // Click the OK button on the dialog. Liberal selector match.
+    for (const el of document.querySelectorAll('button, input[type="button"], input[type="submit"], a, [role="button"]')) {
+      const r = (el as HTMLElement).getBoundingClientRect();
+      if (r.width === 0 || r.height === 0 || (el as HTMLElement).offsetParent === null) continue;
+      const text = ((el as HTMLInputElement).value || el.textContent || '').trim();
+      if (/^OK$/i.test(text)) {
+        (el as HTMLElement).click();
+        return true;
+      }
+    }
+    // No OK button visible — popup might be styled differently. Treat
+    // as not-the-popup so caller falls through to its existing waits.
+    return false;
+  });
+}
+
+/**
  * Download a Purchase/Sales report from Oneglance
  * Assumes we're already on the Purchase/Sales Report page
  */
@@ -91,7 +145,7 @@ async function downloadReport(
   downloadDir: string,
   stepPrefix: string,
   pctBase: number,
-): Promise<{ filePath: string; filename: string }> {
+): Promise<{ filePath: string; filename: string } | null> {
   // Set dates
   progress(opts, stepPrefix, `Setting date range for ${type}...`, pctBase);
 
@@ -161,12 +215,32 @@ async function downloadReport(
   progress(opts, stepPrefix, `Generating ${type} report...`, pctBase + 8);
   await page.locator('button:has-text("Detailed"), a:has-text("Detailed"), input[value="Detailed"]').first().click({ timeout: TIMEOUT });
 
+  // Wait briefly for either the report content OR the "No records"
+  // popup to appear. Do this BEFORE the longer networkidle wait so
+  // we can short-circuit the empty-data case in <2s instead of
+  // waiting 30s on networkidle and then 60s on the missing csv
+  // button.
+  await page.waitForTimeout(1500);
+  if (await dismissNoRecordsPopupIfPresent(page)) {
+    console.log(`[oneglance-sync] "No records" popup detected for ${type} — empty result, skipping CSV download`);
+    progress(opts, stepPrefix, `${type}: no records for this period`, pctBase + 22);
+    return null;
+  }
+
   // Wait for report to load — use short timeout, don't block on networkidle
-  await page.waitForTimeout(3000);
+  await page.waitForTimeout(1500);
   try {
     await page.waitForLoadState('networkidle', { timeout: 30_000 });
   } catch {
     console.log(`[oneglance-sync] networkidle timeout for ${type}, proceeding`);
+  }
+  // Re-check for the popup — sometimes OneGlance shows it AFTER the
+  // networkidle settles (depending on which post-click XHR finishes
+  // last).
+  if (await dismissNoRecordsPopupIfPresent(page)) {
+    console.log(`[oneglance-sync] "No records" popup detected for ${type} (post-networkidle) — empty result`);
+    progress(opts, stepPrefix, `${type}: no records for this period`, pctBase + 22);
+    return null;
   }
   progress(opts, stepPrefix, `${type} report loaded`, pctBase + 15);
 
@@ -197,7 +271,7 @@ async function downloadStockReport(
   context: BrowserContext,
   opts: OneglanceSyncOptions,
   downloadDir: string,
-): Promise<{ filePath: string; filename: string }> {
+): Promise<{ filePath: string; filename: string } | null> {
   progress(opts, 'stock', 'Navigating to Stock Available Report...', 70);
 
   // Navigate back to Utility page if needed
@@ -288,13 +362,31 @@ async function downloadStockReport(
   const stockValuesBtn = page.locator('button:has-text("Stock values"), a:has-text("Stock values"), input[value="Stock values"]').first();
   await stockValuesBtn.click({ timeout: TIMEOUT });
 
+  // Quick check for "No records" popup before waiting on the
+  // (potentially slow) csv-button render. Stock report typically has
+  // data, but defensive guard for branches with no inventory in
+  // this snapshot.
+  await page.waitForTimeout(1500);
+  if (await dismissNoRecordsPopupIfPresent(page)) {
+    console.log('[oneglance-sync] "No records" popup detected for Stock — empty result');
+    progress(opts, 'stock', 'Stock: no records for this period', 84);
+    return null;
+  }
+
   // Wait for CSV button to appear (don't wait for full 30K-row table render)
-  await page.waitForTimeout(3000);
+  await page.waitForTimeout(1500);
   try {
     await page.locator('button.uti_btn, button:has-text("csv")').first()
       .waitFor({ state: 'visible', timeout: 15_000 });
   } catch {
     console.log('[oneglance-sync] CSV button not visible after 15s, trying anyway');
+  }
+  // Re-check after the longer wait (some OneGlance builds delay the
+  // popup until the rendering attempt times out).
+  if (await dismissNoRecordsPopupIfPresent(page)) {
+    console.log('[oneglance-sync] "No records" popup detected for Stock (post-csv-wait) — empty result');
+    progress(opts, 'stock', 'Stock: no records for this period', 84);
+    return null;
   }
   await debugScreenshot(page, '12-stock-report-loaded');
   progress(opts, 'stock', 'Stock report loaded', 80);
@@ -661,10 +753,17 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
     const result: OneglanceSyncResult = {};
 
     // ── Step 5: Download Sales report ──
+    // Each downloadReport call may return null when OneGlance has no
+    // transactions for the date window (it shows a "No records"
+    // popup instead of the report). We treat that as success-with-
+    // zero-rows and leave the result.salesFile undefined; the runner
+    // skips parse + insert and the auto_sync_runs row records as
+    // 'success' rather than 'failed'.
     if (opts.reportType === 'sales' || opts.reportType === 'both' || opts.reportType === 'all') {
       progress(opts, 'sales', 'Starting Sales report...', 35);
-      result.salesFile = await downloadReport(page, context, opts, 'Sales', downloadDir, 'sales', 35);
-      progress(opts, 'sales', 'Sales report downloaded', 55);
+      const salesFile = await downloadReport(page, context, opts, 'Sales', downloadDir, 'sales', 35);
+      if (salesFile) result.salesFile = salesFile;
+      progress(opts, 'sales', salesFile ? 'Sales report downloaded' : 'Sales: no records', 55);
 
       // Navigate back to the report page for purchase if needed
       if (opts.reportType === 'both' || opts.reportType === 'all') {
@@ -707,8 +806,9 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
     if (opts.reportType === 'purchase' || opts.reportType === 'both' || opts.reportType === 'all') {
       const pctStart = (opts.reportType === 'both' || opts.reportType === 'all') ? 58 : 35;
       progress(opts, 'purchase', 'Starting Purchase report...', pctStart);
-      result.purchaseFile = await downloadReport(page, context, opts, 'Purchase', downloadDir, 'purchase', pctStart);
-      progress(opts, 'purchase', 'Purchase report downloaded', pctStart + 25);
+      const purchaseFile = await downloadReport(page, context, opts, 'Purchase', downloadDir, 'purchase', pctStart);
+      if (purchaseFile) result.purchaseFile = purchaseFile;
+      progress(opts, 'purchase', purchaseFile ? 'Purchase report downloaded' : 'Purchase: no records', pctStart + 25);
     }
 
     // ── Step 7: Download Stock Available report ──
@@ -734,7 +834,8 @@ export async function syncOneglance(opts: OneglanceSyncOptions): Promise<Oneglan
             setTimeout(() => reject(new Error(`Stock report download timed out after ${stockTimeout / 1000}s`)), stockTimeout)
           ),
         ]);
-        result.stockFile = stockResult;
+        // null = "No records" popup detected; success-with-zero-rows.
+        if (stockResult) result.stockFile = stockResult;
       } catch (stockErr: any) {
         const errMsg = stockErr?.message || String(stockErr);
         if (opts.reportType === 'stock') {
