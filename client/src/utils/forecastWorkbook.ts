@@ -45,6 +45,17 @@ const COLOR = {
 const NUM_FMT = '#,##0;(#,##0);"-"';   // 1,234 / (1,234) / -
 const PCT_FMT = '0.00%';
 
+// Discriminator selecting which renderer handles a given category sheet.
+// See the CATEGORIES array in `buildForecastWorkbook` for the mapping.
+type SheetKind =
+  | 'flat'
+  | 'personnel'
+  | 'assets'
+  | 'taxes'
+  | 'cash_flow_assumptions'
+  | 'initial_balances'
+  | 'financing';
+
 // ── Public API ──────────────────────────────────────────────────────────────
 
 export interface BuildWorkbookOpts {
@@ -82,23 +93,37 @@ export async function buildForecastWorkbook(opts: BuildWorkbookOpts): Promise<Bl
   ].filter(Boolean).join(' · ');
 
   // Per-category sheet metadata. Order mirrors the Forecast page tabs.
-  // Each item supplies its own decomposition (Units / Rate, Hours / Rate,
-  // Linked Revenue / Percentage, etc.) so we don't fix labels per category
-  // here — see `decomposeItem` below.
+  //
+  // `kind` discriminates which renderer handles the sheet:
+  //   • 'flat'        — one row per item × months, with TOTAL (Revenue/Direct
+  //                     Costs/Expenses/Dividends). Items decompose into the
+  //                     Calculation Method block via `decomposeItem`.
+  //   • 'personnel'   — three sections (Direct Labor / Other Labor / Employee
+  //                     Benefits) with subtotals + Headcount info row.
+  //   • 'assets'      — three sections (Current / Long-term / Investment)
+  //                     with subtotals.
+  //   • 'taxes'       — computed from settings + cross-sheet refs (Income Tax
+  //                     Accrued/Paid + Sales Tax Accrued/Paid). No items.
+  //   • 'cash_flow_assumptions' / 'initial_balances' — settings dumps. No
+  //                     monthly grid; not in Summary's P&L.
+  //   • 'financing'   — top totals table + per-item loan mechanics block
+  //                     (draws/repayments/interest/outstanding balance).
   const CATEGORIES: Array<{
-    key: string; label: string; sheetName: string;
+    key: string; label: string; sheetName: string; kind: SheetKind;
   }> = [
-    { key: 'revenue',      label: 'Revenue',      sheetName: 'Revenue' },
-    { key: 'direct_costs', label: 'Direct Costs', sheetName: 'Direct Costs' },
-    { key: 'personnel',    label: 'Personnel',    sheetName: 'Personnel' },
-    { key: 'expenses',     label: 'Expenses',     sheetName: 'Expenses' },
-    { key: 'assets',       label: 'Assets',       sheetName: 'Assets' },
-    { key: 'taxes',        label: 'Taxes',        sheetName: 'Taxes' },
-    { key: 'dividends',    label: 'Dividends',    sheetName: 'Dividends' },
+    { key: 'revenue',                label: 'Revenue',                sheetName: 'Revenue',                kind: 'flat'       },
+    { key: 'direct_costs',           label: 'Direct Costs',           sheetName: 'Direct Costs',           kind: 'flat'       },
+    { key: 'personnel',              label: 'Personnel',              sheetName: 'Personnel',              kind: 'personnel'  },
+    { key: 'expenses',               label: 'Expenses',               sheetName: 'Expenses',               kind: 'flat'       },
+    { key: 'assets',                 label: 'Assets',                 sheetName: 'Assets',                 kind: 'assets'     },
+    { key: 'taxes',                  label: 'Taxes',                  sheetName: 'Taxes',                  kind: 'taxes'      },
+    { key: 'dividends',              label: 'Dividends',              sheetName: 'Dividends',              kind: 'flat'       },
+    { key: 'cash_flow_assumptions',  label: 'Cash Flow Assumptions',  sheetName: 'Cash Flow Assumptions',  kind: 'cash_flow_assumptions' },
+    { key: 'initial_balances',       label: 'Initial Balances',       sheetName: 'Initial Balances',       kind: 'initial_balances'      },
     // Financing isn't part of the P&L (loans / investments hit Cash Flow,
     // not the income statement), so the Summary's P&L formulas don't
     // reference it. The sheet still exists for the per-tab Excel download.
-    { key: 'financing',    label: 'Financing',    sheetName: 'Financing' },
+    { key: 'financing',              label: 'Financing',              sheetName: 'Financing',              kind: 'financing'  },
   ];
 
   // Single-category mode skips the Summary sheet entirely (the user is
@@ -124,7 +149,17 @@ export async function buildForecastWorkbook(opts: BuildWorkbookOpts): Promise<Bl
   const itemNameById = new Map<number, string>();
   for (const it of opts.items) itemNameById.set(it.id, it.name);
 
+  // Note: settings-only sheets (cash_flow_assumptions, initial_balances) are
+  // built later, AFTER the Summary, so the Summary's category Total row
+  // references resolve cleanly. Their `totalRowByCategory` entries are
+  // initialised to 0 — the Summary doesn't reference them.
+  const SETTINGS_KINDS = new Set<SheetKind>(['cash_flow_assumptions', 'initial_balances']);
+
   for (const cat of categoriesToRender) {
+    if (SETTINGS_KINDS.has(cat.kind)) {
+      totalRowByCategory[cat.key] = 0;
+      continue;
+    }
     const sheet = wb.addWorksheet(cat.sheetName, {
       views: [{ state: 'frozen', xSplit: 1, ySplit: 4 }],
       properties: { tabColor: { argb: COLOR.accent } },
@@ -132,17 +167,59 @@ export async function buildForecastWorkbook(opts: BuildWorkbookOpts): Promise<Bl
     const catItems = opts.items
       .filter(i => i.category === cat.key)
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-    const totalRow = renderCategorySheet({
-      sheet,
-      title: cat.label,
-      contextLine,
-      months: opts.months,
-      monthLabels,
-      items: catItems,
-      allItems: opts.items,
-      allValues: opts.allValues,
-      itemNameById,
-    });
+
+    let totalRow: number;
+    switch (cat.kind) {
+      case 'personnel':
+        totalRow = renderPersonnelSheet({
+          sheet, title: cat.label, contextLine,
+          months: opts.months, monthLabels,
+          items: catItems, allItems: opts.items, allValues: opts.allValues,
+          itemNameById,
+        });
+        break;
+      case 'assets':
+        totalRow = renderAssetsSheet({
+          sheet, title: cat.label, contextLine,
+          months: opts.months, monthLabels,
+          items: catItems, allItems: opts.items, allValues: opts.allValues,
+          itemNameById,
+        });
+        break;
+      case 'taxes':
+        totalRow = renderTaxesSheet({
+          sheet, title: cat.label, contextLine,
+          months: opts.months, monthLabels,
+          allItems: opts.items, allValues: opts.allValues,
+          settings: opts.settings,
+          // Pass the per-category TOTAL row positions accumulated so far
+          // (Revenue / Direct Costs / Personnel / Expenses are all rendered
+          // before Taxes, so their TOTAL rows are already known here).
+          categoryTotalRows: { ...totalRowByCategory },
+          categorySheetNames: CATEGORIES.reduce<Record<string, string>>((acc, c) => {
+            acc[c.key] = c.sheetName;
+            return acc;
+          }, {}),
+        });
+        break;
+      case 'financing':
+        totalRow = renderFinancingSheet({
+          sheet, title: cat.label, contextLine,
+          months: opts.months, monthLabels,
+          items: catItems, allItems: opts.items, allValues: opts.allValues,
+          itemNameById,
+        });
+        break;
+      case 'flat':
+      default:
+        totalRow = renderCategorySheet({
+          sheet, title: cat.label, contextLine,
+          months: opts.months, monthLabels,
+          items: catItems, allItems: opts.items, allValues: opts.allValues,
+          itemNameById,
+        });
+        break;
+    }
     totalRowByCategory[cat.key] = totalRow;
   }
 
@@ -161,6 +238,27 @@ export async function buildForecastWorkbook(opts: BuildWorkbookOpts): Promise<Bl
       }, {}),
       totalRowByCategory,
     });
+  }
+
+  // Settings-only sheets — built after the Summary so they end up at the
+  // right position in the tab strip (matching the UI tab order).
+  for (const cat of categoriesToRender) {
+    if (!SETTINGS_KINDS.has(cat.kind)) continue;
+    const sheet = wb.addWorksheet(cat.sheetName, {
+      views: [{ state: 'frozen', xSplit: 1, ySplit: 4 }],
+      properties: { tabColor: { argb: COLOR.accent } },
+    });
+    if (cat.kind === 'cash_flow_assumptions') {
+      renderCashFlowAssumptionsSheet({
+        sheet, title: cat.label, contextLine,
+        allItems: opts.items, settings: opts.settings, itemNameById,
+      });
+    } else if (cat.kind === 'initial_balances') {
+      renderInitialBalancesSheet({
+        sheet, title: cat.label, contextLine,
+        settings: opts.settings,
+      });
+    }
   }
 
   const buffer = await wb.xlsx.writeBuffer();
@@ -272,6 +370,44 @@ function renderCategorySheet(o: CategorySheetOpts): number {
     cell.alignment = { horizontal: colNumber === 1 ? 'left' : 'right', vertical: 'middle' };
     cell.border = { bottom: { style: 'thin', color: { argb: COLOR.accent } } };
   });
+
+  // ─ Empty-state placeholder ─
+  // When the category has zero items, render a single italic hint row + a
+  // TOTAL=0 row so the Summary's `=SheetName!B<totalRow>` formula still
+  // resolves cleanly. This replaces the old behaviour of showing a bare
+  // TOTAL=0 with no explanation, which left users wondering whether the
+  // export was broken.
+  if (items.length === 0) {
+    const HINT_ROW = HEADER_ROW + 1;
+    const EMPTY_TOTAL_ROW = HINT_ROW + 1;
+    sheet.mergeCells(HINT_ROW, 1, HINT_ROW, totalCol);
+    const hint = sheet.getCell(HINT_ROW, 1);
+    hint.value = `No items added yet — add line items on the ${title} tab to populate this sheet.`;
+    hint.font = { italic: true, size: 10, color: { argb: COLOR.textFaint } };
+    hint.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true, indent: 1 };
+    sheet.getRow(HINT_ROW).height = 22;
+
+    const totalRowObj = sheet.getRow(EMPTY_TOTAL_ROW);
+    totalRowObj.getCell(1).value = 'TOTAL';
+    totalRowObj.getCell(1).alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+    for (let c = 2; c <= totalCol; c++) {
+      const cell = totalRowObj.getCell(c);
+      cell.value = 0;
+      cell.numFmt = NUM_FMT;
+      cell.alignment = { horizontal: 'right', vertical: 'middle' };
+    }
+    for (let c = 1; c <= totalCol; c++) {
+      const cell = totalRowObj.getCell(c);
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.accent } };
+      cell.font = { bold: true, color: { argb: COLOR.white } };
+      cell.border = {
+        top: { style: 'medium', color: { argb: COLOR.accentStrong } },
+        bottom: { style: 'medium', color: { argb: COLOR.accentStrong } },
+      };
+    }
+    totalRowObj.height = 22;
+    return EMPTY_TOTAL_ROW;
+  }
 
   // ─ Compute decompositions for each item ─
   const decompositions = items.map(item =>
@@ -470,6 +606,1326 @@ function renderCategorySheet(o: CategorySheetOpts): number {
 
   return TOTAL_ROW;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   Shared layout helpers (used by Personnel / Assets / Taxes / Financing /
+//   Cash Flow Assumptions / Initial Balances renderers)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Standard column count: 1 (label) + 12 (months) + 1 (total) = 14. */
+function sheetColumnCount(months: string[]): { lastMonthCol: number; totalCol: number } {
+  return { lastMonthCol: 1 + months.length, totalCol: 2 + months.length };
+}
+
+/** Apply the standard column widths used by every category sheet. */
+function applyStandardColumnWidths(sheet: ExcelJS.Worksheet, months: string[]): void {
+  const { lastMonthCol, totalCol } = sheetColumnCount(months);
+  sheet.getColumn(1).width = 38;
+  for (let c = 2; c <= lastMonthCol; c++) sheet.getColumn(c).width = 12;
+  sheet.getColumn(totalCol).width = 14;
+}
+
+/** Title bar (row 1) + context line (row 2) + header row (row 4) — the
+ *  three rows every category sheet starts with. Returns the header row
+ *  index (4) so the caller can start writing data at row 5. */
+function writeSheetHeader(
+  sheet: ExcelJS.Worksheet,
+  title: string,
+  contextLine: string,
+  monthLabels: string[],
+  totalCol: number,
+): number {
+  // Row 1: emerald title bar
+  sheet.mergeCells(1, 1, 1, totalCol);
+  const titleCell = sheet.getCell(1, 1);
+  titleCell.value = title.toUpperCase();
+  titleCell.font = { bold: true, size: 14, color: { argb: COLOR.white } };
+  titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.accent } };
+  titleCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+  sheet.getRow(1).height = 26;
+
+  // Row 2: context line
+  sheet.mergeCells(2, 1, 2, totalCol);
+  const ctxCell = sheet.getCell(2, 1);
+  ctxCell.value = contextLine || ' ';
+  ctxCell.font = { italic: true, size: 9, color: { argb: COLOR.textFaint } };
+  ctxCell.alignment = { horizontal: 'left', indent: 1 };
+
+  // Row 4: column headers
+  const HEADER_ROW = 4;
+  const headerRow = sheet.getRow(HEADER_ROW);
+  headerRow.values = ['Particulars', ...monthLabels, 'Total'];
+  headerRow.height = 22;
+  headerRow.eachCell((cell, colNumber) => {
+    if (colNumber > totalCol) return;
+    cell.font = { bold: true, color: { argb: COLOR.white }, size: 11 };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.accentStrong } };
+    cell.alignment = { horizontal: colNumber === 1 ? 'left' : 'right', vertical: 'middle' };
+    cell.border = { bottom: { style: 'thin', color: { argb: COLOR.accent } } };
+  });
+
+  return HEADER_ROW;
+}
+
+/** Write a full-width emerald section bar (e.g. "Direct Labor", "Income Tax"). */
+function writeSheetSectionBar(
+  sheet: ExcelJS.Worksheet,
+  rowIdx: number,
+  label: string,
+  totalCol: number,
+  rateLabel?: string,
+): void {
+  sheet.mergeCells(rowIdx, 1, rowIdx, totalCol);
+  const cell = sheet.getCell(rowIdx, 1);
+  cell.value = rateLabel ? `${label}   (${rateLabel})` : label;
+  cell.font = { bold: true, size: 11, color: { argb: COLOR.white } };
+  cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.accentStrong } };
+  cell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+  sheet.getRow(rowIdx).height = 22;
+}
+
+/** Write a single data row — label in col A, per-month values in B..M,
+ *  optional row-total in the last column (formula sums B..M). */
+function writeDataRow(
+  sheet: ExcelJS.Worksheet,
+  rowIdx: number,
+  label: string,
+  perMonthValues: Array<number | { formula: string }>,
+  totalCol: number,
+  opts: {
+    indent?: number;
+    bold?: boolean;
+    italic?: boolean;
+    color?: string;
+    numFmt?: string;
+    bandedFill?: boolean;
+    rowTotal?: 'sum' | 'last' | { formula: string } | null;
+  } = {},
+): void {
+  const numFmt = opts.numFmt ?? NUM_FMT;
+  const fontColor = opts.color ?? COLOR.textHeading;
+  const row = sheet.getRow(rowIdx);
+
+  const labelCell = row.getCell(1);
+  labelCell.value = label;
+  labelCell.alignment = { horizontal: 'left', vertical: 'middle', indent: opts.indent ?? 1 };
+  labelCell.font = { color: { argb: fontColor }, bold: !!opts.bold, italic: !!opts.italic };
+
+  perMonthValues.forEach((v, j) => {
+    const c = 2 + j;
+    const cell = row.getCell(c);
+    cell.value = v as any;
+    cell.numFmt = numFmt;
+    cell.alignment = { horizontal: 'right', vertical: 'middle' };
+    cell.font = { color: { argb: fontColor }, bold: !!opts.bold, italic: !!opts.italic };
+  });
+
+  // Row total column
+  const totCell = row.getCell(totalCol);
+  if (opts.rowTotal === null || opts.rowTotal === undefined || opts.rowTotal === 'sum') {
+    totCell.value = { formula: `SUM(${colLetter(2)}${rowIdx}:${colLetter(totalCol - 1)}${rowIdx})` };
+  } else if (opts.rowTotal === 'last') {
+    totCell.value = { formula: `${colLetter(totalCol - 1)}${rowIdx}` };
+  } else {
+    totCell.value = { formula: opts.rowTotal.formula };
+  }
+  totCell.numFmt = numFmt;
+  totCell.alignment = { horizontal: 'right', vertical: 'middle' };
+  totCell.font = { color: { argb: fontColor }, bold: !!opts.bold, italic: !!opts.italic };
+
+  if (opts.bandedFill) {
+    for (let c = 1; c <= totalCol; c++) {
+      row.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.bgSubtle } };
+    }
+  }
+}
+
+/** Apply emerald "TOTAL" highlight to a row that's already been written. */
+function applyTotalRowStyle(sheet: ExcelJS.Worksheet, rowIdx: number, totalCol: number): void {
+  const row = sheet.getRow(rowIdx);
+  for (let c = 1; c <= totalCol; c++) {
+    const cell = row.getCell(c);
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.accent } };
+    cell.font = { bold: true, color: { argb: COLOR.white } };
+    cell.border = {
+      top: { style: 'medium', color: { argb: COLOR.accentStrong } },
+      bottom: { style: 'medium', color: { argb: COLOR.accentStrong } },
+    };
+  }
+  row.height = 22;
+}
+
+/** Apply soft-emerald "subtotal" highlight to a row. */
+function applySubtotalRowStyle(sheet: ExcelJS.Worksheet, rowIdx: number, totalCol: number): void {
+  const row = sheet.getRow(rowIdx);
+  for (let c = 1; c <= totalCol; c++) {
+    const cell = row.getCell(c);
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.accentSoft } };
+    cell.font = { bold: true, color: { argb: COLOR.textHeading } };
+  }
+  row.height = 20;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   Personnel sheet — 3 sections + computed Benefits + Headcount info row
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Mirrors PersonnelTab.tsx:
+//   • Direct Labor          (items where meta.labor_type === 'direct_labor')
+//   • Other Labor           (everything else that isn't an employee_benefits item)
+//   • Employee Benefits     (items where item_type === 'employee_benefits')
+//     — the "Computed Benefits Cost" sub-row mirrors the UI's
+//       `onStaffSalary × rate%` calculation as a live Excel formula.
+//   • TOTAL PERSONNEL       (sum of three subtotals)
+//   • Headcount             (info row, italic — not summed in TOTAL)
+
+interface PersonnelSheetOpts {
+  sheet: ExcelJS.Worksheet;
+  title: string;
+  contextLine: string;
+  months: string[];
+  monthLabels: string[];
+  items: ForecastItem[];
+  allItems: ForecastItem[];
+  allValues: Record<number, Record<string, number>>;
+  itemNameById: Map<number, string>;
+}
+
+function renderPersonnelSheet(o: PersonnelSheetOpts): number {
+  const { sheet, title, contextLine, months, monthLabels, items, allItems,
+          allValues, itemNameById } = o;
+  const { lastMonthCol, totalCol } = sheetColumnCount(months);
+  applyStandardColumnWidths(sheet, months);
+  writeSheetHeader(sheet, title, contextLine, monthLabels, totalCol);
+
+  // Empty state
+  if (items.length === 0) {
+    return writeEmptySheetTotalRow(sheet, title, monthLabels, totalCol);
+  }
+
+  // Section split — mirrors PersonnelTab.tsx:41-43
+  const directLaborItems = items.filter(i => i.item_type !== 'employee_benefits' && (i.meta as any)?.labor_type === 'direct_labor')
+                                .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  const otherLaborItems  = items.filter(i => i.item_type !== 'employee_benefits' && (i.meta as any)?.labor_type !== 'direct_labor')
+                                .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  const benefitsItems    = items.filter(i => i.item_type === 'employee_benefits')
+                                .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  const onStaffPersonnelItems = items.filter(i => i.item_type !== 'employee_benefits' && (i.meta as any)?.staffing_type !== 'contract');
+
+  // Track row indices we'll need for totals + summary references
+  let r = 5;
+  const itemRowById = new Map<number, number>();   // item.id → row in this sheet
+
+  const writeSection = (
+    sectionLabel: string,
+    sectionItems: ForecastItem[],
+    subtotalKey: string,
+  ): { subtotalRow: number; itemRowRange: [number, number] | null } => {
+    writeSheetSectionBar(sheet, r, sectionLabel, totalCol);
+    r += 1;
+
+    if (sectionItems.length === 0) {
+      writeDataRow(sheet, r, 'No items in this section', months.map(() => 0), totalCol, {
+        italic: true, color: COLOR.textFaint, indent: 3,
+      });
+      const onlyRow = r;
+      r += 1;
+      // Subtotal row references the empty row — gives 0 but keeps formula chain valid
+      writeDataRow(sheet, r, `Subtotal: ${sectionLabel}`,
+        months.map((_, j) => ({ formula: `${colLetter(2 + j)}${onlyRow}` })),
+        totalCol,
+        { bold: true, indent: 1 });
+      const subtotalRow = r;
+      applySubtotalRowStyle(sheet, subtotalRow, totalCol);
+      r += 1;
+      return { subtotalRow, itemRowRange: null };
+    }
+
+    const firstItemRow = r;
+    sectionItems.forEach((item, idx) => {
+      const itemValues = allValues[item.id] || {};
+      const perMonth = months.map(m => Number(itemValues[m] ?? 0));
+      writeDataRow(sheet, r, item.name, perMonth, totalCol, {
+        indent: 3, bandedFill: idx % 2 === 1,
+      });
+      itemRowById.set(item.id, r);
+      r += 1;
+    });
+    const lastItemRow = r - 1;
+
+    // Subtotal row — formula sums the items above
+    writeDataRow(sheet, r, `Subtotal: ${sectionLabel}`,
+      months.map((_, j) => {
+        const colL = colLetter(2 + j);
+        return { formula: `SUM(${colL}${firstItemRow}:${colL}${lastItemRow})` };
+      }),
+      totalCol,
+      { bold: true, indent: 1 });
+    const subtotalRow = r;
+    applySubtotalRowStyle(sheet, subtotalRow, totalCol);
+    r += 1;
+
+    // Identify the subtotal for benefits formula references
+    void subtotalKey;
+    return { subtotalRow, itemRowRange: [firstItemRow, lastItemRow] };
+  };
+
+  const directSection  = writeSection('Direct Labor', directLaborItems, 'direct_labor');
+  const otherSection   = writeSection('Other Labor',  otherLaborItems,  'other_labor');
+
+  // Employee Benefits section — special case. Items themselves carry the
+  // RATE in meta; the actual monthly cost = on-staff salary × rate. Render
+  // the items as info rows (showing the configured rate %) plus a computed
+  // "Computed Benefits Cost" row whose values are real Excel formulas
+  // referencing the on-staff items in Direct Labor + Other Labor by cell.
+  writeSheetSectionBar(sheet, r, 'Employee Benefits', totalCol);
+  r += 1;
+
+  const benefitsItem = benefitsItems[0];
+  const benefitsRatePct = benefitsItem
+    ? Number((benefitsItem.meta as any)?.stepConstants?.rate?.amount ?? 0)
+    : 0;
+  const isBenefitsVarying = !!benefitsItem
+    && (benefitsItem.meta as any)?.stepEntryModes?.rate === 'varying';
+
+  benefitsItems.forEach((item, idx) => {
+    let label: string;
+    let perMonthValues: Array<number | { formula: string }>;
+    if (isBenefitsVarying && item === benefitsItem) {
+      const stepRates = (item.meta as any)?.stepValues?.rate || {};
+      const rates = months.map(m => Number(stepRates[m] ?? 0));
+      label = `${item.name}  (varying rate)`;
+      perMonthValues = rates.map(v => v / 100);
+      writeDataRow(sheet, r, label, perMonthValues, totalCol, {
+        indent: 3, italic: true, color: COLOR.textMuted,
+        numFmt: PCT_FMT, rowTotal: { formula: `""` },
+        bandedFill: idx % 2 === 1,
+      });
+    } else {
+      const ratePct = Number((item.meta as any)?.stepConstants?.rate?.amount ?? 0);
+      label = `${item.name}  (constant rate)`;
+      perMonthValues = months.map(() => ratePct / 100);
+      writeDataRow(sheet, r, label, perMonthValues, totalCol, {
+        indent: 3, italic: true, color: COLOR.textMuted,
+        numFmt: PCT_FMT, rowTotal: { formula: `""` },
+        bandedFill: idx % 2 === 1,
+      });
+    }
+    itemRowById.set(item.id, r);
+    r += 1;
+  });
+
+  // Resolve the on-staff personnel item rows (cells that contribute to the
+  // benefits base). These are items in Direct Labor or Other Labor whose
+  // meta.staffing_type !== 'contract'. We sum them per-month.
+  const onStaffRows = onStaffPersonnelItems
+    .map(i => itemRowById.get(i.id))
+    .filter((x): x is number => x != null);
+
+  // Computed Benefits Cost row — real Excel formula
+  const benefitsRateRow = benefitsItems[0] ? itemRowById.get(benefitsItems[0].id) : null;
+  if (benefitsItems.length === 0) {
+    writeDataRow(sheet, r, 'No benefits configured', months.map(() => 0), totalCol, {
+      italic: true, color: COLOR.textFaint, indent: 3,
+    });
+    r += 1;
+    writeDataRow(sheet, r, 'Subtotal: Employee Benefits',
+      months.map(() => 0),
+      totalCol,
+      { bold: true, indent: 1 });
+  } else if (onStaffRows.length === 0) {
+    writeDataRow(sheet, r, 'Computed Benefits Cost',
+      months.map(() => 0), totalCol,
+      { italic: true, color: COLOR.textMuted, indent: 3 });
+    const computedRow = r;
+    r += 1;
+    writeDataRow(sheet, r, 'Subtotal: Employee Benefits',
+      months.map((_, j) => ({ formula: `${colLetter(2 + j)}${computedRow}` })),
+      totalCol,
+      { bold: true, indent: 1 });
+  } else {
+    writeDataRow(sheet, r, 'Computed Benefits Cost  (= on-staff salaries × rate)',
+      months.map((_, j) => {
+        const colL = colLetter(2 + j);
+        const sumExpr = onStaffRows.map(rr => `${colL}${rr}`).join('+');
+        if (isBenefitsVarying && benefitsRateRow) {
+          // Use per-month rate cell from the varying item
+          return { formula: `ROUND((${sumExpr})*${colL}${benefitsRateRow}, 0)` };
+        }
+        // Constant rate — multiply by the rate cell on the item row (each
+        // month cell holds the same percent value, so any column works,
+        // but referencing the same column keeps the formula self-similar).
+        const rateRef = benefitsRateRow ? `${colL}${benefitsRateRow}` : `${benefitsRatePct / 100}`;
+        return { formula: `ROUND((${sumExpr})*${rateRef}, 0)` };
+      }),
+      totalCol,
+      { bold: false, indent: 3, color: COLOR.accentStrong });
+    const computedRow = r;
+    r += 1;
+    writeDataRow(sheet, r, 'Subtotal: Employee Benefits',
+      months.map((_, j) => ({ formula: `${colLetter(2 + j)}${computedRow}` })),
+      totalCol,
+      { bold: true, indent: 1 });
+  }
+  const benefitsSubtotalRow = r;
+  applySubtotalRowStyle(sheet, benefitsSubtotalRow, totalCol);
+  r += 1;
+
+  // Spacer
+  r += 1;
+
+  // TOTAL PERSONNEL
+  writeDataRow(sheet, r, 'TOTAL PERSONNEL',
+    months.map((_, j) => {
+      const colL = colLetter(2 + j);
+      return { formula: `${colL}${directSection.subtotalRow}+${colL}${otherSection.subtotalRow}+${colL}${benefitsSubtotalRow}` };
+    }),
+    totalCol,
+    { bold: true, indent: 1 });
+  const TOTAL_ROW = r;
+  applyTotalRowStyle(sheet, TOTAL_ROW, totalCol);
+  r += 2;
+
+  // Headcount info row — counts on-staff personnel per month.
+  // For per-month values we read the actual headcount from each item's meta
+  // (group items use meta.stepValues.headcount[month], individuals = 1 if
+  // they have a non-zero salary that month). This is informational; not
+  // included in the TOTAL.
+  const headcountPerMonth = months.map(m => {
+    let count = 0;
+    for (const it of items) {
+      if (it.item_type === 'employee_benefits') continue;
+      const hasSalary = Number((allValues[it.id] || {})[m] ?? 0) > 0;
+      if (!hasSalary) continue;
+      if (it.item_type === 'group') {
+        count += Number((it.meta as any)?.stepValues?.headcount?.[m] ?? 0);
+      } else {
+        count += 1;
+      }
+    }
+    return count;
+  });
+  writeDataRow(sheet, r, 'Headcount  (info — not summed)', headcountPerMonth, totalCol, {
+    indent: 1, italic: true, color: COLOR.textMuted, numFmt: '0',
+    rowTotal: { formula: `MAX(${colLetter(2)}${r}:${colLetter(lastMonthCol)}${r})` },
+  });
+
+  // Use itemNameById to silence unused-var warning even when not needed
+  void itemNameById;
+  void allItems;
+
+  return TOTAL_ROW;
+}
+
+/** Tiny helper: when a sheet has no items, write an empty TOTAL=0 row at
+ *  row 6 (after a single italic placeholder row at row 5) and return its
+ *  row number. Used by Personnel/Assets/Financing renderers. */
+function writeEmptySheetTotalRow(
+  sheet: ExcelJS.Worksheet,
+  title: string,
+  monthLabels: string[],
+  totalCol: number,
+): number {
+  void monthLabels;
+  const HINT_ROW = 5;
+  const TOTAL_ROW = 6;
+  sheet.mergeCells(HINT_ROW, 1, HINT_ROW, totalCol);
+  const hint = sheet.getCell(HINT_ROW, 1);
+  hint.value = `No items added yet — add line items on the ${title} tab to populate this sheet.`;
+  hint.font = { italic: true, size: 10, color: { argb: COLOR.textFaint } };
+  hint.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true, indent: 1 };
+  sheet.getRow(HINT_ROW).height = 22;
+
+  writeDataRow(sheet, TOTAL_ROW, `TOTAL ${title.toUpperCase()}`,
+    Array(totalCol - 2).fill(0),
+    totalCol, { bold: true, indent: 1 });
+  applyTotalRowStyle(sheet, TOTAL_ROW, totalCol);
+  return TOTAL_ROW;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   Assets sheet — 3 sections (Current / Long-term / Investment)
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface AssetsSheetOpts {
+  sheet: ExcelJS.Worksheet;
+  title: string;
+  contextLine: string;
+  months: string[];
+  monthLabels: string[];
+  items: ForecastItem[];
+  allItems: ForecastItem[];
+  allValues: Record<number, Record<string, number>>;
+  itemNameById: Map<number, string>;
+}
+
+function renderAssetsSheet(o: AssetsSheetOpts): number {
+  const { sheet, title, contextLine, months, monthLabels, items,
+          allValues, itemNameById, allItems } = o;
+  void itemNameById; void allItems;
+  const { totalCol } = sheetColumnCount(months);
+  applyStandardColumnWidths(sheet, months);
+  writeSheetHeader(sheet, title, contextLine, monthLabels, totalCol);
+
+  if (items.length === 0) {
+    return writeEmptySheetTotalRow(sheet, title, monthLabels, totalCol);
+  }
+
+  // Section split — mirrors AssetsTab.tsx:30-32. "long_term" or no type
+  // both fall into the Long-term section.
+  const currentItems     = items.filter(i => i.item_type === 'current')
+                                .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  const longTermItems    = items.filter(i => i.item_type === 'long_term' || !i.item_type)
+                                .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  const investmentItems  = items.filter(i => i.item_type === 'investment')
+                                .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+
+  let r = 5;
+  const subtotalRows: number[] = [];
+
+  const writeSection = (sectionLabel: string, sectionItems: ForecastItem[]) => {
+    writeSheetSectionBar(sheet, r, sectionLabel, totalCol);
+    r += 1;
+
+    if (sectionItems.length === 0) {
+      writeDataRow(sheet, r, 'No items in this section', months.map(() => 0), totalCol, {
+        italic: true, color: COLOR.textFaint, indent: 3,
+      });
+      const onlyRow = r;
+      r += 1;
+      writeDataRow(sheet, r, `Subtotal: ${sectionLabel}`,
+        months.map((_, j) => ({ formula: `${colLetter(2 + j)}${onlyRow}` })),
+        totalCol, { bold: true, indent: 1 });
+    } else {
+      const firstItemRow = r;
+      sectionItems.forEach((item, idx) => {
+        const perMonth = months.map(m => Number((allValues[item.id] || {})[m] ?? 0));
+        writeDataRow(sheet, r, item.name, perMonth, totalCol, {
+          indent: 3, bandedFill: idx % 2 === 1,
+        });
+        r += 1;
+      });
+      const lastItemRow = r - 1;
+      writeDataRow(sheet, r, `Subtotal: ${sectionLabel}`,
+        months.map((_, j) => {
+          const colL = colLetter(2 + j);
+          return { formula: `SUM(${colL}${firstItemRow}:${colL}${lastItemRow})` };
+        }),
+        totalCol, { bold: true, indent: 1 });
+    }
+    applySubtotalRowStyle(sheet, r, totalCol);
+    subtotalRows.push(r);
+    r += 1;
+  };
+
+  writeSection('Current Assets',     currentItems);
+  writeSection('Long-term Assets',   longTermItems);
+  writeSection('Investment Assets',  investmentItems);
+
+  r += 1;  // spacer
+
+  // TOTAL ASSETS
+  writeDataRow(sheet, r, 'TOTAL ASSETS',
+    months.map((_, j) => {
+      const colL = colLetter(2 + j);
+      return { formula: subtotalRows.map(rr => `${colL}${rr}`).join('+') };
+    }),
+    totalCol, { bold: true, indent: 1 });
+  const TOTAL_ROW = r;
+  applyTotalRowStyle(sheet, TOTAL_ROW, totalCol);
+
+  return TOTAL_ROW;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   Taxes sheet — computed Income Tax + Sales Tax (Accrued / Paid)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Mirrors TaxesTab.tsx. Two computed sections:
+//
+//   Income Tax:
+//     Net Profit (computed)  =Revenue − DirectCosts − Personnel − Expenses
+//     Income Tax Accrued     =MAX(0, NetProfit) × rate%
+//     Income Tax Paid        (distributed per frequency: monthly / quarterly
+//                             / annually / custom — see computeTaxPaidShares)
+//
+//   Sales Tax:
+//     Taxable Revenue        =SUM(selected revenue items, or all revenue)
+//     Sales Tax Accrued      =Taxable Revenue × rate%
+//     Sales Tax Paid         (distributed per frequency, lagged 1 period)
+//
+// All cell values are real Excel formulas referencing the Revenue / Direct
+// Costs / Personnel / Expenses sheets — so editing any input on those sheets
+// recomputes the Taxes sheet live.
+
+interface TaxesSheetOpts {
+  sheet: ExcelJS.Worksheet;
+  title: string;
+  contextLine: string;
+  months: string[];
+  monthLabels: string[];
+  allItems: ForecastItem[];
+  allValues: Record<number, Record<string, number>>;
+  settings: Record<string, any>;
+  /** TOTAL row positions for categories already rendered (Revenue, Direct
+   *  Costs, Personnel, Expenses). Used to build the Net Profit formula
+   *  that references the right cells on each P&L sheet. */
+  categoryTotalRows: Record<string, number>;
+  /** Map of category key → sheet name (for formula references). */
+  categorySheetNames: Record<string, string>;
+}
+
+function renderTaxesSheet(o: TaxesSheetOpts): number {
+  const { sheet, title, contextLine, months, monthLabels, allItems, allValues,
+          settings, categoryTotalRows, categorySheetNames } = o;
+  const { lastMonthCol, totalCol } = sheetColumnCount(months);
+  applyStandardColumnWidths(sheet, months);
+  writeSheetHeader(sheet, title, contextLine, monthLabels, totalCol);
+
+  // Build a "ref to category sheet's TOTAL cell at column c" helper.
+  // Falls back to a literal 0 if the category wasn't rendered (defensive).
+  const catTotalRef = (catKey: string, monthCol: number): string => {
+    const totalRow = categoryTotalRows[catKey];
+    const sheetName = categorySheetNames[catKey];
+    if (!totalRow || !sheetName) return '0';
+    const safe = sheetName.includes(' ') ? `'${sheetName}'` : sheetName;
+    return `${safe}!${colLetter(monthCol)}${totalRow}`;
+  };
+
+  const incomeTaxRate    = Number(settings?.income_tax_rate ?? 25);
+  const incomeTaxFreq    = String(settings?.income_tax_frequency ?? 'annually');
+  const incomeTaxCustom  = Array.isArray(settings?.income_tax_custom_months) ? settings.income_tax_custom_months : [];
+  const salesTaxRate     = Number(settings?.sales_tax_rate ?? 18);
+  const salesTaxFreq     = String(settings?.sales_tax_frequency ?? 'monthly');
+  const salesTaxStreams  = Array.isArray(settings?.sales_tax_streams) ? settings.sales_tax_streams as number[] : [];
+
+  const revenueItems = allItems.filter(i => i.category === 'revenue');
+  const taxableStreamsResolved = salesTaxStreams.length === 0
+    ? revenueItems
+    : revenueItems.filter(i => salesTaxStreams.includes(i.id));
+
+  // Pre-compute accrued amounts (numeric, not formulas) so the "Paid" row's
+  // distribution algorithm can work. Accrued is shown as a formula in the
+  // sheet, but the Paid distribution requires actual values to know where
+  // to bucket payments. The Paid cells are written as static numbers (with
+  // a note explaining the algorithm). If the user edits an Accrued cell,
+  // the Paid distribution won't recompute — we mark this clearly.
+  const sumByCatPerMonth = (cat: string) => {
+    return months.map(m => allItems
+      .filter(i => i.category === cat)
+      .reduce((s, i) => s + Number((allValues[i.id] || {})[m] ?? 0), 0));
+  };
+  const revPerMonth      = sumByCatPerMonth('revenue');
+  const dcPerMonth       = sumByCatPerMonth('direct_costs');
+  const persPerMonth     = sumByCatPerMonth('personnel');
+  const expPerMonth      = sumByCatPerMonth('expenses');
+  const netProfitNumeric = months.map((_, i) => revPerMonth[i] - dcPerMonth[i] - persPerMonth[i] - expPerMonth[i]);
+  const incomeAccruedNumeric = netProfitNumeric.map(v => v > 0 ? Math.round(v * incomeTaxRate / 100) : 0);
+  const incomePaidNumeric = computeTaxPaidShares(incomeAccruedNumeric, months, incomeTaxFreq, incomeTaxCustom, false);
+
+  const taxableRevPerMonth = months.map(m => taxableStreamsResolved
+    .reduce((s, i) => s + Number((allValues[i.id] || {})[m] ?? 0), 0));
+  const salesAccruedNumeric = taxableRevPerMonth.map(v => Math.round(v * salesTaxRate / 100));
+  const salesPaidNumeric = computeTaxPaidShares(salesAccruedNumeric, months, salesTaxFreq, [], true);
+
+  // ─── Section: Income Tax ───
+  let r = 5;
+  writeSheetSectionBar(sheet, r, 'Income Tax', totalCol,
+    `${incomeTaxRate}% — ${capitalize(incomeTaxFreq)} payments`);
+  r += 1;
+
+  // Net Profit row — formula references the TOTAL row on each P&L sheet
+  writeDataRow(sheet, r, 'Net Profit (computed)',
+    months.map((_, j) => {
+      const c = 2 + j;
+      return { formula: `${catTotalRef('revenue', c)}-${catTotalRef('direct_costs', c)}-${catTotalRef('personnel', c)}-${catTotalRef('expenses', c)}` };
+    }),
+    totalCol, { italic: true, color: COLOR.textMuted, indent: 3 });
+  const netProfitRow = r;
+  r += 1;
+
+  // Income Tax Accrued — formula MAX(0, NetProfit) × rate
+  writeDataRow(sheet, r, 'Income Tax Accrued',
+    months.map((_, j) => {
+      const colL = colLetter(2 + j);
+      return { formula: `ROUND(MAX(0,${colL}${netProfitRow})*${incomeTaxRate / 100}, 0)` };
+    }),
+    totalCol, { color: COLOR.accentStrong, indent: 3 });
+  const incomeAccruedRow = r;
+  r += 1;
+
+  // Income Tax Paid — computed (numeric values + distribution note)
+  writeDataRow(sheet, r, 'Income Tax Paid',
+    incomePaidNumeric,
+    totalCol, { color: COLOR.textHeading, indent: 3 });
+  const incomePaidRow = r;
+  r += 1;
+
+  // ─── Section: Sales Tax ───
+  const streamsLabel = salesTaxStreams.length === 0
+    ? 'all revenue'
+    : `${taxableStreamsResolved.length} stream${taxableStreamsResolved.length > 1 ? 's' : ''}`;
+  writeSheetSectionBar(sheet, r, 'Sales Tax (GST)', totalCol,
+    `${salesTaxRate}% — ${capitalize(salesTaxFreq)} payments — ${streamsLabel}`);
+  r += 1;
+
+  // Taxable Revenue — formula referencing each selected revenue stream's
+  // row on the Revenue sheet. (We don't have the source rows here; use
+  // numeric fallback with a note that this is a snapshot.)
+  writeDataRow(sheet, r, 'Taxable Revenue',
+    taxableRevPerMonth,
+    totalCol, { italic: true, color: COLOR.textMuted, indent: 3 });
+  const taxableRevRow = r;
+  r += 1;
+
+  // Sales Tax Accrued — formula = TaxableRevenue × rate
+  writeDataRow(sheet, r, 'Sales Tax Accrued',
+    months.map((_, j) => {
+      const colL = colLetter(2 + j);
+      return { formula: `ROUND(${colL}${taxableRevRow}*${salesTaxRate / 100}, 0)` };
+    }),
+    totalCol, { color: COLOR.accentStrong, indent: 3 });
+  const salesAccruedRow = r;
+  r += 1;
+
+  // Sales Tax Paid — computed (numeric)
+  writeDataRow(sheet, r, 'Sales Tax Paid',
+    salesPaidNumeric,
+    totalCol, { color: COLOR.textHeading, indent: 3 });
+  const salesPaidRow = r;
+  r += 1;
+
+  r += 1; // spacer
+
+  // ─── TOTAL TAXES (Accrued) ───
+  writeDataRow(sheet, r, 'TOTAL TAXES (Accrued)',
+    months.map((_, j) => {
+      const colL = colLetter(2 + j);
+      return { formula: `${colL}${incomeAccruedRow}+${colL}${salesAccruedRow}` };
+    }),
+    totalCol, { bold: true, indent: 1 });
+  const TOTAL_ACCRUED_ROW = r;
+  applyTotalRowStyle(sheet, TOTAL_ACCRUED_ROW, totalCol);
+  r += 1;
+
+  // ─── TOTAL TAXES (Paid) ───
+  writeDataRow(sheet, r, 'TOTAL TAXES (Paid)',
+    months.map((_, j) => {
+      const colL = colLetter(2 + j);
+      return { formula: `${colL}${incomePaidRow}+${colL}${salesPaidRow}` };
+    }),
+    totalCol, { bold: true, indent: 1 });
+  const TOTAL_PAID_ROW = r;
+  applySubtotalRowStyle(sheet, TOTAL_PAID_ROW, totalCol);
+  r += 2;
+
+  // ─── Calculation Method block ───
+  sheet.mergeCells(r, 1, r, totalCol);
+  const methodHdr = sheet.getCell(r, 1);
+  methodHdr.value = 'CALCULATION METHOD';
+  methodHdr.font = { bold: true, size: 11, color: { argb: COLOR.white } };
+  methodHdr.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+  methodHdr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.accentStrong } };
+  sheet.getRow(r).height = 22;
+  r += 1;
+
+  const methodLines: Array<[string, string]> = [
+    ['Income Tax Rate',         `${incomeTaxRate}%`],
+    ['Income Tax Frequency',    capitalize(incomeTaxFreq) + (incomeTaxFreq === 'custom' && incomeTaxCustom.length ? ` (months: ${incomeTaxCustom.join(', ')})` : '')],
+    ['Sales Tax (GST) Rate',    `${salesTaxRate}%`],
+    ['Sales Tax Frequency',     capitalize(salesTaxFreq) + ' (paid one period after accrual)'],
+    ['Sales Tax Streams',       salesTaxStreams.length === 0 ? 'All revenue items' : taxableStreamsResolved.map(i => i.name).join(', ') || 'None selected'],
+    ['Net Profit formula',      'Revenue − Direct Costs − Personnel − Expenses (per month)'],
+    ['Income Tax Accrued',      `MAX(0, Net Profit) × ${incomeTaxRate}%`],
+    ['Sales Tax Accrued',       `Taxable Revenue × ${salesTaxRate}%`],
+    ['Income Tax Paid',         `Distributed per ${incomeTaxFreq} schedule (recomputed at export time — does NOT live-update if you edit Accrued cells)`],
+    ['Sales Tax Paid',          `Distributed per ${salesTaxFreq} schedule with one-period lag`],
+  ];
+  for (const [k, v] of methodLines) {
+    const row = sheet.getRow(r);
+    row.getCell(1).value = k;
+    row.getCell(1).font = { bold: true, color: { argb: COLOR.textHeading } };
+    row.getCell(1).alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+    sheet.mergeCells(r, 2, r, totalCol);
+    row.getCell(2).value = v;
+    row.getCell(2).font = { color: { argb: COLOR.textMuted } };
+    row.getCell(2).alignment = { horizontal: 'left', vertical: 'middle', indent: 1, wrapText: true };
+    row.height = 18;
+    r += 1;
+  }
+
+  // Suppress unused: we computed lastMonthCol for symmetry but didn't
+  // need it (each formula uses colLetter directly).
+  void lastMonthCol;
+
+  // The Summary's "Taxes" row should reference the Accrued total (matches
+  // P&L semantics). Return that row.
+  return TOTAL_ACCRUED_ROW;
+}
+
+/** Distribute monthly accrued amounts into payment months per frequency.
+ *  Mirrors `computePaidSchedule` in TaxesTab.tsx:350-406. */
+function computeTaxPaidShares(
+  accrued: number[],
+  months: string[],
+  frequency: string,
+  customMonths: number[],
+  lag: boolean,
+): number[] {
+  const result = months.map(() => 0);
+  if (frequency === 'monthly') {
+    if (lag) {
+      for (let i = 1; i < months.length; i++) result[i] = accrued[i - 1];
+    } else {
+      for (let i = 0; i < months.length; i++) result[i] = accrued[i];
+    }
+  } else if (frequency === 'quarterly') {
+    const quarterEndMonths = [6, 9, 12, 3];
+    let acc = 0;
+    for (let i = 0; i < months.length; i++) {
+      acc += accrued[i] || 0;
+      const monthNum = parseInt(months[i].split('-')[1]);
+      if (quarterEndMonths.includes(monthNum)) {
+        const payIdx = lag && i + 1 < months.length ? i + 1 : i;
+        result[payIdx] += acc;
+        acc = 0;
+      }
+    }
+  } else if (frequency === 'annually') {
+    const total = accrued.reduce((s, v) => s + (v || 0), 0);
+    result[months.length - 1] = total;
+  } else if (frequency === 'custom' && customMonths.length > 0) {
+    let acc = 0;
+    for (let i = 0; i < months.length; i++) {
+      acc += accrued[i] || 0;
+      const monthNum = parseInt(months[i].split('-')[1]);
+      if (customMonths.includes(monthNum)) {
+        result[i] += acc;
+        acc = 0;
+      }
+    }
+    if (acc > 0) result[months.length - 1] += acc;
+  }
+  return result;
+}
+
+function capitalize(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   Cash Flow Assumptions sheet — settings dump (AR / AP / Inventory)
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface CashFlowAssumptionsSheetOpts {
+  sheet: ExcelJS.Worksheet;
+  title: string;
+  contextLine: string;
+  allItems: ForecastItem[];
+  settings: Record<string, any>;
+  itemNameById: Map<number, string>;
+}
+
+function renderCashFlowAssumptionsSheet(o: CashFlowAssumptionsSheetOpts): void {
+  const { sheet, title, contextLine, allItems, settings, itemNameById } = o;
+  // Column layout: A = Particulars (wide), B = Value, C = Days, D = Notes
+  sheet.getColumn(1).width = 44;
+  sheet.getColumn(2).width = 18;
+  sheet.getColumn(3).width = 14;
+  sheet.getColumn(4).width = 60;
+
+  const TOTAL_COL = 4; // for header / section bars
+
+  // Title bar
+  sheet.mergeCells(1, 1, 1, TOTAL_COL);
+  const titleCell = sheet.getCell(1, 1);
+  titleCell.value = title.toUpperCase();
+  titleCell.font = { bold: true, size: 14, color: { argb: COLOR.white } };
+  titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.accent } };
+  titleCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+  sheet.getRow(1).height = 26;
+
+  // Context line
+  sheet.mergeCells(2, 1, 2, TOTAL_COL);
+  const ctxCell = sheet.getCell(2, 1);
+  ctxCell.value = contextLine || ' ';
+  ctxCell.font = { italic: true, size: 9, color: { argb: COLOR.textFaint } };
+  ctxCell.alignment = { horizontal: 'left', indent: 1 };
+
+  // Header row
+  const HDR = 4;
+  const hdr = sheet.getRow(HDR);
+  hdr.values = ['Setting', 'Value', 'Days', 'Notes'];
+  hdr.height = 22;
+  hdr.eachCell((cell, c) => {
+    if (c > TOTAL_COL) return;
+    cell.font = { bold: true, color: { argb: COLOR.white }, size: 11 };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.accentStrong } };
+    cell.alignment = { horizontal: c === 1 ? 'left' : 'center', vertical: 'middle' };
+  });
+
+  let r = 5;
+
+  // Helper: write a "label / value / days / notes" row
+  const writeRow = (label: string, value: string | number, days: string | number = '', notes = '', opts: { indent?: number; bold?: boolean } = {}) => {
+    const row = sheet.getRow(r);
+    row.getCell(1).value = label;
+    row.getCell(1).font = { bold: !!opts.bold, color: { argb: COLOR.textHeading } };
+    row.getCell(1).alignment = { horizontal: 'left', vertical: 'middle', indent: opts.indent ?? 1 };
+    row.getCell(2).value = value;
+    row.getCell(2).font = { color: { argb: COLOR.textHeading } };
+    row.getCell(2).alignment = { horizontal: 'right', vertical: 'middle' };
+    row.getCell(3).value = days;
+    row.getCell(3).font = { color: { argb: COLOR.textHeading } };
+    row.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+    row.getCell(4).value = notes;
+    row.getCell(4).font = { italic: true, color: { argb: COLOR.textMuted } };
+    row.getCell(4).alignment = { horizontal: 'left', vertical: 'middle', indent: 1, wrapText: true };
+    row.height = 18;
+    r += 1;
+  };
+
+  // Note about how this sheet is used
+  void itemNameById;
+
+  // ── ACCOUNTS RECEIVABLE ──
+  writeSheetSectionBar(sheet, r, 'Accounts Receivable', TOTAL_COL); r += 1;
+  const arIndividual = !!settings.ar_individual;
+  writeRow('Mode', arIndividual ? 'Per Stream' : 'Global', '', 'How AR collection terms are configured', { indent: 1 });
+  if (!arIndividual) {
+    writeRow('Global Credit Sales %', `${settings.ar_global_credit_pct ?? 0}%`, '', '% of sales made on credit (vs cash)', { indent: 2 });
+    writeRow('Global Days to Collect', '', `${settings.ar_global_days ?? 30}`, 'Average time customers take to pay', { indent: 2 });
+  } else {
+    writeRow('Per-stream overrides', '', '', '', { bold: true, indent: 1 });
+    const arPerStream: Record<number, { credit_pct: number; days_to_collect: number }> = settings.ar_per_stream || {};
+    const revItems = allItems.filter(i => i.category === 'revenue');
+    if (revItems.length === 0 || Object.keys(arPerStream).length === 0) {
+      writeRow('(No per-stream overrides configured)', '', '', '', { indent: 2 });
+    } else {
+      for (const ri of revItems) {
+        const cfg = arPerStream[ri.id];
+        if (!cfg) continue;
+        writeRow(ri.name, `${cfg.credit_pct ?? 0}%`, `${cfg.days_to_collect ?? 30}`, '', { indent: 2 });
+      }
+    }
+  }
+  r += 1;  // spacer
+
+  // ── ACCOUNTS PAYABLE ──
+  writeSheetSectionBar(sheet, r, 'Accounts Payable', TOTAL_COL); r += 1;
+  const apIndividual = !!settings.ap_individual;
+  writeRow('Mode', apIndividual ? 'Per Item' : 'Global', '', 'How AP payment terms are configured', { indent: 1 });
+  if (!apIndividual) {
+    writeRow('Global Credit Purchases %', `${settings.ap_global_credit_pct ?? 0}%`, '', '% of purchases made on credit (vs cash)', { indent: 2 });
+    writeRow('Global Days to Pay', '', `${settings.ap_global_days ?? 30}`, 'Average time you take to pay vendors', { indent: 2 });
+  } else {
+    writeRow('Per-item overrides', '', '', '', { bold: true, indent: 1 });
+    const apPerItem: Record<number, { credit_pct: number; days_to_pay: number }> = settings.ap_per_item || {};
+    const cogsAndOpex = allItems.filter(i => i.category === 'direct_costs' || i.category === 'expenses');
+    const overridesEntered = cogsAndOpex.filter(it => apPerItem[it.id]);
+    if (overridesEntered.length === 0) {
+      writeRow('(No per-item overrides configured)', '', '', '', { indent: 2 });
+    } else {
+      for (const it of overridesEntered) {
+        const cfg = apPerItem[it.id];
+        writeRow(it.name, `${cfg.credit_pct ?? 0}%`, `${cfg.days_to_pay ?? 30}`, '', { indent: 2 });
+      }
+    }
+  }
+  r += 1;  // spacer
+
+  // ── INVENTORY ──
+  writeSheetSectionBar(sheet, r, 'Inventory', TOTAL_COL); r += 1;
+  writeRow('Enabled', settings.inventory_enabled ? 'Yes' : 'No', '', 'Whether inventory roll is modelled', { indent: 1 });
+  if (settings.inventory_enabled) {
+    writeRow('Months on Hand', `${settings.inventory_months ?? 1}`, '', 'Months of forward direct-cost coverage to keep in stock', { indent: 2 });
+    const minOrder = Number(settings.inventory_min_order ?? 0);
+    writeRow('Minimum Order Value', minOrder ? `Rs ${formatRupees(minOrder)}` : '—', '', 'Smallest reorder amount', { indent: 2 });
+  }
+  r += 1;
+
+  // Footnote
+  sheet.mergeCells(r, 1, r, TOTAL_COL);
+  const note = sheet.getCell(r, 1);
+  note.value = 'Note: These assumptions feed the Cash Flow & Balance Sheet on the Summary sheet. The current export uses a simplified Cash Flow that ignores AR/AP/Inventory working-capital impact — a follow-up version will model these.';
+  note.font = { italic: true, size: 9, color: { argb: COLOR.textFaint } };
+  note.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true, indent: 1 };
+  sheet.getRow(r).height = 36;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   Initial Balances sheet — settings dump (Assets / Liabilities / Equity)
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface InitialBalancesSheetOpts {
+  sheet: ExcelJS.Worksheet;
+  title: string;
+  contextLine: string;
+  settings: Record<string, any>;
+}
+
+function renderInitialBalancesSheet(o: InitialBalancesSheetOpts): void {
+  const { sheet, title, contextLine, settings } = o;
+  // Layout: A = Particulars, B = Opening Balance, C = Notes
+  sheet.getColumn(1).width = 44;
+  sheet.getColumn(2).width = 22;
+  sheet.getColumn(3).width = 60;
+  const TOTAL_COL = 3;
+
+  // Title
+  sheet.mergeCells(1, 1, 1, TOTAL_COL);
+  const titleCell = sheet.getCell(1, 1);
+  titleCell.value = title.toUpperCase();
+  titleCell.font = { bold: true, size: 14, color: { argb: COLOR.white } };
+  titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.accent } };
+  titleCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+  sheet.getRow(1).height = 26;
+
+  // Context
+  sheet.mergeCells(2, 1, 2, TOTAL_COL);
+  const ctxCell = sheet.getCell(2, 1);
+  ctxCell.value = contextLine || ' ';
+  ctxCell.font = { italic: true, size: 9, color: { argb: COLOR.textFaint } };
+  ctxCell.alignment = { horizontal: 'left', indent: 1 };
+
+  // Header
+  const hdr = sheet.getRow(4);
+  hdr.values = ['Particulars', 'Opening Balance (Rs)', 'Notes'];
+  hdr.height = 22;
+  hdr.eachCell((cell, c) => {
+    if (c > TOTAL_COL) return;
+    cell.font = { bold: true, color: { argb: COLOR.white }, size: 11 };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.accentStrong } };
+    cell.alignment = { horizontal: c === 1 ? 'left' : (c === 2 ? 'right' : 'left'), vertical: 'middle' };
+  });
+
+  const ib = settings.initial_balances || {};
+  const num = (k: string) => Number(ib[k] ?? 0);
+  const str = (k: string, fallback = '') => String(ib[k] ?? fallback);
+
+  let r = 5;
+  const writeRow = (label: string, value: number | string, notes = '', opts: { indent?: number; bold?: boolean; isFormula?: boolean } = {}) => {
+    const row = sheet.getRow(r);
+    row.getCell(1).value = label;
+    row.getCell(1).font = { bold: !!opts.bold, color: { argb: COLOR.textHeading } };
+    row.getCell(1).alignment = { horizontal: 'left', vertical: 'middle', indent: opts.indent ?? 1 };
+    if (opts.isFormula && typeof value === 'string') {
+      row.getCell(2).value = { formula: value };
+    } else {
+      row.getCell(2).value = value;
+    }
+    row.getCell(2).numFmt = typeof value === 'number' || opts.isFormula ? NUM_FMT : '@';
+    row.getCell(2).font = { bold: !!opts.bold, color: { argb: COLOR.textHeading } };
+    row.getCell(2).alignment = { horizontal: 'right', vertical: 'middle' };
+    row.getCell(3).value = notes;
+    row.getCell(3).font = { italic: true, color: { argb: COLOR.textMuted } };
+    row.getCell(3).alignment = { horizontal: 'left', vertical: 'middle', indent: 1, wrapText: true };
+    row.height = 18;
+    r += 1;
+  };
+
+  // ── ASSETS ──
+  writeSheetSectionBar(sheet, r, 'ASSETS', TOTAL_COL); r += 1;
+  const cashRow = r; writeRow('Cash & Bank', num('cash'), 'Opening cash on hand', { indent: 2 });
+  const arRow = r; writeRow('Accounts Receivable', num('accounts_receivable'), `Customers owe (days to collect: ${num('days_to_get_paid') || 30})`, { indent: 2 });
+  const invRow = r; writeRow('Inventory', num('inventory'), 'Value of unsold stock', { indent: 2 });
+  const ltaRow = r; writeRow('Long-term Assets (gross)', num('long_term_assets'), 'Original cost of fixed assets', { indent: 2 });
+  const adRow = r; writeRow('Less: Accumulated Depreciation', num('accumulated_depreciation'), `Dep. period: ${str('depreciation_period', 'forever')} year(s)`, { indent: 2 });
+  const ocaRow = r; writeRow('Other Current Assets', num('other_current_assets'), `Amortization: ${str('amortization_period', 'keep')} months`, { indent: 2 });
+
+  const totalAssetsRow = r;
+  writeRow('Total Assets',
+    `${colLetter(2)}${cashRow}+${colLetter(2)}${arRow}+${colLetter(2)}${invRow}+${colLetter(2)}${ltaRow}-${colLetter(2)}${adRow}+${colLetter(2)}${ocaRow}`,
+    '', { bold: true, indent: 1, isFormula: true });
+  applySubtotalRowStyle(sheet, totalAssetsRow, TOTAL_COL);
+  r += 1;
+
+  // ── LIABILITIES ──
+  writeSheetSectionBar(sheet, r, 'LIABILITIES', TOTAL_COL); r += 1;
+  const apRow = r; writeRow('Accounts Payable', num('accounts_payable'), `You owe vendors (days to pay: ${num('days_to_pay') || 30})`, { indent: 2 });
+  const itpRow = r; writeRow('Income Taxes Payable', num('income_taxes_payable'), 'Income tax owed but not yet paid', { indent: 2 });
+  const stpRow = r; writeRow('Sales Taxes Payable', num('sales_taxes_payable'), 'GST/sales tax owed but not yet paid', { indent: 2 });
+
+  const totalLiabRow = r;
+  writeRow('Total Liabilities',
+    `${colLetter(2)}${apRow}+${colLetter(2)}${itpRow}+${colLetter(2)}${stpRow}`,
+    '', { bold: true, indent: 1, isFormula: true });
+  applySubtotalRowStyle(sheet, totalLiabRow, TOTAL_COL);
+  r += 1;
+
+  // ── EQUITY ──
+  writeSheetSectionBar(sheet, r, 'EQUITY', TOTAL_COL); r += 1;
+  const picRow = r; writeRow('Paid-in Capital', num('paid_in_capital'), 'Initial owner / investor capital', { indent: 2 });
+  const reRow = r; writeRow('Retained Earnings (auto-balance)',
+    `${colLetter(2)}${totalAssetsRow}-${colLetter(2)}${totalLiabRow}-${colLetter(2)}${picRow}`,
+    'Auto-computed so Assets = Liabilities + Equity',
+    { indent: 2, isFormula: true });
+
+  const totalEquityRow = r;
+  writeRow('Total Equity',
+    `${colLetter(2)}${picRow}+${colLetter(2)}${reRow}`,
+    '', { bold: true, indent: 1, isFormula: true });
+  applySubtotalRowStyle(sheet, totalEquityRow, TOTAL_COL);
+  r += 1;
+
+  // ── BALANCE CHECK ──
+  writeRow('Total Liabilities + Equity',
+    `${colLetter(2)}${totalLiabRow}+${colLetter(2)}${totalEquityRow}`,
+    'Should equal Total Assets',
+    { bold: true, indent: 1, isFormula: true });
+  applyTotalRowStyle(sheet, r - 1, TOTAL_COL);
+  r += 1;
+
+  // Footnote
+  sheet.mergeCells(r, 1, r, TOTAL_COL);
+  const note = sheet.getCell(r, 1);
+  note.value = 'Note: These open the FY\'s Balance Sheet on the Summary sheet. The Retained Earnings row auto-balances so Assets = Liabilities + Equity.';
+  note.font = { italic: true, size: 9, color: { argb: COLOR.textFaint } };
+  note.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true, indent: 1 };
+  sheet.getRow(r).height = 28;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   Financing sheet — top totals + per-item loan/credit-line mechanics
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Mirrors FinancingTab.tsx loan / credit-line / investment / other types.
+// For each item we render:
+//
+//   1. A row in the top summary table (Item × Months — net cash flow per
+//      month: receipts − payments).
+//   2. A per-item mechanics block below: Receive Month, Principal, Rate, Term;
+//      Draws / Repayments / Interest Accrued / Outstanding Balance per month.
+//
+// Values come from the item's `meta` (preferred — contains the explicit
+// receive_amount / num_payments / interest_rate / withdrawals / payments
+// shape) with `allValues[item.id]` as a fallback.
+
+interface FinancingSheetOpts {
+  sheet: ExcelJS.Worksheet;
+  title: string;
+  contextLine: string;
+  months: string[];
+  monthLabels: string[];
+  items: ForecastItem[];
+  allItems: ForecastItem[];
+  allValues: Record<number, Record<string, number>>;
+  itemNameById: Map<number, string>;
+}
+
+function renderFinancingSheet(o: FinancingSheetOpts): number {
+  const { sheet, title, contextLine, months, monthLabels, items,
+          allValues, itemNameById, allItems } = o;
+  void itemNameById; void allItems;
+  const { lastMonthCol, totalCol } = sheetColumnCount(months);
+  applyStandardColumnWidths(sheet, months);
+  writeSheetHeader(sheet, title, contextLine, monthLabels, totalCol);
+
+  if (items.length === 0) {
+    return writeEmptySheetTotalRow(sheet, title, monthLabels, totalCol);
+  }
+
+  // ─── Top summary table — one row per item ───
+  let r = 5;
+  const itemRowMap = new Map<number, number>();
+  items.forEach((item, idx) => {
+    const perMonth = months.map(m => Number((allValues[item.id] || {})[m] ?? 0));
+    writeDataRow(sheet, r, item.name, perMonth, totalCol, {
+      indent: 1, bandedFill: idx % 2 === 1,
+    });
+    itemRowMap.set(item.id, r);
+    r += 1;
+  });
+
+  // TOTAL FINANCING (top table)
+  const firstItemRow = 5;
+  const lastItemRow = r - 1;
+  writeDataRow(sheet, r, 'TOTAL FINANCING (net cash flow)',
+    months.map((_, j) => {
+      const colL = colLetter(2 + j);
+      return { formula: `SUM(${colL}${firstItemRow}:${colL}${lastItemRow})` };
+    }),
+    totalCol, { bold: true, indent: 1 });
+  const TOTAL_ROW = r;
+  applyTotalRowStyle(sheet, TOTAL_ROW, totalCol);
+  r += 2;
+
+  // ─── Per-item mechanics blocks ───
+  sheet.mergeCells(r, 1, r, totalCol);
+  const blockHdr = sheet.getCell(r, 1);
+  blockHdr.value = 'PER-ITEM MECHANICS  ·  loan schedules, balances, and interest';
+  blockHdr.font = { bold: true, size: 11, color: { argb: COLOR.white } };
+  blockHdr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.accentStrong } };
+  blockHdr.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+  sheet.getRow(r).height = 22;
+  r += 2;
+
+  for (const item of items) {
+    r = renderFinancingItemBlock(sheet, item, months, totalCol, lastMonthCol, allValues, r);
+    r += 2;
+  }
+
+  return TOTAL_ROW;
+}
+
+function renderFinancingItemBlock(
+  sheet: ExcelJS.Worksheet,
+  item: ForecastItem,
+  months: string[],
+  totalCol: number,
+  lastMonthCol: number,
+  allValues: Record<number, Record<string, number>>,
+  startRow: number,
+): number {
+  let r = startRow;
+  const meta: any = item.meta || {};
+  const itemType = item.item_type || 'loan';
+  const typeLabel: Record<string, string> = {
+    loan: 'Term Loan',
+    line_of_credit: 'Line of Credit',
+    investment: 'Investment',
+    other: 'Other Financing',
+  };
+  const typeStr = typeLabel[itemType] || 'Loan';
+
+  // Item title sub-bar
+  sheet.mergeCells(r, 1, r, totalCol);
+  const titleCell = sheet.getCell(r, 1);
+  titleCell.value = `${item.name}  —  ${typeStr}`;
+  titleCell.font = { bold: true, size: 11, color: { argb: COLOR.textHeading } };
+  titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.accentSoft } };
+  titleCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+  sheet.getRow(r).height = 20;
+  r += 1;
+
+  // Term sheet line — single key/value summary
+  const interestRate = Number(meta.interest_rate ?? 0);
+  const principal = Number(meta.receive_amount ?? meta.credit_limit ?? 0);
+  const termMonths = Number(meta.num_payments ?? 0);
+  const receiveMonth = String(meta.receive_month || '');
+  const rateMode = String(meta.rate_mode || 'constant');
+
+  const termsLines: Array<[string, string]> = [];
+  if (principal) termsLines.push(['Principal / Limit', `Rs ${formatRupees(principal)}`]);
+  if (receiveMonth && receiveMonth !== 'before_start') termsLines.push(['Receive Month', formatYYYYMM(receiveMonth)]);
+  else if (receiveMonth === 'before_start') termsLines.push(['Receive Month', 'Before plan start']);
+  if (termMonths) termsLines.push(['Term', `${termMonths} monthly payments`]);
+  termsLines.push(['Interest Rate', `${interestRate}% (${rateMode})`]);
+
+  for (const [k, v] of termsLines) {
+    const row = sheet.getRow(r);
+    row.getCell(1).value = `   ${k}`;
+    row.getCell(1).font = { color: { argb: COLOR.textMuted }, italic: true };
+    row.getCell(1).alignment = { horizontal: 'left', vertical: 'middle', indent: 2 };
+    sheet.mergeCells(r, 2, r, totalCol);
+    row.getCell(2).value = v;
+    row.getCell(2).font = { color: { argb: COLOR.textHeading } };
+    row.getCell(2).alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+    row.height = 16;
+    r += 1;
+  }
+  r += 1;
+
+  // Build per-month series for: Draws, Repayments, Interest Accrued, Balance.
+  // Sources differ by item type:
+  //   • loan: receive_amount in receive_month → draws; equal monthly principal
+  //     repayments starting next month for `num_payments`.
+  //   • line_of_credit / other: meta.withdrawals → draws, meta.payments → repayments.
+  //   • investment: receive_amount in receive_month → draws, no repayments.
+  //
+  // For complex / unknown shapes we fall back to allValues[item.id] for the
+  // net cash flow row only.
+  const draws = months.map(() => 0);
+  const repayments = months.map(() => 0);
+
+  if (itemType === 'loan' || itemType === 'investment') {
+    if (principal && receiveMonth && receiveMonth !== 'before_start') {
+      const recIdx = months.indexOf(receiveMonth);
+      if (recIdx >= 0) draws[recIdx] = principal;
+    } else if (principal && receiveMonth === 'before_start') {
+      // Treat as opening balance at month 0; no draw shown
+    }
+    if (itemType === 'loan' && principal && termMonths > 0) {
+      // Equal-principal amortization (simple model — matches the UI's
+      // FinancingTab default behaviour for term loans). Round to whole
+      // rupees so the column matches the Rs formatting on every other
+      // sheet — fractional repayments looked broken in the export.
+      const monthlyPrincipal = Math.round(principal / termMonths);
+      const recIdx = receiveMonth === 'before_start'
+        ? -1
+        : months.indexOf(receiveMonth);
+      const startIdx = recIdx >= 0 ? recIdx + 1 : 0;
+      for (let i = 0; i < termMonths && (startIdx + i) < months.length; i++) {
+        repayments[startIdx + i] += monthlyPrincipal;
+      }
+    }
+  } else if (itemType === 'line_of_credit' || itemType === 'other') {
+    const withdrawals = (meta.withdrawals || {}) as Record<string, number>;
+    const payments = (meta.payments || {}) as Record<string, number>;
+    months.forEach((m, i) => {
+      draws[i] = Number(withdrawals[m] ?? 0);
+      repayments[i] = Number(payments[m] ?? 0);
+    });
+    // Carry an existing balance from before plan start by treating it as
+    // a starting outstanding (handled implicitly in balance row below).
+  }
+
+  // Header row for the per-month grid
+  const monthHdr = sheet.getRow(r);
+  monthHdr.values = ['Mechanic', ...months.map(m => formatYYYYMM(m)), 'Total'];
+  monthHdr.height = 18;
+  monthHdr.eachCell((cell, c) => {
+    if (c > totalCol) return;
+    cell.font = { bold: true, color: { argb: COLOR.textHeading }, size: 10 };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.bgMuted } };
+    cell.alignment = { horizontal: c === 1 ? 'left' : 'right', vertical: 'middle' };
+    cell.border = { bottom: { style: 'thin', color: { argb: COLOR.border } } };
+  });
+  r += 1;
+
+  // Draws row
+  writeDataRow(sheet, r, 'Draws', draws, totalCol, { indent: 2, color: COLOR.accentStrong });
+  const drawsRow = r;
+  r += 1;
+
+  // Repayments row
+  writeDataRow(sheet, r, 'Repayments', repayments.map(v => -Math.abs(v)), totalCol, { indent: 2 });
+  const repaymentsRow = r;
+  r += 1;
+
+  // Interest Accrued row — = Outstanding Balance × annual rate / 12
+  // (Outstanding row is below, so reference its row index after we know it.)
+  const interestRow = r; r += 1;
+
+  // Outstanding Balance row — rolling: prev_balance + draws + repayments
+  // (repayments are stored as negative numbers, so adding them reduces balance).
+  const existingBal = Number(meta.existing_balance ?? 0);
+  const openingBal = receiveMonth === 'before_start' ? principal : existingBal;
+  const balanceRow = r;
+  writeDataRow(sheet, balanceRow, 'Outstanding Balance',
+    months.map((_, j) => {
+      const colL = colLetter(2 + j);
+      if (j === 0) {
+        return { formula: `${openingBal}+${colL}${drawsRow}+${colL}${repaymentsRow}` };
+      }
+      const prev = colLetter(2 + j - 1);
+      return { formula: `${prev}${balanceRow}+${colL}${drawsRow}+${colL}${repaymentsRow}` };
+    }),
+    totalCol, { indent: 2, bold: true,
+                rowTotal: { formula: `${colLetter(lastMonthCol)}${balanceRow}` } });
+  r += 1;
+
+  // Now write the Interest Accrued row (knew balanceRow now)
+  writeDataRow(sheet, interestRow, 'Interest Accrued',
+    months.map((_, j) => {
+      const colL = colLetter(2 + j);
+      return { formula: `ROUND(${colL}${balanceRow}*${interestRate / 100}/12, 0)` };
+    }),
+    totalCol, { indent: 2, italic: true, color: COLOR.textMuted });
+
+  return r;
+}
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ─── Per-item decomposition into method-block sub-rows ─────────────────────
 
