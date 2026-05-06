@@ -100,12 +100,18 @@ export default function VcfoModulePage() {
 
   // Load fiscal years
   useEffect(() => {
-    api.get('/settings/fy').then(res => {
-      setFYs(res.data);
-      const active = res.data.find((f: FY) => f.is_active);
-      if (active) setSelectedFY(active);
-      else if (res.data.length) setSelectedFY(res.data[0]);
-    });
+    api.get('/settings/fy')
+      .then(res => {
+        const list: FY[] = Array.isArray(res.data) ? res.data : [];
+        setFYs(list);
+        const active = list.find(f => f.is_active);
+        if (active) setSelectedFY(active);
+        else if (list.length) setSelectedFY(list[0]);
+      })
+      .catch(err => {
+        console.error('[vcfo] /settings/fy failed', err);
+        setFYs([]);
+      });
   }, []);
 
   // Once an FY is picked, seed the period to "FY" preset spanning its range.
