@@ -129,9 +129,24 @@ export async function runHealthplixSync(opts: HealthplixRunOpts): Promise<Health
   const clinicStreamId = clinicStream?.id || null;
   const activeScenario = findActiveScenarioForStream(db, ctx, clinicStreamId);
   if (activeScenario) {
+    // Wipe rollup rows under EVERY scenario the read might pick up — not
+    // just `activeScenario.id`. Branches that historically have multiple
+    // is_default=1 scenarios for the same (FY, stream) used to keep
+    // stale rollup rows in the non-canonical scenario, which the read
+    // then summed → 2× revenue (see /dashboard/overview dedup fix in
+    // commit fcf45ff). Wiping the full candidate set here makes the
+    // sync truly idempotent at the storage level: re-running it can
+    // never leave duplicate rollups across scenarios.
+    const sBf = branchFilter(ctx, { strict: true, alias: 's' });
     db.run(
-      `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Clinic Revenue'${bf.where}`,
-      activeScenario.id, ...bf.params
+      `DELETE FROM dashboard_actuals WHERE category = 'revenue' AND item_name = 'Clinic Revenue'${bf.where}
+        AND scenario_id IN (
+          SELECT s.id FROM scenarios s
+          JOIN financial_years fy ON s.fy_id = fy.id
+          WHERE fy.is_active = 1 AND s.is_default = 1
+            AND (s.stream_id = ? OR s.stream_id IS NULL)${sBf.where}
+        )`,
+      ...bf.params, clinicStreamId, ...sBf.params
     );
     const clinicMonthly = db.all(
       `SELECT bill_month as month, COALESCE(SUM(item_price), 0) as total

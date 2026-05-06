@@ -252,13 +252,29 @@ export async function runOneglanceSync(opts: OneglanceRunOpts): Promise<Oneglanc
     const pharmaStreamId = pharmaStream?.id || null;
     const activeScenario = findActiveScenarioForStream(db, ctx, pharmaStreamId);
     if (activeScenario) {
+      // Wipe rollup rows under EVERY scenario the read might pick up —
+      // see same-shaped fix in healthplix-runner.ts for the rationale
+      // (multiple is_default=1 scenarios per branch + writers picking
+      // different ones over time → cross-scenario double-counting on
+      // read). Both Pharmacy Revenue and Pharmacy COGS use the same
+      // candidate-scenario set since they share the (FY, branch, stream)
+      // key.
+      const sBf = branchFilter(ctx, { strict: true, alias: 's' });
+      const candidateScenariosClause = `scenario_id IN (
+          SELECT s.id FROM scenarios s
+          JOIN financial_years fy ON s.fy_id = fy.id
+          WHERE fy.is_active = 1 AND s.is_default = 1
+            AND (s.stream_id = ? OR s.stream_id IS NULL)${sBf.where}
+        )`;
       db.run(
-        `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Pharmacy Revenue'${bf.where}`,
-        activeScenario.id, ...bf.params
+        `DELETE FROM dashboard_actuals WHERE category = 'revenue' AND item_name = 'Pharmacy Revenue'${bf.where}
+          AND ${candidateScenariosClause}`,
+        ...bf.params, pharmaStreamId, ...sBf.params
       );
       db.run(
-        `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'direct_costs' AND item_name = 'Pharmacy COGS'${bf.where}`,
-        activeScenario.id, ...bf.params
+        `DELETE FROM dashboard_actuals WHERE category = 'direct_costs' AND item_name = 'Pharmacy COGS'${bf.where}
+          AND ${candidateScenariosClause}`,
+        ...bf.params, pharmaStreamId, ...sBf.params
       );
       const pharmaMonthly = db.all(
         // Pharmacy revenue is rolled up ex-GST so the rollup matches the

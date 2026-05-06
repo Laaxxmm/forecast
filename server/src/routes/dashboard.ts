@@ -1784,12 +1784,27 @@ router.post('/resync-actuals', requireRole('admin'), async (req, res) => {
     monthCol: string,
   ): { months: number; total: number } => {
     if (scenarioMap.size === 0) return { months: 0, total: 0 };
-    // Wipe stale rows across every scenario in the map for this item.
-    const scenarioIds = Array.from(scenarioMap.values());
-    const ph = scenarioIds.map(() => '?').join(',');
+    // Wipe rollup rows under EVERY scenario the read might pick up — not
+    // just the canonical ones in `scenarioMap`. The map's first-wins
+    // logic chooses ONE scenario per branch as the write target, but
+    // OTHER is_default=1 scenarios for the same (FY, branch, stream)
+    // can still hold stale rollup rows from prior runs (when a different
+    // canonical scenario was picked, or when an alternate writer landed
+    // under a different scenario). Without this wider DELETE, those
+    // stale rows survive the rebuild and the read sums them on top of
+    // the freshly-written canonical rows → 2× revenue. Matches the same
+    // fix shipped in the auto-sync runners (healthplix-runner /
+    // oneglance-runner).
+    const sBf = branchFilter(req, { strict: true, alias: 's' });
     db.run(
-      `DELETE FROM dashboard_actuals WHERE scenario_id IN (${ph}) AND category = ? AND item_name = ?`,
-      ...scenarioIds, category, itemName
+      `DELETE FROM dashboard_actuals WHERE category = ? AND item_name = ?
+        AND scenario_id IN (
+          SELECT s.id FROM scenarios s
+          JOIN financial_years fy ON s.fy_id = fy.id
+          WHERE fy.is_active = 1 AND s.is_default = 1
+            AND (s.stream_id = ? OR s.stream_id IS NULL)${sBf.where}
+        )`,
+      category, itemName, streamId, ...sBf.params
     );
     // Aggregate per (branch_id, month) from raw — this preserves the
     // branch dimension so each row lands under the right scenario.
