@@ -2012,19 +2012,59 @@ function decomposeItem(
   }
 
   // ── Percent-of-specific-revenue (specific_cost / personnel / expenses) ──
-  // The Forecast page stores the link as meta.linked_revenue_id (some
-  // categories) or meta.linkedRevenueId (specific_cost). The percentage
-  // lives in meta.percent_of_revenue or meta.percentOfStream depending on
-  // category. Accept any of them.
-  const linkedRevenueId = meta.linked_revenue_id ?? meta.linkedRevenueId;
-  const percentValue = meta.percent_of_revenue ?? meta.percentOfStream;
+  //
+  // Two coexisting storage shapes — ItemEditForm.tsx writes BOTH key sets
+  // for every item (lines 800-809) but only one carries real values; the
+  // other holds the field's default (0/null). Which set is "real" depends
+  // on the item type:
+  //
+  //   • Direct Costs → specific_cost items with meta.stepEntryModes.cost
+  //     === 'percent' use camelCase: meta.linkedRevenueId + meta.percentOfStream
+  //   • Personnel/Expenses → entry_mode === 'pct_specific' uses snake_case:
+  //     meta.linked_revenue_id + meta.percent_of_revenue
+  //
+  // The previous `meta.linked_revenue_id ?? meta.linkedRevenueId` chain
+  // only fell back on null/undefined, so a snake_case zero (default value
+  // for a specific_cost item) shadowed the real camelCase percentage →
+  // Excel formula became revenue × 0 = 0 ("share of consultation" bug).
+  //
+  // Fix: prefer the PAIR (linkId, pct) where both are populated AND pct > 0.
+  // If neither pair is fully populated, fall through to the next branch.
+  const camelLinkId = meta.linkedRevenueId;
+  const camelPct    = meta.percentOfStream;
+  const snakeLinkId = meta.linked_revenue_id;
+  const snakePct    = meta.percent_of_revenue;
+
+  let linkedRevenueId: number | null = null;
+  let percentValue:    number | null = null;
+  if (camelLinkId && Number(camelPct) > 0) {
+    linkedRevenueId = camelLinkId;
+    percentValue = Number(camelPct);
+  } else if (snakeLinkId && Number(snakePct) > 0) {
+    linkedRevenueId = snakeLinkId;
+    percentValue = Number(snakePct);
+  } else if (camelLinkId && camelPct != null) {
+    // Both keys populated but pct is 0 — still treat as pct_specific so
+    // the export shows the link + 0% instead of falling through to the
+    // single-row fallback (which would mask the configuration).
+    linkedRevenueId = camelLinkId;
+    percentValue = Number(camelPct);
+  } else if (snakeLinkId && snakePct != null) {
+    linkedRevenueId = snakeLinkId;
+    percentValue = Number(snakePct);
+  }
+
   const isPctSpecific = item.entry_mode === 'pct_specific'
-    || (item.entry_mode === 'percent' && linkedRevenueId);
+    || (item.entry_mode === 'percent' && linkedRevenueId)
+    || (item.item_type === 'specific_cost'
+        && (meta.stepEntryModes?.cost === 'percent'
+            || meta.stepEntryModes?.cost === 'pct_specific')
+        && linkedRevenueId);
   if (isPctSpecific && linkedRevenueId && percentValue != null) {
     const linkedName = itemNameById.get(linkedRevenueId) || `item #${linkedRevenueId}`;
     const linkedValues = allValues[linkedRevenueId] || {};
     const linkedPerMonth = months.map(m => Number(linkedValues[m] ?? 0));
-    const pctFraction = Number(percentValue) / 100;
+    const pctFraction = percentValue / 100;
     return {
       subRows: [
         { label: `Linked: ${linkedName}`, perMonthValues: linkedPerMonth, numFmt: NUM_FMT, hasAnnualSum: true,  isInputRow: false },
