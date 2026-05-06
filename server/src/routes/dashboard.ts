@@ -135,71 +135,97 @@ router.get('/overview', async (req, res) => {
     }
   }
 
-  // Fallback: if dashboard_actuals has no revenue data, read directly from import tables
-  // This handles cases where the auto-sync didn't run or data was lost
-  if (totalRevenue === 0) {
-    // Build a map of stream name → raw table for known integrations
-    // Per-stream revenue source. `amountCol` is interpolated into a
-    // `SUM(${amountCol})` SQL fragment so it can be either a column
-    // name or a column expression. We use an expression for pharmacy
-    // to subtract GST (sales_amount is gross-incl-tax in the source
-    // table) — the Actuals page shows top-line *revenue*, which on
-    // P&L is net of indirect tax. Clinic's `item_price` is already
-    // ex-GST (Healthplix exports tax separately and consult fees
-    // typically aren't taxed); turia's `total_amount` is left as-is.
-    const streamSourceMap: Record<string, { table: string; amountCol: string; monthCol: string }> = {};
-    for (const stream of clientStreams) {
-      const nameLower = stream.name.toLowerCase();
-      if (nameLower.includes('clinic') || nameLower.includes('health')) {
-        streamSourceMap[stream.id] = { table: 'clinic_actuals', amountCol: 'item_price', monthCol: 'bill_month' };
-      } else if (nameLower.includes('pharma')) {
-        streamSourceMap[stream.id] = { table: 'pharmacy_sales_actuals', amountCol: '(sales_amount - COALESCE(sales_tax, 0))', monthCol: 'bill_month' };
-      } else if (nameLower.includes('consult') || nameLower.includes('turia')) {
-        streamSourceMap[stream.id] = { table: 'turia_invoices', amountCol: 'total_amount', monthCol: 'invoice_month' };
+  // Fallback to raw import tables when the dashboard_actuals rollup is
+  // empty (or empty for a specific stream).
+  //
+  // Why this runs PER-STREAM, not just when the grand total is zero:
+  // the rollup is rebuilt by the sync runners (healthplix-runner.ts,
+  // oneglance-runner.ts), each of which writes only its own stream's
+  // rows. If one runner hasn't run yet — or skipped its rollup write
+  // because the canonical scenario for that branch+stream couldn't be
+  // resolved — that stream stays at 0 in the rollup even when raw
+  // pharmacy_sales_actuals / clinic_actuals tables have data.
+  //
+  // The previous behaviour gated the entire fallback on
+  // `totalRevenue === 0`, so a branch with clinic data + missing
+  // pharmacy rollup showed pharmacy = 0 on the Actuals top-tile while
+  // the Insights page (which reads raw) showed real numbers. The
+  // per-stream gate fixes this without making the read more
+  // expensive in the healthy case (the raw query only fires when the
+  // rollup has nothing for that stream).
+  //
+  // The grand-total drift case (rollup has MORE than raw, e.g. stale
+  // rows that were never wiped after a re-sync) is fixed by an admin
+  // running POST /dashboard/resync-actuals — there's no cheap way to
+  // detect it on every read.
+
+  // Per-stream raw-source map. `amountCol` is interpolated into a
+  // `SUM(${amountCol})` SQL fragment so it can be either a column
+  // name or a column expression. We use an expression for pharmacy
+  // to subtract GST (sales_amount is gross-incl-tax in the source
+  // table) — the Actuals page shows top-line *revenue*, which on
+  // P&L is net of indirect tax. Clinic's `item_price` is already
+  // ex-GST (Healthplix exports tax separately and consult fees
+  // typically aren't taxed); turia's `total_amount` is left as-is.
+  const streamSourceMap: Record<string, { table: string; amountCol: string; monthCol: string }> = {};
+  for (const stream of clientStreams) {
+    const nameLower = stream.name.toLowerCase();
+    if (nameLower.includes('clinic') || nameLower.includes('health')) {
+      streamSourceMap[stream.id] = { table: 'clinic_actuals', amountCol: 'item_price', monthCol: 'bill_month' };
+    } else if (nameLower.includes('pharma')) {
+      streamSourceMap[stream.id] = { table: 'pharmacy_sales_actuals', amountCol: '(sales_amount - COALESCE(sales_tax, 0))', monthCol: 'bill_month' };
+    } else if (nameLower.includes('consult') || nameLower.includes('turia')) {
+      streamSourceMap[stream.id] = { table: 'turia_invoices', amountCol: 'total_amount', monthCol: 'invoice_month' };
+    }
+  }
+
+  // No-stream-client fallback (legacy single-stream tenants).
+  // Only fires when total is 0 — these clients don't have streams
+  // whose individual rollups can drift.
+  if (totalRevenue === 0 && clientStreams.length === 0) {
+    try {
+      const clinicTotal = db.get(
+        `SELECT COALESCE(SUM(item_price), 0) as total FROM clinic_actuals WHERE bill_month >= ? AND bill_month <= ?${bf.where}`,
+        startMonth, endMonth, ...bf.params
+      );
+      const pharmaTotal = db.get(
+        `SELECT COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as total FROM pharmacy_sales_actuals WHERE bill_month >= ? AND bill_month <= ?${bf.where}`,
+        startMonth, endMonth, ...bf.params
+      );
+      totalRevenue = (clinicTotal?.total || 0) + (pharmaTotal?.total || 0);
+    } catch { /* tables may not exist */ }
+  }
+
+  // Per-stream fallback: any stream whose rollup came back empty gets
+  // checked against its raw source. Replaces (not adds to) the rollup
+  // value — if rollup says 0, raw is the source of truth.
+  for (const stream of clientStreams) {
+    const sd = streamDataMap[stream.id];
+    // Only fall back when the rollup is empty for this stream. Streams
+    // that already have non-zero rollup data are trusted as-is — the
+    // resync-actuals admin tool exists for the (rarer) case where the
+    // rollup has stale rows that drift from raw.
+    if (!sd || (sd.total_revenue || 0) > 0) continue;
+    const src = streamSourceMap[stream.id];
+    if (!src) continue;
+    try {
+      const rawTotal = db.get(
+        `SELECT COALESCE(SUM(${src.amountCol}), 0) as total FROM ${src.table} WHERE ${src.monthCol} >= ? AND ${src.monthCol} <= ?${bf.where}`,
+        startMonth, endMonth, ...bf.params
+      );
+      const rawMonthly = db.all(
+        `SELECT ${src.monthCol} as month, COALESCE(SUM(${src.amountCol}), 0) as total
+         FROM ${src.table} WHERE ${src.monthCol} >= ? AND ${src.monthCol} <= ?${bf.where}
+         GROUP BY ${src.monthCol} ORDER BY ${src.monthCol}`,
+        startMonth, endMonth, ...bf.params
+      );
+      const rawRevenue = rawTotal?.total || 0;
+      if (rawRevenue > 0) {
+        totalRevenue += rawRevenue;
+        sd.total_revenue = rawRevenue;
+        sd.monthly = rawMonthly.map((r: any) => ({ month: r.month, category: 'revenue', total: r.total }));
       }
-    }
-    // Fallback for no-stream clients. Pharmacy total is ex-GST to
-    // match the per-stream revenue semantic (P&L top-line = net of
-    // indirect tax).
-    if (clientStreams.length === 0) {
-      try {
-        const clinicTotal = db.get(
-          `SELECT COALESCE(SUM(item_price), 0) as total FROM clinic_actuals WHERE bill_month >= ? AND bill_month <= ?${bf.where}`,
-          startMonth, endMonth, ...bf.params
-        );
-        const pharmaTotal = db.get(
-          `SELECT COALESCE(SUM(sales_amount - COALESCE(sales_tax, 0)), 0) as total FROM pharmacy_sales_actuals WHERE bill_month >= ? AND bill_month <= ?${bf.where}`,
-          startMonth, endMonth, ...bf.params
-        );
-        totalRevenue = (clinicTotal?.total || 0) + (pharmaTotal?.total || 0);
-      } catch { /* tables may not exist */ }
-    }
-    // Per-stream fallback from raw import tables
-    for (const stream of clientStreams) {
-      const src = streamSourceMap[stream.id];
-      if (!src) continue;
-      try {
-        const rawTotal = db.get(
-          `SELECT COALESCE(SUM(${src.amountCol}), 0) as total FROM ${src.table} WHERE ${src.monthCol} >= ? AND ${src.monthCol} <= ?${bf.where}`,
-          startMonth, endMonth, ...bf.params
-        );
-        const rawMonthly = db.all(
-          `SELECT ${src.monthCol} as month, COALESCE(SUM(${src.amountCol}), 0) as total
-           FROM ${src.table} WHERE ${src.monthCol} >= ? AND ${src.monthCol} <= ?${bf.where}
-           GROUP BY ${src.monthCol} ORDER BY ${src.monthCol}`,
-          startMonth, endMonth, ...bf.params
-        );
-        const rawRevenue = rawTotal?.total || 0;
-        if (rawRevenue > 0) {
-          totalRevenue += rawRevenue;
-          const sd = streamDataMap[stream.id];
-          if (sd) {
-            sd.total_revenue = rawRevenue;
-            sd.monthly = rawMonthly.map((r: any) => ({ month: r.month, category: 'revenue', total: r.total }));
-          }
-        }
-      } catch { /* table may not exist */ }
-    }
+    } catch { /* table may not exist */ }
   }
 
   // Build cards array from dashboard_cards
