@@ -61,19 +61,35 @@ router.get('/overview', async (req, res) => {
   const streamDataMap: Record<number, any> = {};
 
   for (const stream of clientStreams) {
-    // Find ALL matching scenarios for this stream. In specific-branch /
-    // single-branch mode this is one row (same as the old `LIMIT 1`
-    // behaviour). In **consolidated** mode each branch contributes its
-    // own scenario, so we sum forecasts across the union via
-    // `scenario_id IN (...)`. Without this the consolidated forecast
-    // total only reflected one branch's plan against all-branch actuals.
-    const scenarios = db.all(
-      `SELECT id FROM scenarios WHERE fy_id = ? AND is_default = 1
+    // Find matching scenarios for this stream. We need one PER BRANCH
+    // (consolidated mode unions every branch's plan), but **only one
+    // per branch** — picking multiple scenarios for the same branch
+    // double-counts actuals because the rollup writers
+    // (healthplix-runner / oneglance-runner / resync-actuals) historically
+    // wrote dashboard_actuals rows under different scenarios for the
+    // same (branch, stream) over time. The read used to do
+    // `scenario_id IN (...)` across every match, so a branch with both
+    // a stream-specific scenario and a null-stream default scenario
+    // (both is_default=1) would have its rollup summed twice.
+    //
+    // Fix: query branch_id alongside id, then dedupe in JS picking the
+    // first (preferring exact stream match → lowest id). This mirrors
+    // the first-wins logic in buildScenarioMap on the resync route, so
+    // the read only counts the canonical scenario each writer targets.
+    const scenarioRows = db.all(
+      `SELECT id, branch_id FROM scenarios WHERE fy_id = ? AND is_default = 1
        AND (stream_id = ? OR stream_id IS NULL)${bf.where}
-       ORDER BY CASE WHEN stream_id = ? THEN 0 ELSE 1 END, id`,
+       ORDER BY branch_id, CASE WHEN stream_id = ? THEN 0 ELSE 1 END, id`,
       fy.id, stream.id, ...bf.params, stream.id
     );
-    const scenarioIds = scenarios.map((s: any) => s.id);
+    const seenBranches = new Set<string>();
+    const scenarioIds: number[] = [];
+    for (const r of scenarioRows) {
+      const key = String(r.branch_id ?? 'null');
+      if (seenBranches.has(key)) continue;
+      seenBranches.add(key);
+      scenarioIds.push(r.id);
+    }
     const sIdsPh = scenarioIds.map(() => '?').join(',');
     const noScenarios = scenarioIds.length === 0;
 
