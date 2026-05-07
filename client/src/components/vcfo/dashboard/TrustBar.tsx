@@ -9,6 +9,9 @@ const RECHECK_DAYS = 2;
 interface FailureSummary {
   failureCount: number;
   failures: Array<{ branch_id: number | null; source: string; date: string }>;
+  totalBranches: number;
+  syncedBranches: number;
+  lastSuccessAt: string | null;
 }
 
 type Severity = 'amber' | 'red';
@@ -16,16 +19,18 @@ type Severity = 'amber' | 'red';
 /**
  * Persistent data-trust strip rendered above the dashboard headline KPIs.
  * Reuses the same /api/sync/auto/failures-recent endpoint as the global
- * banner. NOT dismissible — the brief explicitly forbids the close
- * button so users can't make decisions on stale data.
+ * banner (extended in Wave 2 with branch-coverage + last-success summary).
+ * NOT dismissible — the brief explicitly forbids the close button so users
+ * can't make decisions on stale data.
+ *
+ * Visibility:
+ *   - Hidden when failureCount === 0 AND every attempted branch synced.
+ *   - Hidden when no runs at all in the window (nothing to report on).
  *
  * Severity:
- *  - hidden when failureCount === 0 (keeps the page clean when healthy)
- *  - amber when most recent failure is < 24h old
- *  - red   when most recent failure is >= 24h old (sync has been broken)
- *
- * Branch-count and last-sync fields aren't yet exposed by the endpoint;
- * Phase 2 will refine the message once the backend returns them.
+ *   - Red   when most recent failure is >= 24h old, OR no successful sync
+ *           in 24h while branches are missing.
+ *   - Amber otherwise.
  */
 export default function TrustBar() {
   const [summary, setSummary] = useState<FailureSummary | null>(null);
@@ -45,21 +50,35 @@ export default function TrustBar() {
     return () => { cancelled = true; clearInterval(t); };
   }, []);
 
-  if (!summary || summary.failureCount === 0) return null;
+  if (!summary) return null;
 
-  const mostRecentMs = summary.failures
+  const missingBranches = Math.max(0, summary.totalBranches - summary.syncedBranches);
+  const allHealthy =
+    summary.failureCount === 0 &&
+    summary.totalBranches > 0 &&
+    missingBranches === 0;
+  const noActivity = summary.totalBranches === 0 && summary.failureCount === 0;
+  if (allHealthy || noActivity) return null;
+
+  const mostRecentFailureMs = summary.failures
     .map((f) => Date.parse(f.date))
     .filter((n) => !Number.isNaN(n))
     .reduce((max, n) => (n > max ? n : max), 0);
 
-  const ageHours = mostRecentMs > 0 ? (Date.now() - mostRecentMs) / 3_600_000 : 0;
-  const severity: Severity = ageHours >= 24 ? 'red' : 'amber';
+  const lastSuccessMs = summary.lastSuccessAt ? Date.parse(summary.lastSuccessAt) : 0;
+
+  const failureAgeHours = mostRecentFailureMs > 0 ? (Date.now() - mostRecentFailureMs) / 3_600_000 : 0;
+  const lastSuccessAgeHours = lastSuccessMs > 0 ? (Date.now() - lastSuccessMs) / 3_600_000 : Infinity;
+
+  const severity: Severity =
+    (summary.failureCount > 0 && failureAgeHours >= 24) ||
+    (missingBranches > 0 && lastSuccessAgeHours >= 24)
+      ? 'red'
+      : 'amber';
 
   const palette = severity === 'red'
     ? { bg: 'var(--mt-trust-red-bg)',   text: 'var(--mt-trust-red-text)',   accent: 'var(--mt-trust-red-text)' }
     : { bg: 'var(--mt-trust-amber-bg)', text: 'var(--mt-trust-amber-text)', accent: 'var(--mt-trust-amber-accent)' };
-
-  const ageLabel = formatRelative(ageHours);
 
   return (
     <div
@@ -78,8 +97,13 @@ export default function TrustBar() {
       <div className="flex-1 min-w-0 flex flex-wrap items-baseline gap-x-2">
         <span className="font-semibold">Data trust</span>
         <span>
-          {summary.failureCount} sync {summary.failureCount === 1 ? 'failure' : 'failures'} in last {RECHECK_DAYS} days
-          {mostRecentMs > 0 && <span> · most recent {ageLabel}</span>}
+          {summary.syncedBranches} of {summary.totalBranches} {summary.totalBranches === 1 ? 'branch' : 'branches'} synced
+          {summary.failureCount > 0 && (
+            <span> · {summary.failureCount} failure{summary.failureCount === 1 ? '' : 's'} in last {RECHECK_DAYS}d</span>
+          )}
+          {summary.lastSuccessAt && (
+            <span> · last sync {formatRelative(lastSuccessAgeHours)}</span>
+          )}
         </span>
       </div>
       <Link
@@ -94,6 +118,7 @@ export default function TrustBar() {
 }
 
 function formatRelative(ageHours: number): string {
+  if (!Number.isFinite(ageHours)) return 'never';
   if (ageHours < 1) {
     const m = Math.max(1, Math.round(ageHours * 60));
     return `${m} min ago`;

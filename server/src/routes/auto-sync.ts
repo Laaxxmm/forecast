@@ -351,6 +351,36 @@ router.get('/failures-recent', async (req: Request, res: Response) => {
     cutoffStr,
   );
   const failures = rows.filter(r => r.status === 'failed');
+
+  // Phase 2 Wave 2 — branch-coverage summary so the dashboard's TrustBar
+  // can render "X of Y branches synced · last sync N ago". Both counts
+  // are derived from auto_sync_runs (no platform-DB join needed):
+  //   totalBranches  = distinct branch_ids that attempted any run in window
+  //   syncedBranches = distinct branch_ids that had >=1 success in window
+  // For tenants that haven't had any runs in the window the bar will see
+  // zeros and stay hidden, which is the right behaviour.
+  const totalBranchesRow = db.get(
+    `SELECT COUNT(DISTINCT COALESCE(branch_id, -1)) AS n
+       FROM auto_sync_runs
+      WHERE run_date_ist >= ?`,
+    cutoffStr,
+  ) as { n: number } | undefined;
+  const syncedBranchesRow = db.get(
+    `SELECT COUNT(DISTINCT COALESCE(branch_id, -1)) AS n
+       FROM auto_sync_runs
+      WHERE run_date_ist >= ?
+        AND status = 'success'`,
+    cutoffStr,
+  ) as { n: number } | undefined;
+  const lastSuccessRow = db.get(
+    `SELECT finished_at, started_at
+       FROM auto_sync_runs
+      WHERE status = 'success'
+        AND finished_at IS NOT NULL
+      ORDER BY finished_at DESC
+      LIMIT 1`,
+  ) as { finished_at: string | null; started_at: string | null } | undefined;
+
   res.json({
     failureCount: failures.length,
     failures: failures.map(f => ({
@@ -358,6 +388,9 @@ router.get('/failures-recent', async (req: Request, res: Response) => {
       source: f.source,
       date: f.run_date_ist,
     })),
+    totalBranches: totalBranchesRow?.n ?? 0,
+    syncedBranches: syncedBranchesRow?.n ?? 0,
+    lastSuccessAt: lastSuccessRow?.finished_at ?? lastSuccessRow?.started_at ?? null,
   });
 });
 
