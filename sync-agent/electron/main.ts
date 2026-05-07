@@ -330,8 +330,10 @@ function rebuildTrayMenu() {
 function createMainWindow() {
   const iconPath = iconFilePath();
   mainWindow = new BrowserWindow({
-    width: 460,
-    height: 620,
+    width: 600,
+    height: 680,
+    minWidth: 480,
+    minHeight: 560,
     show: false,
     resizable: false,
     fullscreenable: false,
@@ -1150,15 +1152,57 @@ function finishSync(result: SyncResult): SyncResult {
   return result;
 }
 
+/**
+ * Resolve the current schedule mode. We support three modes:
+ *   • 'off'      — no auto-sync
+ *   • 'interval' — every N minutes (legacy default)
+ *   • 'daily'    — once per day at a local-time HH:MM
+ *
+ * Back-compat: if `autoSyncMode` isn't set, we infer from the legacy
+ * `autoSyncEnabled` flag — true → 'interval', false → 'off'.
+ */
+function resolveScheduleMode(): 'off' | 'interval' | 'daily' {
+  if (config.autoSyncMode) return config.autoSyncMode;
+  return config.autoSyncEnabled ? 'interval' : 'off';
+}
+
+/**
+ * Compute milliseconds from now until the next daily fire at HH:MM local
+ * time. If the time has already passed today, schedule for tomorrow.
+ */
+function msUntilNextDailyFire(hhmm: string): number {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+  const hh = m ? Math.min(23, Math.max(0, parseInt(m[1], 10))) : 21;
+  const mm = m ? Math.min(59, Math.max(0, parseInt(m[2], 10))) : 0;
+  const now = new Date();
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, 0, 0);
+  if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+  return next.getTime() - now.getTime();
+}
+
 function restartScheduler() {
-  if (syncTimer) { clearInterval(syncTimer); syncTimer = null; }
-  if (!config.autoSyncEnabled) {
-    logger.info('scheduler.stop', { reason: 'autoSyncEnabled=false' });
+  if (syncTimer) { clearTimeout(syncTimer); clearInterval(syncTimer); syncTimer = null; }
+  const mode = resolveScheduleMode();
+  if (mode === 'off') {
+    logger.info('scheduler.stop', { reason: 'autoSyncMode=off' });
     return;
   }
-  const ms = Math.max(1, config.syncIntervalMinutes) * 60 * 1000;
-  syncTimer = setInterval(() => { runSync().catch((e) => logError(e, 'scheduler.tick')); }, ms);
-  logger.info('scheduler.start', { intervalMinutes: config.syncIntervalMinutes });
+  if (mode === 'interval') {
+    const ms = Math.max(1, config.syncIntervalMinutes) * 60 * 1000;
+    syncTimer = setInterval(() => { runSync().catch((e) => logError(e, 'scheduler.tick')); }, ms);
+    logger.info('scheduler.start', { mode, intervalMinutes: config.syncIntervalMinutes });
+    return;
+  }
+  // mode === 'daily' — chain setTimeout so we recompute against wall-clock
+  // each fire. Avoids drift after laptop sleep / timezone change / DST.
+  const hhmm = config.dailyAtHHMM || '21:00';
+  const fireOnce = () => {
+    runSync().catch((e) => logError(e, 'scheduler.tick'));
+    // After firing, schedule the next one (always tomorrow at HH:MM).
+    syncTimer = setTimeout(fireOnce, msUntilNextDailyFire(hhmm));
+  };
+  syncTimer = setTimeout(fireOnce, msUntilNextDailyFire(hhmm));
+  logger.info('scheduler.start', { mode, dailyAtHHMM: hhmm });
 }
 
 // ── Auto-start on login ─────────────────────────────────────────────────────
@@ -1292,6 +1336,63 @@ ipcMain.handle('config:update', (_e, patch: Partial<AgentConfig>) => {
 });
 
 ipcMain.handle('tally:test', () => pingTally());
+
+/**
+ * Force-refresh the discovered Tally company list and push fresh status to
+ * the renderer. Called when the user opens the Companies page so newly
+ * loaded Tally companies appear without a sign-out / sign-in.
+ */
+ipcMain.handle('tally:reping', async () => {
+  const tally = await pingTally();
+  pushStatus();
+  return tally;
+});
+
+/**
+ * Export full sync history to a user-chosen file. Returns the saved path,
+ * or { ok:false, cancelled:true } if the dialog was dismissed.
+ */
+ipcMain.handle('sync:exportHistory', async (_e, format: 'json' | 'csv') => {
+  try {
+    const { dialog } = await import('electron');
+    const fmt: 'json' | 'csv' = format === 'csv' ? 'csv' : 'json';
+    const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const result = await dialog.showSaveDialog({
+      title: 'Export sync history',
+      defaultPath: `vcfo-sync-history-${ts}.${fmt}`,
+      filters:
+        fmt === 'csv'
+          ? [{ name: 'CSV', extensions: ['csv'] }]
+          : [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: false, cancelled: true };
+    const history = syncHistory.slice(-SYNC_HISTORY_MAX).reverse();
+    let body: string;
+    if (fmt === 'json') {
+      body = JSON.stringify(history, null, 2);
+    } else {
+      const rows: string[] = [
+        'startedAt,finishedAt,ok,rowsSent,company,windowFrom,windowTo,error',
+      ];
+      for (const r of history) {
+        const esc = (v: any) => {
+          const s = v == null ? '' : String(v);
+          return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+        };
+        rows.push([
+          r.startedAt, r.finishedAt, r.ok, r.rowsSent,
+          r.company || '', r.windowFrom || '', r.windowTo || '', r.error || '',
+        ].map(esc).join(','));
+      }
+      body = rows.join('\n');
+    }
+    fs.writeFileSync(result.filePath, body, 'utf8');
+    return { ok: true as const, path: result.filePath };
+  } catch (err: any) {
+    logError(err, 'sync.exportHistory');
+    return { ok: false as const, error: err?.message || 'export failed' };
+  }
+});
 
 // Queue diagnostics / escape hatches. `queue:snapshot` returns the list of
 // pending items (for a future UI panel). `queue:clear` wipes the queue —

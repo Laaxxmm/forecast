@@ -42,6 +42,20 @@ const api = {
     arg?: string | { clientSlug?: string; companyName?: string },
   ): Promise<AgentConfig> => ipcRenderer.invoke('sync:clearCursor', arg),
   testTally: (): Promise<TallyStatus> => ipcRenderer.invoke('tally:test'),
+  /**
+   * Force-refresh the discovered Tally company list and push status out.
+   * Used by the Companies page so newly opened Tally companies appear without
+   * the user having to sign out / sign in.
+   */
+  repingTally: (): Promise<TallyStatus> => ipcRenderer.invoke('tally:reping'),
+  /**
+   * Export the full sync history to a user-chosen path. Returns the saved
+   * file path on success, or null if the user cancelled the dialog.
+   */
+  exportSyncHistory: (
+    format: 'json' | 'csv',
+  ): Promise<{ ok: true; path: string } | { ok: false; cancelled?: boolean; error?: string }> =>
+    ipcRenderer.invoke('sync:exportHistory', format),
   updateConfig: (patch: Partial<AgentConfig>): Promise<AgentConfig> =>
     ipcRenderer.invoke('config:update', patch),
   /** List items currently waiting in the offline retry queue. */

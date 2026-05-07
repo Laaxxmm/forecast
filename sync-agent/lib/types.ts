@@ -156,6 +156,16 @@ export interface AgentConfig {
   clients: AgentClient[];
   syncIntervalMinutes: number;
   autoSyncEnabled: boolean;
+  /**
+   * Schedule shape (added in 0.4.0). When unset, the renderer infers from
+   * `autoSyncEnabled` for back-compat:
+   *   • 'off'      — never auto-sync (matches autoSyncEnabled=false)
+   *   • 'interval' — every `syncIntervalMinutes` minutes (legacy default)
+   *   • 'daily'    — once per day at `dailyAtHHMM` local time
+   */
+  autoSyncMode?: 'off' | 'interval' | 'daily';
+  /** Local-time "HH:MM" for the daily schedule, e.g. "21:00". */
+  dailyAtHHMM?: string;
   autoStartOnLogin?: boolean;
   /** ISO date (YYYY-MM-DD) — earliest date to fetch on first sync. Defaults to 1 Apr of current FY. */
   syncFromDate?: string;
