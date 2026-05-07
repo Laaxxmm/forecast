@@ -618,22 +618,28 @@ export function buildProfitLoss(
 
 // ─── Balance Sheet ──────────────────────────────────────────────────────────
 
+// Tally primary (top-level) groups on the Balance Sheet. Listing only primary
+// groups is intentional — getGroupTree recurses into each parent's child
+// hierarchy, so siblings like Sundry Creditors / Bank Accounts / Cash-in-Hand
+// are picked up *inside* their parent (Current Liabilities / Current Assets).
+// Listing them here separately as well would double-count every ledger under
+// them (a real bug we just fixed: BS short on liabilities by Loans+Branch and
+// over on assets by Bank Accounts).
 const BS_SECTIONS: Array<{
   key: string; label: string; parent: string; side: 'asset' | 'liability';
 }> = [
-  { key: 'capital',         label: 'Capital Account',      parent: 'Capital Account',     side: 'liability' },
-  { key: 'reserves',        label: 'Reserves & Surplus',   parent: 'Reserves & Surplus',  side: 'liability' },
-  { key: 'currentLiab',     label: 'Current Liabilities',  parent: 'Current Liabilities', side: 'liability' },
-  { key: 'securedLoans',    label: 'Secured Loans',        parent: 'Secured Loans',       side: 'liability' },
-  { key: 'unsecuredLoans',  label: 'Unsecured Loans',      parent: 'Unsecured Loans',     side: 'liability' },
-  { key: 'sundryCreditors', label: 'Sundry Creditors',     parent: 'Sundry Creditors',    side: 'liability' },
-  { key: 'fixedAssets',     label: 'Fixed Assets',         parent: 'Fixed Assets',        side: 'asset' },
-  { key: 'investments',     label: 'Investments',          parent: 'Investments',         side: 'asset' },
-  { key: 'currentAssets',   label: 'Current Assets',       parent: 'Current Assets',      side: 'asset' },
-  { key: 'cashInHand',      label: 'Cash-in-Hand',         parent: 'Cash-in-Hand',        side: 'asset' },
-  { key: 'bankAccounts',    label: 'Bank Accounts',        parent: 'Bank Accounts',       side: 'asset' },
-  { key: 'sundryDebtors',   label: 'Sundry Debtors',       parent: 'Sundry Debtors',      side: 'asset' },
-  { key: 'stockInHand',     label: 'Stock-in-Hand',        parent: 'Stock-in-Hand',       side: 'asset' },
+  // ── Liabilities ──────────────────────────────────────────────────────────
+  { key: 'capital',         label: 'Capital Account',       parent: 'Capital Account',       side: 'liability' },
+  { key: 'reserves',        label: 'Reserves & Surplus',    parent: 'Reserves & Surplus',    side: 'liability' },
+  { key: 'loans',           label: 'Loans (Liability)',     parent: 'Loans (Liability)',     side: 'liability' },
+  { key: 'currentLiab',     label: 'Current Liabilities',   parent: 'Current Liabilities',   side: 'liability' },
+  { key: 'branchDivisions', label: 'Branch / Divisions',    parent: 'Branch / Divisions',    side: 'liability' },
+  { key: 'suspenseLiab',    label: 'Suspense (Liability)',  parent: 'Suspense (Liability)',  side: 'liability' },
+  // ── Assets ───────────────────────────────────────────────────────────────
+  { key: 'fixedAssets',     label: 'Fixed Assets',          parent: 'Fixed Assets',          side: 'asset' },
+  { key: 'investments',     label: 'Investments',           parent: 'Investments',           side: 'asset' },
+  { key: 'currentAssets',   label: 'Current Assets',        parent: 'Current Assets',        side: 'asset' },
+  { key: 'miscExp',         label: 'Misc. Expenses (Asset)',parent: 'Misc. Expenses (Asset)',side: 'asset' },
 ];
 
 /**
@@ -787,17 +793,26 @@ export function buildBalanceSheet(
     });
   }
 
-  // Plug the balancing P&L row (current-year profit accumulates as equity).
+  // Plug the balancing P&L row. In Tally the "Profit & Loss A/c" line carries
+  // BOTH (a) the OPENING balance of the P&L A/c group from prior years (the
+  // accumulated retained P&L brought forward), AND (b) the current FY's net
+  // profit which hasn't been year-end-closed into P&L A/c yet.
+  // Earlier this row only had (b), so the BS was short by (a) — typically a
+  // negative for businesses with prior-year losses, making liabilities under-
+  // count by exactly that amount and the BS fail to tie out against Tally.
   const plValues: Record<string, number> = {};
   let plGrand = 0;
   let plNonZero = false;
+  const plGroups = getGroupTree(db, companyId, 'Profit & Loss A/c');
   for (const col of columns) {
     const colAsOf = asOfByCol[col];
+    const opening = plGroups.length ? computeBSClosing(db, companyId, colAsOf, plGroups) : 0;
     const np = computeYTDNetProfit(db, companyId, fyStart(db, companyId, colAsOf), colAsOf);
-    plValues[col] = np;
-    plGrand += np;
-    totalLiabilities[col] += np;
-    if (Math.abs(np) > 0.01) plNonZero = true;
+    const total = opening + np;
+    plValues[col] = total;
+    plGrand += total;
+    totalLiabilities[col] += total;
+    if (Math.abs(total) > 0.01) plNonZero = true;
   }
   if (plNonZero) {
     sections.push({
