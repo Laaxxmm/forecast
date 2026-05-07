@@ -1,5 +1,5 @@
-import { ArrowUpRight, ArrowDownRight, Wallet } from 'lucide-react';
 import { formatRs } from '../../../pages/ForecastModulePage';
+import CashFlowWaterfall from './CashFlowWaterfall';
 
 interface Props {
   operating: number;
@@ -10,77 +10,92 @@ interface Props {
 }
 
 /**
- * Cash Flow snapshot — three rows for Operating / Investing / Financing
- * activity totals across the window, plus a "closing cash" line. No chart;
- * just stat-rows. Click-through to the full Cash Flow tab is implicit via
- * the page nav.
+ * Cash flow this year — waterfall showing Opening cash → +Operating →
+ * -Investing → ±Financing → Closing. Highlights which activity carried
+ * the period at a glance, not just the magnitudes.
+ *
+ * Opening cash is derived (closing - netChange) since the API doesn't
+ * yet return it. Phase 2 will add an explicit field.
  */
 export default function CashFlowSnapshotCard({
   operating, investing, financing, netChange, closingCash,
 }: Props) {
-  const Row = ({ label, value }: { label: string; value: number }) => {
-    const positive = value >= 0;
-    return (
-      <div
-        className="flex items-center justify-between py-2.5"
-        style={{ borderTop: '1px solid var(--mt-border)' }}
-      >
-        <div className="flex items-center gap-2">
-          <span
-            className="inline-flex items-center justify-center w-6 h-6 rounded"
-            style={{
-              background: positive ? 'var(--mt-accent-soft)' : 'var(--mt-danger-soft)',
-              color: positive ? 'var(--mt-accent-text)' : 'var(--mt-danger-text)',
-            }}
-          >
-            {positive ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-          </span>
-          <span className="text-sm" style={{ color: 'var(--mt-text-secondary)' }}>{label}</span>
-        </div>
-        <span
-          className="font-mono font-semibold text-sm"
-          style={{ color: positive ? 'var(--mt-accent-text)' : 'var(--mt-danger-text)' }}
-        >
-          {formatRs(value)}
-        </span>
-      </div>
-    );
-  };
+  const openingCash = closingCash - netChange;
 
   return (
     <div className="mt-card p-4 h-full flex flex-col">
-      <div className="text-sm font-semibold mb-3" style={{ color: 'var(--mt-text-primary)' }}>
-        Cash Flow snapshot
+      <div className="mb-3">
+        <div className="text-sm font-semibold" style={{ color: 'var(--mt-text-primary)' }}>
+          Cash flow this year
+        </div>
+        <div className="text-[11px] mt-0.5" style={{ color: 'var(--mt-text-faint)' }}>
+          How cash moved across operating, investing, and financing
+        </div>
       </div>
 
-      <Row label="Operating activities" value={operating} />
-      <Row label="Investing activities" value={investing} />
-      <Row label="Financing activities" value={financing} />
+      <CashFlowWaterfall
+        opening={openingCash}
+        operating={operating}
+        investing={investing}
+        financing={financing}
+        closing={closingCash}
+      />
 
       <div
-        className="flex items-center justify-between py-2.5 mt-2"
-        style={{ borderTop: '2px solid var(--mt-border-strong)' }}
+        className="mt-3 px-3 py-2 text-[12px] rounded-md leading-snug"
+        style={{
+          background: 'var(--mt-trust-green-bg)',
+          color: 'var(--mt-trust-green-text)',
+        }}
       >
-        <div className="flex items-center gap-2">
-          <span className="inline-flex items-center justify-center w-6 h-6 rounded" style={{ background: 'var(--mt-bg-muted)', color: 'var(--mt-text-faint)' }}>
-            <Wallet size={14} />
-          </span>
-          <span className="text-sm font-medium" style={{ color: 'var(--mt-text-primary)' }}>Net change</span>
-        </div>
-        <span
-          className="font-mono font-semibold text-sm"
-          style={{ color: netChange >= 0 ? 'var(--mt-accent-text)' : 'var(--mt-danger-text)' }}
-        >
-          {formatRs(netChange)}
-        </span>
+        {generateInsight({ operating, investing, financing, openingCash, closingCash })}
       </div>
 
-      <div className="flex items-center justify-between mt-2">
-        <span className="text-[11px]" style={{ color: 'var(--mt-text-faint)' }}>Closing cash</span>
-        <span className="text-xs font-mono font-medium" style={{ color: 'var(--mt-text-primary)' }}>
-          {formatRs(closingCash)}
+      <div
+        className="flex items-center justify-between mt-3 pt-2 text-[11px]"
+        style={{ borderTop: '1px solid var(--mt-border)', color: 'var(--mt-text-faint)' }}
+      >
+        <span>Opening Rs{formatRs(openingCash).replace('Rs', '')}</span>
+        <span>Closing {formatRs(closingCash)}</span>
+        <span style={{ color: netChange >= 0 ? 'var(--mt-accent-text)' : 'var(--mt-danger-text)' }}>
+          Net {netChange >= 0 ? '+' : ''}{formatRs(netChange).replace('Rs', 'Rs')}
         </span>
       </div>
     </div>
   );
+}
+
+interface InsightInput {
+  operating: number;
+  investing: number;
+  financing: number;
+  openingCash: number;
+  closingCash: number;
+}
+
+function generateInsight({ operating, investing, financing, closingCash }: InsightInput): string {
+  const totalAbs = Math.abs(operating) + Math.abs(investing) + Math.abs(financing);
+  if (totalAbs === 0) return 'No cash movement in this period.';
+
+  const opShare = Math.abs(operating) / totalAbs;
+  const invShare = Math.abs(investing) / totalAbs;
+  const finShare = Math.abs(financing) / totalAbs;
+
+  if (operating > 0 && opShare > 0.6) {
+    return finShare < 0.05
+      ? 'Operating cash carried the year. Financing was flat — ask whether the OD needs restructuring.'
+      : 'Operating cash carried the year. Investing and financing were small relative to operations.';
+  }
+  if (operating < 0) {
+    return 'Operating activities consumed cash this period — review collections and cost timing.';
+  }
+  if (financing > 0 && finShare > 0.4) {
+    return 'Financing brought in the bulk of cash this period.';
+  }
+  if (investing < 0 && invShare > 0.4) {
+    return 'Investing absorbed a meaningful share of cash — capex or asset purchases drove the swing.';
+  }
+  return closingCash >= 0
+    ? 'Cash moved roughly evenly across activities; closing position is in surplus.'
+    : 'Cash moved roughly evenly across activities; closing position is in deficit.';
 }

@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import api from '../../api/client';
+import { formatRs, formatRsCompact } from '../../pages/ForecastModulePage';
 import KpiCard from './dashboard/KpiCard';
 import TrendCard from './dashboard/TrendCard';
 import CompositionCard from './dashboard/CompositionCard';
-import CashBankCard from './dashboard/CashBankCard';
 import PartyTopCard from './dashboard/PartyTopCard';
 import CashFlowSnapshotCard from './dashboard/CashFlowSnapshotCard';
-import CompanyContributionCard from './dashboard/CompanyContributionCard';
+import TrustBar from './dashboard/TrustBar';
 
 interface DashboardPayload {
   period: { from: string; to: string };
@@ -49,7 +49,11 @@ interface Props {
 
 /**
  * Dashboard — the default landing tab inside VcfoModulePage. One fetch
- * pulls everything; the layout fans out into eight focused widget cards.
+ * pulls everything; the layout fans out into a 5-row vertical stack
+ * answering the three questions a CFO opens this page to ask:
+ *   (1) Is the data trustworthy?           — Row 0 trust bar
+ *   (2) How are we performing right now?   — Rows 1–3 (KPIs, trend, P&L, cash)
+ *   (3) What needs my attention this week? — Row 4 (receivables, payables)
  *
  * The parent page handles the toolbar (FY / period / company / bifurcate)
  * and the top-tab nav, so this component is pure content.
@@ -102,84 +106,140 @@ export default function DashboardReport({ companyId, companyIds, from, to }: Pro
     );
   }
 
-  const showPerCompany = data.scope.consolidated && (data.perCompany?.length ?? 0) > 1;
+  // ── Derived values used in Row 1 KPIs ─────────────────────────────
+  const netCash = data.cashAndBank.total;
+  const accountCount = data.cashAndBank.ledgers.length;
+  const workingCapitalGap = data.receivables.total - data.payables.total;
+
+  const priorRevenue = data.kpis.revenue.prior;
+  const priorGrossProfit = data.kpis.grossProfit.prior;
+  const currentMargin = data.kpis.grossProfit.marginPct;
+  const priorMargin = priorRevenue > 0 ? (priorGrossProfit / priorRevenue) * 100 : null;
+  const marginPts = priorMargin !== null ? currentMargin - priorMargin : null;
+
+  const headlineLabel = `Headline · ${data.period.from} to ${data.period.to}`;
 
   return (
     <div className="space-y-3 md:space-y-4">
-      {/* Row 1 — KPI strip */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-        <KpiCard
-          label="Revenue"
-          value={data.kpis.revenue.value}
-          deltaPct={data.kpis.revenue.deltaPct}
-          sublabel={`vs ${data.prior.from} → ${data.prior.to}`}
-        />
-        <KpiCard
-          label="Gross Profit"
-          value={data.kpis.grossProfit.value}
-          deltaPct={data.kpis.grossProfit.deltaPct}
-          sublabel={`Margin ${data.kpis.grossProfit.marginPct.toFixed(1)}%`}
-        />
-        <KpiCard
-          label="Net Profit"
-          value={data.kpis.netProfit.value}
-          deltaPct={data.kpis.netProfit.deltaPct}
-          sublabel={`Margin ${data.kpis.netProfit.marginPct.toFixed(1)}%`}
-          tone={data.kpis.netProfit.value >= 0 ? 'positive' : 'negative'}
-        />
-        <KpiCard
-          label="Cash & Bank"
-          value={data.kpis.cashAndBank.value}
-          sublabel={`As of ${data.kpis.cashAndBank.asOf}`}
-        />
-      </div>
+      {/* Row 0 — Trust bar (auto-hides when sync is healthy) */}
+      <TrustBar />
 
-      {/* Row 2 — Trend (8 cols) + Cash & Bank (4 cols) */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4">
-        <div className="md:col-span-8">
-          <TrendCard
-            columns={data.trend.columns}
-            revenue={data.trend.revenue}
-            netProfit={data.trend.netProfit}
+      {/* Row 1 — Headline KPIs */}
+      <div>
+        <div
+          className="text-[11px] uppercase font-semibold mb-2"
+          style={{ color: 'var(--mt-text-faint)', letterSpacing: '0.5px' }}
+        >
+          {headlineLabel}
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
+          <KpiCard
+            label="Revenue"
+            value={data.kpis.revenue.value}
+            deltaPct={data.kpis.revenue.deltaPct}
+            prior={data.kpis.revenue.prior}
+            sublabel={`vs ${data.prior.from} → ${data.prior.to}`}
+          />
+          <KpiCard
+            label="Gross margin"
+            value={currentMargin}
+            valueOverride={`${currentMargin.toFixed(1)}%`}
+            deltaPct={marginPts}
+            prior={priorRevenue}
+            deltaUnit="pts"
+            sublabel={priorMargin !== null
+              ? `Prior ${priorMargin.toFixed(1)}% · Gross profit ${formatRsCompact(data.kpis.grossProfit.value)}`
+              : `Gross profit ${formatRsCompact(data.kpis.grossProfit.value)}`}
+          />
+          <KpiCard
+            label="Net cash position"
+            value={netCash}
+            tone={netCash < 0 ? 'negative' : 'neutral'}
+            sublabel={netCash < 0
+              ? `${accountCount} ${accountCount === 1 ? 'account' : 'accounts'} · likely OD`
+              : `Across ${accountCount} ${accountCount === 1 ? 'account' : 'accounts'}`}
+            tooltip={<NetCashTooltip ledgers={data.cashAndBank.ledgers} asOf={data.cashAndBank.asOf} />}
+          />
+          <KpiCard
+            label="Working capital gap"
+            value={workingCapitalGap}
+            tone={workingCapitalGap < 0 ? 'negative' : 'neutral'}
+            borderTone={workingCapitalGap < 0 ? 'danger' : undefined}
+            sublabel={`Receivables ${formatRsCompact(data.receivables.total)} · Payables ${formatRsCompact(data.payables.total)}`}
           />
         </div>
-        <div className="md:col-span-4">
-          <CashBankCard
-            asOf={data.cashAndBank.asOf}
-            total={data.cashAndBank.total}
-            ledgers={data.cashAndBank.ledgers}
-          />
-        </div>
       </div>
 
-      {/* Row 3 — Composition + Cash Flow snapshot */}
+      {/* Row 2 — Performance over time (full width) */}
+      <TrendCard
+        columns={data.trend.columns}
+        revenue={data.trend.revenue}
+        netProfit={data.trend.netProfit}
+      />
+
+      {/* Row 3 — P&L story | Cash story */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
         <CompositionCard {...data.composition} />
         <CashFlowSnapshotCard {...data.cashFlow} />
       </div>
 
-      {/* Row 4 — Receivables + Payables */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
-        <PartyTopCard
-          title="Top 10 Receivables"
-          subtitle="Sundry Debtors"
-          total={data.receivables.total}
-          entries={data.receivables.top}
-          color="#10b981"
-        />
-        <PartyTopCard
-          title="Top 10 Payables"
-          subtitle="Sundry Creditors"
-          total={data.payables.total}
-          entries={data.payables.top}
-          color="#f59e0b"
-        />
+      {/* Row 4 — Working capital action board */}
+      <div>
+        <div
+          className="text-[11px] uppercase font-semibold mb-2"
+          style={{ color: 'var(--mt-text-faint)', letterSpacing: '0.5px' }}
+        >
+          Action board · Working capital
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+          <PartyTopCard
+            title="Money owed to us"
+            subtitle="Sundry Debtors"
+            entityLabel="customers"
+            total={data.receivables.total}
+            entries={data.receivables.top}
+          />
+          <PartyTopCard
+            title="Money we owe"
+            subtitle="Sundry Creditors"
+            entityLabel="vendors"
+            total={data.payables.total}
+            entries={data.payables.top}
+          />
+        </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Row 5 — Per-company (consolidation, ≥2 companies) */}
-      {showPerCompany && (
-        <CompanyContributionCard entries={data.perCompany!} />
-      )}
+/** Per-account breakdown rendered inside the Net Cash Position popover. */
+function NetCashTooltip({
+  ledgers, asOf,
+}: {
+  ledgers: Array<{ name: string; group: 'Cash-in-Hand' | 'Bank Accounts'; balance: number }>;
+  asOf: string;
+}) {
+  if (ledgers.length === 0) {
+    return <div className="text-[11px]" style={{ color: 'var(--mt-text-faint)' }}>No ledgers found.</div>;
+  }
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide font-semibold mb-2" style={{ color: 'var(--mt-text-faint)' }}>
+        Per account · As of {asOf}
+      </div>
+      <div className="space-y-1">
+        {ledgers.map((l) => (
+          <div key={`${l.group}-${l.name}`} className="flex items-center justify-between gap-3 text-[11px]">
+            <span className="truncate" title={l.name} style={{ color: 'var(--mt-text-secondary)' }}>{l.name}</span>
+            <span
+              className="font-mono shrink-0"
+              style={{ color: l.balance < 0 ? 'var(--mt-danger-text)' : 'var(--mt-text-primary)' }}
+            >
+              {formatRs(l.balance)}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -187,10 +247,7 @@ export default function DashboardReport({ companyId, companyIds, from, to }: Pro
 /** Pulse-skeleton placeholder while the fetch is in flight. */
 function DashboardSkeleton() {
   const block = (h: string) => (
-    <div
-      className="mt-card p-4 animate-pulse"
-      style={{ minHeight: h }}
-    >
+    <div className="mt-card p-4 animate-pulse" style={{ minHeight: h }}>
       <div className="h-3 w-24 rounded mb-3" style={{ background: 'var(--mt-bg-muted)' }} />
       <div className="h-7 w-32 rounded" style={{ background: 'var(--mt-bg-muted)' }} />
     </div>
@@ -200,12 +257,9 @@ function DashboardSkeleton() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
         {block('72px')}{block('72px')}{block('72px')}{block('72px')}
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4">
-        <div className="md:col-span-8">{block('260px')}</div>
-        <div className="md:col-span-4">{block('260px')}</div>
-      </div>
+      {block('260px')}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
-        {block('220px')}{block('220px')}
+        {block('260px')}{block('260px')}
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
         {block('260px')}{block('260px')}
