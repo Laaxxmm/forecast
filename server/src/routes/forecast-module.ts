@@ -922,6 +922,163 @@ router.delete('/category-mapping/:id', requireWriteAccess, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Tally chart-of-accounts pickers (drive the Category Mapping UI) ─────────
+//
+// Two read-only endpoints that power the Tally Group dropdown and the Ledger
+// multi-select on the Category Mapping editor. Both union across every
+// company synced via the desktop agent so the operator picks once for the
+// whole tenant (mappings are tenant-wide, not per-company).
+//
+// Top-level only: a Tally group is "top-level" when it has no parent OR its
+// parent is "Primary" (Tally's root sentinel). The BvA matcher rolls every
+// TB row up to its root before joining against the mapping table, so
+// listing sub-groups in the dropdown would silently match the parent's
+// whole tree — confusing UX. If the operator wants to scope to a subset of
+// a parent group's ledgers, they use the Ledger multi-select (handled by
+// the second endpoint below).
+
+interface TallyGroup {
+  name: string;
+  /** Number of distinct synced companies that have a group with this name. */
+  companyCount: number;
+  /** Number of distinct ledgers under this group (and its sub-tree) across all companies. */
+  ledgerCount: number;
+  /** 'BS' (balance-sheet item), 'PL' (profit-and-loss item), or null if not classified. */
+  side: 'BS' | 'PL' | null;
+}
+
+router.get('/tally-groups', async (req, res) => {
+  const db = req.tenantDb!;
+  // Step 1: find every top-level group across every synced company. A row
+  // qualifies when its parent_group is null/empty or 'Primary'. We use a
+  // CTE walk to handle accidental missing parent rows defensively.
+  const rows = db.all(
+    `WITH RECURSIVE
+       all_groups AS (
+         SELECT company_id, group_name, parent_group, bs_pl
+           FROM vcfo_account_groups
+       ),
+       /* For each group, walk to the topmost ancestor (root) within its company. */
+       roots(company_id, group_name, root_name, depth) AS (
+         SELECT company_id, group_name, group_name, 0
+           FROM all_groups
+          WHERE parent_group IS NULL OR parent_group = '' OR parent_group = 'Primary'
+         UNION ALL
+         SELECT g.company_id, g.group_name, r.root_name, r.depth + 1
+           FROM all_groups g
+           JOIN roots r
+             ON g.company_id = r.company_id
+            AND g.parent_group = r.group_name
+          WHERE r.depth < 16
+       )
+     SELECT roots.root_name AS name,
+            COUNT(DISTINCT roots.company_id) AS companyCount,
+            (
+              SELECT COUNT(DISTINCT l.name)
+                FROM vcfo_ledgers l
+                JOIN roots r2
+                  ON r2.company_id = l.company_id
+                 AND r2.group_name = l.group_name
+               WHERE r2.root_name = roots.root_name
+            ) AS ledgerCount,
+            (
+              SELECT bs_pl
+                FROM all_groups g2
+               WHERE g2.group_name = roots.root_name
+               LIMIT 1
+            ) AS side
+       FROM roots
+      WHERE roots.depth = 0
+      GROUP BY roots.root_name
+      ORDER BY roots.root_name COLLATE NOCASE`,
+  ) as Array<{ name: string; companyCount: number; ledgerCount: number; side: string | null }>;
+  const groups: TallyGroup[] = rows
+    .filter(r => r.name && r.name !== 'Primary')
+    .map(r => ({
+      name: r.name,
+      companyCount: r.companyCount,
+      ledgerCount: r.ledgerCount,
+      side: r.side === 'BS' ? 'BS' : r.side === 'PL' ? 'PL' : null,
+    }));
+  res.json(groups);
+});
+
+router.get('/tally-groups/:groupName/ledgers', async (req, res) => {
+  const db = req.tenantDb!;
+  const groupName = requireString(req.params.groupName, 'groupName', 200);
+  // Find every ledger whose group rolls up to the requested top-level group.
+  // Same root-walk CTE as above but parameterised by name.
+  const rows = db.all(
+    `WITH RECURSIVE descendants(company_id, group_name, depth) AS (
+       SELECT company_id, group_name, 0
+         FROM vcfo_account_groups
+        WHERE group_name = ?
+       UNION ALL
+       SELECT g.company_id, g.group_name, d.depth + 1
+         FROM vcfo_account_groups g
+         JOIN descendants d
+           ON g.company_id = d.company_id
+          AND g.parent_group = d.group_name
+        WHERE d.depth < 16
+     )
+     SELECT l.name AS name,
+            GROUP_CONCAT(DISTINCT c.name) AS companies
+       FROM vcfo_ledgers l
+       JOIN descendants d
+         ON d.company_id = l.company_id
+        AND d.group_name = l.group_name
+       JOIN vcfo_companies c
+         ON c.id = l.company_id
+      GROUP BY l.name
+      ORDER BY l.name COLLATE NOCASE`,
+    groupName,
+  ) as Array<{ name: string; companies: string }>;
+  res.json(rows.map(r => ({
+    name: r.name,
+    companies: (r.companies || '').split(',').filter(Boolean),
+  })));
+});
+
+/**
+ * Expand a stored ledger_filter pattern into the actual ledger names that
+ * currently match. Drives the "Switch to multi-select" affordance on the
+ * Category Mapping editor: when an existing row has a wildcard pattern, the
+ * UI calls this to pre-populate the multi-select with what the pattern
+ * resolves to today.
+ */
+router.post('/tally-groups/:groupName/expand-filter', async (req, res) => {
+  const db = req.tenantDb!;
+  const groupName = requireString(req.params.groupName, 'groupName', 200);
+  const filter = optionalString(req.body.filter, 'filter', 500) || '';
+  const patterns = filter.split(',').map(p => p.trim()).filter(Boolean);
+  if (patterns.length === 0) return res.json({ matches: [] });
+
+  const likeClause = patterns.map(() => 'l.name LIKE ?').join(' OR ');
+  const rows = db.all(
+    `WITH RECURSIVE descendants(company_id, group_name, depth) AS (
+       SELECT company_id, group_name, 0
+         FROM vcfo_account_groups
+        WHERE group_name = ?
+       UNION ALL
+       SELECT g.company_id, g.group_name, d.depth + 1
+         FROM vcfo_account_groups g
+         JOIN descendants d
+           ON g.company_id = d.company_id
+          AND g.parent_group = d.group_name
+        WHERE d.depth < 16
+     )
+     SELECT DISTINCT l.name AS name
+       FROM vcfo_ledgers l
+       JOIN descendants d
+         ON d.company_id = l.company_id
+        AND d.group_name = l.group_name
+      WHERE ${likeClause}
+      ORDER BY l.name COLLATE NOCASE`,
+    groupName, ...patterns,
+  ) as Array<{ name: string }>;
+  res.json({ matches: rows.map(r => r.name) });
+});
+
 // === BUDGET vs ACTUAL (Step 8) ===
 // Compares forecast totals from forecast_items + forecast_values against
 // real Tally totals from vcfo_trial_balance, joined via forecast_category
