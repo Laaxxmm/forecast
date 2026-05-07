@@ -2,6 +2,7 @@ import { formatRs } from '../../../pages/ForecastModulePage';
 import CashFlowWaterfall from './CashFlowWaterfall';
 
 interface Props {
+  opening: number;
   operating: number;
   investing: number;
   financing: number;
@@ -13,14 +14,11 @@ interface Props {
  * Cash flow this year — waterfall showing Opening cash → +Operating →
  * -Investing → ±Financing → Closing. Highlights which activity carried
  * the period at a glance, not just the magnitudes.
- *
- * Opening cash is derived (closing - netChange) since the API doesn't
- * yet return it. Phase 2 will add an explicit field.
  */
 export default function CashFlowSnapshotCard({
-  operating, investing, financing, netChange, closingCash,
+  opening, operating, investing, financing, netChange, closingCash,
 }: Props) {
-  const openingCash = closingCash - netChange;
+  const openingCash = opening;
 
   return (
     <div className="mt-card p-4 h-full flex flex-col">

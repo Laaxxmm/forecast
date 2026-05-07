@@ -31,13 +31,21 @@ interface DashboardPayload {
     asOf: string; total: number;
     ledgers: Array<{ name: string; group: 'Cash-in-Hand' | 'Bank Accounts'; balance: number }>;
   };
-  receivables: { total: number; top: Array<{ party: string; amount: number }> };
-  payables:    { total: number; top: Array<{ party: string; amount: number }> };
+  receivables: { total: number; top: Array<PartyEntry> };
+  payables:    { total: number; top: Array<PartyEntry> };
   cashFlow: {
+    opening: number;
     operating: number; investing: number; financing: number;
     netChange: number; closingCash: number;
   };
   perCompany?: Array<{ id: number; name: string; revenue: number; netProfit: number }>;
+}
+
+export interface PartyEntry {
+  party: string;
+  amount: number;
+  /** Age in days of the oldest contributing voucher entry — Phase 2 aging proxy. */
+  oldestEntryDays: number | null;
 }
 
 interface Props {

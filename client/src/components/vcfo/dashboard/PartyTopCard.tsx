@@ -1,9 +1,5 @@
-import { formatRs } from '../../../pages/ForecastModulePage';
-
-interface PartyEntry {
-  party: string;
-  amount: number;
-}
+import { formatRs, formatRsCompact } from '../../../pages/ForecastModulePage';
+import type { PartyEntry } from '../DashboardReport';
 
 interface Props {
   title: string;                      // 'Money owed to us' | 'Money we owe'
@@ -16,17 +12,28 @@ interface Props {
 }
 
 const VISIBLE_ROWS = 5;
+const AGING_RED_THRESHOLD = 60;
+const AGING_AMBER_THRESHOLD = 30;
 
 /**
  * Top party ledgers — clean table (top 5 with "+ N more" footer) replacing
- * the previous horizontal bar chart. Aging pills are deferred to Phase 2;
- * the column slot is reserved with a TODO so the structure is ready when
- * backend support lands.
+ * the previous horizontal bar chart. Each row carries an aging pill keyed
+ * to the age of the OLDEST contributing voucher entry: red ≥60 days,
+ * amber 30–60, green <30. The header sub-line summarises the total stuck
+ * in the red bucket so the CFO can act on the worst-aged amounts first.
+ *
+ * The aging value is a proxy, not full FIFO aging — see the backend
+ * comment on PartyEntry.oldestEntryDays.
  */
 export default function PartyTopCard({ title, total, entries, subtitle, entityLabel }: Props) {
   const visible = entries.slice(0, VISIBLE_ROWS);
   const rest = entries.slice(VISIBLE_ROWS);
   const restTotal = rest.reduce((sum, e) => sum + e.amount, 0);
+
+  const overdueAmount = entries
+    .filter((e) => (e.oldestEntryDays ?? 0) >= AGING_RED_THRESHOLD)
+    .reduce((sum, e) => sum + e.amount, 0);
+  const hasAgingData = entries.some((e) => e.oldestEntryDays != null);
 
   return (
     <div className="mt-card p-4 h-full flex flex-col">
@@ -41,7 +48,11 @@ export default function PartyTopCard({ title, total, entries, subtitle, entityLa
       <div className="text-[11px] mb-3" style={{ color: 'var(--mt-text-faint)' }}>
         {entries.length} {entityLabel ?? 'parties'}
         {subtitle ? ` · ${subtitle}` : ''}
-        {/* TODO Phase 2: aging summary, e.g. "· Rs2.4L overdue 60+ days" */}
+        {hasAgingData && overdueAmount > 0 && (
+          <span style={{ color: 'var(--mt-danger-text)' }}>
+            {' · '}{formatRsCompact(overdueAmount)} aged 60+ days
+          </span>
+        )}
       </div>
 
       {entries.length === 0 ? (
@@ -53,14 +64,14 @@ export default function PartyTopCard({ title, total, entries, subtitle, entityLa
           {visible.map((e, i) => (
             <div
               key={`${e.party}-${i}`}
-              className="flex items-center justify-between py-2 text-[12px]"
+              className="flex items-center justify-between gap-2 py-2 text-[12px]"
               style={{ borderTop: '1px solid var(--mt-border)' }}
             >
-              <span className="truncate flex-1 pr-3" title={e.party} style={{ color: 'var(--mt-text-secondary)' }}>
+              <span className="truncate flex-1" title={e.party} style={{ color: 'var(--mt-text-secondary)' }}>
                 {e.party}
               </span>
-              {/* TODO Phase 2: aging pill column goes here */}
-              <span className="font-mono shrink-0" style={{ color: 'var(--mt-text-primary)' }}>
+              {e.oldestEntryDays != null && <AgingPill days={e.oldestEntryDays} />}
+              <span className="font-mono shrink-0 w-24 text-right" style={{ color: 'var(--mt-text-primary)' }}>
                 {formatRs(e.amount)}
               </span>
             </div>
@@ -77,5 +88,29 @@ export default function PartyTopCard({ title, total, entries, subtitle, entityLa
         </div>
       )}
     </div>
+  );
+}
+
+function AgingPill({ days }: { days: number }) {
+  const tone = days >= AGING_RED_THRESHOLD ? 'red'
+    : days >= AGING_AMBER_THRESHOLD ? 'amber'
+    : 'green';
+  const palette = tone === 'red'
+    ? { bg: 'var(--mt-trust-red-bg)',   color: 'var(--mt-trust-red-text)' }
+    : tone === 'amber'
+    ? { bg: 'var(--mt-trust-amber-bg)', color: 'var(--mt-trust-amber-text)' }
+    : { bg: 'var(--mt-trust-green-bg)', color: 'var(--mt-trust-green-text)' };
+  return (
+    <span
+      className="text-[10px] font-medium shrink-0 rounded"
+      style={{
+        background: palette.bg,
+        color: palette.color,
+        padding: '2px 6px',
+      }}
+      title={`Oldest entry ${days} days old`}
+    >
+      {days}d
+    </span>
   );
 }

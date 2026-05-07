@@ -54,10 +54,11 @@ export interface DashboardPayload {
     ledgers: Array<{ name: string; group: 'Cash-in-Hand' | 'Bank Accounts'; balance: number }>;
   };
 
-  receivables: { total: number; top: Array<{ party: string; amount: number }> };
-  payables:    { total: number; top: Array<{ party: string; amount: number }> };
+  receivables: { total: number; top: Array<PartyEntry> };
+  payables:    { total: number; top: Array<PartyEntry> };
 
   cashFlow: {
+    opening: number;
     operating: number;
     investing: number;
     financing: number;
@@ -67,6 +68,23 @@ export interface DashboardPayload {
 
   /** Present only when scope is consolidated AND there are 2+ companies. */
   perCompany?: Array<{ id: number; name: string; revenue: number; netProfit: number }>;
+}
+
+/**
+ * One party row in the receivables/payables top list. `oldestEntryDays` is a
+ * pragmatic Phase-2 aging proxy: the age in days, as of the report date, of
+ * the OLDEST voucher entry contributing to the party's balance. The frontend
+ * uses it to colour the aging pill (>60 red, 30-60 amber, <30 green).
+ *
+ * It's not full FIFO aging (which would need invoice-level matching to
+ * payments) but it's a meaningful improvement over no aging signal at all,
+ * and unlike FIFO it adds zero query cost — just a MIN() in the existing
+ * group-by.
+ */
+export interface PartyEntry {
+  party: string;
+  amount: number;
+  oldestEntryDays: number | null;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -111,7 +129,7 @@ function getTopPartyLedgers(
   asOf: string,
   parentGroup: 'Sundry Debtors' | 'Sundry Creditors',
   limit = 10,
-): Array<{ party: string; amount: number }> {
+): Array<PartyEntry> {
   if (companyIds.length === 0) return [];
 
   // Walk each company's group tree to collect every group that rolls up under
@@ -131,8 +149,13 @@ function getTopPartyLedgers(
   // through vcfo_ledgers so we can filter by group_name (the entries table
   // doesn't carry group). is_party_ledger = 1 keeps party rows only — excludes
   // contra hits like opening journal entries on the parent ledger.
+  //
+  // MIN(voucher_date) gives us the date of the oldest entry contributing to
+  // the party's balance — used as the aging proxy on the frontend.
   const rows = db.all(
-    `SELECT e.ledger_name AS party, SUM(e.credit - e.debit) AS net_amount
+    `SELECT e.ledger_name AS party,
+            SUM(e.credit - e.debit) AS net_amount,
+            MIN(e.voucher_date)     AS oldest_voucher_date
      FROM vcfo_voucher_ledger_entries e
      JOIN vcfo_ledgers l
        ON l.name = e.ledger_name AND l.company_id = e.company_id
@@ -148,14 +171,26 @@ function getTopPartyLedgers(
     asOf,
     ...Array.from(groupNames),
     limit,
-  ) as Array<{ party: string; net_amount: number }>;
+  ) as Array<{ party: string; net_amount: number; oldest_voucher_date: string | null }>;
+
+  const asOfMs = new Date(asOf + 'T00:00:00').getTime();
 
   // Display sign: receivables are stored credit-positive but flipped for the
   // user (we are owed → positive amount). Payables stay credit-positive.
-  return rows.map((r) => ({
-    party: r.party,
-    amount: parentGroup === 'Sundry Debtors' ? -r.net_amount : r.net_amount,
-  }));
+  return rows.map((r) => {
+    let oldestEntryDays: number | null = null;
+    if (r.oldest_voucher_date) {
+      const oldestMs = new Date(r.oldest_voucher_date + 'T00:00:00').getTime();
+      if (!Number.isNaN(oldestMs)) {
+        oldestEntryDays = Math.max(0, Math.round((asOfMs - oldestMs) / 86400000));
+      }
+    }
+    return {
+      party: r.party,
+      amount: parentGroup === 'Sundry Debtors' ? -r.net_amount : r.net_amount,
+      oldestEntryDays,
+    };
+  });
 }
 
 /**
@@ -312,6 +347,7 @@ export function buildDashboard(
     receivables: { total: receivablesTotal, top: topReceivables },
     payables: { total: payablesTotal, top: topPayables },
     cashFlow: {
+      opening: cf.openingCash,
       operating: cf.operatingTotal,
       investing: cf.investingTotal,
       financing: cf.financingTotal,
