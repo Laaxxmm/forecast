@@ -62,6 +62,44 @@ export default function TrialBalanceReport({ companyId, companyIds, from, to }: 
       .finally(() => setLoading(false));
   }, [companyId, companyIds, from, to]);
 
+  // ── Hooks must run on every render — see React error #310 ────────────────
+  // These useMemo calls used to live below the early returns, which made
+  // the hook count change between the loading and loaded renders and
+  // crashed the page. Compute them unconditionally with null-safe inputs.
+
+  // Server-side groups are preferred; fall back to client-side grouping for
+  // older server responses that didn't populate `groups` yet.
+  const allGroups = useMemo<TrialBalanceGroup[]>(() => {
+    if (!data) return [];
+    return data.groups && data.groups.length > 0
+      ? data.groups
+      : foldRowsClientSide(data.rows);
+  }, [data]);
+
+  // Find-in-statement search. Matches a group OR any of its child ledgers; we
+  // expand matched groups automatically so the matching child is visible.
+  const groups = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return allGroups;
+    return allGroups
+      .map(g => {
+        const groupHit = g.groupName.toLowerCase().includes(q);
+        const matchedChildren = g.children.filter(c => c.ledgerName.toLowerCase().includes(q));
+        if (groupHit) return g; // group name matches → show whole group
+        if (matchedChildren.length > 0) return { ...g, children: matchedChildren };
+        return null;
+      })
+      .filter((g): g is TrialBalanceGroup => g != null);
+  }, [allGroups, search]);
+
+  // When a search filters to specific children, force-expand those groups.
+  const effectiveExpanded = useMemo(() => {
+    if (!search.trim()) return expanded;
+    const next = new Set(expanded);
+    for (const g of groups) next.add(g.key);
+    return next;
+  }, [expanded, groups, search]);
+
   if (!companyId && !companyIds) {
     return (
       <div className="bg-dark-800 border border-dark-400/30 rounded-2xl p-8 text-center">
@@ -89,37 +127,6 @@ export default function TrialBalanceReport({ companyId, companyIds, from, to }: 
       return next;
     });
   };
-
-  // Server-side groups are preferred; fall back to client-side grouping for
-  // older server responses that didn't populate `groups` yet.
-  const allGroups: TrialBalanceGroup[] =
-    data.groups && data.groups.length > 0
-      ? data.groups
-      : foldRowsClientSide(data.rows);
-
-  // Find-in-statement search. Matches a group OR any of its child ledgers; we
-  // expand matched groups automatically so the matching child is visible.
-  const groups = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return allGroups;
-    return allGroups
-      .map(g => {
-        const groupHit = g.groupName.toLowerCase().includes(q);
-        const matchedChildren = g.children.filter(c => c.ledgerName.toLowerCase().includes(q));
-        if (groupHit) return g; // group name matches → show whole group
-        if (matchedChildren.length > 0) return { ...g, children: matchedChildren };
-        return null;
-      })
-      .filter((g): g is TrialBalanceGroup => g != null);
-  }, [allGroups, search]);
-
-  // When a search filters to specific children, force-expand those groups.
-  const effectiveExpanded = useMemo(() => {
-    if (!search.trim()) return expanded;
-    const next = new Set(expanded);
-    for (const g of groups) next.add(g.key);
-    return next;
-  }, [expanded, groups, search]);
 
   const renderGroup = (g: TrialBalanceGroup): ReactNode => {
     const isOpen = effectiveExpanded.has(g.key);

@@ -63,6 +63,21 @@ export default function BalanceSheetReport({ companyId, companyIds, asOf, view, 
       .finally(() => setLoading(false));
   }, [companyId, companyIds, asOf, view, from, bifurcate]);
 
+  // ── Hooks must run on every render — see React error #310 ────────────────
+  // Hoisted above the loading / error / no-data early returns so the hook
+  // count stays stable across data-state transitions.
+  const allSections = data?.sections ?? [];
+  const { sections, expandKeys } = useMemo(
+    () => filterSectionTree(allSections, search),
+    [allSections, search]
+  );
+  const effectiveExpanded = useMemo(() => {
+    if (!search.trim()) return expanded;
+    const next = new Set(expanded);
+    expandKeys.forEach(k => next.add(k));
+    return next;
+  }, [expanded, expandKeys, search]);
+
   if (!companyId && !companyIds) {
     return (
       <div className="bg-dark-800 border border-dark-400/30 rounded-2xl p-8 text-center">
@@ -82,18 +97,7 @@ export default function BalanceSheetReport({ companyId, companyIds, asOf, view, 
     );
   }
 
-  const { columns, sections: allSections, totals, view: reportView, bifurcated, columnLabels } = data;
-  // Find-in-statement search prunes both sides to only matching subtrees.
-  const { sections, expandKeys } = useMemo(
-    () => filterSectionTree(allSections, search),
-    [allSections, search]
-  );
-  const effectiveExpanded = useMemo(() => {
-    if (!search.trim()) return expanded;
-    const next = new Set(expanded);
-    expandKeys.forEach(k => next.add(k));
-    return next;
-  }, [expanded, expandKeys, search]);
+  const { columns, totals, view: reportView, bifurcated, columnLabels } = data;
   const liabilities = sections.filter(s => s.side === 'liability');
   const assets = sections.filter(s => s.side === 'asset');
   const labelFor = (col: string): string => {
