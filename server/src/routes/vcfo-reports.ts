@@ -26,6 +26,7 @@ import {
   buildCashFlowMulti,
 } from '../services/vcfo-report-builder.js';
 import { buildDashboard } from '../services/vcfo-dashboard-builder.js';
+import { listAccessibleCompanies } from '../services/accessible-companies.js';
 import {
   renderXlsx,
   renderPdf,
@@ -113,100 +114,10 @@ async function resolveCompanyRefs(req: Request): Promise<CompanyRef[]> {
   return [...byId.values()];
 }
 
-/**
- * Pick the set of vcfo_companies the active user can see in the current
- * branch/stream context. Delegates filtering to platform.db.vcfo_company_mapping.
- */
-async function listAccessibleCompanies(req: Request): Promise<Array<{
-  id: number;
-  name: string;
-  location: string;
-  entity_type: string;
-  branchId: number | null;
-  streamId: number | null;
-  branchName: string | null;
-  streamName: string | null;
-  lastSyncedAt: string | null;
-}>> {
-  const db = req.tenantDb!;
-  const platformDb = await getPlatformHelper();
-
-  // Load the sidebar filter context
-  const activeBranchId = req.branchMode === 'specific' ? req.branchId : null;
-  const activeStreamId = req.streamMode === 'specific' ? req.streamId : null;
-
-  // Pull companies that have actually received data from the sync-agent.
-  // `last_full_sync_at IS NOT NULL` excludes the seed/ghost row that
-  // `ensureVcfoForSlug` plants on tenant creation (it carries the client
-  // display name, e.g. "MagnaCode Healthcare", which is NOT a real Tally
-  // company). Ordering by `last_full_sync_at DESC` means the UI's default
-  // auto-selection lands on the company the user most recently worked with
-  // — no "pick a company to see anything" friction on page load.
-  //
-  // Tie-breaker by name keeps results stable when two companies happened
-  // to be synced in the same second.
-  const companies = db.all(
-    `SELECT id, name, location, entity_type, last_full_sync_at
-     FROM vcfo_companies
-     WHERE is_active = 1
-       AND last_full_sync_at IS NOT NULL
-     ORDER BY last_full_sync_at DESC, name ASC`,
-  ) as Array<{ id: number; name: string; location: string; entity_type: string; last_full_sync_at: string }>;
-
-  if (companies.length === 0) return [];
-
-  // Pull the mapping rows for this client
-  const mappings = platformDb.all(
-    `SELECT tally_company_name, branch_id, stream_id
-     FROM vcfo_company_mapping
-     WHERE client_id = ?`,
-    req.clientId,
-  ) as Array<{ tally_company_name: string; branch_id: number | null; stream_id: number | null }>;
-  const byName = new Map(mappings.map(m => [m.tally_company_name.toLowerCase(), m]));
-
-  // Hydrate human-readable branch + stream names from platform.db. We do a
-  // separate pair of lookups (not a JOIN on the mapping query) so unmapped
-  // companies still resolve to `null` labels without blowing up the query.
-  const branches = platformDb.all(
-    `SELECT id, name FROM branches WHERE client_id = ?`,
-    req.clientId,
-  ) as Array<{ id: number; name: string }>;
-  const branchNameById = new Map<number, string>(branches.map(b => [b.id, b.name]));
-
-  const streams = platformDb.all(
-    `SELECT id, name FROM business_streams WHERE client_id = ?`,
-    req.clientId,
-  ) as Array<{ id: number; name: string }>;
-  const streamNameById = new Map<number, string>(streams.map(s => [s.id, s.name]));
-
-  const filtered = companies
-    .map(c => {
-      const m = byName.get(c.name.toLowerCase());
-      const branchId = m?.branch_id ?? null;
-      const streamId = m?.stream_id ?? null;
-      return {
-        id: c.id,
-        name: c.name,
-        location: c.location || '',
-        entity_type: c.entity_type || '',
-        branchId,
-        streamId,
-        branchName: branchId != null ? branchNameById.get(branchId) ?? null : null,
-        streamName: streamId != null ? streamNameById.get(streamId) ?? null : null,
-        lastSyncedAt: c.last_full_sync_at || null,
-      };
-    })
-    .filter(c => {
-      // If a branch is selected, keep companies mapped to it (or unmapped → still shown).
-      // Same for stream. This mirrors the permissive "NULL == include" rule used
-      // elsewhere (branchFilter in utils/branch.ts).
-      if (activeBranchId && c.branchId != null && c.branchId !== activeBranchId) return false;
-      if (activeStreamId && c.streamId != null && c.streamId !== activeStreamId) return false;
-      return true;
-    });
-
-  return filtered;
-}
+// Note: `listAccessibleCompanies` was extracted to
+// `services/accessible-companies.ts` so the BvA endpoint in forecast-module
+// can scope its actuals query by the same branch/stream rules these report
+// tabs use. Imported above.
 
 // ─── Endpoints ──────────────────────────────────────────────────────────────
 

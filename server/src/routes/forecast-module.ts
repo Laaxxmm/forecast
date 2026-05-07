@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { branchFilter, getBranchIdForInsert, streamFilter, getStreamIdForInsert } from '../utils/branch.js';
 import { requireInt, requireString, requireNumber, optionalString, optionalNumber, requireMonth, ValidationError } from '../middleware/validate.js';
+import { getAccessibleCompanyIds } from '../services/accessible-companies.js';
 
 const router = Router();
 
@@ -1142,7 +1143,21 @@ router.get('/budget-vs-actual', async (req, res) => {
   const hasActuals = tbCount > 0;
   const actual: Record<string, Record<string, number>> = {};
 
-  if (hasActuals) {
+  // Branch / stream scoping. `null` → "All branches" mode, no filter applied
+  // (admin consolidated view). `[]` → user picked a branch with zero mapped
+  // Tally companies, so actuals are zero across the board (skip queries).
+  // `[id, …]` → restrict the trial-balance query to those companies only.
+  const accessibleCompanyIds = await getAccessibleCompanyIds(req);
+  const hasCompanyFilter = accessibleCompanyIds !== null;
+  const skipActuals = hasCompanyFilter && accessibleCompanyIds.length === 0;
+  const companyFilterSql = hasCompanyFilter && accessibleCompanyIds.length > 0
+    ? ` AND tb.company_id IN (${accessibleCompanyIds.map(() => '?').join(',')})`
+    : '';
+  const companyFilterParams: number[] = hasCompanyFilter && accessibleCompanyIds.length > 0
+    ? accessibleCompanyIds
+    : [];
+
+  if (hasActuals && !skipActuals) {
     const mappings = db.all(
       'SELECT id, forecast_category, tally_group_name, ledger_filter FROM forecast_category_mapping'
     );
@@ -1181,9 +1196,9 @@ router.get('/budget-vs-actual', async (req, res) => {
          JOIN forecast_category_mapping fcm
            ON fcm.tally_group_name = COALESCE(r.root_name, tb.group_name)
           AND (fcm.ledger_filter IS NULL OR fcm.ledger_filter = '')
-        WHERE substr(tb.period_from, 1, 7) BETWEEN ? AND ?
+        WHERE substr(tb.period_from, 1, 7) BETWEEN ? AND ?${companyFilterSql}
         GROUP BY month, category`,
-      monthStart, monthEnd
+      monthStart, monthEnd, ...companyFilterParams
     );
     for (const row of filterlessRows) {
       if (!actual[row.category]) actual[row.category] = {};
@@ -1206,11 +1221,11 @@ router.get('/budget-vs-actual', async (req, res) => {
            FROM vcfo_trial_balance tb
            LEFT JOIN roots r
              ON r.company_id = tb.company_id AND r.group_name = tb.group_name
-          WHERE substr(tb.period_from, 1, 7) BETWEEN ? AND ?
+          WHERE substr(tb.period_from, 1, 7) BETWEEN ? AND ?${companyFilterSql}
             AND COALESCE(r.root_name, tb.group_name) = ?
             AND (${likeClause})
           GROUP BY month`,
-        monthStart, monthEnd, m.tally_group_name, ...patterns
+        monthStart, monthEnd, ...companyFilterParams, m.tally_group_name, ...patterns
       );
       for (const row of rows) {
         if (!actual[m.forecast_category]) actual[m.forecast_category] = {};
