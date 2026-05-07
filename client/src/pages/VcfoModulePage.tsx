@@ -22,10 +22,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import api from '../api/client';
-import { FileSpreadsheet, TrendingUp, Scale, Banknote, Columns, Trash2 } from 'lucide-react';
+import { LayoutDashboard, FileSpreadsheet, TrendingUp, Scale, Banknote, Columns, Trash2 } from 'lucide-react';
 import VcfoCompanyPicker, { VcfoCompany } from '../components/vcfo/VcfoCompanyPicker';
 import VcfoDownloadMenu from '../components/vcfo/VcfoDownloadMenu';
 import VcfoPeriodPicker, { PeriodValue } from '../components/vcfo/VcfoPeriodPicker';
+import DashboardReport from '../components/vcfo/DashboardReport';
 import TrialBalanceReport from '../components/vcfo/TrialBalanceReport';
 import ProfitLossReport from '../components/vcfo/ProfitLossReport';
 import BalanceSheetReport from '../components/vcfo/BalanceSheetReport';
@@ -34,20 +35,22 @@ import CashFlowReport from '../components/vcfo/CashFlowReport';
 interface FY { id: number; label: string; start_date: string; end_date: string; is_active: number; }
 
 const topTabs = [
+  { path: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, key: 'db' as const },
   { path: 'trial-balance', label: 'Trial Balance', icon: FileSpreadsheet, key: 'tb' as const },
   { path: 'profit-loss', label: 'Profit & Loss', icon: TrendingUp, key: 'pl' as const },
   { path: 'balance-sheet', label: 'Balance Sheet', icon: Scale, key: 'bs' as const },
   { path: 'cash-flow', label: 'Cash Flow', icon: Banknote, key: 'cf' as const },
 ];
 
-type ReportKey = 'tb' | 'pl' | 'bs' | 'cf';
+type ReportKey = 'db' | 'tb' | 'pl' | 'bs' | 'cf';
 
 function detectActiveReportKey(): ReportKey {
   const path = window.location.pathname;
+  if (path.endsWith('/trial-balance')) return 'tb';
   if (path.endsWith('/profit-loss')) return 'pl';
   if (path.endsWith('/balance-sheet')) return 'bs';
   if (path.endsWith('/cash-flow')) return 'cf';
-  return 'tb';
+  return 'db'; // default landing tab
 }
 
 export default function VcfoModulePage() {
@@ -181,6 +184,10 @@ export default function VcfoModulePage() {
   const buildDownloadParams = (format: 'xlsx' | 'pdf' | 'docx'): string | null => {
     if (!fromDate || !toDate) return null;
     if (companies.length === 0) return null;
+    // Dashboard download is intentionally not in v1 — return null so the
+    // download button stays disabled on that tab. The four detail tabs each
+    // have their own export already.
+    if (activeReportKey === 'db') return null;
     const params = new URLSearchParams({
       report: activeReportKey,
       format,
@@ -207,7 +214,7 @@ export default function VcfoModulePage() {
   };
 
   const selectedCompany = companies.find(c => c.id === selectedCompanyId) || null;
-  const downloadDisabled = !selectedFY || companies.length === 0;
+  const downloadDisabled = !selectedFY || companies.length === 0 || activeReportKey === 'db';
   const filenameHint = selectedCompany
     ? `${selectedCompany.name.replace(/[^a-z0-9]+/gi, '_')}_${activeReportKey}`
     : `consolidated_${activeReportKey}`;
@@ -400,7 +407,18 @@ export default function VcfoModulePage() {
           </div>
         ) : (
           <Routes>
-            <Route index element={<Navigate to="trial-balance" replace />} />
+            <Route index element={<Navigate to="dashboard" replace />} />
+            <Route
+              path="dashboard"
+              element={
+                <DashboardReport
+                  companyId={reportScope.companyId}
+                  companyIds={reportScope.companyIds}
+                  from={fromDate}
+                  to={toDate}
+                />
+              }
+            />
             <Route
               path="trial-balance"
               element={

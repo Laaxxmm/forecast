@@ -25,6 +25,7 @@ import {
   buildBalanceSheetMulti,
   buildCashFlowMulti,
 } from '../services/vcfo-report-builder.js';
+import { buildDashboard } from '../services/vcfo-dashboard-builder.js';
 import {
   renderXlsx,
   renderPdf,
@@ -304,6 +305,24 @@ router.get('/trial-balance', async (req, res) => {
   } catch (err: any) {
     console.error('[vcfo-reports] /trial-balance error', err);
     res.status(400).json({ error: err?.message || 'Failed to build trial balance' });
+  }
+});
+
+/**
+ * Dashboard — single-call payload powering the Dashboard tab. Wraps the same
+ * underlying builders (P&L / Cash Flow / BS helpers) plus one new SQL aggregate
+ * for top-N party ledgers, returning everything the page needs in one trip.
+ */
+router.get('/dashboard', async (req, res) => {
+  try {
+    const companies = await resolveCompanyRefs(req);
+    const from = requireDate(req.query.from, 'from');
+    const to = requireDate(req.query.to, 'to');
+    const payload = buildDashboard(req.tenantDb!, companies, from, to);
+    res.json(payload);
+  } catch (err: any) {
+    console.error('[vcfo-reports] /dashboard error', err);
+    res.status(400).json({ error: err?.message || 'Failed to build dashboard' });
   }
 });
 
