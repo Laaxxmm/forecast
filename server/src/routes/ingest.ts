@@ -16,11 +16,21 @@
 //   companies            → INSERT ... ON CONFLICT(name) DO UPDATE
 //   ledgers              → INSERT OR REPLACE  by (company_id, name)
 //   groups               → INSERT OR REPLACE  by (company_id, group_name)
-//   vouchers             → INSERT OR IGNORE   by the composite voucher UNIQUE index
+//   vouchers             → DELETE by (company_id, sync_month) THEN INSERT
 //   stockSummary         → INSERT OR REPLACE  by (company_id, period_from, period_to, item_name)
 //   trialBalance         → INSERT OR REPLACE  by (company_id, period_from, period_to, ledger_name)
-//   voucherLedgerEntries → INSERT OR IGNORE   by composite (company, date, type, number, ledger, debit, credit)
+//   voucherLedgerEntries → DELETE by (company_id, sync_month) THEN INSERT
 //   fyOpeningBalances    → INSERT OR REPLACE  by (company_id, fy_start, ledger_name)
+//
+// Why DELETE-then-INSERT for voucher tables: their UNIQUE keys include the
+// amount columns (debit/credit on voucherLedgerEntries, amount on vouchers)
+// to support Tally's legitimate "same ledger appears twice in one voucher
+// with different amounts" case. That makes plain INSERT OR IGNORE non-
+// idempotent under EDITS — when a voucher's amount changes in Tally, the
+// new value lands as a "different" unique row alongside the stale one,
+// double-counting in every report. Wiping the (company, sync_month)
+// bucket before inserting the freshly-pulled batch keeps the table in
+// sync with Tally even when prior vouchers were edited or deleted.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Router, Request, Response } from 'express';
@@ -121,6 +131,24 @@ function ingestVouchers(db: DbHelper, companyId: number, rows: any[]): number {
   let n = 0;
   db.beginBatch();
   try {
+    // Wipe the (company, sync_month) buckets present in this batch before
+    // inserting. See header comment for the rationale — INSERT OR IGNORE
+    // with `amount` in the UNIQUE key is not idempotent under voucher edits.
+    const months = new Set<string>();
+    for (const r of rows) {
+      if (!r?.date || !r?.ledgerName) continue;
+      months.add(String(r.date).slice(0, 7));
+    }
+    if (months.size > 0) {
+      const placeholders = Array.from(months).map(() => '?').join(',');
+      db.run(
+        `DELETE FROM vcfo_vouchers
+         WHERE company_id = ? AND sync_month IN (${placeholders})`,
+        companyId,
+        ...Array.from(months),
+      );
+    }
+
     for (const r of rows) {
       if (!r?.date || !r?.ledgerName) continue;
       const syncMonth = String(r.date).slice(0, 7); // YYYY-MM
@@ -277,14 +305,37 @@ function ingestTrialBalance(db: DbHelper, companyId: number, rows: any[]): numbe
  * Feeds the dynamic-TB service which composes any date range from these plus
  * FY-start openings. Composite UNIQUE includes (debit, credit) so Tally's
  * legitimate "same ledger appears twice in one voucher with different amounts"
- * case (e.g. split GST entries) lands as distinct rows. IGNORE (not REPLACE)
- * because a re-pull of the same month must be idempotent.
+ * case (e.g. split GST entries) lands as distinct rows.
+ *
+ * Idempotency under edits: we DELETE all existing rows for the (company_id,
+ * sync_month) buckets present in the batch before inserting. INSERT OR IGNORE
+ * alone is not enough — including (debit, credit) in the UNIQUE key means a
+ * voucher edited in Tally (amount changed) lands as a "different" unique row,
+ * leaving the stale row in place and double-counting in every report. The
+ * agent always re-emits a full month's worth of entries, so wiping that
+ * bucket first keeps the table in lock-step with Tally even when vouchers
+ * were edited, deleted, or renumbered upstream.
  */
 function ingestVoucherLedgerEntries(db: DbHelper, companyId: number, rows: any[]): number {
   const num = (v: any) => (v == null ? 0 : Number(v) || 0);
   let n = 0;
   db.beginBatch();
   try {
+    const months = new Set<string>();
+    for (const r of rows) {
+      if (!r?.voucherDate || !r?.ledgerName) continue;
+      months.add(String(r.voucherDate).slice(0, 7));
+    }
+    if (months.size > 0) {
+      const placeholders = Array.from(months).map(() => '?').join(',');
+      db.run(
+        `DELETE FROM vcfo_voucher_ledger_entries
+         WHERE company_id = ? AND sync_month IN (${placeholders})`,
+        companyId,
+        ...Array.from(months),
+      );
+    }
+
     for (const r of rows) {
       if (!r?.voucherDate || !r?.ledgerName) continue;
       const syncMonth = String(r.voucherDate).slice(0, 7);
