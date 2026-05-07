@@ -7,6 +7,7 @@ import CompositionCard from './dashboard/CompositionCard';
 import PartyTopCard from './dashboard/PartyTopCard';
 import CashFlowSnapshotCard from './dashboard/CashFlowSnapshotCard';
 import TrustBar from './dashboard/TrustBar';
+import WeeklyChangeCard from './dashboard/WeeklyChangeCard';
 
 interface DashboardPayload {
   period: { from: string; to: string };
@@ -39,6 +40,11 @@ interface DashboardPayload {
     netChange: number; closingCash: number;
   };
   perCompany?: Array<{ id: number; name: string; revenue: number; netProfit: number }>;
+  weekly: {
+    revenue: { last7d: number; prior7d: number; deltaPct: number | null };
+    netCash: { current: number; weekAgo: number; delta: number };
+    windows: { last7dFrom: string; last7dTo: string; prior7dFrom: string; prior7dTo: string };
+  };
 }
 
 export interface PartyEntry {
@@ -216,6 +222,13 @@ export default function DashboardReport({ companyId, companyIds, from, to }: Pro
           />
         </div>
       </div>
+
+      {/* Row 5 — What changed this week */}
+      <WeeklyChangeCard
+        revenue={data.weekly.revenue}
+        netCash={data.weekly.netCash}
+        windows={data.weekly.windows}
+      />
     </div>
   );
 }

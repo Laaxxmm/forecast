@@ -68,6 +68,19 @@ export interface DashboardPayload {
 
   /** Present only when scope is consolidated AND there are 2+ companies. */
   perCompany?: Array<{ id: number; name: string; revenue: number; netProfit: number }>;
+
+  /**
+   * Week-over-week deltas anchored at `to` — powers the dashboard's
+   * Row 5 "What changed this week" card. `null` for revenue.deltaPct
+   * means the prior 7-day window had zero revenue, so growth is not
+   * meaningful to render. Always present; the frontend hides the card
+   * if both deltas are zero (nothing happened in either week).
+   */
+  weekly: {
+    revenue: { last7d: number; prior7d: number; deltaPct: number | null };
+    netCash: { current: number; weekAgo: number; delta: number };
+    windows: { last7dFrom: string; last7dTo: string; prior7dFrom: string; prior7dTo: string };
+  };
 }
 
 /**
@@ -113,6 +126,13 @@ function priorWindow(from: string, to: string): { from: string; to: string } {
   const priorStart = new Date(priorEnd.getTime() - (lenDays - 1) * 86400000);
   const iso = (d: Date) => d.toISOString().slice(0, 10);
   return { from: iso(priorStart), to: iso(priorEnd) };
+}
+
+/** Anchor `to` minus `n` days as ISO YYYY-MM-DD. */
+function isoMinusDays(toIso: string, n: number): string {
+  const d = new Date(toIso + 'T00:00:00');
+  d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10);
 }
 
 /**
@@ -280,6 +300,30 @@ export function buildDashboard(
     });
   }
 
+  // 8. Week-over-week deltas — last 7d vs prior 7d, anchored at `to`.
+  //    Costs two extra P&L builds + one BS-closing pass per company.
+  //    Acceptable on this endpoint; revisit with an event-log table if
+  //    the dashboard's render budget tightens.
+  const last7dFrom  = isoMinusDays(to, 6);
+  const prior7dFrom = isoMinusDays(to, 13);
+  const prior7dTo   = isoMinusDays(to, 7);
+  const plLast7d  = buildProfitLossMulti(db, companies, last7dFrom,  to,         'yearly', false);
+  const plPrior7d = buildProfitLossMulti(db, companies, prior7dFrom, prior7dTo,  'yearly', false);
+  const revLast = plLast7d.grandTotals.revenue;
+  const revPrior = plPrior7d.grandTotals.revenue;
+  const revDeltaPct = revPrior === 0
+    ? null
+    : Math.round(((revLast - revPrior) / Math.abs(revPrior)) * 1000) / 10;
+
+  // Sign matches the Net Cash Position KPI in Row 1 — same source helper,
+  // no flip — so "delta = current - weekAgo" reads identically to the user.
+  let cashWeekAgo = 0;
+  for (const c of companies) {
+    const cashGroups = getGroupTree(db, c.id, 'Cash-in-Hand');
+    const bankGroups = getGroupTree(db, c.id, 'Bank Accounts');
+    cashWeekAgo += computeBSClosing(db, c.id, prior7dTo, [...cashGroups, ...bankGroups]);
+  }
+
   // ── Assemble payload ──────────────────────────────────────────────────────
   const cur = plCurrent.grandTotals;
   const pri = plPrior.grandTotals;
@@ -355,5 +399,10 @@ export function buildDashboard(
       closingCash: cf.closingCash,
     },
     perCompany,
+    weekly: {
+      revenue: { last7d: revLast, prior7d: revPrior, deltaPct: revDeltaPct },
+      netCash: { current: cashAndBankTotal, weekAgo: cashWeekAgo, delta: cashAndBankTotal - cashWeekAgo },
+      windows: { last7dFrom, last7dTo: to, prior7dFrom, prior7dTo },
+    },
   };
 }
