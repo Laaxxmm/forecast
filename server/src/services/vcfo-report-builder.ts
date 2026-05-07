@@ -211,7 +211,7 @@ function buildPLGroupSets(db: DbHelper, companyId: number): GroupSets {
  * (inclusive). Tally's chart is hierarchical — "Sundry Debtors" is itself a
  * group under which users nest sub-groups like "Debtors > Domestic".
  */
-function getGroupTree(db: DbHelper, companyId: number, parentName: string): string[] {
+export function getGroupTree(db: DbHelper, companyId: number, parentName: string): string[] {
   const allGroups = db.all(
     'SELECT group_name, parent_group FROM vcfo_account_groups WHERE company_id = ?',
     companyId,
@@ -641,7 +641,7 @@ const BS_SECTIONS: Array<{
  * `getBalancesAsOf`: sums credit-positive closings of every ledger whose
  * group is in `groupNames`. Callers flip sign for asset sides as needed.
  */
-function computeBSClosing(
+export function computeBSClosing(
   db: DbHelper,
   companyId: number,
   asOfDate: string,
@@ -684,7 +684,7 @@ function fyStart(db: DbHelper, companyId: number, asOf: string): string {
  * Per-ledger closing balances for a set of groups, keyed by ledger name, as of
  * a particular date. Used to build expandable children under each BS parent.
  */
-function computeBSClosingByLedger(
+export function computeBSClosingByLedger(
   db: DbHelper,
   companyId: number,
   asOfDate: string,
@@ -978,7 +978,7 @@ export function buildCashFlow(
 // need to match across companies — children are merged by label, non-matches
 // appear as separate rows.
 
-type CompanyRef = {
+export type CompanyRef = {
   id: number;
   name: string;
   branchName?: string | null;
