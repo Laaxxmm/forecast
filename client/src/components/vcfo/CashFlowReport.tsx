@@ -68,6 +68,31 @@ export default function CashFlowReport({ companyId, companyIds, from, to, bifurc
       .finally(() => setLoading(false));
   }, [companyId, companyIds, from, to, bifurcate]);
 
+  // ── Hooks must run on every render — see React error #310 ────────────────
+  // Hoisted above the loading / error / no-data early returns so the hook
+  // count stays stable across data-state transitions.
+  //
+  // Find-in-statement search prunes the three activity sections (Operating /
+  // Investing / Financing) to matching subtrees. Subtotals stay accurate
+  // because they come from data.*TotalValues precomputed on the server.
+  // CFLine has { label, children? } so it's compatible with filterSectionTree
+  // (the helper only reads `key`, `label`, `children`); we synthesize a key
+  // from the label to satisfy the type.
+  const synth = (lines: CFLine[]): any[] =>
+    lines.map((l, i) => ({ ...l, key: `${l.label}-${i}`, children: l.children ? synth(l.children) : undefined }));
+  const operating = useMemo(
+    () => filterSectionTree(synth(data?.operating ?? []), search).sections as unknown as CFLine[],
+    [data?.operating, search]
+  );
+  const investing = useMemo(
+    () => filterSectionTree(synth(data?.investing ?? []), search).sections as unknown as CFLine[],
+    [data?.investing, search]
+  );
+  const financing = useMemo(
+    () => filterSectionTree(synth(data?.financing ?? []), search).sections as unknown as CFLine[],
+    [data?.financing, search]
+  );
+
   if (!companyId && !companyIds) {
     return (
       <div className="bg-dark-800 border border-dark-400/30 rounded-2xl p-8 text-center">
@@ -99,26 +124,6 @@ export default function CashFlowReport({ companyId, companyIds, from, to, bifurc
   const columns = data.columns && data.bifurcated ? data.columns : null;
   const labelFor = (col: string): string => data.columnLabels?.[col] || (col === 'total' ? 'Total' : col);
 
-  // Find-in-statement search prunes the three activity sections (Operating /
-  // Investing / Financing) to matching subtrees. Subtotals stay accurate
-  // because they come from data.*TotalValues precomputed on the server.
-  // CFLine has { label, children? } so it's compatible with filterSectionTree
-  // (the helper only reads `key`, `label`, `children`); we synthesize a key
-  // from the label to satisfy the type.
-  const synth = (lines: CFLine[]): any[] =>
-    lines.map((l, i) => ({ ...l, key: `${l.label}-${i}`, children: l.children ? synth(l.children) : undefined }));
-  const operating = useMemo(
-    () => filterSectionTree(synth(data.operating), search).sections as unknown as CFLine[],
-    [data.operating, search]
-  );
-  const investing = useMemo(
-    () => filterSectionTree(synth(data.investing), search).sections as unknown as CFLine[],
-    [data.investing, search]
-  );
-  const financing = useMemo(
-    () => filterSectionTree(synth(data.financing), search).sections as unknown as CFLine[],
-    [data.financing, search]
-  );
   const totalAllLines = data.operating.length + data.investing.length + data.financing.length;
   const totalVisibleLines = operating.length + investing.length + financing.length;
 
