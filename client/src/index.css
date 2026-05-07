@@ -70,6 +70,18 @@
   --mt-shadow-card:  0 1px 2px rgba(15,23,42,0.04), 0 2px 8px -2px rgba(15,23,42,0.06);
   --mt-shadow-pop:   0 10px 32px -8px rgba(15,23,42,0.16), 0 2px 8px rgba(15,23,42,0.06);
 
+  /* VCFO dashboard redesign — trust bar + P&L composition palette */
+  --mt-trust-amber-bg:     #FAEEDA;
+  --mt-trust-amber-text:   #633806;
+  --mt-trust-amber-accent: #BA7517;
+  --mt-trust-green-bg:     #E1F5EE;
+  --mt-trust-green-text:   #0F6E56;
+  --mt-trust-red-bg:       #FCEBEB;
+  --mt-trust-red-text:     #A32D2D;
+  --mt-pl-direct-red:      #E24B4A;
+  --mt-pl-indirect-gray:   #888780;
+  --mt-pl-net-green:       #1D9E75;
+
   /* Component tokens */
   --scrollbar-track: transparent;
   --scrollbar-thumb: #cbd5e1;
@@ -127,6 +139,18 @@
   --mt-danger-text:  #f87171;
   --mt-shadow-card:  0 1px 2px rgba(0,0,0,0.3), 0 2px 8px -2px rgba(0,0,0,0.35);
   --mt-shadow-pop:   0 12px 40px -12px rgba(0,0,0,0.6), 0 4px 12px rgba(0,0,0,0.3);
+
+  /* VCFO dashboard — dark-mode-friendly tints; brand accents kept identical */
+  --mt-trust-amber-bg:     rgba(245, 158, 11, 0.14);
+  --mt-trust-amber-text:   #fbbf24;
+  --mt-trust-amber-accent: #BA7517;
+  --mt-trust-green-bg:     rgba(16, 185, 129, 0.14);
+  --mt-trust-green-text:   #34d399;
+  --mt-trust-red-bg:       rgba(239, 68, 68, 0.14);
+  --mt-trust-red-text:     #f87171;
+  --mt-pl-direct-red:      #E24B4A;
+  --mt-pl-indirect-gray:   #888780;
+  --mt-pl-net-green:       #1D9E75;
 
   --scrollbar-track: transparent;
   --scrollbar-thumb: #2a2f44;

@@ -54,6 +54,20 @@ export function formatRs(amount: number): string {
   return 'Rs' + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(amount);
 }
 
+/**
+ * Compact rupee format for tight spaces (chart axis labels, KPI sub-lines).
+ * ≥1 crore → RsX.XCr · ≥1 lakh → RsX.XL · otherwise falls back to formatRs.
+ * Negative values are preserved with a leading '-' (e.g. Rs-2.6L).
+ */
+export function formatRsCompact(amount: number): string {
+  if (amount === 0) return 'Rs0';
+  const abs = Math.abs(amount);
+  const sign = amount < 0 ? '-' : '';
+  if (abs >= 1_00_00_000) return `Rs${sign}${(abs / 1_00_00_000).toFixed(1)}Cr`;
+  if (abs >= 1_00_000)    return `Rs${sign}${(abs / 1_00_000).toFixed(1)}L`;
+  return formatRs(amount);
+}
+
 const topTabs = [
   { path: 'overview', label: 'Overview', icon: BarChart3 },
   { path: 'tables', label: 'Financial Tables', icon: Table2 },

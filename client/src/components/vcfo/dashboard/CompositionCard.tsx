@@ -1,4 +1,5 @@
 import { formatRs } from '../../../pages/ForecastModulePage';
+import StackedShareBar from './StackedShareBar';
 
 interface Props {
   revenue: number;
@@ -10,71 +11,89 @@ interface Props {
 }
 
 /**
- * P&L composition — visualises how Revenue is consumed by Direct Costs,
- * leaves Gross Profit, then is reduced by Indirect Expenses (and possibly
- * lifted by Indirect Income) to land at Net Profit. Pure CSS bars sized
- * relative to Revenue so the proportions are visually obvious without a
- * chart library round-trip.
+ * P&L composition — single horizontal stacked bar showing how every
+ * rupee of Revenue is consumed by Direct Costs, Indirect (net), and
+ * what remains as Net Profit. Numbers table below makes the math
+ * explicit:  Revenue  - Direct  =  Gross  - Indirect  =  Net.
  */
 export default function CompositionCard({
   revenue, directCosts, indirectIncome, indirectExpenses, grossProfit, netProfit,
 }: Props) {
-  // Use revenue as the 100% reference. If revenue is zero, fall back to the
-  // largest absolute number so we still draw something legible.
-  const ref = Math.max(
-    Math.abs(revenue),
-    Math.abs(directCosts),
-    Math.abs(indirectExpenses),
-    Math.abs(indirectIncome),
-    Math.abs(grossProfit),
-    Math.abs(netProfit),
-    1, // avoid /0
-  );
-  const pct = (v: number) => Math.min(100, Math.max(0, (Math.abs(v) / ref) * 100));
-
-  // Each row: label · bar · amount. Bar colour signals tone (revenue/income =
-  // emerald, expense = rose, profit = indigo).
-  const rows: { label: string; value: number; color: string }[] = [
-    { label: 'Revenue',           value: revenue,           color: '#10b981' },
-    { label: 'Direct Costs',      value: directCosts,       color: '#f43f5e' },
-    { label: 'Gross Profit',      value: grossProfit,       color: '#6366f1' },
-    ...(indirectIncome !== 0
-      ? [{ label: 'Indirect Income', value: indirectIncome, color: '#34d399' }]
-      : []),
-    { label: 'Indirect Expenses', value: indirectExpenses,  color: '#fb7185' },
-    { label: 'Net Profit',        value: netProfit,         color: netProfit >= 0 ? '#10b981' : '#ef4444' },
-  ];
+  // Net indirect impact (expenses pull profit down; income lifts it back up).
+  const indirectNet = indirectExpenses - indirectIncome;
+  const directPct   = revenue > 0 ? (directCosts   / revenue) * 100 : 0;
+  const indirectPct = revenue > 0 ? (indirectNet   / revenue) * 100 : 0;
+  const netPct      = revenue > 0 ? (netProfit     / revenue) * 100 : 0;
 
   return (
     <div className="mt-card p-4 h-full">
-      <div className="flex items-center justify-between mb-3">
+      <div className="mb-3">
         <div className="text-sm font-semibold" style={{ color: 'var(--mt-text-primary)' }}>
           P&amp;L composition
         </div>
-        {revenue > 0 && (
-          <div className="text-[11px]" style={{ color: 'var(--mt-text-faint)' }}>
-            Margin {((netProfit / revenue) * 100).toFixed(1)}%
-          </div>
-        )}
+        <div className="text-[11px] mt-0.5" style={{ color: 'var(--mt-text-faint)' }}>
+          Where every Rs1 of revenue went
+        </div>
       </div>
-      <div className="space-y-2">
-        {rows.map((r) => (
-          <div key={r.label} className="flex items-center gap-3">
-            <div className="text-[11px] flex-shrink-0 w-28" style={{ color: 'var(--mt-text-secondary)' }}>
-              {r.label}
-            </div>
-            <div className="flex-1 h-5 rounded relative overflow-hidden" style={{ background: 'var(--mt-bg-muted)' }}>
-              <div
-                className="absolute inset-y-0 left-0 rounded transition-all duration-300"
-                style={{ width: `${pct(r.value)}%`, background: r.color, opacity: 0.85 }}
-              />
-            </div>
-            <div className="text-[11px] font-mono font-semibold flex-shrink-0 w-24 text-right" style={{ color: 'var(--mt-text-primary)' }}>
-              {formatRs(r.value)}
-            </div>
-          </div>
-        ))}
+
+      <StackedShareBar
+        total={revenue}
+        segments={[
+          { label: 'Direct',   value: directCosts,             color: 'var(--mt-pl-direct-red)' },
+          { label: 'Indirect', value: Math.max(0, indirectNet), color: 'var(--mt-pl-indirect-gray)' },
+          { label: 'Net',      value: Math.max(0, netProfit),  color: 'var(--mt-pl-net-green)' },
+        ]}
+      />
+
+      <div className="flex justify-between text-[10px] mt-1.5" style={{ color: 'var(--mt-text-faint)' }}>
+        <span>0%</span><span>50%</span><span>100%</span>
       </div>
+
+      <div className="mt-4 text-[12px]">
+        <Row label="Revenue"          value={revenue}                         strong />
+        <Row label="− Direct costs"   value={-Math.abs(directCosts)}          tone="negative" />
+        <Row label="= Gross profit"   value={grossProfit}                     strong />
+        <Row label={indirectIncome > 0 ? '− Indirect (net)' : '− Indirect'} value={-Math.abs(indirectNet)} tone="negative" />
+        <Row label="= Net profit"     value={netProfit}                       strong tone={netProfit >= 0 ? 'positive' : 'negative'} />
+      </div>
+
+      {revenue > 0 && (
+        <div className="text-[11px] mt-3 pt-2" style={{ color: 'var(--mt-text-faint)', borderTop: '1px solid var(--mt-border)' }}>
+          {directPct.toFixed(0)}% to direct · {Math.max(0, indirectPct).toFixed(0)}% to indirect · {netPct.toFixed(1)}% margin
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Row({
+  label, value, strong, tone,
+}: {
+  label: string;
+  value: number;
+  strong?: boolean;
+  tone?: 'positive' | 'negative';
+}) {
+  const valueColor = tone === 'positive' ? 'var(--mt-accent-text)'
+    : tone === 'negative' ? 'var(--mt-danger-text)'
+    : 'var(--mt-text-primary)';
+  return (
+    <div
+      className="flex items-center justify-between py-1.5"
+      style={{ borderTop: '1px solid var(--mt-border)' }}
+    >
+      <span
+        className={strong ? 'font-medium' : ''}
+        style={{ color: strong ? 'var(--mt-text-primary)' : 'var(--mt-text-secondary)' }}
+      >
+        {label}
+      </span>
+      <span
+        className={`font-mono ${strong ? 'font-semibold' : ''}`}
+        style={{ color: valueColor }}
+      >
+        {formatRs(value)}
+      </span>
     </div>
   );
 }

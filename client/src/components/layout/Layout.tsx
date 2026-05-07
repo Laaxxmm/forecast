@@ -109,7 +109,9 @@ function LayoutInner() {
           </div>
         )}
         <div className={isMobile ? 'p-4' : 'p-8'}>
-          <AutoSyncFailureBanner />
+          {/* VCFO Dashboard renders its own non-dismissible TrustBar in place
+              of the global banner — suppress here to avoid duplicate alerts. */}
+          {location.pathname !== '/vcfo/dashboard' && <AutoSyncFailureBanner />}
           <Outlet />
         </div>
         {/* Floating help button */}
