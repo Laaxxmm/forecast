@@ -1033,6 +1033,43 @@ export function initializeSchema(db: DbHelper) {
       created_at TEXT DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_doctor_aliases_doctor ON doctor_aliases(doctor_id);
+
+    -- Recipients of the 8 AM Daily Brief email. branch_id is the platform
+    -- branches.id (no FK because the cross-DB ref isn't enforceable here);
+    -- NULL means the recipient gets the consolidated brief. UNIQUE per
+    -- (branch, email) so the same address can subscribe to multiple
+    -- branches without colliding.
+    CREATE TABLE IF NOT EXISTS daily_brief_recipients (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      branch_id INTEGER,
+      email TEXT NOT NULL,
+      name TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      created_by TEXT,
+      UNIQUE(branch_id, email)
+    );
+    CREATE INDEX IF NOT EXISTS idx_daily_brief_recipients_branch
+      ON daily_brief_recipients(branch_id, is_active);
+
+    -- Audit log for every Daily Brief send (manual test or scheduled).
+    -- Mirrors auto_sync_runs: one row per (run_date_ist, branch_id) so
+    -- a re-run for the same day overwrites instead of duplicating, and
+    -- the scheduler can short-circuit on a successful prior run.
+    CREATE TABLE IF NOT EXISTS daily_brief_sends (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_date_ist TEXT NOT NULL,
+      branch_id INTEGER,
+      trigger TEXT NOT NULL CHECK(trigger IN ('schedule','manual_test','catchup')),
+      status TEXT NOT NULL CHECK(status IN ('running','success','failed','skipped')),
+      recipient_count INTEGER DEFAULT 0,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      error TEXT,
+      UNIQUE(run_date_ist, branch_id, trigger)
+    );
+    CREATE INDEX IF NOT EXISTS idx_daily_brief_sends_date
+      ON daily_brief_sends(run_date_ist DESC);
   `);
 
   // Seed self-aliases so the revenue-sharing dashboard's behavior is

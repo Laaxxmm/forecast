@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import api from '../api/client';
 import { Eye, EyeOff, CheckCircle, Stethoscope, Pill, Trash2, Briefcase, Phone } from 'lucide-react';
+import DailyBriefRecipients from '../components/settings/DailyBriefRecipients';
 
 export default function SettingsPage() {
   const [fys, setFYs] = useState<any[]>([]);
@@ -418,6 +419,13 @@ export default function SettingsPage() {
             <p className="text-xs mt-1" style={{ color: 'var(--mt-text-faint)' }}>Contact your administrator to configure available settings.</p>
           </div>
         )}
+
+        {/* Daily Brief recipients — admin/super-admin only (parent route is
+            already gated by ClientAdminRoute). Spans the full grid width
+            so the email list isn't cramped. */}
+        <div className="lg:col-span-2">
+          <DailyBriefRecipients />
+        </div>
       </div>
 
       {(showHp || showOg || showTuria) && (
