@@ -4,13 +4,13 @@ import { formatINR } from '../utils/format';
 import { canEditRevenueSharing } from '../utils/roles';
 import {
   PieChart as PieIcon, IndianRupee, Users, Building2, ChevronDown, ChevronRight,
-  Settings2, Eye, Check, Loader2,
+  Settings2, Eye, Check, Loader2, Link2, Unlink, Plus, AlertCircle,
 } from 'lucide-react';
 
 // ── Types ──
 interface MonthlyEntry { month: string; revenue: number; doctor_share: number; magna_share: number }
 interface CatBreakdown { category: string; revenue: number; doctor_pct: number; magna_pct: number; doctor_share: number; magna_share: number; has_rule: boolean; monthly: MonthlyEntry[]; }
-interface DoctorRow { doctor_name: string; has_any_rule: boolean; categories: CatBreakdown[]; totals: { revenue: number; doctor_share: number; magna_share: number; doctor_pct: number }; }
+interface DoctorRow { doctor_id: number | null; doctor_name: string; is_unmapped: boolean; raw_aliases: string[]; has_any_rule: boolean; categories: CatBreakdown[]; totals: { revenue: number; doctor_share: number; magna_share: number; doctor_pct: number }; }
 interface DashData { fy: any; doctors: DoctorRow[]; allCategories: string[]; grandTotals: { revenue: number; doctor_share: number; magna_share: number; magna_pct: number }; }
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -182,10 +182,14 @@ function DashboardTab() {
             </thead>
             <tbody>
               {doctors.map(doc => {
-                const isExpanded = expanded === doc.doctor_name;
+                // Mirror the server's bucket key so a canonical doctor and an
+                // unmapped raw name with the same display string can't share
+                // an expand-state slot.
+                const rowKey = doc.doctor_id != null ? `id:${doc.doctor_id}` : `raw:${doc.doctor_name}`;
+                const isExpanded = expanded === rowKey;
                 return (
-                  <DoctorTableRow key={doc.doctor_name} doc={doc} isExpanded={isExpanded}
-                    onToggle={() => setExpanded(isExpanded ? null : doc.doctor_name)} />
+                  <DoctorTableRow key={rowKey} doc={doc} isExpanded={isExpanded}
+                    onToggle={() => setExpanded(isExpanded ? null : rowKey)} />
                 );
               })}
             </tbody>
@@ -221,7 +225,12 @@ function DoctorTableRow({ doc, isExpanded, onToggle }: { doc: DoctorRow; isExpan
         <td className="px-3 py-2.5 font-medium flex items-center gap-1.5" style={{ color: 'var(--mt-text-heading)' }}>
           {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           {doc.doctor_name}
-          {!doc.has_any_rule && (
+          {doc.is_unmapped && (
+            <span className="mt-pill mt-pill--warn mt-pill-sm" title="This raw name isn't linked to a canonical doctor — link it from Rules & Config">
+              Unmapped
+            </span>
+          )}
+          {!doc.is_unmapped && !doc.has_any_rule && (
             <span className="mt-pill mt-pill--warn mt-pill-sm">No rules</span>
           )}
         </td>
@@ -299,6 +308,11 @@ function RulesTab() {
   const [localPcts, setLocalPcts] = useState<Record<number, number>>({});
   const [savingId, setSavingId] = useState<number | null>(null);
   const [savedId, setSavedId] = useState<number | null>(null);
+
+  const reloadDoctors = async () => {
+    const r = await api.get('/revenue-sharing/doctors');
+    setDoctors(r.data);
+  };
 
   useEffect(() => {
     Promise.all([
@@ -408,6 +422,13 @@ function RulesTab() {
           </table>
         </div>
       </div>
+
+      {/* Doctor Name Mappings — link raw billed_doctor variants to canonical doctors */}
+      <NameMappingsSection
+        doctors={doctors}
+        canEdit={canEdit}
+        onDoctorsChanged={reloadDoctors}
+      />
 
       {/* Doctor Sharing Rules — pick a doctor, then drag a slider per category */}
       <div>
@@ -524,6 +545,310 @@ function Spinner() {
         className="w-5 h-5 border-2 rounded-full animate-spin"
         style={{ borderColor: 'var(--mt-accent-soft)', borderTopColor: 'var(--mt-accent)' }}
       />
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  NAME MAPPINGS SECTION
+// ══════════════════════════════════════════════════════════════════════
+// Two surfaces stacked vertically:
+//  1. Unmapped raw names — billing strings without an alias yet, sorted by
+//     revenue desc so the highest-impact merges land at the top.
+//  2. Existing mappings (collapsible) — alias → canonical doctor, with a
+//     dropdown to re-target and an unlink button to remove.
+// Both share a "Create new doctor" inline affordance per row so admins can
+// spin up a clean canonical name without leaving the page.
+interface AliasRow { id: number; alias: string; doctor_id: number; doctor_name: string }
+interface UnmappedRow { raw_name: string; revenue: number; source: string }
+
+function NameMappingsSection({
+  doctors, canEdit, onDoctorsChanged,
+}: {
+  doctors: any[];
+  canEdit: boolean;
+  onDoctorsChanged: () => Promise<void> | void;
+}) {
+  const [aliases, setAliases] = useState<AliasRow[]>([]);
+  const [unmapped, setUnmapped] = useState<UnmappedRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [showMapped, setShowMapped] = useState(false);
+  // When a row is in "create new doctor" mode, this holds the alias being
+  // mapped + the in-flight name. Only one row can be in this mode at a time.
+  const [creatingFor, setCreatingFor] = useState<string | null>(null);
+  const [newDoctorName, setNewDoctorName] = useState('');
+
+  const reload = async () => {
+    setLoading(true);
+    try {
+      const r = await api.get('/revenue-sharing/aliases');
+      setAliases(r.data.aliases || []);
+      setUnmapped(r.data.unmapped || []);
+    } catch {
+      setAliases([]);
+      setUnmapped([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { reload(); }, []);
+
+  const upsertAlias = async (alias: string, doctorId: number) => {
+    setBusyKey(alias);
+    try {
+      await api.post('/revenue-sharing/aliases', { alias, doctor_id: doctorId });
+      await reload();
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const deleteAlias = async (id: number) => {
+    setBusyKey(`unlink:${id}`);
+    try {
+      await api.delete(`/revenue-sharing/aliases/${id}`);
+      await reload();
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const createDoctorAndLink = async (alias: string) => {
+    const name = newDoctorName.trim();
+    if (!name) return;
+    setBusyKey(alias);
+    try {
+      const r = await api.post('/revenue-sharing/doctors', { name });
+      if (r.data?.id) {
+        await api.post('/revenue-sharing/aliases', { alias, doctor_id: r.data.id });
+      }
+      await onDoctorsChanged();
+      await reload();
+      setCreatingFor(null);
+      setNewDoctorName('');
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const totalUnmappedRevenue = unmapped.reduce((s, u) => s + (u.revenue || 0), 0);
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2">
+        <Link2 size={14} style={{ color: 'var(--mt-text-muted)' }} />
+        <h2 className="mt-heading text-sm">Doctor Name Mappings</h2>
+        <span className="text-[11px]" style={{ color: 'var(--mt-text-faint)' }}>
+          · merge billing-name variants under one canonical doctor
+        </span>
+      </div>
+
+      {loading ? (
+        <div className="mt-card p-6 text-center text-xs" style={{ color: 'var(--mt-text-muted)' }}>
+          Loading mappings…
+        </div>
+      ) : (
+        <>
+          {/* Unmapped — priority surface */}
+          {unmapped.length > 0 ? (
+            <div className="mt-card p-0 overflow-hidden mb-3">
+              <div className="flex items-center gap-2 px-3 py-2" style={{ background: 'var(--mt-warn-soft)', borderBottom: '1px solid var(--mt-border)' }}>
+                <AlertCircle size={12} style={{ color: 'var(--mt-warn-text)' }} />
+                <span className="text-xs font-semibold" style={{ color: 'var(--mt-warn-text)' }}>
+                  {unmapped.length} raw {unmapped.length === 1 ? 'name needs' : 'names need'} mapping · {formatINR(totalUnmappedRevenue)} of revenue
+                </span>
+              </div>
+              {unmapped.map((u, idx) => (
+                <MappingRow
+                  key={u.raw_name}
+                  alias={u.raw_name}
+                  revenue={u.revenue}
+                  source={u.source}
+                  currentDoctorId={null}
+                  doctors={doctors}
+                  canEdit={canEdit}
+                  busy={busyKey === u.raw_name}
+                  isCreating={creatingFor === u.raw_name}
+                  newDoctorName={newDoctorName}
+                  onPickDoctor={id => upsertAlias(u.raw_name, id)}
+                  onStartCreate={() => { setCreatingFor(u.raw_name); setNewDoctorName(''); }}
+                  onCancelCreate={() => { setCreatingFor(null); setNewDoctorName(''); }}
+                  onChangeNewName={setNewDoctorName}
+                  onSubmitCreate={() => createDoctorAndLink(u.raw_name)}
+                  borderTop={idx > 0}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="mt-card p-3 text-center text-xs mb-3" style={{ color: 'var(--mt-text-muted)' }}>
+              All raw billing names are mapped — nothing to merge right now.
+            </div>
+          )}
+
+          {/* Existing mappings — collapsed by default to keep the page tight */}
+          {aliases.length > 0 && (
+            <div>
+              <button
+                onClick={() => setShowMapped(s => !s)}
+                className="text-xs flex items-center gap-1 mb-2 cursor-pointer"
+                style={{ color: 'var(--mt-text-muted)' }}
+              >
+                {showMapped ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                {aliases.length} existing mapping{aliases.length === 1 ? '' : 's'}
+              </button>
+              {showMapped && (
+                <div className="mt-card p-0 overflow-hidden">
+                  {aliases.map((a, idx) => (
+                    <MappingRow
+                      key={a.id}
+                      alias={a.alias}
+                      revenue={null}
+                      source={null}
+                      currentDoctorId={a.doctor_id}
+                      currentDoctorName={a.doctor_name}
+                      doctors={doctors}
+                      canEdit={canEdit}
+                      busy={busyKey === a.alias || busyKey === `unlink:${a.id}`}
+                      isCreating={creatingFor === a.alias}
+                      newDoctorName={newDoctorName}
+                      onPickDoctor={id => upsertAlias(a.alias, id)}
+                      onUnlink={() => deleteAlias(a.id)}
+                      onStartCreate={() => { setCreatingFor(a.alias); setNewDoctorName(''); }}
+                      onCancelCreate={() => { setCreatingFor(null); setNewDoctorName(''); }}
+                      onChangeNewName={setNewDoctorName}
+                      onSubmitCreate={() => createDoctorAndLink(a.alias)}
+                      borderTop={idx > 0}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function MappingRow({
+  alias, revenue, source, currentDoctorId, currentDoctorName,
+  doctors, canEdit, busy, isCreating, newDoctorName,
+  onPickDoctor, onUnlink, onStartCreate, onCancelCreate, onChangeNewName, onSubmitCreate,
+  borderTop,
+}: {
+  alias: string;
+  revenue: number | null;
+  source: string | null;
+  currentDoctorId: number | null;
+  currentDoctorName?: string;
+  doctors: any[];
+  canEdit: boolean;
+  busy: boolean;
+  isCreating: boolean;
+  newDoctorName: string;
+  onPickDoctor: (id: number) => void;
+  onUnlink?: () => void;
+  onStartCreate: () => void;
+  onCancelCreate: () => void;
+  onChangeNewName: (v: string) => void;
+  onSubmitCreate: () => void;
+  borderTop: boolean;
+}) {
+  return (
+    <div className="px-3 py-2.5" style={{ borderTop: borderTop ? '1px solid var(--mt-border)' : 'none' }}>
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium truncate" style={{ color: 'var(--mt-text-heading)' }}>
+            {alias}
+          </div>
+          <div className="text-[10px] mt-0.5 flex items-center gap-2" style={{ color: 'var(--mt-text-faint)' }}>
+            {revenue != null && <span className="mt-num">{formatINR(revenue)}</span>}
+            {source && <span>· {source}</span>}
+            {currentDoctorName && (
+              <span>
+                · mapped to <strong style={{ color: 'var(--mt-text-secondary)' }}>{currentDoctorName}</strong>
+              </span>
+            )}
+          </div>
+        </div>
+
+        {isCreating ? (
+          <div className="flex items-center gap-1.5">
+            <input
+              type="text"
+              autoFocus
+              value={newDoctorName}
+              onChange={e => onChangeNewName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !busy && newDoctorName.trim()) onSubmitCreate();
+                if (e.key === 'Escape') onCancelCreate();
+              }}
+              placeholder="Canonical doctor name"
+              className="mt-input text-xs"
+              style={{ padding: '6px 10px', width: 220 }}
+              disabled={busy}
+            />
+            <button
+              onClick={onSubmitCreate}
+              disabled={busy || !newDoctorName.trim()}
+              className="mt-btn-soft text-xs flex items-center gap-1"
+              title="Create doctor and link this raw name"
+            >
+              <Check size={12} /> Create
+            </button>
+            <button
+              onClick={onCancelCreate}
+              disabled={busy}
+              className="text-[10px] px-1.5 py-1"
+              style={{ color: 'var(--mt-text-faint)' }}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <select
+              value={currentDoctorId ?? ''}
+              onChange={e => { if (e.target.value) onPickDoctor(Number(e.target.value)); }}
+              disabled={!canEdit || busy}
+              className="mt-input text-xs"
+              style={{ padding: '6px 10px', width: 220 }}
+            >
+              <option value="">{currentDoctorId ? 'Re-target…' : 'Link to doctor…'}</option>
+              {doctors.map((d: any) => (
+                <option key={d.id} value={d.id}>{d.name}</option>
+              ))}
+            </select>
+            {canEdit && (
+              <button
+                onClick={onStartCreate}
+                disabled={busy}
+                className="text-[10px] flex items-center gap-1 px-1.5 py-1"
+                style={{ color: 'var(--mt-text-muted)' }}
+                title="Create a new canonical doctor for this name"
+              >
+                <Plus size={11} /> New
+              </button>
+            )}
+            {onUnlink && canEdit && (
+              <button
+                onClick={onUnlink}
+                disabled={busy}
+                className="p-1"
+                style={{ color: 'var(--mt-text-faint)' }}
+                title="Remove this mapping (the raw name will become unmapped)"
+                onMouseEnter={e => { e.currentTarget.style.color = 'var(--mt-danger-text)'; }}
+                onMouseLeave={e => { e.currentTarget.style.color = 'var(--mt-text-faint)'; }}
+              >
+                <Unlink size={11} />
+              </button>
+            )}
+            {busy && <Loader2 size={11} className="animate-spin" style={{ color: 'var(--mt-text-faint)' }} />}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

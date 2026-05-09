@@ -1020,7 +1020,51 @@ export function initializeSchema(db: DbHelper) {
     );
     CREATE INDEX IF NOT EXISTS idx_rs_rules_doctor ON revenue_sharing_rules(doctor_id, is_active);
     CREATE INDEX IF NOT EXISTS idx_rs_rules_category ON revenue_sharing_rules(category_id);
+
+    -- Maps every distinct raw name from clinic_actuals.billed_doctor /
+    -- pharmacy_sales_actuals.referred_by to a canonical doctor row. The
+    -- revenue-sharing dashboard groups by alias.doctor_id so case/spelling
+    -- variants of the same person ("DR.SMITH" vs "Dr Smith") roll up under
+    -- one rule set. Admin can re-target an alias from the Rules tab.
+    CREATE TABLE IF NOT EXISTS doctor_aliases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      alias TEXT NOT NULL UNIQUE,
+      doctor_id INTEGER NOT NULL REFERENCES doctors(id) ON DELETE CASCADE,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_doctor_aliases_doctor ON doctor_aliases(doctor_id);
   `);
+
+  // Seed self-aliases so the revenue-sharing dashboard's behavior is
+  // unchanged on existing tenants right after this migration: every distinct
+  // raw billed_doctor / referred_by that already matches a doctor row gets
+  // an alias pointing to that same doctor. Admin then re-targets variants
+  // ("DR SHANMUGASUNDAR", "Shanmugasundar", …) to a single canonical row
+  // via the Rules tab.
+  //
+  // Gated on the alias table being empty so we only pay the two table-scan
+  // cost on the first server start after this migration ships. Subsequent
+  // boots skip the seed entirely. New raw names from later imports are
+  // handled by the Name Mappings UI (they show up as "Unmapped" until linked).
+  try {
+    const aliasCount = db.get('SELECT COUNT(*) AS n FROM doctor_aliases');
+    if (!aliasCount || aliasCount.n === 0) {
+      db.exec(`
+        INSERT OR IGNORE INTO doctor_aliases (alias, doctor_id)
+        SELECT DISTINCT raw_name, d.id
+        FROM (
+          SELECT billed_doctor AS raw_name FROM clinic_actuals
+          WHERE billed_doctor IS NOT NULL AND billed_doctor != '' AND billed_doctor != '-'
+          UNION
+          SELECT referred_by AS raw_name FROM pharmacy_sales_actuals
+          WHERE referred_by IS NOT NULL AND referred_by != ''
+        ) raw
+        JOIN doctors d ON raw.raw_name = d.name;
+      `);
+    }
+  } catch (e) {
+    console.error('Failed to backfill doctor_aliases:', e);
+  }
 
   // ── Performance indexes for dashboard queries ──
   const perfIndexes = [

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireRole } from '../middleware/auth.js';
-import { branchFilter } from '../utils/branch.js';
+import { branchFilter, getBranchIdForInsert } from '../utils/branch.js';
 import { requireInt, requireString, requireNumber, optionalString, optionalNumber, ValidationError } from '../middleware/validate.js';
 
 const router = Router();
@@ -63,11 +63,31 @@ router.get('/dashboard', async (req, res) => {
      WHERE r.is_active = 1`
   );
 
-  // Build lookup: doctor_name → category_name → { doctor_pct, magna_pct }
-  const ruleLookup: Record<string, Record<string, { doctor_pct: number; magna_pct: number }>> = {};
+  // Rules are keyed by doctor_id, not doctor_name — name variants ("DR.SMITH"
+  // vs "Dr Smith") that all alias to the same canonical doctor share one rule
+  // set, which is the whole point of the alias layer.
+  const ruleLookup: Record<number, Record<string, { doctor_pct: number; magna_pct: number }>> = {};
   for (const r of rules as any[]) {
-    if (!ruleLookup[r.doctor_name]) ruleLookup[r.doctor_name] = {};
-    ruleLookup[r.doctor_name][r.category_name] = { doctor_pct: r.doctor_pct, magna_pct: r.magna_pct };
+    if (!ruleLookup[r.doctor_id]) ruleLookup[r.doctor_id] = {};
+    ruleLookup[r.doctor_id][r.category_name] = { doctor_pct: r.doctor_pct, magna_pct: r.magna_pct };
+  }
+
+  // Map every raw billed_doctor / referred_by string to its canonical doctor.
+  // Filtered by the caller's branch — a Chennai-only user only resolves
+  // aliases that point to Chennai (or unscoped) doctors. Raw names without a
+  // matching alias fall through to an "unmapped" group keyed on raw text so
+  // their revenue is still visible (just not rolled up under a rule).
+  const aliasBf = branchFilter(req, 'd');
+  const aliasRows = db.all(
+    `SELECT a.alias, a.doctor_id, d.name AS doctor_name
+     FROM doctor_aliases a
+     JOIN doctors d ON a.doctor_id = d.id
+     WHERE 1=1${aliasBf.where}`,
+    ...aliasBf.params
+  );
+  const aliasLookup: Record<string, { doctor_id: number; doctor_name: string }> = {};
+  for (const a of aliasRows as any[]) {
+    aliasLookup[a.alias] = { doctor_id: a.doctor_id, doctor_name: a.doctor_name };
   }
 
   // ── Clinic revenue by doctor × category ──
@@ -108,38 +128,63 @@ router.get('/dashboard', async (req, res) => {
     startMonth, endMonth, ...bf.params
   ) : [];
 
-  // ── Aggregate into doctor → category → { revenue, monthly } ──
-  const doctorMap: Record<string, Record<string, { revenue: number; monthly: Record<string, number> }>> = {};
+  // Aggregate into a doctor bucket keyed by canonical doctor_id when the raw
+  // name resolves through doctor_aliases, otherwise by the raw string itself.
+  // The "raw:" prefix on unmapped keys keeps them from colliding with a
+  // numeric id key.
+  type DocBucket = {
+    doctor_id: number | null;
+    doctor_name: string;
+    is_unmapped: boolean;
+    raw_aliases: Set<string>;
+    categories: Record<string, { revenue: number; monthly: Record<string, number> }>;
+  };
+  const doctorMap: Record<string, DocBucket> = {};
 
-  const ensureDoc = (name: string, cat: string) => {
-    if (!doctorMap[name]) doctorMap[name] = {};
-    if (!doctorMap[name][cat]) doctorMap[name][cat] = { revenue: 0, monthly: {} };
+  const ensureDoc = (rawName: string): DocBucket => {
+    const alias = aliasLookup[rawName];
+    const key = alias ? `id:${alias.doctor_id}` : `raw:${rawName}`;
+    if (!doctorMap[key]) {
+      doctorMap[key] = {
+        doctor_id: alias?.doctor_id ?? null,
+        doctor_name: alias?.doctor_name ?? rawName,
+        is_unmapped: !alias,
+        raw_aliases: new Set(),
+        categories: {},
+      };
+    }
+    doctorMap[key].raw_aliases.add(rawName);
+    return doctorMap[key];
+  };
+  const ensureCat = (bucket: DocBucket, cat: string) => {
+    if (!bucket.categories[cat]) bucket.categories[cat] = { revenue: 0, monthly: {} };
+    return bucket.categories[cat];
   };
 
   for (const row of clinicRows as any[]) {
-    ensureDoc(row.doctor_name, row.service_category);
-    doctorMap[row.doctor_name][row.service_category].revenue += row.total_revenue;
-    doctorMap[row.doctor_name][row.service_category].monthly[row.bill_month] =
-      (doctorMap[row.doctor_name][row.service_category].monthly[row.bill_month] || 0) + row.total_revenue;
+    const bucket = ensureDoc(row.doctor_name);
+    const cat = ensureCat(bucket, row.service_category);
+    cat.revenue += row.total_revenue;
+    cat.monthly[row.bill_month] = (cat.monthly[row.bill_month] || 0) + row.total_revenue;
   }
 
   for (const row of pharmacyRows as any[]) {
-    ensureDoc(row.doctor_name, 'Pharmacy');
-    doctorMap[row.doctor_name]['Pharmacy'].revenue += row.total_revenue;
-    doctorMap[row.doctor_name]['Pharmacy'].monthly[row.bill_month] =
-      (doctorMap[row.doctor_name]['Pharmacy'].monthly[row.bill_month] || 0) + row.total_revenue;
+    const bucket = ensureDoc(row.doctor_name);
+    const cat = ensureCat(bucket, 'Pharmacy');
+    cat.revenue += row.total_revenue;
+    cat.monthly[row.bill_month] = (cat.monthly[row.bill_month] || 0) + row.total_revenue;
   }
 
   // ── Build response ──
   let grandTotalRevenue = 0, grandDoctorShare = 0, grandMagnaShare = 0;
   const doctors: any[] = [];
 
-  for (const [doctorName, catMap] of Object.entries(doctorMap)) {
-    const docRules = ruleLookup[doctorName] || {};
+  for (const bucket of Object.values(doctorMap)) {
+    const docRules = bucket.doctor_id != null ? (ruleLookup[bucket.doctor_id] || {}) : {};
     let docTotalRev = 0, docTotalDoctorShare = 0, docTotalMagnaShare = 0;
     const catBreakdown: any[] = [];
 
-    for (const [catName, data] of Object.entries(catMap)) {
+    for (const [catName, data] of Object.entries(bucket.categories)) {
       const rule = docRules[catName];
       const doctorPct = rule?.doctor_pct ?? 0;
       const magnaPct = rule?.magna_pct ?? 100;
@@ -171,7 +216,10 @@ router.get('/dashboard', async (req, res) => {
     grandMagnaShare += docTotalMagnaShare;
 
     doctors.push({
-      doctor_name: doctorName,
+      doctor_id: bucket.doctor_id,
+      doctor_name: bucket.doctor_name,
+      is_unmapped: bucket.is_unmapped,
+      raw_aliases: [...bucket.raw_aliases].sort(),
       has_any_rule: Object.keys(docRules).length > 0,
       categories: catBreakdown.sort((a, b) => b.revenue - a.revenue),
       totals: {
@@ -313,6 +361,104 @@ router.get('/doctors', (req, res) => {
     ...bf.params
   );
   res.json(rows);
+});
+
+// ══════════════════════════════════════════════════════════════════════
+//  DOCTOR NAME ALIASES
+// ══════════════════════════════════════════════════════════════════════
+// Returns:
+//   - aliases: raw_name → doctor row (branch-scoped via the joined doctor)
+//   - unmapped: raw_name strings still without an alias, with the revenue
+//     they would carry across the active FY (sorted desc) so admin can
+//     prioritize the highest-impact merges first.
+router.get('/aliases', (req, res) => {
+  const db = req.tenantDb!;
+  const bfDoc = branchFilter(req, 'd');
+  const aliases = db.all(
+    `SELECT a.id, a.alias, a.doctor_id, d.name AS doctor_name
+     FROM doctor_aliases a
+     JOIN doctors d ON a.doctor_id = d.id
+     WHERE 1=1${bfDoc.where}
+     ORDER BY d.name COLLATE NOCASE, a.alias COLLATE NOCASE`,
+    ...bfDoc.params
+  );
+
+  const fy = db.get('SELECT * FROM financial_years WHERE is_active = 1');
+  const startMonth = fy ? fy.start_date.slice(0, 7) : '0000-00';
+  const endMonth = fy ? fy.end_date.slice(0, 7) : '9999-99';
+  const bfRaw = branchFilter(req);
+
+  // Distinct raw names from clinic + pharmacy that don't yet have an alias,
+  // each carrying the FY revenue they currently sit on. UNION ALL inside a
+  // GROUP BY so a name appearing in both sources collapses to one row.
+  const unmapped = db.all(
+    `SELECT raw_name, SUM(revenue) AS revenue, MAX(source_label) AS source
+     FROM (
+       SELECT ca.billed_doctor AS raw_name,
+              SUM(COALESCE(ca.item_price, 0)) AS revenue,
+              'clinic' AS source_label
+       FROM clinic_actuals ca
+       WHERE ca.bill_month >= ? AND ca.bill_month <= ?
+         AND ca.billed_doctor IS NOT NULL
+         AND ca.billed_doctor != '' AND ca.billed_doctor != '-'
+         AND ca.billed_doctor NOT IN (SELECT alias FROM doctor_aliases)${bfRaw.where}
+       GROUP BY ca.billed_doctor
+       UNION ALL
+       SELECT ps.referred_by AS raw_name,
+              SUM(COALESCE(ps.sales_amount, 0)) AS revenue,
+              'pharmacy' AS source_label
+       FROM pharmacy_sales_actuals ps
+       WHERE ps.bill_month >= ? AND ps.bill_month <= ?
+         AND ps.referred_by IS NOT NULL AND ps.referred_by != ''
+         AND ps.referred_by NOT IN (SELECT alias FROM doctor_aliases)${bfRaw.where}
+       GROUP BY ps.referred_by
+     )
+     GROUP BY raw_name
+     ORDER BY revenue DESC`,
+    startMonth, endMonth, ...bfRaw.params,
+    startMonth, endMonth, ...bfRaw.params
+  );
+
+  res.json({ aliases, unmapped });
+});
+
+// Upsert an alias → doctor mapping. Used both to create new aliases for
+// previously-unmapped raw names, and to re-target an existing alias to a
+// different canonical doctor (the merge action).
+router.post('/aliases', requireRole('admin'), (req, res) => {
+  const db = req.tenantDb!;
+  const alias = requireString(req.body.alias, 'alias', 200);
+  const doctor_id = requireInt(req.body.doctor_id, 'doctor_id');
+  db.run(
+    `INSERT INTO doctor_aliases (alias, doctor_id) VALUES (?, ?)
+     ON CONFLICT(alias) DO UPDATE SET doctor_id = excluded.doctor_id`,
+    alias, doctor_id
+  );
+  res.json({ ok: true });
+});
+
+router.delete('/aliases/:id', requireRole('admin'), (req, res) => {
+  const db = req.tenantDb!;
+  const id = requireInt(req.params.id, 'id');
+  db.run('DELETE FROM doctor_aliases WHERE id = ?', id);
+  res.json({ ok: true });
+});
+
+// Create a new canonical doctor row. Mirrors POST /api/settings/doctors so
+// the alias-merge UI can spin up a fresh "Dr. Shanmugasundar" inline without
+// leaving the Rules tab. Returns the existing id when the name is already
+// taken (INSERT OR IGNORE leaves lastInsertRowid at 0 in that case).
+router.post('/doctors', requireRole('admin'), (req, res) => {
+  const db = req.tenantDb!;
+  const name = requireString(req.body.name, 'name', 200);
+  const branchId = getBranchIdForInsert(req);
+  const result = db.run('INSERT OR IGNORE INTO doctors (name, branch_id) VALUES (?, ?)', name, branchId);
+  let id = Number(result.lastInsertRowid);
+  if (!id) {
+    const existing = db.get('SELECT id FROM doctors WHERE name = ?', name);
+    if (existing) id = existing.id;
+  }
+  res.json({ id });
 });
 
 export default router;
