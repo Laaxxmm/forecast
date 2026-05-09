@@ -21,6 +21,7 @@
     "helmet": "^8.1.0",
     "multer": "^1.4.5-lts.1",
     "node-cron": "^4.2.1",
+    "nodemailer": "^6.9.16",
     "pdfkit": "^0.17.2",
     "playwright": "^1.59.1",
     "sql.js": "^1.11.0",
@@ -33,6 +34,7 @@
     "@types/express": "^5.0.0",
     "@types/express-session": "^1.18.0",
     "@types/multer": "^1.4.12",
+    "@types/nodemailer": "^6.4.17",
     "@types/pdfkit": "^0.13.9",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"

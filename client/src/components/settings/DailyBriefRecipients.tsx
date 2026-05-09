@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../api/client';
-import { Mail, Plus, Trash2, Send, Eye } from 'lucide-react';
+import { Mail, Plus, Trash2, Send, Eye, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 
 // Settings card that lets admins (and super_admins) manage who receives the
 // 8 AM Daily Brief email. branch_id is the platform branches.id; NULL means
@@ -23,25 +23,43 @@ interface Branch {
   name: string;
 }
 
+interface SmtpStatus {
+  configured: boolean;
+  hint?: string;
+  host?: string;
+  port?: number;
+  user?: string;
+  fromName?: string;
+  replyTo?: string;
+  verifyOk?: boolean;
+  verifyError?: string;
+}
+
 const ALL_BRANCHES_KEY = '__all__';
 
 export default function DailyBriefRecipients() {
   const [recipients, setRecipients] = useState<Recipient[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [smtp, setSmtp] = useState<SmtpStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState({ email: '', name: '', branch: ALL_BRANCHES_KEY });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [testEmail, setTestEmail] = useState('');
+  const [testSending, setTestSending] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const reload = async () => {
     setLoading(true);
     try {
-      const [r, b] = await Promise.all([
+      const [r, b, s] = await Promise.all([
         api.get('/daily-brief/recipients'),
         api.get('/daily-brief/branches'),
+        api.get('/daily-brief/smtp-status'),
       ]);
       setRecipients(r.data || []);
       setBranches(b.data || []);
+      setSmtp(s.data);
     } catch (err: any) {
       setError(err?.response?.data?.error || 'Failed to load recipients');
     } finally {
@@ -50,6 +68,28 @@ export default function DailyBriefRecipients() {
   };
 
   useEffect(() => { reload(); }, []);
+
+  const sendTest = async () => {
+    setTestResult(null);
+    setTestSending(true);
+    try {
+      const body: any = {};
+      if (testEmail.trim()) body.email = testEmail.trim();
+      const r = await api.post('/daily-brief/send-test', body);
+      const status = r.data?.status;
+      if (status === 'success') {
+        setTestResult({ ok: true, message: `Sent to ${r.data.recipientCount} recipient${r.data.recipientCount === 1 ? '' : 's'} successfully.` });
+      } else if (status === 'skipped') {
+        setTestResult({ ok: false, message: r.data?.error || 'No active recipients.' });
+      } else {
+        setTestResult({ ok: false, message: r.data?.error || 'Send failed.' });
+      }
+    } catch (err: any) {
+      setTestResult({ ok: false, message: err?.response?.data?.error || err?.message || 'Send failed.' });
+    } finally {
+      setTestSending(false);
+    }
+  };
 
   const addRecipient = async () => {
     setError(null);
@@ -119,6 +159,92 @@ export default function DailyBriefRecipients() {
       <p className="text-xs mb-4" style={{ color: 'var(--mt-text-faint)' }}>
         Admins manage who receives the 8 AM morning report by email. Add as many addresses as you like — each can be subscribed to a specific branch or to the consolidated view.
       </p>
+
+      {/* SMTP status — quick health check on the email transport */}
+      {smtp && (
+        <div
+          className="flex items-start gap-2 px-3 py-2 mb-4 rounded text-xs"
+          style={{
+            background: smtp.configured && smtp.verifyOk
+              ? 'var(--mt-accent-soft)'
+              : smtp.configured
+                ? 'var(--mt-warn-soft)'
+                : 'var(--mt-bg-muted)',
+            border: '1px solid',
+            borderColor: smtp.configured && smtp.verifyOk
+              ? 'var(--mt-accent-border)'
+              : smtp.configured
+                ? 'var(--mt-warn-border)'
+                : 'var(--mt-border)',
+            color: smtp.configured && smtp.verifyOk
+              ? 'var(--mt-accent-text)'
+              : smtp.configured
+                ? 'var(--mt-warn-text)'
+                : 'var(--mt-text-muted)',
+          }}
+        >
+          {smtp.configured && smtp.verifyOk
+            ? <CheckCircle2 size={14} className="mt-0.5 shrink-0" />
+            : <AlertCircle size={14} className="mt-0.5 shrink-0" />}
+          <div className="flex-1">
+            {smtp.configured ? (
+              smtp.verifyOk ? (
+                <>
+                  <div><strong>Email transport is ready.</strong> Sending from <code>{smtp.user}</code> via <code>{smtp.host}:{smtp.port}</code>.</div>
+                </>
+              ) : (
+                <>
+                  <div><strong>SMTP credentials are set, but the connection check failed.</strong></div>
+                  <div className="mt-1">{smtp.verifyError || 'Could not reach the SMTP server.'}</div>
+                </>
+              )
+            ) : (
+              <>
+                <div><strong>Email transport not configured.</strong></div>
+                <div className="mt-1">{smtp.hint || 'Set SMTP credentials on the server before scheduling.'}</div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Send-test row — handy for verifying the wiring before adding 6 real recipients */}
+      <div className="rounded p-3 mb-4" style={{ background: 'var(--mt-bg-muted)', border: '1px dashed var(--mt-border)' }}>
+        <div className="text-xs mb-2" style={{ color: 'var(--mt-text-muted)' }}>
+          <strong style={{ color: 'var(--mt-text-secondary)' }}>Send a test email.</strong> Leave the address blank to send to all active recipients. Type one address to send only to them.
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="email"
+            value={testEmail}
+            onChange={e => setTestEmail(e.target.value)}
+            placeholder="optional — only this address"
+            className="mt-input text-sm flex-1 min-w-[200px]"
+            style={{ padding: '6px 10px' }}
+          />
+          <button
+            onClick={sendTest}
+            disabled={testSending || !smtp?.configured}
+            className="mt-btn-soft text-sm flex items-center gap-1.5"
+            style={{ padding: '6px 12px' }}
+          >
+            {testSending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+            {testSending ? 'Sending…' : 'Send test now'}
+          </button>
+        </div>
+        {testResult && (
+          <div
+            className="text-xs mt-2 px-2 py-1.5 rounded"
+            style={{
+              background: testResult.ok ? 'var(--mt-accent-soft)' : 'var(--mt-danger-soft)',
+              color: testResult.ok ? 'var(--mt-accent-text)' : 'var(--mt-danger-text)',
+              border: `1px solid ${testResult.ok ? 'var(--mt-accent-border)' : 'var(--mt-danger-border)'}`,
+            }}
+          >
+            {testResult.message}
+          </div>
+        )}
+      </div>
 
       {/* Add new */}
       <div className="flex flex-wrap items-end gap-2 mb-4">

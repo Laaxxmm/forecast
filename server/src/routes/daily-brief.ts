@@ -13,6 +13,8 @@ import { getPlatformHelper } from '../db/platform-connection.js';
 import { reportDateIst, todayIst, yesterdayIst } from '../utils/ist-date.js';
 import { buildDailyBriefData } from '../services/daily-brief/data.js';
 import { renderDailyBriefHtml, renderDailyBriefPdf, dailyBriefFilename } from '../services/daily-brief/render.js';
+import { runDailyBriefSend } from '../services/daily-brief/send.js';
+import { verifyMailer, getMailerConfig } from '../services/daily-brief/mailer.js';
 import { requireInt, requireString, optionalString, optionalNumber } from '../middleware/validate.js';
 
 const router = Router();
@@ -206,6 +208,72 @@ router.get('/branches', requireRole('admin'), async (req, res, next) => {
       req.clientId
     );
     res.json(rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── SMTP transport status ──
+// The Settings UI calls this on mount to show whether the mailer is wired
+// up. Doesn't expose the password, just reports configuration presence
+// and a verify-handshake result.
+router.get('/smtp-status', requireRole('admin'), async (_req, res) => {
+  const cfg = getMailerConfig();
+  if (!cfg) {
+    return res.json({
+      configured: false,
+      hint: 'Set SMTP_USER and SMTP_PASS environment variables on the server.',
+    });
+  }
+  const verify = await verifyMailer();
+  res.json({
+    configured: true,
+    host: cfg.host,
+    port: cfg.port,
+    user: cfg.user,
+    fromName: cfg.fromName,
+    replyTo: cfg.replyTo,
+    verifyOk: verify.ok,
+    verifyError: verify.error,
+  });
+});
+
+// "Send test now" — admin triggers an immediate send. Two modes:
+//   • body.email present: sends only to that one address (good for first
+//     verification before adding real recipients to the list)
+//   • body.email absent : sends to the configured active recipients for
+//     the requested branch
+router.post('/send-test', requireRole('admin'), async (req, res, next) => {
+  try {
+    const db = req.tenantDb!;
+    const { today, yesterday } = resolveReportDates(req);
+    let branchIdParam: number | null;
+    if (req.body.branch_id === undefined) {
+      branchIdParam = req.branchId ?? null;
+    } else if (req.body.branch_id === null || req.body.branch_id === '') {
+      branchIdParam = null;
+    } else {
+      const parsed = Number(req.body.branch_id);
+      if (!Number.isInteger(parsed)) {
+        return res.status(400).json({ error: 'branch_id must be an integer or null' });
+      }
+      branchIdParam = parsed;
+    }
+    const overrideEmail = typeof req.body.email === 'string' && req.body.email.trim()
+      ? [req.body.email.trim()]
+      : undefined;
+    const result = await runDailyBriefSend({
+      db,
+      ctx: req,
+      clientId: req.clientId!,
+      branchId: branchIdParam,
+      reportDate: yesterday,
+      todayDate: today,
+      trigger: 'manual_test',
+      overrideRecipients: overrideEmail,
+      filedAtLabel: '(test send)',
+    });
+    res.json(result);
   } catch (err) {
     next(err);
   }

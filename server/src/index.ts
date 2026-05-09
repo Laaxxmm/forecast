@@ -28,6 +28,7 @@ import dashboardActualsRoutes from './routes/dashboard-actuals.js';
 import syncRoutes from './routes/sync.js';
 import autoSyncRoutes from './routes/auto-sync.js';
 import { registerAutoSync, scheduleCatchup } from './services/scheduler/auto-sync.js';
+import { registerDailyBrief } from './services/scheduler/daily-brief.js';
 import revenueSharingRoutes from './routes/revenue-sharing.js';
 import dailyBriefRoutes from './routes/daily-brief.js';
 import dbViewerRoutes from './routes/db-viewer.js';
@@ -1152,6 +1153,15 @@ async function start() {
     scheduleCatchup();
   } catch (e) {
     console.error('[auto-sync] registration failed:', e);
+  }
+
+  // ─── Daily Brief scheduler ────────────────────────────────────────────
+  // 8 AM IST cron + a 9 AM catchup retry. Tick is a no-op unless SMTP is
+  // configured AND there's at least one active recipient.
+  try {
+    registerDailyBrief();
+  } catch (e) {
+    console.error('[daily-brief] registration failed:', e);
   }
 
   app.listen(PORT, () => {
