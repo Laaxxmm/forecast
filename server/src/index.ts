@@ -29,6 +29,7 @@ import syncRoutes from './routes/sync.js';
 import autoSyncRoutes from './routes/auto-sync.js';
 import { registerAutoSync, scheduleCatchup } from './services/scheduler/auto-sync.js';
 import revenueSharingRoutes from './routes/revenue-sharing.js';
+import dailyBriefRoutes from './routes/daily-brief.js';
 import dbViewerRoutes from './routes/db-viewer.js';
 import ingestRoutes from './routes/ingest.js';
 import vcfoReportsRoutes from './routes/vcfo-reports.js';
@@ -271,6 +272,7 @@ app.use('/api/dashboard-actuals', ...forecastOps, dashboardActualsRoutes);
 app.use('/api/sync/auto', ...forecastOps, autoSyncRoutes);
 app.use('/api/sync', ...forecastOps, forecastWrite, syncRoutes);
 app.use('/api/revenue-sharing', ...forecastOps, revenueSharingRoutes);
+app.use('/api/daily-brief', ...forecastOps, dailyBriefRoutes);
 app.use('/api/db', requireAuth, resolveTenant, resolveBranch, requireSuperAdmin, dbViewerRoutes);
 
 // ─── Client modules & integrations (for module selection page) ──────────────
