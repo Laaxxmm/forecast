@@ -247,16 +247,32 @@ export function renderDailyBriefHtml(data: DailyBriefData): string {
   return replaceTokens(template, tokens);
 }
 
-// ── PDF render via Playwright (Chromium already installed for the syncs) ──
-// Loads the rendered HTML in a headless page and prints to PDF. A4 portrait,
-// background graphics on (so the .plan card's solid black drop-shadow and
-// coloured pills aren't dropped).
+// ── PDF render via Playwright ──
+// Mirrors the launch strategy used by the existing sync runners
+// (healthplix-sync, oneglance-sync): on prod we point Playwright at the
+// system-installed /usr/bin/chromium so we don't fight 1.49+'s switch to
+// the (separately-downloaded) chromium-headless-shell variant. Local
+// dev falls through to Playwright's auto-discovery.
+function resolveChromiumExecutablePath(): string | undefined {
+  const envPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+  if (envPath && fs.existsSync(envPath)) return envPath;
+  const isProd = process.env.NODE_ENV === 'production';
+  if (!isProd) return undefined;                       // dev → Playwright auto-discovery
+  for (const candidate of ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome']) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
 export async function renderDailyBriefPdf(data: DailyBriefData): Promise<Buffer> {
   const html = renderDailyBriefHtml(data);
   // Lazy-import Playwright so a server boot in an env without Chromium
   // still works for the HTML preview path.
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch();
+  const executablePath = resolveChromiumExecutablePath();
+  const browser = await chromium.launch(
+    executablePath ? { executablePath, headless: true } : { headless: true }
+  );
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'load' });
