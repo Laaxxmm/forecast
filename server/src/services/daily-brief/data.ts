@@ -11,6 +11,7 @@
 import type { DbHelper } from '../../db/connection.js';
 import type { BranchContext } from '../../utils/branch.js';
 import { branchFilter } from '../../utils/branch.js';
+import { getMonthlyRevenueTarget } from './targets.js';
 
 // ── Public types ──
 export interface DailyBriefStream {
@@ -234,18 +235,14 @@ export function buildDailyBriefData(
   const typicalDayLabel = WEEKDAY_LONG[yesterday.getDay()];
 
   // ── 2. Monthly goal + MTD ──
-  // Sum of all revenue-class budgets for the active FY × current month,
-  // branch-scoped. Falls back to 0 when no budget is set, in which case the
-  // status message acknowledges the missing target rather than dividing by it.
+  // Targets live in forecast_items (category='revenue') under the default
+  // scenario per (fy, stream, branch) — same place the Operational
+  // Insights screen reads them from. Returns 0 when no scenario / no
+  // forecast items exist.
   const fy = db.get('SELECT * FROM financial_years WHERE is_active = 1');
-  const monthlyGoalRow = fy ? db.get(
-    `SELECT COALESCE(SUM(amount), 0) AS goal
-       FROM budgets
-      WHERE fy_id = ? AND month = ?
-        AND LOWER(metric) LIKE '%revenue%'${bf.where}`,
-    fy.id, currentMonth, ...bf.params
-  ) : null;
-  const monthlyGoal = monthlyGoalRow?.goal || 0;
+  const monthlyGoal = fy
+    ? getMonthlyRevenueTarget(db, ctx, { fyId: fy.id, month: currentMonth })
+    : 0;
 
   const mtdC = db.get(
     `SELECT COALESCE(SUM(item_price), 0) AS rev
@@ -283,17 +280,11 @@ export function buildDailyBriefData(
         WHERE bill_date = ?${bf.where}`,
       yesterdayStr, ...bf.params
     );
-    // Stream's monthly target = sum of budgets where stream_id matches OR
-    // (fallback) the stream's name matches a department in the budget rows.
-    const targetRow = fy ? db.get(
-      `SELECT COALESCE(SUM(amount), 0) AS goal
-         FROM budgets
-        WHERE fy_id = ? AND month = ?
-          AND LOWER(metric) LIKE '%revenue%'
-          AND (business_unit = ? OR LOWER(business_unit) LIKE LOWER(?))${bf.where}`,
-      fy.id, currentMonth, s.name, `%${s.name}%`, ...bf.params
-    ) : null;
-    const monthlyTarget = targetRow?.goal || 0;
+    // Stream's monthly target = sum of revenue forecast_items in the
+    // default scenario for this (fy, stream, branch).
+    const monthlyTarget = fy
+      ? getMonthlyRevenueTarget(db, ctx, { fyId: fy.id, month: currentMonth, streamId: s.id })
+      : 0;
     const todayTarget = monthlyTarget > 0 && daysRemaining > 0
       ? Math.max(0, (monthlyTarget - (dayRow?.rev || 0)) / daysRemaining)  // crude — refined below
       : 0;

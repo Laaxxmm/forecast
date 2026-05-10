@@ -10,6 +10,7 @@ import type { DbHelper } from '../../db/connection.js';
 import type { BranchContext } from '../../utils/branch.js';
 import { branchFilter } from '../../utils/branch.js';
 import { formatINR, formatIndian } from './data.js';
+import { getMonthlyRevenueTarget } from './targets.js';
 
 // ── Public types ──
 export interface WeeklyDayPoint {
@@ -309,14 +310,12 @@ export function buildWeeklyPulseData(
   const dayOfMonth = today.getDate();
   const daysRemaining = Math.max(0, daysInMonth - dayOfMonth);
 
-  const monthlyGoalRow = fy ? db.get(
-    `SELECT COALESCE(SUM(amount), 0) AS goal
-       FROM budgets
-      WHERE fy_id = ? AND month = ?
-        AND LOWER(metric) LIKE '%revenue%'${bf.where}`,
-    fy.id, currentMonth, ...bf.params
-  ) : null;
-  const monthlyGoal = monthlyGoalRow?.goal || 0;
+  // Targets live in forecast_items (category='revenue') under the default
+  // scenario per (fy, stream, branch) — same source as the Operational
+  // Insights screen.
+  const monthlyGoal = fy
+    ? getMonthlyRevenueTarget(db, ctx, { fyId: fy.id, month: currentMonth })
+    : 0;
   const dailyTarget = monthlyGoal > 0 ? monthlyGoal / daysInMonth : 0;
   const weekTarget = dailyTarget * 7;
 
@@ -453,15 +452,9 @@ export function buildWeeklyPulseData(
       currentMonth, options.today, ...bf.params
     );
     const streamMtd = mtdRow?.rev || 0;
-    const streamMonthlyTarget = fy ? db.get(
-      `SELECT COALESCE(SUM(amount), 0) AS goal
-         FROM budgets
-        WHERE fy_id = ? AND month = ?
-          AND LOWER(metric) LIKE '%revenue%'
-          AND (business_unit = ? OR LOWER(business_unit) LIKE LOWER(?))${bf.where}`,
-      fy.id, currentMonth, s.name, `%${s.name}%`, ...bf.params
-    ) : null;
-    const monthlyTarget = streamMonthlyTarget?.goal || 0;
+    const monthlyTarget = fy
+      ? getMonthlyRevenueTarget(db, ctx, { fyId: fy.id, month: currentMonth, streamId: s.id })
+      : 0;
     const projected = dayOfMonth > 0 ? (streamMtd / dayOfMonth) * daysInMonth : 0;
     const projectedPct = monthlyTarget > 0 ? (projected / monthlyTarget) * 100 : 0;
     let status: 'ok' | 'amber' | 'red' = 'ok';
