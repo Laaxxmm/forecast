@@ -253,7 +253,7 @@ export function renderDailyBriefHtml(data: DailyBriefData): string {
 // system-installed /usr/bin/chromium so we don't fight 1.49+'s switch to
 // the (separately-downloaded) chromium-headless-shell variant. Local
 // dev falls through to Playwright's auto-discovery.
-function resolveChromiumExecutablePath(): string | undefined {
+export function resolveChromiumExecutablePath(): string | undefined {
   const envPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
   if (envPath && fs.existsSync(envPath)) return envPath;
   const isProd = process.env.NODE_ENV === 'production';

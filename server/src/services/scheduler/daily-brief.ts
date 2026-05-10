@@ -1,27 +1,32 @@
-// 8 AM IST cron that emails the Daily Brief to every active recipient.
+// Daily Brief at 8 AM IST + Weekly Pulse at 7:30 AM IST every Monday.
 //
-// Walks every active tenant + branch with at least one active recipient,
-// gathers data for yesterday-IST, renders, and sends via the configured
-// Office 365 SMTP transport.
+// Walks every active tenant + branch with at least one active recipient
+// for the relevant cadence, gathers data, renders, and sends via the
+// configured Office 365 SMTP transport.
 //
-// One main fire at 08:00 plus a single retry at 09:00 — the retry is
-// short-circuited by alreadyRanForDate() so successful branches aren't
-// re-sent. Mirrors the conservative pattern in auto-sync.ts.
+// Daily: main at 08:00, catchup at 09:00. Weekly: main Mon 07:30, catchup
+// Mon 08:30. Catchup runs short-circuit on alreadyRanForDate() so
+// successful branches aren't re-sent.
 
 import cron from 'node-cron';
 import { getPlatformHelper } from '../../db/platform-connection.js';
 import { getClientHelper } from '../../db/connection.js';
 import { todayIst, yesterdayIst } from '../../utils/ist-date.js';
 import type { BranchContext } from '../../utils/branch.js';
-import { runDailyBriefSend, alreadyRanForDate, type SendTrigger } from '../daily-brief/send.js';
+import { runDailyBriefSend, alreadyRanForDate, type SendTrigger, type Cadence } from '../daily-brief/send.js';
 import { getMailerConfig } from '../daily-brief/mailer.js';
 
 const TZ = 'Asia/Kolkata';
-const SCHEDULE_CRON = '0 8 * * *';
-const RETRY_CRON = '0 9 * * *';
+const DAILY_CRON = '0 8 * * *';
+const DAILY_RETRY_CRON = '0 9 * * *';
+// Weekly fires on Monday only (cron weekday 1 = Monday).
+const WEEKLY_CRON = '30 7 * * 1';
+const WEEKLY_RETRY_CRON = '30 8 * * 1';
 
-let mainTask: ReturnType<typeof cron.schedule> | null = null;
-let retryTask: ReturnType<typeof cron.schedule> | null = null;
+let dailyTask: ReturnType<typeof cron.schedule> | null = null;
+let dailyRetryTask: ReturnType<typeof cron.schedule> | null = null;
+let weeklyTask: ReturnType<typeof cron.schedule> | null = null;
+let weeklyRetryTask: ReturnType<typeof cron.schedule> | null = null;
 let isTickRunning = false;
 
 interface Target {
@@ -31,7 +36,7 @@ interface Target {
   isMultiBranch: boolean;
 }
 
-async function enumerateTargets(): Promise<Target[]> {
+async function enumerateTargets(cadence: Cadence): Promise<Target[]> {
   const platformDb = await getPlatformHelper();
   const targets: Target[] = [];
   const clients: Array<{ id: number; slug: string; is_multi_branch?: number }> =
@@ -41,10 +46,14 @@ async function enumerateTargets(): Promise<Target[]> {
     const isMultiBranch = !!client.is_multi_branch;
     const tenantDb = await getClientHelper(client.slug);
 
-    // Pull every branch_id the recipients table refers to. NULL is the
-    // consolidated subscriber set; specific ids fan out per branch.
+    // Pull every branch_id the recipients table refers to FOR THIS CADENCE.
+    // 'both' rows count for either cadence; daily/weekly rows only for
+    // their own. NULL = consolidated subscriber set; specific ids fan out
+    // per branch.
     const recipientBranchIds: Array<{ branch_id: number | null }> = tenantDb.all(
-      `SELECT DISTINCT branch_id FROM daily_brief_recipients WHERE is_active = 1`
+      `SELECT DISTINCT branch_id FROM daily_brief_recipients
+        WHERE is_active = 1 AND (cadence = ? OR cadence = 'both')`,
+      cadence
     );
     if (recipientBranchIds.length === 0) continue;
 
@@ -84,26 +93,39 @@ function ctxFor(target: Target): BranchContext {
   };
 }
 
-async function tick(trigger: SendTrigger) {
+// Compute the just-past Sunday's date (YYYY-MM-DD) given today's date.
+// Used by the weekly tick to know which week is being summarised.
+function previousSundayIst(today: string): string {
+  const [yy, mm, dd] = today.split('-').map(Number);
+  const d = new Date(yy, mm - 1, dd);
+  const dayOfWeek = d.getDay();             // 0=Sun, 1=Mon, …
+  const daysSinceSunday = dayOfWeek === 0 ? 7 : dayOfWeek;
+  d.setDate(d.getDate() - daysSinceSunday);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+async function tick(cadence: Cadence, trigger: SendTrigger) {
+  const tag = `[${cadence}]`;
   if (isTickRunning) {
-    console.log('[daily-brief] tick already running — skipping');
+    console.log(`${tag} tick already running — skipping`);
     return;
   }
   if (!getMailerConfig()) {
-    console.warn('[daily-brief] SMTP not configured (SMTP_USER / SMTP_PASS missing) — skipping tick');
+    console.warn(`${tag} SMTP not configured (SMTP_USER / SMTP_PASS missing) — skipping tick`);
     return;
   }
   isTickRunning = true;
-  const reportDate = yesterdayIst();
   const todayDate = todayIst();
+  // Daily reports on yesterday-IST; weekly reports on the just-past Sunday.
+  const reportDate = cadence === 'weekly' ? previousSundayIst(todayDate) : yesterdayIst();
+  const filedAtLabel = cadence === 'weekly' ? '7:30 AM' : '8:00 AM';
   const startedAt = Date.now();
   try {
-    const targets = await enumerateTargets();
-    console.log(`[daily-brief] ${trigger} tick — ${targets.length} target(s) for ${reportDate}`);
+    const targets = await enumerateTargets(cadence);
+    console.log(`${tag} ${trigger} tick — ${targets.length} target(s) for ${reportDate}`);
     for (const target of targets) {
       const tenantDb = await getClientHelper(target.slug);
-      // Catchup runs skip branches that already succeeded today.
-      if (trigger === 'catchup' && alreadyRanForDate(tenantDb, reportDate, target.branchId)) {
+      if (trigger === 'catchup' && alreadyRanForDate(tenantDb, reportDate, target.branchId, cadence)) {
         continue;
       }
       try {
@@ -115,32 +137,35 @@ async function tick(trigger: SendTrigger) {
           reportDate,
           todayDate,
           trigger,
-          filedAtLabel: '8:00 AM',
+          cadence,
+          filedAtLabel,
         });
-        console.log(`[daily-brief] ${target.slug} branch=${target.branchId ?? 'null'} → ${result.status} (${result.recipientCount} recipients)${result.error ? ' · ' + result.error : ''}`);
+        console.log(`${tag} ${target.slug} branch=${target.branchId ?? 'null'} → ${result.status} (${result.recipientCount} recipients)${result.error ? ' · ' + result.error : ''}`);
       } catch (err: any) {
-        console.error(`[daily-brief] ${target.slug} branch=${target.branchId ?? 'null'} threw:`, err?.message || err);
+        console.error(`${tag} ${target.slug} branch=${target.branchId ?? 'null'} threw:`, err?.message || err);
       }
     }
   } finally {
     isTickRunning = false;
-    console.log(`[daily-brief] tick done in ${Math.round((Date.now() - startedAt) / 1000)}s`);
+    console.log(`${tag} tick done in ${Math.round((Date.now() - startedAt) / 1000)}s`);
   }
 }
 
 export function registerDailyBrief() {
-  if (mainTask || retryTask) {
+  if (dailyTask || dailyRetryTask || weeklyTask || weeklyRetryTask) {
     console.log('[daily-brief] already registered, skipping re-registration');
     return;
   }
-  mainTask = cron.schedule(SCHEDULE_CRON, () => { tick('schedule'); }, { timezone: TZ });
-  retryTask = cron.schedule(RETRY_CRON, () => { tick('catchup'); }, { timezone: TZ });
-  console.log(`[daily-brief] cron registered — main ${SCHEDULE_CRON} ${TZ}, retry ${RETRY_CRON} ${TZ}`);
+  dailyTask      = cron.schedule(DAILY_CRON,        () => { tick('daily', 'schedule'); }, { timezone: TZ });
+  dailyRetryTask = cron.schedule(DAILY_RETRY_CRON,  () => { tick('daily', 'catchup');  }, { timezone: TZ });
+  weeklyTask     = cron.schedule(WEEKLY_CRON,       () => { tick('weekly', 'schedule'); }, { timezone: TZ });
+  weeklyRetryTask= cron.schedule(WEEKLY_RETRY_CRON, () => { tick('weekly', 'catchup');  }, { timezone: TZ });
+  console.log(`[daily-brief] cron registered — daily ${DAILY_CRON} / ${DAILY_RETRY_CRON} ${TZ}; weekly ${WEEKLY_CRON} / ${WEEKLY_RETRY_CRON} ${TZ}`);
 }
 
 // Manual trigger for the "Run now" admin action — currently only wired
 // internally; routes that need it can import directly. Returns nothing
 // (results are visible in daily_brief_sends).
-export async function runDailyBriefNow(): Promise<void> {
-  await tick('manual_test');
+export async function runDailyBriefNow(cadence: Cadence = 'daily'): Promise<void> {
+  await tick(cadence, 'manual_test');
 }

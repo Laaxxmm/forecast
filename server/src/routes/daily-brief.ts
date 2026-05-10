@@ -13,7 +13,9 @@ import { getPlatformHelper } from '../db/platform-connection.js';
 import { reportDateIst, todayIst, yesterdayIst } from '../utils/ist-date.js';
 import { buildDailyBriefData } from '../services/daily-brief/data.js';
 import { renderDailyBriefHtml, renderDailyBriefPdf, dailyBriefFilename } from '../services/daily-brief/render.js';
-import { runDailyBriefSend } from '../services/daily-brief/send.js';
+import { buildWeeklyPulseData } from '../services/daily-brief/weekly-data.js';
+import { renderWeeklyPulseHtml, renderWeeklyPulsePdf, weeklyPulseFilename } from '../services/daily-brief/weekly-render.js';
+import { runDailyBriefSend, type Cadence } from '../services/daily-brief/send.js';
 import { verifyMailer, getMailerConfig } from '../services/daily-brief/mailer.js';
 import { requireInt, requireString, optionalString, optionalNumber } from '../middleware/validate.js';
 
@@ -62,6 +64,105 @@ function resolveReportDates(req: any): { today: string; yesterday: string } {
   }
   return { today: todayIst(), yesterday: yesterdayIst() };
 }
+
+// ── Weekly Pulse preview routes ──
+// The weekly mirrors the daily structure: HTML preview, PDF download,
+// and a JSON view for debugging. The cadence is implicit in the path
+// (`/weekly-pulse/...` → cadence='weekly'); the runner picks the right
+// data + renderer.
+
+function resolveWeeklyDates(req: any): { today: string; weekEnd: string } {
+  // ?date=YYYY-MM-DD names the Monday of the issue (defaults to most
+  // recent Monday). The week being summarised ends on the Sunday before.
+  const explicit = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+    ? req.query.date
+    : null;
+  let today: string;
+  if (explicit) {
+    today = explicit;
+  } else {
+    // Most recent Monday in IST
+    const t = todayIst();
+    const [yy, mm, dd] = t.split('-').map(Number);
+    const d = new Date(yy, mm - 1, dd);
+    const dayOfWeek = d.getDay();   // 0 = Sun ... 1 = Mon
+    const daysSinceMonday = (dayOfWeek + 6) % 7;
+    d.setDate(d.getDate() - daysSinceMonday);
+    today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+  // weekEnd = day before issue (Sunday)
+  const [yy, mm, dd] = today.split('-').map(Number);
+  const e = new Date(yy, mm - 1, dd);
+  e.setDate(e.getDate() - 1);
+  const weekEnd = `${e.getFullYear()}-${String(e.getMonth() + 1).padStart(2, '0')}-${String(e.getDate()).padStart(2, '0')}`;
+  return { today, weekEnd };
+}
+
+router.get('/weekly-pulse/preview', requireRole('admin'), async (req, res, next) => {
+  try {
+    const db = req.tenantDb!;
+    const { clientName, branchName } = await resolveLabels(req.clientId!, req.branchId ?? null);
+    const streams = await loadStreams(req.clientId!);
+    const { today, weekEnd } = resolveWeeklyDates(req);
+    const data = buildWeeklyPulseData(db, req, {
+      clientName,
+      branchName,
+      branchId: req.branchId ?? null,
+      streams,
+      today,
+      weekEnd,
+      filedAtLabel: '7:30 AM',
+    });
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(renderWeeklyPulseHtml(data));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/weekly-pulse/preview.pdf', requireRole('admin'), async (req, res, next) => {
+  try {
+    const db = req.tenantDb!;
+    const { clientName, branchName } = await resolveLabels(req.clientId!, req.branchId ?? null);
+    const streams = await loadStreams(req.clientId!);
+    const { today, weekEnd } = resolveWeeklyDates(req);
+    const data = buildWeeklyPulseData(db, req, {
+      clientName,
+      branchName,
+      branchId: req.branchId ?? null,
+      streams,
+      today,
+      weekEnd,
+      filedAtLabel: '7:30 AM',
+    });
+    const pdf = await renderWeeklyPulsePdf(data);
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', `inline; filename="${weeklyPulseFilename(data)}"`);
+    res.send(pdf);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/weekly-pulse/data', requireRole('admin'), async (req, res, next) => {
+  try {
+    const db = req.tenantDb!;
+    const { clientName, branchName } = await resolveLabels(req.clientId!, req.branchId ?? null);
+    const streams = await loadStreams(req.clientId!);
+    const { today, weekEnd } = resolveWeeklyDates(req);
+    const data = buildWeeklyPulseData(db, req, {
+      clientName,
+      branchName,
+      branchId: req.branchId ?? null,
+      streams,
+      today,
+      weekEnd,
+    });
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.get('/preview', requireRole('admin'), async (req, res, next) => {
   try {
@@ -131,7 +232,7 @@ router.get('/recipients', requireRole('admin'), (req, res) => {
   const branchFilterId = req.query.branch_id !== undefined
     ? (req.query.branch_id === 'null' || req.query.branch_id === '' ? null : requireInt(req.query.branch_id, 'branch_id'))
     : undefined;
-  let sql = `SELECT id, branch_id, email, name, is_active, created_at FROM daily_brief_recipients`;
+  let sql = `SELECT id, branch_id, email, name, cadence, is_active, created_at FROM daily_brief_recipients`;
   const params: any[] = [];
   if (branchFilterId !== undefined) {
     if (branchFilterId === null) sql += ` WHERE branch_id IS NULL`;
@@ -157,14 +258,22 @@ router.post('/recipients', requireRole('admin'), (req, res, next) => {
     const email = validateEmail(requireString(req.body.email, 'email', 200));
     const name = optionalString(req.body.name, 'name', 100) || null;
     const branchId = optionalNumber(req.body.branch_id, 'branch_id') ?? null;
+    const cadenceRaw = optionalString(req.body.cadence, 'cadence', 10) || 'daily';
+    if (!['daily', 'weekly', 'both'].includes(cadenceRaw)) {
+      return res.status(400).json({ error: 'cadence must be daily, weekly, or both' });
+    }
     const createdBy = req.session?.username || req.session?.displayName || null;
+    // The conflict target matches idx_daily_brief_recipients_unique_v2,
+    // which uses COALESCE(branch_id, 0) so NULL-branch rows dedupe
+    // correctly. SQLite resolves the ON CONFLICT clause against the
+    // expression-based unique index defined in schema.ts.
     const result = db.run(
-      `INSERT INTO daily_brief_recipients (branch_id, email, name, is_active, created_by)
-         VALUES (?, ?, ?, 1, ?)
-         ON CONFLICT(branch_id, email) DO UPDATE SET
+      `INSERT INTO daily_brief_recipients (branch_id, email, name, cadence, is_active, created_by)
+         VALUES (?, ?, ?, ?, 1, ?)
+         ON CONFLICT(COALESCE(branch_id, 0), email, cadence) DO UPDATE SET
            name = excluded.name,
            is_active = 1`,
-      branchId, email, name, createdBy
+      branchId, email, name, cadenceRaw, createdBy
     );
     res.json({ ok: true, id: Number(result.lastInsertRowid) });
   } catch (err: any) {
@@ -246,7 +355,6 @@ router.get('/smtp-status', requireRole('admin'), async (_req, res) => {
 router.post('/send-test', requireRole('admin'), async (req, res, next) => {
   try {
     const db = req.tenantDb!;
-    const { today, yesterday } = resolveReportDates(req);
     let branchIdParam: number | null;
     if (req.body.branch_id === undefined) {
       branchIdParam = req.branchId ?? null;
@@ -262,14 +370,27 @@ router.post('/send-test', requireRole('admin'), async (req, res, next) => {
     const overrideEmail = typeof req.body.email === 'string' && req.body.email.trim()
       ? [req.body.email.trim()]
       : undefined;
+    const cadence: Cadence = (req.body.cadence === 'weekly') ? 'weekly' : 'daily';
+    let reportDate: string;
+    let todayDate: string;
+    if (cadence === 'weekly') {
+      const w = resolveWeeklyDates(req);
+      reportDate = w.weekEnd;
+      todayDate = w.today;
+    } else {
+      const d = resolveReportDates(req);
+      reportDate = d.yesterday;
+      todayDate = d.today;
+    }
     const result = await runDailyBriefSend({
       db,
       ctx: req,
       clientId: req.clientId!,
       branchId: branchIdParam,
-      reportDate: yesterday,
-      todayDate: today,
+      reportDate,
+      todayDate,
       trigger: 'manual_test',
+      cadence,
       overrideRecipients: overrideEmail,
       filedAtLabel: '(test send)',
     });

@@ -718,6 +718,11 @@ export function initializeSchema(db: DbHelper) {
     'ALTER TABLE vcfo_compliances ADD COLUMN state TEXT',
     'ALTER TABLE vcfo_compliances ADD COLUMN stream_id INTEGER',
     "ALTER TABLE vcfo_compliance_catalog ADD COLUMN default_scope TEXT DEFAULT 'branch'",
+    // Daily Brief → Weekly Pulse retrofits. Tenants whose tables predate
+    // the cadence column need these added so the cadence-aware queries
+    // don't fail with "no such column".
+    "ALTER TABLE daily_brief_recipients ADD COLUMN cadence TEXT NOT NULL DEFAULT 'daily'",
+    "ALTER TABLE daily_brief_sends ADD COLUMN cadence TEXT NOT NULL DEFAULT 'daily'",
   ];
   for (const sql of branchMigrations) {
     try { db.exec(sql); } catch { /* column already exists */ }
@@ -847,6 +852,94 @@ export function initializeSchema(db: DbHelper) {
     // deploy retries the migration.
     try { db.exec('ROLLBACK'); } catch {}
     console.warn('[schema] dashboard_actuals unique-key migration skipped:', (err as Error).message);
+  }
+
+  // ── daily_brief_* cadence migration ────────────────────────────────────────
+  // Tenants whose daily_brief_recipients / daily_brief_sends predate the
+  // cadence column had inline UNIQUE constraints that didn't include
+  // cadence. SQLite can't widen UNIQUE via ALTER, so the only way to
+  // unblock daily+weekly rows for the same (branch, email) is to rebuild
+  // the table without the legacy auto-unique-index. The presence of an
+  // sqlite_autoindex on either table is the migration flag — newly
+  // created tenants skip this block entirely because the current schema
+  // declares no inline UNIQUE.
+  for (const tableName of ['daily_brief_recipients', 'daily_brief_sends']) {
+    try {
+      const legacyAutoIndex = db.get(
+        `SELECT name FROM sqlite_master
+          WHERE type = 'index'
+            AND tbl_name = ?
+            AND name LIKE 'sqlite_autoindex_%'
+          LIMIT 1`,
+        tableName
+      );
+      if (!legacyAutoIndex) continue;
+
+      if (tableName === 'daily_brief_recipients') {
+        db.exec(`
+          BEGIN;
+          CREATE TABLE daily_brief_recipients_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            branch_id INTEGER,
+            email TEXT NOT NULL,
+            name TEXT,
+            cadence TEXT NOT NULL DEFAULT 'daily',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now')),
+            created_by TEXT
+          );
+          INSERT INTO daily_brief_recipients_new
+            (id, branch_id, email, name, cadence, is_active, created_at, created_by)
+            SELECT id, branch_id, email, name,
+                   COALESCE(cadence, 'daily'),
+                   is_active, created_at, created_by
+              FROM daily_brief_recipients;
+          DROP TABLE daily_brief_recipients;
+          ALTER TABLE daily_brief_recipients_new RENAME TO daily_brief_recipients;
+          CREATE INDEX IF NOT EXISTS idx_daily_brief_recipients_branch
+            ON daily_brief_recipients(branch_id, is_active);
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_brief_recipients_unique_v2
+            ON daily_brief_recipients (COALESCE(branch_id, 0), email, cadence);
+          COMMIT;
+        `);
+        console.log('[schema] daily_brief_recipients rebuilt to drop legacy UNIQUE');
+      } else {
+        db.exec(`
+          BEGIN;
+          CREATE TABLE daily_brief_sends_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_date_ist TEXT NOT NULL,
+            branch_id INTEGER,
+            cadence TEXT NOT NULL DEFAULT 'daily',
+            trigger TEXT NOT NULL CHECK(trigger IN ('schedule','manual_test','catchup')),
+            status TEXT NOT NULL CHECK(status IN ('running','success','failed','skipped')),
+            recipient_count INTEGER DEFAULT 0,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            error TEXT
+          );
+          INSERT INTO daily_brief_sends_new
+            (id, run_date_ist, branch_id, cadence, trigger, status,
+             recipient_count, started_at, finished_at, error)
+            SELECT id, run_date_ist, branch_id,
+                   COALESCE(cadence, 'daily'),
+                   trigger, status,
+                   recipient_count, started_at, finished_at, error
+              FROM daily_brief_sends;
+          DROP TABLE daily_brief_sends;
+          ALTER TABLE daily_brief_sends_new RENAME TO daily_brief_sends;
+          CREATE INDEX IF NOT EXISTS idx_daily_brief_sends_date
+            ON daily_brief_sends(run_date_ist DESC);
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_brief_sends_unique_v2
+            ON daily_brief_sends (run_date_ist, COALESCE(branch_id, 0), cadence, trigger);
+          COMMIT;
+        `);
+        console.log('[schema] daily_brief_sends rebuilt to drop legacy UNIQUE');
+      }
+    } catch (err) {
+      try { db.exec('ROLLBACK'); } catch {}
+      console.warn(`[schema] ${tableName} cadence rebuild skipped:`, (err as Error).message);
+    }
   }
 
   // Data migrations — backfill / normalise legacy rows
@@ -1034,42 +1127,48 @@ export function initializeSchema(db: DbHelper) {
     );
     CREATE INDEX IF NOT EXISTS idx_doctor_aliases_doctor ON doctor_aliases(doctor_id);
 
-    -- Recipients of the 8 AM Daily Brief email. branch_id is the platform
-    -- branches.id (no FK because the cross-DB ref isn't enforceable here);
-    -- NULL means the recipient gets the consolidated brief. UNIQUE per
-    -- (branch, email) so the same address can subscribe to multiple
-    -- branches without colliding.
+    -- Recipients of the 8 AM Daily Brief / Monday Weekly Pulse email.
+    -- branch_id is platform branches.id (no FK because the cross-DB ref
+    -- isn't enforceable); NULL = consolidated. cadence: 'daily' | 'weekly'
+    -- | 'both'. The UNIQUE constraint lives in a separate index that uses
+    -- COALESCE(branch_id, 0) so SQLite's "NULLs are distinct" quirk
+    -- doesn't allow duplicate consolidated rows. The migration block
+    -- below rebuilds legacy tables that predate the cadence column.
     CREATE TABLE IF NOT EXISTS daily_brief_recipients (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       branch_id INTEGER,
       email TEXT NOT NULL,
       name TEXT,
+      cadence TEXT NOT NULL DEFAULT 'daily',
       is_active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now')),
-      created_by TEXT,
-      UNIQUE(branch_id, email)
+      created_by TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_daily_brief_recipients_branch
       ON daily_brief_recipients(branch_id, is_active);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_brief_recipients_unique_v2
+      ON daily_brief_recipients (COALESCE(branch_id, 0), email, cadence);
 
-    -- Audit log for every Daily Brief send (manual test or scheduled).
-    -- Mirrors auto_sync_runs: one row per (run_date_ist, branch_id) so
-    -- a re-run for the same day overwrites instead of duplicating, and
-    -- the scheduler can short-circuit on a successful prior run.
+    -- Audit log for every Daily Brief / Weekly Pulse send (manual test or
+    -- scheduled). cadence: 'daily' | 'weekly'. Uniqueness lives in a
+    -- separate COALESCE-aware index for the same NULL-handling reason as
+    -- the recipients table.
     CREATE TABLE IF NOT EXISTS daily_brief_sends (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       run_date_ist TEXT NOT NULL,
       branch_id INTEGER,
+      cadence TEXT NOT NULL DEFAULT 'daily',
       trigger TEXT NOT NULL CHECK(trigger IN ('schedule','manual_test','catchup')),
       status TEXT NOT NULL CHECK(status IN ('running','success','failed','skipped')),
       recipient_count INTEGER DEFAULT 0,
       started_at TEXT NOT NULL,
       finished_at TEXT,
-      error TEXT,
-      UNIQUE(run_date_ist, branch_id, trigger)
+      error TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_daily_brief_sends_date
       ON daily_brief_sends(run_date_ist DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_brief_sends_unique_v2
+      ON daily_brief_sends (run_date_ist, COALESCE(branch_id, 0), cadence, trigger);
   `);
 
   // Seed self-aliases so the revenue-sharing dashboard's behavior is

@@ -14,9 +14,12 @@ interface Recipient {
   branch_id: number | null;
   email: string;
   name: string | null;
+  cadence: 'daily' | 'weekly' | 'both';
   is_active: number;
   created_at: string;
 }
+
+type Cadence = 'daily' | 'weekly' | 'both';
 
 interface Branch {
   id: number;
@@ -42,10 +45,11 @@ export default function DailyBriefRecipients() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [smtp, setSmtp] = useState<SmtpStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [draft, setDraft] = useState({ email: '', name: '', branch: ALL_BRANCHES_KEY });
+  const [draft, setDraft] = useState({ email: '', name: '', branch: ALL_BRANCHES_KEY, cadence: 'both' as Cadence });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [testEmail, setTestEmail] = useState('');
+  const [testCadence, setTestCadence] = useState<'daily' | 'weekly'>('daily');
   const [testSending, setTestSending] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -73,7 +77,7 @@ export default function DailyBriefRecipients() {
     setTestResult(null);
     setTestSending(true);
     try {
-      const body: any = {};
+      const body: any = { cadence: testCadence };
       if (testEmail.trim()) body.email = testEmail.trim();
       const r = await api.post('/daily-brief/send-test', body);
       const status = r.data?.status;
@@ -106,8 +110,9 @@ export default function DailyBriefRecipients() {
         email,
         name: draft.name.trim() || undefined,
         branch_id: branchId,
+        cadence: draft.cadence,
       });
-      setDraft({ email: '', name: '', branch: draft.branch });
+      setDraft({ email: '', name: '', branch: draft.branch, cadence: draft.cadence });
       reload();
     } catch (err: any) {
       setError(err?.response?.data?.error || 'Couldn’t add recipient');
@@ -211,9 +216,18 @@ export default function DailyBriefRecipients() {
       {/* Send-test row — handy for verifying the wiring before adding 6 real recipients */}
       <div className="rounded p-3 mb-4" style={{ background: 'var(--mt-bg-muted)', border: '1px dashed var(--mt-border)' }}>
         <div className="text-xs mb-2" style={{ color: 'var(--mt-text-muted)' }}>
-          <strong style={{ color: 'var(--mt-text-secondary)' }}>Send a test email.</strong> Leave the address blank to send to all active recipients. Type one address to send only to them.
+          <strong style={{ color: 'var(--mt-text-secondary)' }}>Send a test email.</strong> Leave the address blank to send to all active recipients. Type one address to send only to them. Pick which report to send.
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={testCadence}
+            onChange={e => setTestCadence(e.target.value as 'daily' | 'weekly')}
+            className="mt-input text-sm"
+            style={{ padding: '6px 10px', minWidth: 140 }}
+          >
+            <option value="daily">Daily Brief</option>
+            <option value="weekly">Weekly Pulse</option>
+          </select>
           <input
             type="email"
             value={testEmail}
@@ -288,6 +302,19 @@ export default function DailyBriefRecipients() {
             </select>
           </div>
         )}
+        <div className="min-w-[140px]">
+          <label className="block text-[10px] mb-1 uppercase tracking-wider" style={{ color: 'var(--mt-text-faint)' }}>Cadence</label>
+          <select
+            value={draft.cadence}
+            onChange={e => setDraft(d => ({ ...d, cadence: e.target.value as Cadence }))}
+            className="mt-input text-sm w-full"
+            style={{ padding: '8px 10px' }}
+          >
+            <option value="both">Daily &amp; Weekly</option>
+            <option value="daily">Daily Brief only</option>
+            <option value="weekly">Weekly Pulse only</option>
+          </select>
+        </div>
         <button
           onClick={addRecipient}
           disabled={saving || !draft.email.trim()}
@@ -304,28 +331,32 @@ export default function DailyBriefRecipients() {
         </div>
       )}
 
-      {/* Preview link */}
-      <div className="flex items-center gap-2 mb-4 flex-wrap text-xs" style={{ color: 'var(--mt-text-muted)' }}>
-        <span>See what the 8 AM email looks like:</span>
-        <a
-          href="/api/daily-brief/preview"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 underline"
-          style={{ color: 'var(--mt-accent-text)' }}
-        >
-          <Eye size={12} /> HTML preview
-        </a>
-        <span style={{ color: 'var(--mt-text-faint)' }}>·</span>
-        <a
-          href="/api/daily-brief/preview.pdf"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 underline"
-          style={{ color: 'var(--mt-accent-text)' }}
-        >
-          <Send size={12} /> PDF
-        </a>
+      {/* Preview links — daily on top, weekly below */}
+      <div className="space-y-1 mb-4 text-xs" style={{ color: 'var(--mt-text-muted)' }}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span style={{ minWidth: 110 }}>Daily Brief (8 AM):</span>
+          <a href="/api/daily-brief/preview" target="_blank" rel="noopener noreferrer"
+             className="inline-flex items-center gap-1 underline" style={{ color: 'var(--mt-accent-text)' }}>
+            <Eye size={12} /> HTML
+          </a>
+          <span style={{ color: 'var(--mt-text-faint)' }}>·</span>
+          <a href="/api/daily-brief/preview.pdf" target="_blank" rel="noopener noreferrer"
+             className="inline-flex items-center gap-1 underline" style={{ color: 'var(--mt-accent-text)' }}>
+            <Send size={12} /> PDF
+          </a>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span style={{ minWidth: 110 }}>Weekly Pulse (Mon 7:30 AM):</span>
+          <a href="/api/daily-brief/weekly-pulse/preview" target="_blank" rel="noopener noreferrer"
+             className="inline-flex items-center gap-1 underline" style={{ color: 'var(--mt-accent-text)' }}>
+            <Eye size={12} /> HTML
+          </a>
+          <span style={{ color: 'var(--mt-text-faint)' }}>·</span>
+          <a href="/api/daily-brief/weekly-pulse/preview.pdf" target="_blank" rel="noopener noreferrer"
+             className="inline-flex items-center gap-1 underline" style={{ color: 'var(--mt-accent-text)' }}>
+            <Send size={12} /> PDF
+          </a>
+        </div>
       </div>
 
       {/* List */}
@@ -344,7 +375,9 @@ export default function DailyBriefRecipients() {
                 <span style={{ color: 'var(--mt-text-faint)' }}>· {g.rows.length} {g.rows.length === 1 ? 'recipient' : 'recipients'}</span>
               </div>
               <div className="rounded overflow-hidden" style={{ border: '1px solid var(--mt-border)' }}>
-                {g.rows.map((r, idx) => (
+                {g.rows.map((r, idx) => {
+                  const cadenceLabel = r.cadence === 'both' ? 'Daily + Weekly' : r.cadence === 'weekly' ? 'Weekly only' : 'Daily only';
+                  return (
                   <div
                     key={r.id}
                     className="flex items-center gap-3 px-3 py-2"
@@ -358,8 +391,18 @@ export default function DailyBriefRecipients() {
                       <div className="text-sm font-medium truncate" style={{ color: 'var(--mt-text-heading)' }}>
                         {r.name ? `${r.name} · ${r.email}` : r.email}
                       </div>
-                      <div className="text-[10px] mt-0.5" style={{ color: 'var(--mt-text-faint)' }}>
-                        Added {new Date(r.created_at).toLocaleDateString()} · {branchLabel(r.branch_id)}
+                      <div className="text-[10px] mt-0.5 flex items-center gap-1.5" style={{ color: 'var(--mt-text-faint)' }}>
+                        <span>Added {new Date(r.created_at).toLocaleDateString()} · {branchLabel(r.branch_id)}</span>
+                        <span
+                          className="inline-block px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider"
+                          style={{
+                            background: 'var(--mt-bg-muted)',
+                            border: '1px solid var(--mt-border)',
+                            color: 'var(--mt-text-secondary)',
+                          }}
+                        >
+                          {cadenceLabel}
+                        </span>
                       </div>
                     </div>
                     <button
@@ -385,7 +428,8 @@ export default function DailyBriefRecipients() {
                       <Trash2 size={13} />
                     </button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ))}

@@ -8,8 +8,12 @@ import type { DbHelper } from '../../db/connection.js';
 import type { BranchContext } from '../../utils/branch.js';
 import { getPlatformHelper } from '../../db/platform-connection.js';
 import { buildDailyBriefData } from './data.js';
+import { buildWeeklyPulseData } from './weekly-data.js';
 import { renderDailyBriefHtml, renderDailyBriefPdf, dailyBriefFilename } from './render.js';
+import { renderWeeklyPulseHtml, renderWeeklyPulsePdf, weeklyPulseFilename } from './weekly-render.js';
 import { sendMail } from './mailer.js';
+
+export type Cadence = 'daily' | 'weekly';
 
 export type SendTrigger = 'schedule' | 'manual_test' | 'catchup';
 
@@ -40,12 +44,13 @@ interface RunOptions {
   ctx: BranchContext;
   clientId: number;
   branchId: number | null;       // null = consolidated
-  reportDate: string;            // YYYY-MM-DD — yesterday in IST
-  todayDate: string;             // YYYY-MM-DD — today in IST
+  reportDate: string;            // YYYY-MM-DD — yesterday in IST (daily) OR Sunday of prior week (weekly)
+  todayDate: string;             // YYYY-MM-DD — today in IST (daily) OR Monday issue date (weekly)
   trigger: SendTrigger;
+  cadence?: Cadence;             // 'daily' (default) or 'weekly'
   // Override the recipient list. Used by "Send test now" with a single
   // tester. When omitted, recipients are loaded from daily_brief_recipients
-  // for this branch (plus consolidated rows when branch is specific).
+  // for this branch + cadence (plus consolidated rows when branch is specific).
   overrideRecipients?: string[];
   syncedAtLabel?: string;
   filedAtLabel?: string;
@@ -53,14 +58,18 @@ interface RunOptions {
 
 export async function runDailyBriefSend(opts: RunOptions): Promise<SendOutcome> {
   const { db, ctx, clientId, branchId, reportDate, todayDate, trigger } = opts;
+  const cadence: Cadence = opts.cadence || 'daily';
   const startedAt = new Date().toISOString();
 
-  // 1. Resolve recipients
-  const recipients = opts.overrideRecipients ?? loadActiveRecipients(db, branchId);
+  // 1. Resolve recipients (cadence-scoped — daily-only subscribers don't
+  // get the weekly mail and vice versa; 'both' rows are included for
+  // either cadence).
+  const recipients = opts.overrideRecipients ?? loadActiveRecipients(db, branchId, cadence);
   if (recipients.length === 0) {
     writeAuditRow(db, {
       runDate: reportDate,
       branchId,
+      cadence,
       trigger,
       status: 'skipped',
       recipientCount: 0,
@@ -87,15 +96,33 @@ export async function runDailyBriefSend(opts: RunOptions): Promise<SendOutcome> 
 
   // Mark as running so a concurrent re-fire (catchup) skips this branch
   // until the row finalises.
-  upsertRunning(db, { runDate: reportDate, branchId, trigger, startedAt, recipientCount: recipients.length });
+  upsertRunning(db, { runDate: reportDate, branchId, cadence, trigger, startedAt, recipientCount: recipients.length });
 
   // 3. Gather data + render — serialised through renderMutex so a manual
-  // test send during the 8 AM cron doesn't double-launch Chromium.
+  // test send during the cron doesn't double-launch Chromium. Picks the
+  // right gatherer + renderer based on cadence.
   let html: string;
   let pdf: Buffer;
   let pdfName: string;
   try {
     const rendered = await withRenderLock(async () => {
+      if (cadence === 'weekly') {
+        const data = buildWeeklyPulseData(db, ctx, {
+          clientName,
+          branchName,
+          branchId,
+          streams,
+          today: todayDate,
+          weekEnd: reportDate,
+          syncedAtLabel: opts.syncedAtLabel,
+          filedAtLabel: opts.filedAtLabel || '7:30 AM',
+        });
+        return {
+          html: renderWeeklyPulseHtml(data),
+          pdf: await renderWeeklyPulsePdf(data),
+          pdfName: weeklyPulseFilename(data),
+        };
+      }
       const data = buildDailyBriefData(db, ctx, {
         clientName,
         branchName,
@@ -106,9 +133,11 @@ export async function runDailyBriefSend(opts: RunOptions): Promise<SendOutcome> 
         syncedAtLabel: opts.syncedAtLabel,
         filedAtLabel: opts.filedAtLabel || '8:00 AM',
       });
-      const html = renderDailyBriefHtml(data);
-      const pdf = await renderDailyBriefPdf(data);
-      return { html, pdf, pdfName: dailyBriefFilename(data) };
+      return {
+        html: renderDailyBriefHtml(data),
+        pdf: await renderDailyBriefPdf(data),
+        pdfName: dailyBriefFilename(data),
+      };
     });
     html = rendered.html;
     pdf = rendered.pdf;
@@ -119,6 +148,7 @@ export async function runDailyBriefSend(opts: RunOptions): Promise<SendOutcome> 
     writeAuditRow(db, {
       runDate: reportDate,
       branchId,
+      cadence,
       trigger,
       status: 'failed',
       recipientCount: recipients.length,
@@ -130,7 +160,9 @@ export async function runDailyBriefSend(opts: RunOptions): Promise<SendOutcome> 
   }
 
   // 4. Send
-  const subject = `Daily Brief · ${branchName} · ${formatSubjectDate(reportDate)}`;
+  const subject = cadence === 'weekly'
+    ? `Weekly Pulse · ${branchName} · Week of ${formatSubjectDate(reportDate)}`
+    : `Daily Brief · ${branchName} · ${formatSubjectDate(reportDate)}`;
   const result = await sendMail({
     to: recipients,
     subject,
@@ -144,6 +176,7 @@ export async function runDailyBriefSend(opts: RunOptions): Promise<SendOutcome> 
     writeAuditRow(db, {
       runDate: reportDate,
       branchId,
+      cadence,
       trigger,
       status: 'success',
       recipientCount: recipients.length,
@@ -155,6 +188,7 @@ export async function runDailyBriefSend(opts: RunOptions): Promise<SendOutcome> 
   writeAuditRow(db, {
     runDate: reportDate,
     branchId,
+    cadence,
     trigger,
     status: 'failed',
     recipientCount: recipients.length,
@@ -166,21 +200,26 @@ export async function runDailyBriefSend(opts: RunOptions): Promise<SendOutcome> 
 }
 
 // ── Internal helpers ──
-function loadActiveRecipients(db: DbHelper, branchId: number | null): string[] {
+function loadActiveRecipients(db: DbHelper, branchId: number | null, cadence: Cadence): string[] {
   // For a branch-specific send: include both this-branch recipients AND
   // consolidated (branch_id IS NULL) recipients so the owner who's
-  // subscribed to "All branches" still gets each branch's mail.
+  // subscribed to "All branches" still gets each branch's mail. The
+  // cadence filter accepts the requested cadence OR 'both'.
+  const cadenceClause = `(cadence = ? OR cadence = 'both')`;
   const rows = branchId
     ? db.all(
         `SELECT email FROM daily_brief_recipients
-          WHERE is_active = 1 AND (branch_id = ? OR branch_id IS NULL)
+          WHERE is_active = 1 AND ${cadenceClause}
+            AND (branch_id = ? OR branch_id IS NULL)
           ORDER BY email`,
-        branchId
+        cadence, branchId
       )
     : db.all(
         `SELECT email FROM daily_brief_recipients
-          WHERE is_active = 1 AND branch_id IS NULL
-          ORDER BY email`
+          WHERE is_active = 1 AND ${cadenceClause}
+            AND branch_id IS NULL
+          ORDER BY email`,
+        cadence
       );
   // Lowercase before deduping so `Alice@x.com` and `alice@x.com` collapse —
   // the POST /recipients route already lowercases, but legacy / override
@@ -193,19 +232,19 @@ function loadActiveRecipients(db: DbHelper, branchId: number | null): string[] {
 // no-op for consolidated/single-branch rows and would accumulate stale
 // `running` audits on every retry. Explicit lookup-then-insert/update
 // covers both the NULL and non-NULL paths uniformly.
-function findExistingRun(db: DbHelper, runDate: string, branchId: number | null, trigger: SendTrigger): { id: number } | null {
+function findExistingRun(db: DbHelper, runDate: string, branchId: number | null, cadence: Cadence, trigger: SendTrigger): { id: number } | null {
   const row = db.get(
     `SELECT id FROM daily_brief_sends
-      WHERE run_date_ist = ? AND trigger = ?
+      WHERE run_date_ist = ? AND trigger = ? AND cadence = ?
         AND ${branchId === null ? 'branch_id IS NULL' : 'branch_id = ?'}
       LIMIT 1`,
-    ...(branchId === null ? [runDate, trigger] : [runDate, trigger, branchId])
+    ...(branchId === null ? [runDate, trigger, cadence] : [runDate, trigger, cadence, branchId])
   );
   return row || null;
 }
 
-function upsertRunning(db: DbHelper, row: { runDate: string; branchId: number | null; trigger: SendTrigger; startedAt: string; recipientCount: number }) {
-  const existing = findExistingRun(db, row.runDate, row.branchId, row.trigger);
+function upsertRunning(db: DbHelper, row: { runDate: string; branchId: number | null; cadence: Cadence; trigger: SendTrigger; startedAt: string; recipientCount: number }) {
+  const existing = findExistingRun(db, row.runDate, row.branchId, row.cadence, row.trigger);
   if (existing) {
     db.run(
       `UPDATE daily_brief_sends
@@ -220,15 +259,16 @@ function upsertRunning(db: DbHelper, row: { runDate: string; branchId: number | 
     return;
   }
   db.run(
-    `INSERT INTO daily_brief_sends (run_date_ist, branch_id, trigger, status, recipient_count, started_at)
-     VALUES (?, ?, ?, 'running', ?, ?)`,
-    row.runDate, row.branchId, row.trigger, row.recipientCount, row.startedAt
+    `INSERT INTO daily_brief_sends (run_date_ist, branch_id, cadence, trigger, status, recipient_count, started_at)
+     VALUES (?, ?, ?, ?, 'running', ?, ?)`,
+    row.runDate, row.branchId, row.cadence, row.trigger, row.recipientCount, row.startedAt
   );
 }
 
 function writeAuditRow(db: DbHelper, row: {
   runDate: string;
   branchId: number | null;
+  cadence: Cadence;
   trigger: SendTrigger;
   status: 'success' | 'failed' | 'skipped';
   recipientCount: number;
@@ -236,7 +276,7 @@ function writeAuditRow(db: DbHelper, row: {
   finishedAt: string;
   error?: string;
 }) {
-  const existing = findExistingRun(db, row.runDate, row.branchId, row.trigger);
+  const existing = findExistingRun(db, row.runDate, row.branchId, row.cadence, row.trigger);
   if (existing) {
     db.run(
       `UPDATE daily_brief_sends
@@ -247,23 +287,24 @@ function writeAuditRow(db: DbHelper, row: {
     return;
   }
   db.run(
-    `INSERT INTO daily_brief_sends (run_date_ist, branch_id, trigger, status, recipient_count, started_at, finished_at, error)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    row.runDate, row.branchId, row.trigger, row.status, row.recipientCount,
+    `INSERT INTO daily_brief_sends (run_date_ist, branch_id, cadence, trigger, status, recipient_count, started_at, finished_at, error)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    row.runDate, row.branchId, row.cadence, row.trigger, row.status, row.recipientCount,
     row.startedAt, row.finishedAt, row.error || null
   );
 }
 
 // Returns true if a successful or in-progress run already exists for this
-// (date, branch). The cron's catchup retry uses this to avoid double-sending.
-export function alreadyRanForDate(db: DbHelper, runDate: string, branchId: number | null): boolean {
+// (date, branch, cadence). The cron's catchup retry uses this to avoid
+// double-sending.
+export function alreadyRanForDate(db: DbHelper, runDate: string, branchId: number | null, cadence: Cadence = 'daily'): boolean {
   const row = db.get(
     `SELECT 1 FROM daily_brief_sends
-      WHERE run_date_ist = ?
+      WHERE run_date_ist = ? AND cadence = ?
         AND ${branchId === null ? 'branch_id IS NULL' : 'branch_id = ?'}
         AND status IN ('success', 'running')
       LIMIT 1`,
-    ...(branchId === null ? [runDate] : [runDate, branchId])
+    ...(branchId === null ? [runDate, cadence] : [runDate, cadence, branchId])
   );
   return !!row;
 }
