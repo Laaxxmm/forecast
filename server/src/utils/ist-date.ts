@@ -58,6 +58,49 @@ export function istHourPassed(hour24: number): boolean {
 }
 
 /**
+ * The "anchor date" of the auto-sync tick currently active in Asia/Kolkata
+ * — i.e. the IST date of the most recent scheduled tick firing.
+ *
+ * The auto-sync scheduler fires a primary tick at `scheduleHour` IST every
+ * night, plus retry firings at +30 min, +2 hr, +6 hr (i.e. 23:30, 01:00,
+ * 05:00 IST by default). Both the *data window* a retry should sync and
+ * the *audit row date* it should write to must be anchored to the ORIGINAL
+ * 23:00 firing's date, NOT to the wall-clock date when the retry happens
+ * to fire — otherwise a 01:00 retry shifts to the next calendar day, asks
+ * for the wrong data window, and looks like a fresh tick that runs the
+ * sync twice (once at 23:00 against the right window, once at 01:00
+ * against the wrong window).
+ *
+ * Returns `{ today, yesterday }` where `today` is the anchor date and
+ * `yesterday` is one day earlier. For the standard 2-day rolling window
+ * (today + yesterday), pass these directly as `toDate` / `fromDate`.
+ *
+ * Behaviour with scheduleHour=23:
+ *   23:00 IST May 8 (primary fires)         → anchor = May 8
+ *   23:30 IST May 8 (retry 1)                → anchor = May 8
+ *   00:30 IST May 9 (long tick spanning midnight) → anchor = May 8
+ *   01:00 IST May 9 (retry 2)                → anchor = May 8
+ *   05:00 IST May 9 (retry 3)                → anchor = May 8
+ *   22:59 IST May 9 (still pre-tonight-tick) → anchor = May 8
+ *   23:00 IST May 9 (next primary fires)     → anchor = May 9
+ */
+export function tickAnchorIst(scheduleHour: number = 23): { today: string; yesterday: string } {
+  const now = new Date();
+  const p = partsInIst(now);
+  // If we're at or past today's scheduleHour, today's tick has already
+  // fired (or is firing right now) — anchor is today. Otherwise we're
+  // still in the retry tail of yesterday's tick — anchor is yesterday.
+  const inTodaysTick = p.hour >= scheduleHour;
+  const anchorMs = inTodaysTick ? now.getTime() : now.getTime() - 24 * 60 * 60 * 1000;
+  const ap = partsInIst(new Date(anchorMs));
+  const yp = partsInIst(new Date(anchorMs - 24 * 60 * 60 * 1000));
+  return {
+    today: `${ap.year}-${pad(ap.month)}-${pad(ap.day)}`,
+    yesterday: `${yp.year}-${pad(yp.month)}-${pad(yp.day)}`,
+  };
+}
+
+/**
  * Pick the "report date" for an Insight PDF: the last fully-synced day
  * in IST. Auto-sync runs at 23:00 IST nightly, so before 23:00 the most
  * recent fully-synced day is yesterday; after 23:00 it's today.

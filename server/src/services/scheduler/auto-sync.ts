@@ -9,7 +9,7 @@
 import cron from 'node-cron';
 import { getPlatformHelper } from '../../db/platform-connection.js';
 import { getClientHelper } from '../../db/connection.js';
-import { todayIst, yesterdayIst, istHourPassed } from '../../utils/ist-date.js';
+import { todayIst, yesterdayIst, istHourPassed, tickAnchorIst } from '../../utils/ist-date.js';
 import { branchSettingsKey, type BranchContext } from '../../utils/branch.js';
 import { runHealthplixSync } from '../sync/healthplix-runner.js';
 import { runOneglanceSync } from '../sync/oneglance-runner.js';
@@ -194,8 +194,18 @@ async function alreadyRanToday(
 /** Run a single (tenant, branch, source) target. */
 export async function runAutoSyncForTarget(target: Target, trigger: Trigger): Promise<void> {
   const { slug, clientId, branchId, source } = target;
-  const today = todayIst();
-  const yesterday = yesterdayIst();
+  // Anchor the data window + audit row date to the original tick firing
+  // for scheduled and catchup runs. The 01:00 / 05:00 IST retries used
+  // to compute "today" at retry time, which shifted the data window to
+  // the next calendar day and made `alreadyRanToday` miss the previous
+  // evening's success row — net effect was every successful 23:00 run
+  // got pointlessly re-scraped at 01:00 against a next-day window. For
+  // manual_test (run-now) we keep the raw "today + yesterday" semantics
+  // because the user clicking the button at noon expects to sync the
+  // data they see, not yesterday's anchor window.
+  const { today, yesterday } = trigger === 'manual_test'
+    ? { today: todayIst(), yesterday: yesterdayIst() }
+    : tickAnchorIst(SCHEDULE_HOUR);
   const ctx = ctxFor(target);
 
   const tenantDb = await getClientHelper(slug);
@@ -312,14 +322,19 @@ export async function runAutoSyncTick(trigger: Trigger): Promise<void> {
     );
 
     // For catchup, pre-filter out targets that already ran successfully
-    // today. Saves us spawning a worker just to log "skip" for every
-    // already-done branch.
+    // for the active tick anchor. Saves us spawning a worker just to log
+    // "skip" for every already-done branch. Critical: use the tick anchor
+    // date (most recent 23:00 IST), not wall-clock today, so the 01:00 /
+    // 05:00 IST retry firings correctly recognise the previous evening's
+    // success row stored under e.g. 2026-05-08 even when they themselves
+    // are running on 2026-05-09 wall-clock time.
+    const anchorDate = tickAnchorIst(SCHEDULE_HOUR).today;
     const targets: Target[] = [];
     for (const t of allTargets) {
       if (trigger === 'catchup') {
-        const ranAlready = await alreadyRanToday(t.slug, todayIst(), t.branchId, t.source);
+        const ranAlready = await alreadyRanToday(t.slug, anchorDate, t.branchId, t.source);
         if (ranAlready) {
-          console.log(`[auto-sync][tenant=${t.slug} branch=${t.branchId} source=${t.source}] catchup skip — already ran today`);
+          console.log(`[auto-sync][tenant=${t.slug} branch=${t.branchId} source=${t.source}] catchup skip — already ran for anchor ${anchorDate}`);
           continue;
         }
       }
