@@ -118,7 +118,10 @@ export async function runDailyBriefSend(opts: RunOptions): Promise<SendOutcome> 
           filedAtLabel: opts.filedAtLabel || '7:30 AM',
         });
         return {
-          html: renderWeeklyPulseHtml(data),
+          // Email body uses the table-based, Outlook-safe template; PDF
+          // attachment uses the regular template (renders fine through
+          // Playwright with the print CSS).
+          html: renderWeeklyPulseHtml(data, true),
           pdf: await renderWeeklyPulsePdf(data),
           pdfName: weeklyPulseFilename(data),
         };
@@ -134,7 +137,7 @@ export async function runDailyBriefSend(opts: RunOptions): Promise<SendOutcome> 
         filedAtLabel: opts.filedAtLabel || '8:00 AM',
       });
       return {
-        html: renderDailyBriefHtml(data),
+        html: renderDailyBriefHtml(data, true),
         pdf: await renderDailyBriefPdf(data),
         pdfName: dailyBriefFilename(data),
       };

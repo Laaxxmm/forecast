@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="x-apple-disable-message-reformatting" />
+<meta name="color-scheme" content="light only" />
+<meta name="supported-color-schemes" content="light" />
+<title>The Weekly Pulse · {{BRANCH_NAME}} · {{FILED_DATE_LABEL}}</title>
+<style>
+  body, table, td, p, a { -webkit-text-size-adjust:100%; -ms-text-size-adjust:100% }
+  table { border-collapse:collapse !important }
+  img { border:0; line-height:100%; outline:none; text-decoration:none; -ms-interpolation-mode:bicubic; display:block }
+  a { color:#155cab; text-decoration:none }
+  @media only screen and (max-width: 620px){
+    .wp-container{ width:100% !important }
+    .wp-stack    { display:block !important; width:100% !important }
+    .wp-stack-td { display:block !important; width:100% !important; padding-right:0 !important; padding-left:0 !important }
+    .wp-pad-x    { padding-left:18px !important; padding-right:18px !important }
+    .wp-h1       { font-size:30px !important; line-height:32px !important }
+    .wp-hero     { font-size:54px !important; line-height:54px !important }
+    .wp-glance-num { font-size:24px !important }
+  }
+</style>
+</head>
+<body style="margin:0; padding:0; background:#f1f2f5; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif; color:#15171c;">
+
+<div style="display:none; max-height:0; overflow:hidden; mso-hide:all; font-size:1px; line-height:1px; color:#f1f2f5;">
+  {{STATUS_HEADLINE}} · This week's number: ₹{{REQUIRED_RUPEE}}.
+  ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌ ‌
+</div>
+
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f1f2f5;">
+  <tr><td align="center" style="padding:24px 12px;">
+    <table role="presentation" class="wp-container" cellpadding="0" cellspacing="0" border="0" width="640" style="width:640px; max-width:640px; background:#ffffff; border:1px solid #e3e4e8; border-radius:6px;">
+
+      <!-- Pre-flight strip -->
+      <tr>
+        <td class="wp-pad-x" style="padding:14px 24px 10px 24px; border-bottom:1px solid #15171c; font:600 11px/1.4 ui-monospace,'SF Mono',Menlo,Consolas,monospace; letter-spacing:1px; text-transform:uppercase; color:#76787e;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+            <tr>
+              <td align="left" style="vertical-align:middle;">
+                <span style="background:#15171c; color:#ffffff; padding:3px 8px; border-radius:2px; font-weight:700; letter-spacing:1.5px;">VOL.&nbsp;01 · NO.&nbsp;{{ISSUE_NUMBER}}</span>
+                &nbsp;<span style="background:#155cab; color:#ffffff; padding:3px 8px; border-radius:2px; font-weight:700; letter-spacing:1.5px;">WEEK&nbsp;{{WEEK_NUMBER}} · {{YEAR}}</span>
+              </td>
+              <td align="right" style="vertical-align:middle; color:#3a3d44;">Filed {{FILED_AT_LABEL}} · {{FILED_DATE_LABEL}}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+
+      <!-- Masthead -->
+      <tr>
+        <td class="wp-pad-x" style="padding:18px 24px 14px 24px; border-top:4px solid #15171c; border-bottom:4px double #15171c;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+            <tr>
+              <td class="wp-stack-td" align="left" valign="middle" width="160" style="width:160px; padding-right:10px;">
+                <img src="{{CLIENT_LOGO_DATAURI}}" alt="{{CLIENT_NAME}}" width="150" style="height:auto; max-height:46px; width:auto; max-width:150px;" />
+              </td>
+              <td class="wp-stack-td" align="center" valign="middle" style="text-align:center;">
+                <div style="font:700 10px/1.2 ui-monospace,'SF Mono',Menlo,Consolas,monospace; letter-spacing:2.4px; text-transform:uppercase; color:#155cab;">{{CLIENT_NAME}} · Weekly Edition</div>
+                <div class="wp-h1" style="font:italic 700 36px/40px 'Iowan Old Style','Apple Garamond',Georgia,serif; letter-spacing:-0.6px; color:#15171c; margin:6px 0 4px 0;">The Weekly Pulse<span style="color:#d6262f;">.</span></div>
+                <div style="font:italic 500 13px/1.4 'Iowan Old Style',Georgia,serif; color:#3a3d44;">A Monday morning read on the week we just finished — and the one we're starting.</div>
+              </td>
+              <td class="wp-stack-td" align="right" valign="middle" width="140" style="width:140px; padding-left:10px;">
+                <div style="font:700 14px/1.4 -apple-system,Helvetica,Arial,sans-serif; color:#15171c; letter-spacing:0.5px;">{{BRANCH_NAME_UPPER}}</div>
+                <div style="font:500 11px/1.5 ui-monospace,Menlo,Consolas,monospace; color:#76787e;">{{TODAY_WEEKDAY}}<br/>{{TODAY_DATE_LONG}}</div>
+              </td>
+            </tr>
+          </table>
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:12px;">
+            <tr>
+              <td align="left" style="font:500 11px/1.5 ui-monospace,Menlo,Consolas,monospace; color:#76787e; letter-spacing:0.4px;">Week of <b style="color:#15171c;">{{WEEK_RANGE}}</b> &nbsp;·&nbsp; Day <b style="color:#15171c;">{{DAY_OF_MONTH}} of {{DAYS_IN_MONTH}}</b> &nbsp;·&nbsp; Month so far <b style="color:#15171c;">{{MONTH_PCT}}% of goal</b></td>
+              <td align="right" style="font:500 11px/1.5 ui-monospace,Menlo,Consolas,monospace; color:#76787e;">Imports synced {{SYNCED_AT}}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+
+      <!-- Status strap -->
+      <tr>
+        <td class="wp-pad-x" style="padding:14px 24px 0 24px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:{{STATUS_BG}}; border:1px solid {{STATUS_BORDER}}; border-radius:4px;">
+            <tr><td style="padding:12px 16px; font:italic 600 15px/1.4 'Iowan Old Style',Georgia,serif; color:{{STATUS_FG}};">
+              <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:{{STATUS_FG}}; vertical-align:middle; margin-right:8px;">&nbsp;</span>
+              {{STATUS_HEADLINE}}
+            </td></tr>
+          </table>
+        </td>
+      </tr>
+
+      <!-- Page 01 — Three numbers -->
+      <tr>
+        <td class="wp-pad-x" style="padding:22px 24px 0 24px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-bottom:1px solid #e3e4e8; padding-bottom:6px;">
+            <tr>
+              <td align="left" style="font:700 13px/1.3 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.6px; text-transform:uppercase; color:#155cab; padding-right:10px;">The week, in three numbers</td>
+              <td align="right" style="font:500 10.5px/1.4 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.2px; text-transform:uppercase; color:#76787e;">{{WEEK_RANGE_LONG}}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td class="wp-pad-x" style="padding:12px 24px 0 24px;">
+          <table role="presentation" class="wp-stack" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #e3e4e8; border-radius:6px;">
+            <tr>
+              <td class="wp-stack-td" valign="top" width="33%" style="width:33%; padding:14px 16px; border-right:1px solid #eef0f3;">
+                <div style="font:500 10.5px/1.4 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.4px; color:#76787e;">01 · MONEY</div>
+                <div style="font:500 13px/1.4 -apple-system,Helvetica,Arial,sans-serif; color:#3a3d44; margin-top:2px;">Earned this week</div>
+                <div class="wp-glance-num" style="font:700 28px/1 'Iowan Old Style',Georgia,serif; color:#15171c; letter-spacing:-0.5px; margin-top:8px;">{{W_REVENUE}}</div>
+                <div style="font:600 12px/1.4 -apple-system,Helvetica,Arial,sans-serif; color:{{W_REVENUE_DELTA_COLOR}}; margin-top:6px;">{{W_REVENUE_DELTA_ARROW}} {{W_REVENUE_DELTA_TEXT}}</div>
+                <div style="font:500 11px/1.4 ui-monospace,Menlo,Consolas,monospace; color:#76787e; margin-top:2px;">{{W_TARGET_FOOTNOTE}}</div>
+              </td>
+              <td class="wp-stack-td" valign="top" width="33%" style="width:33%; padding:14px 16px; border-right:1px solid #eef0f3;">
+                <div style="font:500 10.5px/1.4 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.4px; color:#76787e;">02 · FOOTFALL</div>
+                <div style="font:500 13px/1.4 -apple-system,Helvetica,Arial,sans-serif; color:#3a3d44; margin-top:2px;">Patient visits</div>
+                <div class="wp-glance-num" style="font:700 28px/1 'Iowan Old Style',Georgia,serif; color:#15171c; letter-spacing:-0.5px; margin-top:8px;">{{W_VISITS}}</div>
+                <div style="font:600 12px/1.4 -apple-system,Helvetica,Arial,sans-serif; color:{{W_VISITS_DELTA_COLOR}}; margin-top:6px;">{{W_VISITS_DELTA_ARROW}} {{W_VISITS_DELTA_TEXT}}</div>
+                <div style="font:500 11px/1.4 ui-monospace,Menlo,Consolas,monospace; color:#76787e; margin-top:2px;">Trailing 4-week avg · {{W_VISITS_AVG}}</div>
+              </td>
+              <td class="wp-stack-td" valign="top" width="34%" style="width:34%; padding:14px 16px;">
+                <div style="font:500 10.5px/1.4 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.4px; color:#76787e;">03 · RHYTHM</div>
+                <div style="font:500 13px/1.4 -apple-system,Helvetica,Arial,sans-serif; color:#3a3d44; margin-top:2px;">Days that hit target</div>
+                <div class="wp-glance-num" style="font:700 28px/1 'Iowan Old Style',Georgia,serif; color:#15171c; letter-spacing:-0.5px; margin-top:8px;">{{W_DAYS_HIT}} <span style="font-size:18px; color:#76787e; font-weight:500;">of {{W_WORKING_DAYS}}</span></div>
+                <div style="font:600 12px/1.4 -apple-system,Helvetica,Arial,sans-serif; color:#3a3d44; margin-top:6px;">● Working days only</div>
+                <div style="font:500 11px/1.4 ui-monospace,Menlo,Consolas,monospace; color:#76787e; margin-top:2px;">{{W_DAYS_HIT_NAMES}}</div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+
+      <!-- Page 02 — Day by day -->
+      <tr>
+        <td class="wp-pad-x" style="padding:22px 24px 0 24px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-bottom:1px solid #e3e4e8; padding-bottom:6px;">
+            <tr>
+              <td align="left" style="font:700 13px/1.3 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.6px; text-transform:uppercase; color:#155cab;">Day by day — how the week earned</td>
+              <td align="right" style="font:500 10.5px/1.4 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.2px; text-transform:uppercase; color:#76787e;">Daily target {{DAILY_TARGET}}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td class="wp-pad-x" style="padding:12px 24px 0 24px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #e3e4e8; border-radius:6px;">
+            <tr><td style="padding:14px 18px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                {{CHART_ROWS_HTML}}
+              </table>
+              <div style="margin-top:12px; padding-top:10px; border-top:1px dashed #e3e4e8; font:italic 400 13px/1.5 'Iowan Old Style',Georgia,serif; color:#3a3d44;">
+                {{CHART_SUMMARY_HTML}}
+              </div>
+            </td></tr>
+          </table>
+        </td>
+      </tr>
+
+      <!-- Page 03 — Service areas -->
+      <tr>
+        <td class="wp-pad-x" style="padding:22px 24px 0 24px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-bottom:1px solid #e3e4e8; padding-bottom:6px;">
+            <tr>
+              <td align="left" style="font:700 13px/1.3 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.6px; text-transform:uppercase; color:#155cab;">Service areas — how the week landed</td>
+              <td align="right" style="font:500 10.5px/1.4 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.2px; text-transform:uppercase; color:#76787e;">Week vs. last week</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td class="wp-pad-x" style="padding:12px 24px 0 24px;">
+          {{STREAMS_HTML}}
+        </td>
+      </tr>
+
+      <!-- Page 04 — Hero -->
+      <tr>
+        <td class="wp-pad-x" style="padding:22px 24px 0 24px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-bottom:1px solid #e3e4e8; padding-bottom:6px;">
+            <tr>
+              <td align="left" style="font:700 13px/1.3 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.6px; text-transform:uppercase; color:#155cab;">This week's prescription</td>
+              <td align="right" style="font:500 10.5px/1.4 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.2px; text-transform:uppercase; color:#76787e;">{{NEXT_WEEK_RANGE}} · {{WORKING_DAYS_REMAINING}} working days</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td class="wp-pad-x" style="padding:12px 24px 0 24px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #15171c; border-radius:6px; overflow:hidden;">
+            <tr>
+              <td style="background:#15171c; padding:10px 16px; font:700 10.5px/1 ui-monospace,Menlo,Consolas,monospace; letter-spacing:2.2px; text-transform:uppercase; color:#ffffff;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                  <tr>
+                    <td align="left" style="color:#ffffff;"><span style="color:#d6262f; font:italic 700 16px/1 'Iowan Old Style',Georgia,serif; vertical-align:-1px;">℞</span> &nbsp; The number to keep on the wall this week</td>
+                    <td align="right" style="color:#9b9da3;">For the team</td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:18px 22px 14px 22px;">
+                <table role="presentation" class="wp-stack" cellpadding="0" cellspacing="0" border="0" width="100%">
+                  <tr>
+                    <td class="wp-stack-td" valign="top" width="58%" style="width:58%; padding-right:18px;">
+                      <div style="font:700 11px/1.4 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.6px; text-transform:uppercase; color:#76787e;">What we need to earn this week</div>
+                      <div class="wp-hero" style="font:700 64px/60px 'Iowan Old Style',Georgia,serif; letter-spacing:-2px; color:#15171c; margin-top:4px;"><span style="color:#155cab; font-style:italic;">₹</span>{{REQUIRED_RUPEE}}</div>
+                      <div style="font:400 13px/1.5 -apple-system,Helvetica,Arial,sans-serif; color:#3a3d44; margin-top:10px;">So far this month: <b>{{MTD_REVENUE}}</b> of <b>{{MONTHLY_GOAL}}</b> goal — <b>{{MONTH_PCT}}%</b> there, <b>{{DAYS_REMAINING}} days</b> to close it out.</div>
+                      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:12px; border:1px solid #e3e4e8; border-radius:3px; background:#f3f4f7; height:10px;">
+                        <tr>
+                          <td width="{{PROGRESS_FILL_PCT}}%" style="width:{{PROGRESS_FILL_PCT}}%; background:#155cab; height:10px; line-height:0; font-size:0;">&nbsp;</td>
+                          <td width="{{PROGRESS_WEEK_SLOT_PCT}}%" style="width:{{PROGRESS_WEEK_SLOT_PCT}}%; background:#bcd0ea; height:10px; line-height:0; font-size:0;">&nbsp;</td>
+                          <td style="line-height:0; font-size:0;">&nbsp;</td>
+                        </tr>
+                      </table>
+                      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:6px;">
+                        <tr>
+                          <td align="left"  style="font:500 10.5px/1.3 ui-monospace,Menlo,Consolas,monospace; letter-spacing:0.6px; text-transform:uppercase; color:#76787e;"><b style="color:#15171c;">{{MTD_REVENUE}}</b> earned</td>
+                          <td align="center" style="font:500 10.5px/1.3 ui-monospace,Menlo,Consolas,monospace; letter-spacing:0.6px; text-transform:uppercase; color:#76787e;">Day {{DAY_OF_MONTH}} of {{DAYS_IN_MONTH}}</td>
+                          <td align="right"  style="font:500 10.5px/1.3 ui-monospace,Menlo,Consolas,monospace; letter-spacing:0.6px; text-transform:uppercase; color:#76787e;"><b style="color:#15171c;">{{MONTHLY_GOAL}}</b> goal</td>
+                        </tr>
+                      </table>
+                    </td>
+                    <td class="wp-stack-td" valign="top" width="42%" style="width:42%; border-left:1px dashed #e3e4e8; padding-left:18px;">
+                      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                        {{TODAY_PER_STREAM_HTML}}
+                      </table>
+                      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:10px; border:1px solid #e3e4e8; border-radius:5px; background:#ffffff;">
+                        <tr><td align="center" style="padding:8px 6px;">
+                          <div style="font:700 30px/1 'Iowan Old Style',Georgia,serif; color:#155cab; letter-spacing:-1px;">{{WORKING_DAYS_REMAINING}}</div>
+                          <div style="font:500 10px/1.3 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.4px; text-transform:uppercase; color:#76787e; margin-top:4px;">Working days this week</div>
+                        </td></tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+
+      <!-- Page 05 — People -->
+      <tr>
+        <td class="wp-pad-x" style="padding:22px 24px 0 24px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-bottom:1px solid #e3e4e8; padding-bottom:6px;">
+            <tr>
+              <td align="left" style="font:700 13px/1.3 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.6px; text-transform:uppercase; color:#155cab;">People — celebrate &amp; reach out</td>
+              <td align="right" style="font:500 10.5px/1.4 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.2px; text-transform:uppercase; color:#76787e;">A week's worth, not a day's</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td class="wp-pad-x" style="padding:12px 24px 0 24px;">
+          <table role="presentation" class="wp-stack" cellpadding="0" cellspacing="0" border="0" width="100%">
+            <tr>
+              <td class="wp-stack-td" valign="top" width="58%" style="width:58%; padding:0 6px 0 0;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #e3e4e8; border-radius:6px;">
+                  <tr><td style="padding:12px 14px;">
+                    <div style="font:600 16px/1.2 'Iowan Old Style',Georgia,serif; color:#15171c;">Honour roll · Top {{TOP_DOCS_COUNT}} doctors this week</div>
+                    <div style="font:400 11.5px/1.4 -apple-system,Helvetica,Arial,sans-serif; color:#76787e; margin-top:2px; margin-bottom:8px;">Compared with each doctor's typical week.</div>
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                      {{TOP_DOCS_HTML}}
+                    </table>
+                  </td></tr>
+                </table>
+              </td>
+              <td class="wp-stack-td" valign="top" width="42%" style="width:42%; padding:0 0 0 6px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #e3e4e8; border-radius:6px;">
+                  <tr><td style="padding:12px 14px;">
+                    <div style="font:600 16px/1.2 'Iowan Old Style',Georgia,serif; color:#15171c;">Skipped the week</div>
+                    <div style="font:400 11.5px/1.4 -apple-system,Helvetica,Arial,sans-serif; color:#76787e; margin-top:2px; margin-bottom:8px;">Worth a conversation.</div>
+                    {{SILENT_DOCS_HTML}}
+                  </td></tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+
+      <!-- Page 06 — Pattern of the week -->
+      <tr>
+        <td class="wp-pad-x" style="padding:22px 24px 0 24px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-bottom:1px solid #e3e4e8; padding-bottom:6px;">
+            <tr>
+              <td align="left" style="font:700 13px/1.3 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.6px; text-transform:uppercase; color:#155cab;">Pattern of the week</td>
+              <td align="right" style="font:500 10.5px/1.4 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.2px; text-transform:uppercase; color:#76787e;">Auto-detected · 4-week window</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td class="wp-pad-x" style="padding:12px 24px 0 24px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f3f4f7; border:1px solid #e3e4e8; border-radius:6px;">
+            <tr>
+              <td valign="middle" width="60" style="width:60px; padding:18px 0 18px 22px;">
+                <div style="font:italic 700 48px/0.8 'Iowan Old Style',Georgia,serif; color:#155cab;">¶</div>
+              </td>
+              <td valign="middle" style="padding:18px 22px 18px 18px;">
+                <div style="font:500 10.5px/1.4 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.4px; text-transform:uppercase; color:#76787e; margin-bottom:4px;">{{PATTERN_LABEL}}</div>
+                <div style="font:italic 400 17px/1.45 'Iowan Old Style',Georgia,serif; color:#15171c;">{{PATTERN_TEXT}}</div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+
+      <!-- Page 07 — Watchlist -->
+      <tr>
+        <td class="wp-pad-x" style="padding:22px 24px 0 24px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-bottom:1px solid #e3e4e8; padding-bottom:6px;">
+            <tr>
+              <td align="left" style="font:700 13px/1.3 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.6px; text-transform:uppercase; color:#155cab;">On the watchlist</td>
+              <td align="right" style="font:500 10.5px/1.4 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.2px; text-transform:uppercase; color:#76787e;">{{WATCHLIST_STAMP}}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td class="wp-pad-x" style="padding:12px 24px 0 24px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #e3e4e8; border-radius:6px;">
+            {{WATCHLIST_HTML}}
+          </table>
+        </td>
+      </tr>
+
+      <!-- Colophon -->
+      <tr>
+        <td class="wp-pad-x" style="padding:22px 24px 22px 24px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-top:3px double #15171c;">
+            <tr><td style="padding-top:14px;">
+              <table role="presentation" class="wp-stack" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td class="wp-stack-td" valign="middle" align="left" width="40%" style="width:40%;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td valign="middle" style="padding-right:10px;"><img src="{{INDEFINE_LOGO_DATAURI}}" alt="Indefine" height="22" style="height:22px; width:auto; display:block;" /></td>
+                        <td valign="middle" style="font:600 10.5px/1.4 ui-monospace,Menlo,Consolas,monospace; letter-spacing:1.1px; text-transform:uppercase; color:#76787e;">Prepared by <span style="color:#15171c; font-weight:700; letter-spacing:0.5px;">Indefine</span><br/><span style="font-weight:500;">Streamlining Workflows</span></td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td class="wp-stack-td" valign="middle" align="center" width="30%" style="width:30%; font:italic 500 12.5px/1.4 'Iowan Old Style',Georgia,serif; color:#76787e;">&ldquo;The week, on one page &mdash; every Monday at half past seven.&rdquo;</td>
+                  <td class="wp-stack-td" valign="middle" align="right" width="30%" style="width:30%; font:500 10.5px/1.5 ui-monospace,Menlo,Consolas,monospace; color:#76787e; letter-spacing:0.4px;">Generated {{GENERATED_AT_LABEL}}<br/>Imports synced {{SYNCED_AT}} · {{BRANCH_NAME}}</td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </td>
+      </tr>
+
+    </table>
+
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="640" style="width:640px; max-width:640px;">
+      <tr><td align="center" style="padding:14px 12px 6px 12px; font:500 11px/1.5 -apple-system,Helvetica,Arial,sans-serif; color:#76787e;">
+        You're receiving this because you're on the {{BRANCH_NAME}} weekly briefing roster. The full report is also attached as a PDF.
+      </td></tr>
+    </table>
+
+  </td></tr>
+</table>
+
+</body>
+</html>

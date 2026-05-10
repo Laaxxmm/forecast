@@ -251,12 +251,30 @@
     .chart .row{grid-template-columns:60px 1fr 90px}
   }
 
-  @page{size:A4;margin:12mm}
+  @page{size:A4;margin:10mm}
   @media print{
-    body{background:white}
-    .sheet{max-width:none;padding:0}
+    html,body{background:white !important}
+    body{
+      -webkit-print-color-adjust:exact !important;
+      print-color-adjust:exact !important;
+      color-adjust:exact !important;
+      zoom:.78;
+    }
+    .sheet{max-width:840px !important;width:840px !important;margin:0 auto !important;padding:0 !important}
     .plan{box-shadow:none}
-    section,.glance,.scorecard,.people,.watch,.plan,.chart,.pattern{break-inside:avoid;page-break-inside:avoid}
+    /* Keep grids fixed — never let them reflow to fewer columns when the
+       print viewport is narrower than the on-screen breakpoint. A4 width
+       in CSS pixels (~793px) crosses the 760px responsive breakpoint and
+       would otherwise collapse every grid to a single column. */
+    .glance{grid-template-columns:repeat(3,1fr) !important}
+    .scorecard{grid-template-columns:repeat(4,1fr) !important}
+    .people{grid-template-columns:1.15fr 1fr !important}
+    .plan .body{grid-template-columns:1.4fr 1fr !important}
+    .masthead{grid-template-columns:auto 1fr auto !important}
+    .chart .row{grid-template-columns:64px 1fr 130px !important}
+    section,.glance,.scorecard,.people,.watch,.plan,.chart,.pattern{
+      break-inside:avoid;page-break-inside:avoid;
+    }
   }
 </style>
 </head>
