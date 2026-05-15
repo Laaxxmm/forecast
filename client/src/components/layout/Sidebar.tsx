@@ -185,6 +185,23 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
     try { return JSON.parse(localStorage.getItem('streams') || '[]'); } catch { return []; }
   };
 
+  // Auto-select the only stream when the tenant has exactly one. Without
+  // this, single-stream tenants land on the "All" view, which renders the
+  // legacy ActualsAllOverview that's hardcoded for clinic + pharma layouts
+  // — useless (or actively misleading) for a restaurant tenant. By routing
+  // them straight to the stream view, the dashboard shows the real
+  // RestaurantAnalytics / ClinicAnalytics / etc. tile set instead.
+  // selectStream() persists to localStorage + reloads, so on the next
+  // render selectedStreamId === stream.id and this effect is a no-op.
+  useEffect(() => {
+    if (!isMultiBranch || selectedBranchId === 'all') return;
+    const streams = getBranchStreams();
+    if (streams.length === 1 && selectedStreamId === 'all') {
+      selectStream(String(streams[0].id), streams[0].name);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBranchId, selectedStreamId, branches]);
+
   const enabledModules: string[] = (() => {
     try { return JSON.parse(localStorage.getItem('enabled_modules') || '[]'); } catch { return []; }
   })();
@@ -582,8 +599,14 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
         </div>
       )}
 
-      {/* Stream selector — shows when branch is selected and has streams */}
-      {isMultiBranch && !(isSuperAdmin && isOwner) && expanded && getBranchStreams().length > 0 && selectedBranchId !== 'all' && (
+      {/* Stream selector — shows when the branch has 2+ active streams.
+          Tenants with a single stream (e.g. a restaurant onboarded with one
+          catch-all "Restaurant" stream) don't need an All/<name> toggle —
+          both chips would render identical data. The auto-select effect
+          below routes single-stream tenants straight to their stream view
+          so they land on the analytics dashboard instead of the legacy
+          All overview (which still expects clinic + pharma cards). */}
+      {isMultiBranch && !(isSuperAdmin && isOwner) && expanded && getBranchStreams().length > 1 && selectedBranchId !== 'all' && (
         <div
           className="px-3 py-2 flex-shrink-0"
           style={{ borderBottom: '1px solid var(--mt-border)' }}

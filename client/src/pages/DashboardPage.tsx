@@ -352,6 +352,11 @@ export default function DashboardPage() {
   // All view; the top-right keeps just the period dropdown.
   const goAllStreams = () => selectStream(null, '');
   const isSubView = !!activeStreamId;
+  // Single-stream tenants don't get a meaningful "All" view — the All
+  // overview's hardcoded clinic + pharma tile layout doesn't apply, and
+  // both views would render identical numbers anyway. Hide the back-nav
+  // so they stay on the one analytics dashboard that matters.
+  const hideBackToAll = streams.length <= 1;
 
   return (
     <div className="animate-fade-in">
@@ -361,7 +366,7 @@ export default function DashboardPage() {
           /actuals throughout (stream selection is held in state, not
           the path), so the browser back button still goes to whatever
           page the user came from before opening /actuals. */}
-      {isSubView && (
+      {isSubView && !hideBackToAll && (
         <div className="flex items-center gap-3 text-[13px] mb-3" style={{ color: 'var(--mt-text-secondary)' }}>
           <button
             type="button"
