@@ -484,28 +484,47 @@ export default function ImportPage() {
       {/* UPLOAD MODE */}
       {mode === 'upload' && (
         <>
-          <div className="flex flex-wrap gap-2 mb-4">
-            {sources.map(s => {
-              const active = selected === s.key;
-              return (
-                <button
-                  key={s.key}
-                  onClick={() => { setSelected(s.key); setFile(null); setResult(null); setError(''); }}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all"
-                  style={{
-                    background: active ? 'var(--mt-accent-soft)' : 'var(--mt-bg-raised)',
-                    color: active ? 'var(--mt-accent-text)' : 'var(--mt-text-muted)',
-                    border: `1px solid ${active ? 'var(--mt-accent-border)' : 'var(--mt-border)'}`,
-                    fontWeight: active ? 500 : 400,
-                  }}
-                >
-                  <s.icon size={15} style={{ color: active ? 'var(--mt-accent-text)' : 'var(--mt-text-faint)' }} />
-                  {s.label}
-                  <span className="text-[10px] hidden sm:inline" style={{ color: 'var(--mt-text-faint)' }}>· {s.desc}</span>
-                </button>
-              );
-            })}
-          </div>
+          {sources.length === 0 ? (
+            <div
+              className="rounded-xl px-4 py-5 mb-4 text-sm"
+              style={{
+                background: 'var(--mt-bg-raised)',
+                border: '1px dashed var(--mt-border)',
+                color: 'var(--mt-text-muted)',
+              }}
+            >
+              <p className="font-medium text-theme-heading mb-1">No data sources enabled for this client</p>
+              <p className="text-xs leading-relaxed">
+                Sources show up here once your admin enables an integration.
+                Go to <b>Admin Panel → Integrations</b> and toggle on the
+                relevant source (Petpooja for restaurants, Healthplix /
+                Oneglance for healthcare, Turia for consultancy).
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2 mb-4">
+              {sources.map(s => {
+                const active = selected === s.key;
+                return (
+                  <button
+                    key={s.key}
+                    onClick={() => { setSelected(s.key); setFile(null); setResult(null); setError(''); }}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all"
+                    style={{
+                      background: active ? 'var(--mt-accent-soft)' : 'var(--mt-bg-raised)',
+                      color: active ? 'var(--mt-accent-text)' : 'var(--mt-text-muted)',
+                      border: `1px solid ${active ? 'var(--mt-accent-border)' : 'var(--mt-border)'}`,
+                      fontWeight: active ? 500 : 400,
+                    }}
+                  >
+                    <s.icon size={15} style={{ color: active ? 'var(--mt-accent-text)' : 'var(--mt-text-faint)' }} />
+                    {s.label}
+                    <span className="text-[10px] hidden sm:inline" style={{ color: 'var(--mt-text-faint)' }}>· {s.desc}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {selected && !result && (
             <div className="mt-card p-5 mb-5">
@@ -812,8 +831,11 @@ export default function ImportPage() {
         </div>
       )}
 
-      {/* Sync Tracker */}
-      {trackerData && (() => {
+      {/* Sync Tracker — only relevant for clinic / pharma / consultancy
+          tenants. Restaurant tenants don't have a daily-coverage signal
+          to track (Petpooja is upload-only), so the calendar is hidden
+          when none of those integrations are enabled. */}
+      {trackerData && (showHpSync || showOgSync || showTuriaSync) && (() => {
         const [yr, mo] = trackerMonth.split('-').map(Number);
         const daysInMonth = new Date(yr, mo, 0).getDate();
         const firstDow = new Date(yr, mo - 1, 1).getDay();
@@ -1056,8 +1078,14 @@ export default function ImportPage() {
         );
       })()}
 
-      {/* Download Report */}
-      <DownloadReportSection />
+      {/* Download Report — clinic / pharma only today (no Petpooja or Turia
+          export pipeline yet). Hidden for restaurant-only and consultancy-
+          only tenants so they don't see irrelevant Clinic / Pharmacy
+          chips. Healthcare tenants with healthplix or oneglance enabled
+          see this unchanged. */}
+      {(enabledIntegrations.includes('healthplix') || enabledIntegrations.includes('oneglance')) && (
+        <DownloadReportSection />
+      )}
 
       {/* Import History */}
       <div className="mt-card p-4">

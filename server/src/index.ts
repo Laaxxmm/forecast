@@ -577,12 +577,30 @@ async function start() {
   // bootstrap inserts NULL-branch rows that show up as orphans every time
   // the server restarts after a wipe/delete, which is what the recurring
   // orphan-actuals banner has been signalling.
-  const clients = platformDb.all('SELECT slug, name, is_multi_branch FROM clients WHERE is_active = 1');
+  const clients = platformDb.all('SELECT id, slug, name, is_multi_branch, industry FROM clients WHERE is_active = 1');
   for (const client of clients) {
     try {
       const clientDb = await getClientHelper(client.slug);
       initializeSchema(clientDb);
       await seedDatabase(clientDb);
+
+      // Restaurant tenants ship with a single data source (Petpooja) — auto-
+      // enable the integration row on first boot after this feature lands so
+      // existing restaurant clients (onboarded before the petpooja seed in
+      // admin.ts) can use Import Data → Petpooja Sales without a manual SQL
+      // step. INSERT OR IGNORE makes this idempotent: a tenant who explicitly
+      // toggled the row off keeps it off; only first-time rows get inserted.
+      // Healthcare / consultancy / retail tenants are untouched.
+      if (client.industry === 'restaurant') {
+        try {
+          platformDb.run(
+            'INSERT OR IGNORE INTO client_integrations (client_id, integration_key, is_enabled) VALUES (?, ?, ?)',
+            [client.id, 'petpooja', 1]
+          );
+        } catch (e: any) {
+          console.warn(`[restaurant-bootstrap] petpooja integration seed failed for ${client.slug}:`, e?.message);
+        }
+      }
 
       // Idempotent VCFO top-up: seeds a default vcfo_companies row for
       // any client that has none, so the VCFO dashboard isn't blank on
