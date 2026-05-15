@@ -38,15 +38,20 @@ async function resolveStreamId(req: any, integrationHint: 'clinic' | 'pharmacy' 
   return fromHeader;
 }
 
-/** For restaurant tenants: a Petpooja CSV contains all four channels mixed
- *  together. The dashboard rollup needs to write a separate row per channel
- *  to that channel's stream-scoped scenario, so we resolve every restaurant
- *  stream upfront and key it by canonical channel name (matching the values
- *  produced by canonicalChannel() in parsers/petpooja.ts).
- *  Returns Map<canonicalChannel, streamId>. Empty map if the tenant has no
- *  restaurant streams (defensive — middleware should already prevent that). */
-async function resolveRestaurantStreamsByChannel(req: any): Promise<Map<string, number>> {
-  const map = new Map<string, number>();
+/** For restaurant tenants: a Petpooja CSV contains all channels mixed
+ *  together. Two onboarding shapes need to be supported:
+ *    (a) Four template-style streams (Dine-in / Delivery / Takeaway /
+ *        Catering) — the rollup writes one row per channel-stream, each
+ *        filtered to that channel's order_channel value.
+ *    (b) A single catch-all stream literally named "Restaurant" (e.g.
+ *        clients onboarded under an older template, like Yumm Keralam).
+ *        The rollup writes ONE row to that stream summing every channel.
+ *  Returns an array of targets — each with the matching streamId plus an
+ *  optional channelFilter; null filter means "sum across all channels".
+ *  Mixed setups are supported too: a tenant with Restaurant + Catering
+ *  gets both a catch-all rollup (Restaurant) and a catering-only rollup. */
+async function resolveRestaurantStreamTargets(req: any): Promise<Array<{ streamId: number; channelFilter: string | null }>> {
+  const targets: Array<{ streamId: number; channelFilter: string | null }> = [];
   try {
     const platformDb = await getPlatformHelper();
     const streams = platformDb.all(
@@ -55,13 +60,14 @@ async function resolveRestaurantStreamsByChannel(req: any): Promise<Map<string, 
     );
     for (const s of streams) {
       const n = (s.name || '').toLowerCase();
-      if      (n.includes('dine'))     map.set('Dine-in',  s.id);
-      else if (n.includes('takeaway')) map.set('Takeaway', s.id);
-      else if (n.includes('delivery')) map.set('Delivery', s.id);
-      else if (n.includes('catering')) map.set('Catering', s.id);
+      if      (n.includes('dine'))         targets.push({ streamId: s.id, channelFilter: 'Dine-in'  });
+      else if (n.includes('takeaway'))     targets.push({ streamId: s.id, channelFilter: 'Takeaway' });
+      else if (n.includes('delivery'))     targets.push({ streamId: s.id, channelFilter: 'Delivery' });
+      else if (n.includes('catering'))     targets.push({ streamId: s.id, channelFilter: 'Catering' });
+      else if (n.includes('restaurant'))   targets.push({ streamId: s.id, channelFilter: null });
     }
   } catch { /* platform DB may not be available */ }
-  return map;
+  return targets;
 }
 
 const router = Router();
@@ -619,18 +625,21 @@ router.post('/petpooja-sales', requireRole('admin', 'operational_head'), require
       db.endBatch();
     } catch (e) { db.rollbackBatch(); throw e; }
 
-    // Per-channel auto-sync to dashboard_actuals. Each restaurant stream has
-    // its OWN active scenario, so we loop the four channels and write a
-    // separate rollup row keyed to each stream's scenario. This matches the
-    // clinic + pharma pattern (one rollup per stream) but multiplied by the
-    // four channels that share the single Petpooja import.
+    // Auto-sync to dashboard_actuals. Two shapes supported:
+    //   - Channel-scoped streams (Dine-in/Delivery/Takeaway/Catering) get a
+    //     per-channel-filtered rollup so each shows its own number.
+    //   - A catch-all stream literally named "Restaurant" (channelFilter
+    //     null) gets ONE rollup summing every channel. Used when the tenant
+    //     wants a single restaurant dashboard rather than four splits.
+    // Each restaurant stream has its OWN active scenario so each gets its
+    // own scenario-scoped rollup row — same pattern as clinic + pharma.
     const bf = branchFilter(req, { strict: true });
-    const channelStreams = await resolveRestaurantStreamsByChannel(req);
-    for (const [channel, streamId] of channelStreams.entries()) {
+    const targets = await resolveRestaurantStreamTargets(req);
+    for (const { streamId, channelFilter } of targets) {
       const activeScenario = findActiveScenarioForStream(db, req, streamId);
       if (!activeScenario) continue; // no scenario yet (FY not set up) — skip silently
 
-      // Wipe the channel's existing rollup before re-inserting. Scoped to
+      // Wipe this stream's existing rollup before re-inserting. Scoped to
       // the caller's branch via bf so multi-branch tenants don't lose
       // sibling-branch rows during a per-branch re-import.
       db.run(
@@ -641,15 +650,16 @@ router.post('/petpooja-sales', requireRole('admin', 'operational_head'), require
       // Net revenue (ex-tax) = gross_amount - discount. Voids/cancellations
       // are filtered defensively — Petpooja today exports only Success rows
       // but the WHERE survives future export-format changes.
+      const channelWhere  = channelFilter ? ' AND order_channel = ?' : '';
+      const channelParams = channelFilter ? [channelFilter] : [];
       const monthly = db.all(
         `SELECT bill_month as month,
                 COALESCE(SUM(gross_amount - COALESCE(discount, 0)), 0) as total
          FROM restaurant_sales_actuals
-         WHERE order_channel = ?
-           AND (status IS NULL OR status = 'Success')
+         WHERE (status IS NULL OR status = 'Success')${channelWhere}
            AND bill_month IS NOT NULL AND bill_month != ''${bf.where}
          GROUP BY bill_month`,
-        channel, ...bf.params
+        ...channelParams, ...bf.params
       );
       for (const row of monthly) {
         if (!row.month) continue;
@@ -783,35 +793,36 @@ router.delete('/:id', requireRole('admin', 'operational_head'), async (req, res)
       );
     }
 
-    // Re-sync Restaurant Revenue per-channel from remaining data. Each
-    // channel has its own stream-scoped scenario, so the wipe above
-    // (scoped to the caller's active scenario) only cleared one channel's
-    // rollup; we must look up each channel's scenario explicitly.
-    const channelStreams = await resolveRestaurantStreamsByChannel(req);
-    for (const [channel, streamId] of channelStreams.entries()) {
-      const channelScenario = findActiveScenarioForStream(db, req, streamId);
-      if (!channelScenario) continue;
-      // Wipe this channel's existing rollup (could differ from activeScenario above).
+    // Re-sync Restaurant Revenue from remaining data. Each stream has its
+    // own stream-scoped scenario, so the wipe above (scoped to the caller's
+    // active scenario) only cleared one stream's rollup; look up each
+    // stream's scenario explicitly. Catch-all "Restaurant" streams get
+    // an unfiltered rollup; channel streams get a filtered one.
+    const targets = await resolveRestaurantStreamTargets(req);
+    for (const { streamId, channelFilter } of targets) {
+      const streamScenario = findActiveScenarioForStream(db, req, streamId);
+      if (!streamScenario) continue;
       db.run(
         `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Restaurant Revenue'${bf.where}`,
-        channelScenario.id, ...bf.params
+        streamScenario.id, ...bf.params
       );
+      const channelWhere  = channelFilter ? ' AND order_channel = ?' : '';
+      const channelParams = channelFilter ? [channelFilter] : [];
       const restMonthly = db.all(
         `SELECT bill_month as month,
                 COALESCE(SUM(gross_amount - COALESCE(discount, 0)), 0) as total
          FROM restaurant_sales_actuals
-         WHERE order_channel = ?
-           AND (status IS NULL OR status = 'Success')
+         WHERE (status IS NULL OR status = 'Success')${channelWhere}
            AND bill_month IS NOT NULL AND bill_month != ''${bf.where}
          GROUP BY bill_month`,
-        channel, ...bf.params
+        ...channelParams, ...bf.params
       );
       for (const row of restMonthly) {
         if (!row.month) continue;
         db.run(
           `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
            VALUES (?, 'revenue', 'Restaurant Revenue', ?, ?, ?, ?, datetime('now'))`,
-          channelScenario.id, row.month, row.total, branchId, streamId
+          streamScenario.id, row.month, row.total, branchId, streamId
         );
       }
     }

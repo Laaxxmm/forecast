@@ -197,11 +197,15 @@ router.get('/overview', async (req, res) => {
       nameLower.includes('catering') || nameLower.includes('takeaway') ||
       nameLower.includes('restaurant')
     ) {
-      // Four restaurant streams share the same restaurant_sales_actuals table
-      // and are distinguished by order_channel. Net revenue = gross - discount
-      // (ex-tax) to match the clinic/pharma P&L convention. The channel filter
-      // is interpolated as an extraWhere fragment so the existing aggregation
-      // helpers downstream can stay agnostic to the per-channel split.
+      // Two shapes are supported:
+      //   (a) Four template-style streams (Dine-in / Delivery / Takeaway /
+      //       Catering) — each gets a per-channel filter so the four streams
+      //       show distinct numbers.
+      //   (b) A single catch-all stream named "Restaurant" (e.g. Yumm Keralam,
+      //       onboarded before the four-channel template). No channel filter
+      //       — sums every row. The per-channel breakdown still appears
+      //       inside the dashboard via the byChannel table.
+      // Net revenue = gross - discount (ex-tax), matching clinic/pharma P&L.
       const channel =
         nameLower.includes('dine')     ? 'Dine-in'  :
         nameLower.includes('takeaway') ? 'Takeaway' :
@@ -214,6 +218,16 @@ router.get('/overview', async (req, res) => {
           monthCol: 'bill_month',
           extraWhere: ` AND order_channel = ? AND (status IS NULL OR status = 'Success')`,
           extraParams: [channel],
+        };
+      } else {
+        // Generic "Restaurant" stream (no specific channel keyword) — sums
+        // every channel's bills into a single rollup.
+        streamSourceMap[stream.id] = {
+          table: 'restaurant_sales_actuals',
+          amountCol: '(gross_amount - COALESCE(discount, 0))',
+          monthCol: 'bill_month',
+          extraWhere: ` AND (status IS NULL OR status = 'Success')`,
+          extraParams: [],
         };
       }
     }

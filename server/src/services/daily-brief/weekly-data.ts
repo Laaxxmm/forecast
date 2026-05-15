@@ -184,6 +184,15 @@ function streamSourceFor(stream: { name: string }):
       extraParams: [restaurantChannel],
     };
   }
+  // Generic catch-all "Restaurant" stream — sums every channel.
+  if (n.includes('restaurant')) {
+    return {
+      table: 'restaurant_sales_actuals',
+      amountCol: '(gross_amount - COALESCE(discount, 0))',
+      extraWhere: " AND (status IS NULL OR status = 'Success')",
+      extraParams: [],
+    };
+  }
   return null;
 }
 
