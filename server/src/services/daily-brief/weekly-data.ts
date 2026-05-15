@@ -158,10 +158,33 @@ function isoWeekNumber(d: Date): number {
   return 1 + Math.round((date.getTime() - firstThursday.getTime()) / (7 * 24 * 3600 * 1000));
 }
 
-function streamSourceFor(stream: { name: string }): { table: string; amountCol: string; visitGrouping?: string } | null {
+// See data.ts: previously this fell through to clinic_actuals for any
+// non-pharma stream, which would silently misroute restaurant data.
+// Returns null for unknown streams so the caller skips them.
+function streamSourceFor(stream: { name: string }):
+  { table: string; amountCol: string; visitGrouping?: string; extraWhere?: string; extraParams?: any[] } | null {
   const n = stream.name.toLowerCase();
-  if (n.includes('pharma')) return { table: 'pharmacy_sales_actuals', amountCol: '(sales_amount - COALESCE(sales_tax, 0))' };
-  return { table: 'clinic_actuals', amountCol: 'item_price' };
+  if (n.includes('pharma')) {
+    return { table: 'pharmacy_sales_actuals', amountCol: '(sales_amount - COALESCE(sales_tax, 0))' };
+  }
+  if (n.includes('clinic') || n.includes('health') || n.includes('consult')
+      || n.includes('diagnos') || n.includes('lab')) {
+    return { table: 'clinic_actuals', amountCol: 'item_price' };
+  }
+  const restaurantChannel =
+    n.includes('dine')     ? 'Dine-in'  :
+    n.includes('takeaway') ? 'Takeaway' :
+    n.includes('delivery') ? 'Delivery' :
+    n.includes('catering') ? 'Catering' : null;
+  if (restaurantChannel) {
+    return {
+      table: 'restaurant_sales_actuals',
+      amountCol: '(gross_amount - COALESCE(discount, 0))',
+      extraWhere: " AND order_channel = ? AND (status IS NULL OR status = 'Success')",
+      extraParams: [restaurantChannel],
+    };
+  }
+  return null;
 }
 
 function friendlyStreamLabel(name: string): string {
@@ -170,6 +193,10 @@ function friendlyStreamLabel(name: string): string {
   if (n.includes('diagnos') || n.includes('lab')) return 'Diagnostics';
   if (n.includes('pharma')) return 'Pharmacy';
   if (n.includes('other')) return 'Other Revenue';
+  if (n.includes('dine'))     return 'Dine-in';
+  if (n.includes('takeaway')) return 'Takeaway';
+  if (n.includes('delivery')) return 'Delivery';
+  if (n.includes('catering')) return 'Catering';
   return name;
 }
 
@@ -178,6 +205,10 @@ function friendlyStreamSubLabel(label: string): string {
   if (label === 'Diagnostics') return 'Lab tests';
   if (label === 'Other Revenue') return 'Procedures & packages';
   if (label === 'Pharmacy') return 'Counter sales';
+  if (label === 'Dine-in')  return 'Dine-in covers';
+  if (label === 'Delivery') return 'Delivery orders';
+  if (label === 'Takeaway') return 'Takeaway orders';
+  if (label === 'Catering') return 'Catering orders';
   return label;
 }
 
@@ -406,17 +437,19 @@ export function buildWeeklyPulseData(
   for (const s of options.streams) {
     const src = streamSourceFor(s);
     if (!src) continue;
+    const xWhere  = src.extraWhere  || '';
+    const xParams = src.extraParams || [];
     const wRow = db.get(
       `SELECT COALESCE(SUM(${src.amountCol}), 0) AS rev
          FROM ${src.table}
-        WHERE bill_date >= ? AND bill_date <= ?${bf.where}`,
-      weekStartStr, weekEndStr, ...bf.params
+        WHERE bill_date >= ? AND bill_date <= ?${bf.where}${xWhere}`,
+      weekStartStr, weekEndStr, ...bf.params, ...xParams
     );
     const pRow = db.get(
       `SELECT COALESCE(SUM(${src.amountCol}), 0) AS rev
          FROM ${src.table}
-        WHERE bill_date >= ? AND bill_date <= ?${bf.where}`,
-      priorStartStr, priorEndStr, ...bf.params
+        WHERE bill_date >= ? AND bill_date <= ?${bf.where}${xWhere}`,
+      priorStartStr, priorEndStr, ...bf.params, ...xParams
     );
     const weekRev = wRow?.rev || 0;
     const priorRev = pRow?.rev || 0;
@@ -434,6 +467,17 @@ export function buildWeeklyPulseData(
       );
       unitsCount = u?.n || 0;
       unitsLabel = 'patients seen';
+    } else if (src.table === 'restaurant_sales_actuals') {
+      // Restaurant uses COUNT(DISTINCT bill_no) for orders — bill-line grain
+      // in the source means many rows roll up to one bill.
+      const u = db.get(
+        `SELECT COUNT(DISTINCT bill_no) AS n
+           FROM restaurant_sales_actuals
+          WHERE bill_date >= ? AND bill_date <= ?${bf.where}${xWhere}`,
+        weekStartStr, weekEndStr, ...bf.params, ...xParams
+      );
+      unitsCount = u?.n || 0;
+      unitsLabel = 'orders';
     } else {
       const u = db.get(
         `SELECT COUNT(*) AS n
@@ -448,8 +492,8 @@ export function buildWeeklyPulseData(
     const mtdRow = db.get(
       `SELECT COALESCE(SUM(${src.amountCol}), 0) AS rev
          FROM ${src.table}
-        WHERE bill_month = ? AND bill_date <= ?${bf.where}`,
-      currentMonth, options.today, ...bf.params
+        WHERE bill_month = ? AND bill_date <= ?${bf.where}${xWhere}`,
+      currentMonth, options.today, ...bf.params, ...xParams
     );
     const streamMtd = mtdRow?.rev || 0;
     const monthlyTarget = fy

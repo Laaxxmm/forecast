@@ -337,6 +337,46 @@ export function initializeSchema(db: DbHelper) {
     )
   `);
 
+  // Restaurant (Petpooja-style POS) sales table.
+  // Bill-line grain — one row per item on a bill. The four restaurant streams
+  // (Dine-in / Delivery / Takeaway / Catering) share this table and are
+  // distinguished by `order_channel`, canonicalized at parse time so
+  // Petpooja's "Pick Up" → "Takeaway", "Delivery(Parcel)" → "Delivery",
+  // "Dine In" → "Dine-in". Revenue convention matches clinic/pharma P&L:
+  // net_revenue = gross_amount - discount (ex-tax), computed in the view.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS restaurant_sales_actuals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      import_id INTEGER NOT NULL REFERENCES import_logs(id),
+      branch_id INTEGER,
+      bill_no TEXT,
+      bill_date TEXT,
+      bill_month TEXT NOT NULL,
+      bill_time TEXT,
+      order_channel TEXT NOT NULL,
+      payment_type TEXT,
+      table_no TEXT,
+      server_name TEXT,
+      covers INTEGER DEFAULT 0,
+      item_name TEXT,
+      item_category TEXT,
+      group_name TEXT,
+      qty REAL DEFAULT 0,
+      price REAL DEFAULT 0,
+      gross_amount REAL DEFAULT 0,
+      discount REAL DEFAULT 0,
+      tax REAL DEFAULT 0,
+      final_total REAL DEFAULT 0,
+      status TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_rest_sales_branch_month
+      ON restaurant_sales_actuals(branch_id, bill_month);
+    CREATE INDEX IF NOT EXISTS idx_rest_sales_channel
+      ON restaurant_sales_actuals(order_channel);
+    CREATE INDEX IF NOT EXISTS idx_rest_sales_bill_no
+      ON restaurant_sales_actuals(branch_id, bill_no);
+  `);
+
   // ── VCFO (sync-agent) tables ──────────────────────────────────────────────
   // Populated by the Electron VCFO Sync agent via /api/ingest/*. Report
   // builders in `services/vcfo-report-builder.ts` read from these tables.
@@ -1052,6 +1092,29 @@ export function initializeSchema(db: DbHelper) {
       COALESCE(SUM(profit), 0) as expected_profit
     FROM pharmacy_purchase_actuals
     GROUP BY branch_id, invoice_month`,
+
+    `DROP VIEW IF EXISTS restaurant_monthly_summary`,
+    // net_revenue = gross_amount - discount (ex-tax line revenue) matches
+    // the clinic/pharma P&L convention. orders = COUNT DISTINCT bill_no
+    // per (branch, month, channel). Voids/cancellations are filtered
+    // defensively by status = 'Success' (Petpooja exports only succeeded
+    // bills today, but the filter future-proofs against export changes).
+    `CREATE VIEW restaurant_monthly_summary AS
+    SELECT
+      branch_id,
+      bill_month,
+      order_channel,
+      COUNT(DISTINCT bill_no) as orders,
+      COALESCE(SUM(gross_amount - COALESCE(discount, 0)), 0) as net_revenue,
+      COALESCE(SUM(gross_amount), 0) as gross_revenue,
+      COALESCE(SUM(discount), 0) as total_discount,
+      COALESCE(SUM(tax), 0) as total_tax,
+      COALESCE(SUM(final_total), 0) as total_final,
+      COALESCE(SUM(qty), 0) as total_qty,
+      COALESCE(SUM(covers), 0) as total_covers
+    FROM restaurant_sales_actuals
+    WHERE status IS NULL OR status = 'Success'
+    GROUP BY branch_id, bill_month, order_channel`,
   ];
 
   for (const v of views) {

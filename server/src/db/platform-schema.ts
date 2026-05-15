@@ -342,7 +342,13 @@ export function initializePlatformSchema(db: DbHelper) {
       const sid = String(s.id);
       const nameLower = (s.name as string).toLowerCase();
       const isClinic = nameLower.includes('clinic') || nameLower.includes('health');
-      const source = isClinic ? 'healthplix' : nameLower.includes('pharma') ? 'oneglance' : '';
+      const isRestaurant = nameLower.includes('dine') || nameLower.includes('delivery')
+                        || nameLower.includes('catering') || nameLower.includes('takeaway')
+                        || nameLower.includes('restaurant');
+      const source = isClinic ? 'healthplix'
+                    : nameLower.includes('pharma') ? 'oneglance'
+                    : isRestaurant ? 'petpooja'
+                    : '';
 
       // Common: stream in trend chart
       seedVis(c.id, sid, 'charts', 'stream_in_trend', `${s.name} in Trend Chart`, 0, `Whether ${s.name} appears as a bar in the Monthly Revenue Trend chart`, source);
@@ -574,6 +580,28 @@ export function initializePlatformSchema(db: DbHelper) {
           'Searchable table: Bill, Date, Patient, Drug, Qty, Sales, COGS, Profit, Referred By. Paginated.', source);
         seedVis(c.id, sid, 'tables', 'pharma_stock_table', 'Stock details', 2,
           'Searchable table of sellable items (expired hidden by default) with at-risk row tinting, Critical-only quick filter, and download. Strips column dropped.', source);
+      }
+
+      // Restaurant-specific cards (Petpooja data). v1 keeps the scorecard
+      // minimal: net revenue + discount on the Value row, orders + ATV on
+      // the Volume row, plus the channel-mix card. Item / category mix and
+      // discount-deep-dive land in v2 once the v1 surface settles.
+      if (isRestaurant) {
+        // ── Value row ──
+        seedVis(c.id, sid, 'cards', 'restaurant_total_revenue', 'Net Revenue', 0,
+          'Net revenue ex-tax (gross_amount − discount) for this channel over the selected period. Mirrors the P&L convention used for clinic/pharma.', source);
+        seedVis(c.id, sid, 'cards', 'restaurant_gross_discount', 'Discount', 1,
+          'Total discount applied to this channel. Sub-line shows discount as a percentage of gross revenue.', source);
+
+        // ── Volume row ──
+        seedVis(c.id, sid, 'cards', 'restaurant_total_orders', 'Orders', 2,
+          'Distinct bill count for this channel. Petpooja exports at bill-line grain, so this is COUNT(DISTINCT bill_no).', source);
+        seedVis(c.id, sid, 'cards', 'restaurant_avg_ticket', 'Avg Ticket Value', 3,
+          'Net revenue divided by order count for this channel.', source);
+
+        // ── Channel mix card ──
+        seedVis(c.id, sid, 'cards', 'restaurant_channel_mix', 'Channel Mix', 4,
+          'Side-by-side table of all four channels (Dine-in / Delivery / Takeaway / Catering) with orders, revenue, ATV, and share %.', source);
       }
     }
   }

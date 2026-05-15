@@ -139,13 +139,51 @@ function friendlyStreamLabel(name: string): string {
   if (n.includes('diagnos') || n.includes('lab')) return 'Diagnostics';
   if (n.includes('pharma')) return 'Pharmacy';
   if (n.includes('other')) return 'Other Revenue';
+  if (n.includes('dine'))     return 'Dine-in';
+  if (n.includes('takeaway')) return 'Takeaway';
+  if (n.includes('delivery')) return 'Delivery';
+  if (n.includes('catering')) return 'Catering';
   return name;
 }
 
-function streamSourceFor(stream: { name: string }): { table: string; amountCol: string; monthCol: string } | null {
+// Map a stream onto its raw source table + amount expression. Returns null
+// for streams we don't know how to source (e.g. a custom stream the tenant
+// added manually) — the caller then skips the stream rather than blindly
+// reading from clinic_actuals (which was the prior fallback's bug: a
+// restaurant tenant's revenue would silently appear under whatever
+// non-pharma stream name happened to be active).
+//
+// Restaurant streams share one table; the extraWhere/extraParams pin each
+// stream to a single order_channel so the four restaurant streams don't
+// all sum to the same total.
+function streamSourceFor(stream: { name: string }):
+  { table: string; amountCol: string; monthCol: string; extraWhere?: string; extraParams?: any[] } | null {
   const n = stream.name.toLowerCase();
-  if (n.includes('pharma')) return { table: 'pharmacy_sales_actuals', amountCol: '(sales_amount - COALESCE(sales_tax, 0))', monthCol: 'bill_month' };
-  return { table: 'clinic_actuals', amountCol: 'item_price', monthCol: 'bill_month' };
+  if (n.includes('pharma')) {
+    return { table: 'pharmacy_sales_actuals', amountCol: '(sales_amount - COALESCE(sales_tax, 0))', monthCol: 'bill_month' };
+  }
+  if (n.includes('clinic') || n.includes('health') || n.includes('consult')
+      || n.includes('diagnos') || n.includes('lab')) {
+    // Clinic table absorbs consult / diagnostics / labs for healthcare tenants;
+    // the daily brief has always treated them all as bill-line revenue from
+    // clinic_actuals. Mentioning each name keeps the prior behaviour explicit.
+    return { table: 'clinic_actuals', amountCol: 'item_price', monthCol: 'bill_month' };
+  }
+  const restaurantChannel =
+    n.includes('dine')     ? 'Dine-in'  :
+    n.includes('takeaway') ? 'Takeaway' :
+    n.includes('delivery') ? 'Delivery' :
+    n.includes('catering') ? 'Catering' : null;
+  if (restaurantChannel) {
+    return {
+      table: 'restaurant_sales_actuals',
+      amountCol: '(gross_amount - COALESCE(discount, 0))',
+      monthCol: 'bill_month',
+      extraWhere: " AND order_channel = ? AND (status IS NULL OR status = 'Success')",
+      extraParams: [restaurantChannel],
+    };
+  }
+  return null;
 }
 
 // ── Main entry point ──
@@ -273,12 +311,14 @@ export function buildDailyBriefData(
   for (const s of options.streams) {
     const src = streamSourceFor(s);
     if (!src) continue;
+    const xWhere  = src.extraWhere  || '';
+    const xParams = src.extraParams || [];
     // Yesterday's revenue from this stream's source table.
     const dayRow = db.get(
       `SELECT COALESCE(SUM(${src.amountCol}), 0) AS rev
          FROM ${src.table}
-        WHERE bill_date = ?${bf.where}`,
-      yesterdayStr, ...bf.params
+        WHERE bill_date = ?${bf.where}${xWhere}`,
+      yesterdayStr, ...bf.params, ...xParams
     );
     // Stream's monthly target = sum of revenue forecast_items in the
     // default scenario for this (fy, stream, branch).
@@ -292,8 +332,8 @@ export function buildDailyBriefData(
     const mtdRow = db.get(
       `SELECT COALESCE(SUM(${src.amountCol}), 0) AS rev
          FROM ${src.table}
-        WHERE bill_month = ? AND bill_date <= ?${bf.where}`,
-      currentMonth, todayStr, ...bf.params
+        WHERE bill_month = ? AND bill_date <= ?${bf.where}${xWhere}`,
+      currentMonth, todayStr, ...bf.params, ...xParams
     );
     const streamMtd = mtdRow?.rev || 0;
     const projected = dayOfMonth > 0 ? (streamMtd / dayOfMonth) * daysInMonth : 0;

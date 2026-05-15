@@ -183,7 +183,7 @@ router.get('/overview', async (req, res) => {
   // P&L is net of indirect tax. Clinic's `item_price` is already
   // ex-GST (Healthplix exports tax separately and consult fees
   // typically aren't taxed); turia's `total_amount` is left as-is.
-  const streamSourceMap: Record<string, { table: string; amountCol: string; monthCol: string }> = {};
+  const streamSourceMap: Record<string, { table: string; amountCol: string; monthCol: string; extraWhere?: string; extraParams?: any[] }> = {};
   for (const stream of clientStreams) {
     const nameLower = stream.name.toLowerCase();
     if (nameLower.includes('clinic') || nameLower.includes('health')) {
@@ -192,6 +192,30 @@ router.get('/overview', async (req, res) => {
       streamSourceMap[stream.id] = { table: 'pharmacy_sales_actuals', amountCol: '(sales_amount - COALESCE(sales_tax, 0))', monthCol: 'bill_month' };
     } else if (nameLower.includes('consult') || nameLower.includes('turia')) {
       streamSourceMap[stream.id] = { table: 'turia_invoices', amountCol: 'total_amount', monthCol: 'invoice_month' };
+    } else if (
+      nameLower.includes('dine')     || nameLower.includes('delivery') ||
+      nameLower.includes('catering') || nameLower.includes('takeaway') ||
+      nameLower.includes('restaurant')
+    ) {
+      // Four restaurant streams share the same restaurant_sales_actuals table
+      // and are distinguished by order_channel. Net revenue = gross - discount
+      // (ex-tax) to match the clinic/pharma P&L convention. The channel filter
+      // is interpolated as an extraWhere fragment so the existing aggregation
+      // helpers downstream can stay agnostic to the per-channel split.
+      const channel =
+        nameLower.includes('dine')     ? 'Dine-in'  :
+        nameLower.includes('takeaway') ? 'Takeaway' :
+        nameLower.includes('delivery') ? 'Delivery' :
+        nameLower.includes('catering') ? 'Catering' : null;
+      if (channel) {
+        streamSourceMap[stream.id] = {
+          table: 'restaurant_sales_actuals',
+          amountCol: '(gross_amount - COALESCE(discount, 0))',
+          monthCol: 'bill_month',
+          extraWhere: ` AND order_channel = ? AND (status IS NULL OR status = 'Success')`,
+          extraParams: [channel],
+        };
+      }
     }
   }
 
@@ -224,16 +248,20 @@ router.get('/overview', async (req, res) => {
     if (!sd || (sd.total_revenue || 0) > 0) continue;
     const src = streamSourceMap[stream.id];
     if (!src) continue;
+    // Restaurant streams share one table — extraWhere pins the row set to
+    // a single order_channel. For clinic/pharma/turia these are no-ops.
+    const extraWhere = src.extraWhere || '';
+    const extraParams = src.extraParams || [];
     try {
       const rawTotal = db.get(
-        `SELECT COALESCE(SUM(${src.amountCol}), 0) as total FROM ${src.table} WHERE ${src.monthCol} >= ? AND ${src.monthCol} <= ?${bf.where}`,
-        startMonth, endMonth, ...bf.params
+        `SELECT COALESCE(SUM(${src.amountCol}), 0) as total FROM ${src.table} WHERE ${src.monthCol} >= ? AND ${src.monthCol} <= ?${bf.where}${extraWhere}`,
+        startMonth, endMonth, ...bf.params, ...extraParams
       );
       const rawMonthly = db.all(
         `SELECT ${src.monthCol} as month, COALESCE(SUM(${src.amountCol}), 0) as total
-         FROM ${src.table} WHERE ${src.monthCol} >= ? AND ${src.monthCol} <= ?${bf.where}
+         FROM ${src.table} WHERE ${src.monthCol} >= ? AND ${src.monthCol} <= ?${bf.where}${extraWhere}
          GROUP BY ${src.monthCol} ORDER BY ${src.monthCol}`,
-        startMonth, endMonth, ...bf.params
+        startMonth, endMonth, ...bf.params, ...extraParams
       );
       const rawRevenue = rawTotal?.total || 0;
       if (rawRevenue > 0) {
@@ -1015,6 +1043,101 @@ router.get('/pharmacy-analytics', async (req, res) => {
   }
 
   res.json(result);
+});
+
+// Restaurant analytics — v1 scorecard.
+// Returns: { totals: {revenue, orders, atv}, byChannel: [...], monthly: [...] }
+// Revenue is ex-tax (gross_amount - discount) to match the clinic/pharma P&L
+// convention. Orders = COUNT DISTINCT bill_no per (channel) — bill-line grain
+// in the source means many rows roll up to one bill.
+router.get('/restaurant-analytics', async (req, res) => {
+  const db = req.tenantDb!;
+  const { fy_id, startMonth: qStart, endMonth: qEnd } = req.query;
+  const bf = branchFilter(req, { strict: true });
+
+  const fy = fy_id
+    ? db.get('SELECT * FROM financial_years WHERE id = ?', fy_id)
+    : db.get('SELECT * FROM financial_years WHERE is_active = 1');
+  if (!fy) return res.json({ error: 'No FY found' });
+
+  const fyStart = fy.start_date.slice(0, 7);
+  const fyEnd = fy.end_date.slice(0, 7);
+  const startMonth = (typeof qStart === 'string' && /^\d{4}-\d{2}$/.test(qStart)) ? qStart : fyStart;
+  const endMonth = (typeof qEnd === 'string' && /^\d{4}-\d{2}$/.test(qEnd)) ? qEnd : fyEnd;
+
+  let totalRows = 0;
+  try {
+    totalRows = db.get('SELECT COUNT(*) as n FROM restaurant_sales_actuals')?.n || 0;
+  } catch {
+    return res.json({ hasData: false });
+  }
+  if (totalRows === 0) {
+    return res.json({ hasData: false, totals: { revenue: 0, orders: 0, atv: 0 }, byChannel: [], monthly: [] });
+  }
+
+  // Per-channel summary over the requested period.
+  const byChannel = db.all(
+    `SELECT order_channel,
+            COUNT(DISTINCT bill_no) as orders,
+            COALESCE(SUM(gross_amount - COALESCE(discount, 0)), 0) as revenue,
+            COALESCE(SUM(gross_amount), 0) as gross_revenue,
+            COALESCE(SUM(discount), 0) as discount,
+            COALESCE(SUM(tax), 0) as tax,
+            COALESCE(SUM(qty), 0) as items_sold,
+            COALESCE(SUM(covers), 0) as covers
+     FROM restaurant_sales_actuals
+     WHERE bill_month >= ? AND bill_month <= ?
+       AND (status IS NULL OR status = 'Success')${bf.where}
+     GROUP BY order_channel
+     ORDER BY revenue DESC`,
+    startMonth, endMonth, ...bf.params
+  ).map((r: any) => ({
+    channel: r.order_channel,
+    orders: r.orders || 0,
+    revenue: r.revenue || 0,
+    gross_revenue: r.gross_revenue || 0,
+    discount: r.discount || 0,
+    tax: r.tax || 0,
+    items_sold: r.items_sold || 0,
+    covers: r.covers || 0,
+    atv: r.orders > 0 ? r.revenue / r.orders : 0,
+  }));
+
+  // Totals across all channels (orders counted once globally — a Petpooja
+  // bill never spans channels, so SUM(by-channel orders) is correct here).
+  const totals = byChannel.reduce(
+    (acc: any, c: any) => ({
+      revenue: acc.revenue + c.revenue,
+      orders:  acc.orders  + c.orders,
+      gross_revenue: acc.gross_revenue + c.gross_revenue,
+      discount: acc.discount + c.discount,
+      tax: acc.tax + c.tax,
+    }),
+    { revenue: 0, orders: 0, gross_revenue: 0, discount: 0, tax: 0 }
+  );
+  const atv = totals.orders > 0 ? totals.revenue / totals.orders : 0;
+
+  // Monthly trend per channel — feeds line/area charts on the dashboard.
+  const monthly = db.all(
+    `SELECT bill_month as month, order_channel as channel,
+            COUNT(DISTINCT bill_no) as orders,
+            COALESCE(SUM(gross_amount - COALESCE(discount, 0)), 0) as revenue
+     FROM restaurant_sales_actuals
+     WHERE bill_month >= ? AND bill_month <= ?
+       AND (status IS NULL OR status = 'Success')${bf.where}
+     GROUP BY bill_month, order_channel
+     ORDER BY bill_month, order_channel`,
+    startMonth, endMonth, ...bf.params
+  );
+
+  res.json({
+    hasData: true,
+    fy: { id: fy.id, label: fy.label, start: fyStart, end: fyEnd },
+    period: { start: startMonth, end: endMonth },
+    totals: { ...totals, atv },
+    byChannel,
+    monthly,
+  });
 });
 
 router.get('/variance', async (req, res) => {

@@ -7,6 +7,7 @@ import { parseOneglancePurchase } from '../services/parsers/oneglance-purchase.j
 import { parseOneglanceStock } from '../services/parsers/oneglance-stock.js';
 import { parseOneglanceTransfer } from '../services/parsers/oneglance-transfer.js';
 import { parseTuriaInvoices } from '../services/parsers/turia.js';
+import { parsePetpooja } from '../services/parsers/petpooja.js';
 import { getBranchIdForInsert, branchFilter, getStreamIdForInsert } from '../utils/branch.js';
 import { findActiveScenarioForStream } from '../utils/scenarios.js';
 import { getPlatformHelper } from '../db/platform-connection.js';
@@ -35,6 +36,32 @@ async function resolveStreamId(req: any, integrationHint: 'clinic' | 'pharmacy' 
     }
   } catch { /* platform DB may not be available */ }
   return fromHeader;
+}
+
+/** For restaurant tenants: a Petpooja CSV contains all four channels mixed
+ *  together. The dashboard rollup needs to write a separate row per channel
+ *  to that channel's stream-scoped scenario, so we resolve every restaurant
+ *  stream upfront and key it by canonical channel name (matching the values
+ *  produced by canonicalChannel() in parsers/petpooja.ts).
+ *  Returns Map<canonicalChannel, streamId>. Empty map if the tenant has no
+ *  restaurant streams (defensive — middleware should already prevent that). */
+async function resolveRestaurantStreamsByChannel(req: any): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  try {
+    const platformDb = await getPlatformHelper();
+    const streams = platformDb.all(
+      'SELECT id, name FROM business_streams WHERE client_id = ? AND is_active = 1 ORDER BY sort_order',
+      req.clientId
+    );
+    for (const s of streams) {
+      const n = (s.name || '').toLowerCase();
+      if      (n.includes('dine'))     map.set('Dine-in',  s.id);
+      else if (n.includes('takeaway')) map.set('Takeaway', s.id);
+      else if (n.includes('delivery')) map.set('Delivery', s.id);
+      else if (n.includes('catering')) map.set('Catering', s.id);
+    }
+  } catch { /* platform DB may not be available */ }
+  return map;
 }
 
 const router = Router();
@@ -540,6 +567,109 @@ router.post('/turia', requireRole('admin', 'operational_head'), requireIntegrati
   }
 });
 
+// ── Restaurant (Petpooja) ────────────────────────────────────────────────────
+// A single Petpooja "Item Report With Customer/Order Details" export contains
+// every channel (Dine-in / Delivery / Takeaway / Catering) mixed together. We
+// insert all rows into restaurant_sales_actuals with order_channel populated
+// (canonicalized at parse time) and then write a separate rollup row to each
+// channel's stream-scoped scenario so the four restaurant streams each show
+// their own revenue and target on the dashboard.
+router.post('/petpooja-sales', requireRole('admin', 'operational_head'), requireIntegration('petpooja'), upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  try {
+    const db = req.tenantDb!;
+    const branchId = getBranchIdForInsert(req);
+    const { rows, summary } = parsePetpooja(req.file.path);
+
+    // Dedup: delete existing restaurant rows for this branch on the dates
+    // being re-imported. branch_id scope is MANDATORY — re-importing one
+    // branch's CSV must never wipe another branch's rows on the same dates.
+    const restDates = [...new Set(rows.map(r => r.bill_date).filter(Boolean))];
+    if (restDates.length > 0) {
+      const ph = restDates.map(() => '?').join(',');
+      db.run(
+        `DELETE FROM restaurant_sales_actuals WHERE branch_id IS ? AND bill_date IN (${ph})`,
+        branchId, ...restDates
+      );
+    }
+
+    db.run(
+      `INSERT INTO import_logs (source, filename, rows_imported, date_range_start, date_range_end, status, branch_id, file_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      'PETPOOJA', req.file.originalname, rows.length,
+      summary.dateRange?.start || null, summary.dateRange?.end || null, 'completed', branchId, req.file.path
+    );
+    const importId = db.get("SELECT id FROM import_logs WHERE source = 'PETPOOJA' ORDER BY id DESC LIMIT 1")?.id || 0;
+
+    db.beginBatch();
+    try {
+      for (const r of rows) {
+        db.run(
+          `INSERT INTO restaurant_sales_actuals (import_id, branch_id, bill_no, bill_date, bill_month, bill_time,
+             order_channel, payment_type, table_no, server_name, covers,
+             item_name, item_category, group_name, qty, price,
+             gross_amount, discount, tax, final_total, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          importId, branchId, r.bill_no, r.bill_date, r.bill_month, r.bill_time,
+          r.order_channel, r.payment_type, r.table_no, r.server_name, r.covers,
+          r.item_name, r.item_category, r.group_name, r.qty, r.price,
+          r.gross_amount, r.discount, r.tax, r.final_total, r.status
+        );
+      }
+      db.endBatch();
+    } catch (e) { db.rollbackBatch(); throw e; }
+
+    // Per-channel auto-sync to dashboard_actuals. Each restaurant stream has
+    // its OWN active scenario, so we loop the four channels and write a
+    // separate rollup row keyed to each stream's scenario. This matches the
+    // clinic + pharma pattern (one rollup per stream) but multiplied by the
+    // four channels that share the single Petpooja import.
+    const bf = branchFilter(req, { strict: true });
+    const channelStreams = await resolveRestaurantStreamsByChannel(req);
+    for (const [channel, streamId] of channelStreams.entries()) {
+      const activeScenario = findActiveScenarioForStream(db, req, streamId);
+      if (!activeScenario) continue; // no scenario yet (FY not set up) — skip silently
+
+      // Wipe the channel's existing rollup before re-inserting. Scoped to
+      // the caller's branch via bf so multi-branch tenants don't lose
+      // sibling-branch rows during a per-branch re-import.
+      db.run(
+        `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Restaurant Revenue'${bf.where}`,
+        activeScenario.id, ...bf.params
+      );
+
+      // Net revenue (ex-tax) = gross_amount - discount. Voids/cancellations
+      // are filtered defensively — Petpooja today exports only Success rows
+      // but the WHERE survives future export-format changes.
+      const monthly = db.all(
+        `SELECT bill_month as month,
+                COALESCE(SUM(gross_amount - COALESCE(discount, 0)), 0) as total
+         FROM restaurant_sales_actuals
+         WHERE order_channel = ?
+           AND (status IS NULL OR status = 'Success')
+           AND bill_month IS NOT NULL AND bill_month != ''${bf.where}
+         GROUP BY bill_month`,
+        channel, ...bf.params
+      );
+      for (const row of monthly) {
+        if (!row.month) continue;
+        db.run(
+          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+           VALUES (?, 'revenue', 'Restaurant Revenue', ?, ?, ?, ?, datetime('now'))
+           ON CONFLICT(scenario_id, category, item_name, month, COALESCE(branch_id, 0))
+           DO UPDATE SET amount = excluded.amount, stream_id = excluded.stream_id, updated_at = datetime('now')`,
+          activeScenario.id, row.month, row.total, branchId, streamId
+        );
+      }
+    }
+
+    res.json({ importId, ...summary });
+  } catch (err: any) {
+    if (req.file?.path) try { fs.unlinkSync(req.file.path); } catch {}
+    res.status(400).json({ error: isProd ? 'Import failed' : err.message });
+  }
+});
+
 router.get('/history', async (req, res) => {
   const db = req.tenantDb!;
   // Strict: branch users see only their branch's import logs. NULL-branch
@@ -561,6 +691,7 @@ router.delete('/:id', requireRole('admin', 'operational_head'), async (req, res)
   db.run('DELETE FROM pharmacy_stock_actuals WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM pharmacy_stock_transfers WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM turia_invoices WHERE import_id = ?', req.params.id);
+  db.run('DELETE FROM restaurant_sales_actuals WHERE import_id = ?', req.params.id);
   db.run('DELETE FROM import_logs WHERE id = ?', req.params.id);
 
   // Refresh COGS aggregate for the caller's branch — sales/transfer rows
@@ -650,6 +781,39 @@ router.delete('/:id', requireRole('admin', 'operational_head'), async (req, res)
          VALUES (?, 'revenue', 'Consultancy Revenue', ?, ?, ?, ?, datetime('now'))`,
         activeScenario.id, row.month, row.total, branchId, consultStreamId
       );
+    }
+
+    // Re-sync Restaurant Revenue per-channel from remaining data. Each
+    // channel has its own stream-scoped scenario, so the wipe above
+    // (scoped to the caller's active scenario) only cleared one channel's
+    // rollup; we must look up each channel's scenario explicitly.
+    const channelStreams = await resolveRestaurantStreamsByChannel(req);
+    for (const [channel, streamId] of channelStreams.entries()) {
+      const channelScenario = findActiveScenarioForStream(db, req, streamId);
+      if (!channelScenario) continue;
+      // Wipe this channel's existing rollup (could differ from activeScenario above).
+      db.run(
+        `DELETE FROM dashboard_actuals WHERE scenario_id = ? AND category = 'revenue' AND item_name = 'Restaurant Revenue'${bf.where}`,
+        channelScenario.id, ...bf.params
+      );
+      const restMonthly = db.all(
+        `SELECT bill_month as month,
+                COALESCE(SUM(gross_amount - COALESCE(discount, 0)), 0) as total
+         FROM restaurant_sales_actuals
+         WHERE order_channel = ?
+           AND (status IS NULL OR status = 'Success')
+           AND bill_month IS NOT NULL AND bill_month != ''${bf.where}
+         GROUP BY bill_month`,
+        channel, ...bf.params
+      );
+      for (const row of restMonthly) {
+        if (!row.month) continue;
+        db.run(
+          `INSERT INTO dashboard_actuals (scenario_id, category, item_name, month, amount, branch_id, stream_id, updated_at)
+           VALUES (?, 'revenue', 'Restaurant Revenue', ?, ?, ?, ?, datetime('now'))`,
+          channelScenario.id, row.month, row.total, branchId, streamId
+        );
+      }
     }
   }
 

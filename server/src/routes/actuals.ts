@@ -157,6 +157,104 @@ router.get('/pharmacy/purchases', async (req, res) => {
   ));
 });
 
+// Restaurant monthly summary by (bill_month, order_channel). Mirrors /clinic
+// in shape but partitions by channel instead of department. net_revenue is
+// ex-tax (gross_amount - discount) to match the P&L convention used for
+// clinic + pharma.
+router.get('/restaurant', async (req, res) => {
+  const db = req.tenantDb!;
+  const { fy_id } = req.query;
+  const bf = branchFilter(req, { strict: true });
+
+  if (fy_id) {
+    const fy = db.get('SELECT * FROM financial_years WHERE id = ?', fy_id);
+    if (fy) {
+      res.json(db.all(
+        `SELECT bill_month, order_channel,
+          SUM(orders) as orders,
+          SUM(net_revenue) as net_revenue,
+          SUM(gross_revenue) as gross_revenue,
+          SUM(total_discount) as total_discount,
+          SUM(total_tax) as total_tax,
+          SUM(total_qty) as total_qty,
+          SUM(total_covers) as total_covers
+        FROM restaurant_monthly_summary WHERE bill_month >= ? AND bill_month <= ?${bf.where}
+        GROUP BY bill_month, order_channel ORDER BY bill_month, order_channel`,
+        fy.start_date.slice(0, 7), fy.end_date.slice(0, 7), ...bf.params
+      ));
+      return;
+    }
+  }
+  res.json(db.all(
+    `SELECT bill_month, order_channel,
+      SUM(orders) as orders,
+      SUM(net_revenue) as net_revenue,
+      SUM(gross_revenue) as gross_revenue,
+      SUM(total_discount) as total_discount,
+      SUM(total_tax) as total_tax,
+      SUM(total_qty) as total_qty,
+      SUM(total_covers) as total_covers
+    FROM restaurant_monthly_summary WHERE 1=1${bf.where}
+    GROUP BY bill_month, order_channel ORDER BY bill_month, order_channel`,
+    ...bf.params
+  ));
+});
+
+// Per-channel summary over the whole FY (no month grouping). Useful for
+// the channel-mix pie/donut and the channel scorecard. ATV is computed
+// here so the client doesn't have to.
+router.get('/restaurant/channels', async (req, res) => {
+  const db = req.tenantDb!;
+  const { fy_id } = req.query;
+  const bf = branchFilter(req, { strict: true });
+
+  const buildRow = (r: any) => ({
+    order_channel: r.order_channel,
+    orders: r.orders || 0,
+    net_revenue: r.net_revenue || 0,
+    gross_revenue: r.gross_revenue || 0,
+    total_discount: r.total_discount || 0,
+    total_tax: r.total_tax || 0,
+    total_qty: r.total_qty || 0,
+    total_covers: r.total_covers || 0,
+    atv: r.orders > 0 ? (r.net_revenue || 0) / r.orders : 0,
+  });
+
+  if (fy_id) {
+    const fy = db.get('SELECT * FROM financial_years WHERE id = ?', fy_id);
+    if (fy) {
+      const rows = db.all(
+        `SELECT order_channel,
+          SUM(orders) as orders,
+          SUM(net_revenue) as net_revenue,
+          SUM(gross_revenue) as gross_revenue,
+          SUM(total_discount) as total_discount,
+          SUM(total_tax) as total_tax,
+          SUM(total_qty) as total_qty,
+          SUM(total_covers) as total_covers
+        FROM restaurant_monthly_summary WHERE bill_month >= ? AND bill_month <= ?${bf.where}
+        GROUP BY order_channel ORDER BY net_revenue DESC`,
+        fy.start_date.slice(0, 7), fy.end_date.slice(0, 7), ...bf.params
+      );
+      return res.json(rows.map(buildRow));
+    }
+  }
+  const rows = db.all(
+    `SELECT order_channel,
+      SUM(orders) as orders,
+      SUM(net_revenue) as net_revenue,
+      SUM(gross_revenue) as gross_revenue,
+      SUM(total_discount) as total_discount,
+      SUM(total_tax) as total_tax,
+      SUM(total_qty) as total_qty,
+      SUM(total_covers) as total_covers
+    FROM restaurant_monthly_summary WHERE 1=1${bf.where}
+    GROUP BY order_channel ORDER BY net_revenue DESC`,
+    ...bf.params
+  );
+  res.json(rows.map(buildRow));
+});
+
 // Generic stream summary — returns monthly actuals from dashboard_actuals for any stream
 router.get('/stream/:streamId/summary', async (req, res) => {
   const db = req.tenantDb!;

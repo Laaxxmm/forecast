@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import api from '../api/client';
 import ClinicAnalytics from '../components/dashboard/ClinicAnalytics';
 import PharmacyAnalytics from '../components/dashboard/PharmacyAnalytics';
+import RestaurantAnalytics from '../components/dashboard/RestaurantAnalytics';
 import ActualsAllOverview from '../components/dashboard/ActualsAllOverview';
 import { buildPeriodOptions } from '../components/dashboard/dashboardUtils';
 import SyncIndicator from '../components/common/SyncIndicator';
@@ -281,6 +282,18 @@ export default function DashboardPage() {
     String(s.id) === activeStreamId &&
     (s.name || '').toLowerCase().includes('pharma')
   );
+  // Restaurant streams: Dine-in / Delivery / Takeaway / Catering — all four
+  // back onto the same restaurant_sales_actuals table, distinguished by
+  // order_channel server-side. Matched by stream-name substring so this
+  // catches "Dine-in", "Delivery", "Takeaway", "Catering", or anything
+  // explicitly named with "restaurant" in it.
+  const isRestaurantStream = !isAllStreams && streams.some((s: any) => {
+    if (String(s.id) !== activeStreamId) return false;
+    const n = (s.name || '').toLowerCase();
+    return n.includes('dine') || n.includes('delivery')
+        || n.includes('catering') || n.includes('takeaway')
+        || n.includes('restaurant');
+  });
   // Chart visibility helper — used by stream-specific sub-tabs (Clinic /
   // Pharmacy). The All view's redesigned layout doesn't read individual
   // chart visibility settings; the sub-cards (alerts, trend, quick view)
@@ -309,6 +322,18 @@ export default function DashboardPage() {
     if (!pharmaStreamId) return false;
     const entry = chartVis.find((v: any) => v.element_key === key && v.scope === pharmaStreamId);
     return entry ? !!entry.is_visible : true; // default visible for pharmacy
+  };
+
+  // Restaurant stream visibility helper. Scoped to the active stream so
+  // each of the four restaurant channels can hide/show its own cards
+  // independently (matches the per-stream `chartVis` shape clinic / pharma
+  // use). Default-visible when no row exists yet — first-import users see
+  // a populated dashboard before they tweak settings.
+  const activeRestaurantStreamId = isRestaurantStream ? activeStreamId : null;
+  const isRestaurantVisible = (key: string) => {
+    if (!activeRestaurantStreamId) return false;
+    const entry = chartVis.find((v: any) => v.element_key === key && v.scope === activeRestaurantStreamId);
+    return entry ? !!entry.is_visible : true;
   };
 
   // ── Header context ───────────────────────────────────────────────────────
@@ -489,6 +514,9 @@ export default function DashboardPage() {
 
       {/* Pharmacy Analytics — only when pharmacy stream is active */}
       {isPharmaStream && pharmaStreamId && <PharmacyAnalytics isVisible={isPharmaVisible} startMonth={periodStartMonth} endMonth={periodEndMonth} />}
+
+      {/* Restaurant Analytics — any of the four restaurant streams */}
+      {isRestaurantStream && activeRestaurantStreamId && <RestaurantAnalytics isVisible={isRestaurantVisible} startMonth={periodStartMonth} endMonth={periodEndMonth} />}
     </div>
   );
 }

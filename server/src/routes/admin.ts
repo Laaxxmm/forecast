@@ -187,6 +187,12 @@ router.post('/clients', async (req: Request, res: Response) => {
   if (industry === 'consultancy') {
     defaultSettings.push({ key: 'turia', on: false });
   }
+  if (industry === 'restaurant') {
+    // Petpooja is the v1 POS source; admin enables it after onboarding once
+    // the actual export credentials are configured. Sibling parsers (Posist,
+    // UrbanPiper) can be added later as additional integration keys.
+    defaultSettings.push({ key: 'petpooja', on: false });
+  }
   for (const s of defaultSettings) {
     db.run(
       'INSERT INTO client_integrations (client_id, integration_key, is_enabled) VALUES (?, ?, ?)',
