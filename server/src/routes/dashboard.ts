@@ -1059,11 +1059,12 @@ router.get('/pharmacy-analytics', async (req, res) => {
   res.json(result);
 });
 
-// Restaurant analytics — v1 scorecard.
-// Returns: { totals: {revenue, orders, atv}, byChannel: [...], monthly: [...] }
-// Revenue is ex-tax (gross_amount - discount) to match the clinic/pharma P&L
-// convention. Orders = COUNT DISTINCT bill_no per (channel) — bill-line grain
-// in the source means many rows roll up to one bill.
+// Restaurant analytics — Vision restaurant dashboard payload.
+// Aggregates every chart's data server-side so the browser never sees the
+// 42K-row line-item grain. Revenue is ex-tax (gross_amount - discount) to
+// match clinic/pharma's P&L convention. Orders = COUNT DISTINCT bill_no
+// per channel — Petpooja exports at bill-line grain so many rows roll up
+// to one bill.
 router.get('/restaurant-analytics', async (req, res) => {
   const db = req.tenantDb!;
   const { fy_id, startMonth: qStart, endMonth: qEnd } = req.query;
@@ -1089,7 +1090,7 @@ router.get('/restaurant-analytics', async (req, res) => {
     return res.json({ hasData: false, totals: { revenue: 0, orders: 0, atv: 0 }, byChannel: [], monthly: [] });
   }
 
-  // Per-channel summary over the requested period.
+  // ── Per-channel summary ──────────────────────────────────────────────
   const byChannel = db.all(
     `SELECT order_channel,
             COUNT(DISTINCT bill_no) as orders,
@@ -1117,8 +1118,7 @@ router.get('/restaurant-analytics', async (req, res) => {
     atv: r.orders > 0 ? r.revenue / r.orders : 0,
   }));
 
-  // Totals across all channels (orders counted once globally — a Petpooja
-  // bill never spans channels, so SUM(by-channel orders) is correct here).
+  // Totals across channels (orders never span channels, so per-channel SUM is correct).
   const totals = byChannel.reduce(
     (acc: any, c: any) => ({
       revenue: acc.revenue + c.revenue,
@@ -1126,12 +1126,21 @@ router.get('/restaurant-analytics', async (req, res) => {
       gross_revenue: acc.gross_revenue + c.gross_revenue,
       discount: acc.discount + c.discount,
       tax: acc.tax + c.tax,
+      items_sold: acc.items_sold + c.items_sold,
     }),
-    { revenue: 0, orders: 0, gross_revenue: 0, discount: 0, tax: 0 }
+    { revenue: 0, orders: 0, gross_revenue: 0, discount: 0, tax: 0, items_sold: 0 }
   );
   const atv = totals.orders > 0 ? totals.revenue / totals.orders : 0;
+  const itemsPerOrder = totals.orders > 0 ? totals.items_sold / totals.orders : 0;
 
-  // Monthly trend per channel — feeds line/area charts on the dashboard.
+  // Aggregator commission proxy: 25% of Delivery channel revenue. Petpooja's
+  // Area column would let us split Swiggy/Zomato (commissionable) from Home
+  // Delivery (in-house) precisely, but Area isn't parsed yet — using the
+  // spec's recommended approximation. Bump to per-aggregator when Area lands.
+  const aggregatorRevenue = byChannel.find((c: any) => c.channel === 'Delivery')?.revenue || 0;
+  const aggregatorCommissionEstimate = aggregatorRevenue * 0.25;
+
+  // ── Monthly trend (cross-month) ──────────────────────────────────────
   const monthly = db.all(
     `SELECT bill_month as month, order_channel as channel,
             COUNT(DISTINCT bill_no) as orders,
@@ -1144,13 +1153,231 @@ router.get('/restaurant-analytics', async (req, res) => {
     startMonth, endMonth, ...bf.params
   );
 
+  // ── Daily revenue ────────────────────────────────────────────────────
+  // SQLite strftime('%w', date) returns Sunday=0 … Saturday=6.
+  // We materialize the full date range (so closed days render as 0) in JS
+  // rather than SQL, since SQLite has no native generate_series.
+  const dailyRaw = db.all(
+    `SELECT bill_date as date,
+            COUNT(DISTINCT bill_no) as orders,
+            COALESCE(SUM(gross_amount - COALESCE(discount, 0)), 0) as revenue
+     FROM restaurant_sales_actuals
+     WHERE bill_month >= ? AND bill_month <= ?
+       AND (status IS NULL OR status = 'Success')
+       AND bill_date IS NOT NULL${bf.where}
+     GROUP BY bill_date
+     ORDER BY bill_date`,
+    startMonth, endMonth, ...bf.params
+  );
+  const dailyMap = new Map<string, { date: string; revenue: number; orders: number }>();
+  for (const r of dailyRaw) dailyMap.set(r.date, { date: r.date, revenue: r.revenue || 0, orders: r.orders || 0 });
+
+  // Full date range — `startMonth-01` through last day of endMonth.
+  const [sy, sm] = startMonth.split('-').map(Number);
+  const [ey, em] = endMonth.split('-').map(Number);
+  const rangeStart = new Date(Date.UTC(sy, sm - 1, 1));
+  const rangeEnd = new Date(Date.UTC(ey, em, 0)); // day 0 of next month = last day of em
+  const daily: Array<{ date: string; revenue: number; orders: number; dow: number; is_weekend: boolean; is_closed: boolean }> = [];
+  for (let d = new Date(rangeStart); d <= rangeEnd; d.setUTCDate(d.getUTCDate() + 1)) {
+    const iso = d.toISOString().slice(0, 10);
+    const row = dailyMap.get(iso);
+    const dow = d.getUTCDay(); // 0=Sun, 6=Sat
+    daily.push({
+      date: iso,
+      revenue: row?.revenue || 0,
+      orders: row?.orders || 0,
+      dow,
+      is_weekend: dow === 0 || dow === 6,
+      is_closed: !row,
+    });
+  }
+
+  const daysWithData = dailyRaw.length;
+  const dailyAvg = daysWithData > 0 ? totals.revenue / daysWithData : 0;
+
+  // Peak + worst days (over days with actual data; closed days excluded)
+  const openDays = daily.filter(d => !d.is_closed);
+  const peakDay   = openDays.reduce((best, d) => d.revenue > (best?.revenue || 0) ? d : best, openDays[0]);
+  const worstDay  = openDays.reduce((worst, d) => d.revenue < (worst?.revenue || Infinity) ? d : worst, openDays[0]);
+
+  // Day-of-week averages (used to drive narrative "Sundays peak / Mondays slowest").
+  const dowBuckets: Record<number, { revenue: number; count: number }> = {};
+  for (const d of openDays) {
+    const b = dowBuckets[d.dow] || { revenue: 0, count: 0 };
+    b.revenue += d.revenue;
+    b.count += 1;
+    dowBuckets[d.dow] = b;
+  }
+  const dowAvg = Object.entries(dowBuckets).map(([dow, b]) => ({
+    dow: Number(dow),
+    avg: b.count > 0 ? b.revenue / b.count : 0,
+  })).sort((a, b) => b.avg - a.avg);
+
+  // ── Payment-method split (top 5 + percent) ───────────────────────────
+  const paymentRows = db.all(
+    `SELECT payment_type,
+            COALESCE(SUM(gross_amount - COALESCE(discount, 0)), 0) as revenue,
+            COUNT(DISTINCT bill_no) as orders
+     FROM restaurant_sales_actuals
+     WHERE bill_month >= ? AND bill_month <= ?
+       AND (status IS NULL OR status = 'Success')
+       AND payment_type IS NOT NULL AND payment_type != ''${bf.where}
+     GROUP BY payment_type
+     ORDER BY revenue DESC
+     LIMIT 5`,
+    startMonth, endMonth, ...bf.params
+  );
+  const byPayment = paymentRows.map((r: any) => ({
+    method: r.payment_type,
+    revenue: r.revenue || 0,
+    orders: r.orders || 0,
+    pct: totals.revenue > 0 ? (r.revenue / totals.revenue) * 100 : 0,
+  }));
+  const cashRev    = paymentRows.find((r: any) => /cash/i.test(r.payment_type || ''))?.revenue || 0;
+  const digitalPct = totals.revenue > 0 ? ((totals.revenue - cashRev) / totals.revenue) * 100 : 0;
+  const cashPct    = totals.revenue > 0 ? (cashRev / totals.revenue) * 100 : 0;
+
+  // ── Hourly revenue (8 AM – 11 PM) ────────────────────────────────────
+  // Petpooja's bill_time is "YYYY-MM-DD HH:MM:SS" so SUBSTR is enough — no
+  // strftime needed (and faster). Bucket as Morning (8-11), Lunch (12-16),
+  // Dinner (17-23). Anything outside 8-23 buckets into "Late night" but we
+  // don't render those in the chart.
+  const hourlyRows = db.all(
+    `SELECT CAST(SUBSTR(bill_time, 12, 2) AS INTEGER) as hour,
+            COALESCE(SUM(gross_amount - COALESCE(discount, 0)), 0) as revenue
+     FROM restaurant_sales_actuals
+     WHERE bill_month >= ? AND bill_month <= ?
+       AND (status IS NULL OR status = 'Success')
+       AND bill_time IS NOT NULL AND bill_time != ''${bf.where}
+     GROUP BY hour
+     ORDER BY hour`,
+    startMonth, endMonth, ...bf.params
+  );
+  const hourlyMap = new Map<number, number>();
+  for (const r of hourlyRows) hourlyMap.set(r.hour, r.revenue || 0);
+  const byHour = [] as Array<{ hour: number; revenue: number; daypart: 'morning' | 'lunch' | 'dinner' }>;
+  for (let h = 8; h <= 23; h++) {
+    const daypart: 'morning' | 'lunch' | 'dinner' =
+      h <= 11 ? 'morning' :
+      h <= 16 ? 'lunch'   :
+      'dinner';
+    byHour.push({ hour: h, revenue: hourlyMap.get(h) || 0, daypart });
+  }
+  const peakHour = byHour.reduce((best, h) => h.revenue > (best?.revenue || 0) ? h : best, byHour[0]);
+  const morningRev = byHour.filter(h => h.daypart === 'morning').reduce((s, h) => s + h.revenue, 0);
+  const lunchRev   = byHour.filter(h => h.daypart === 'lunch').reduce((s, h) => s + h.revenue, 0);
+  const dinnerRev  = byHour.filter(h => h.daypart === 'dinner').reduce((s, h) => s + h.revenue, 0);
+  const daypartTotal = morningRev + lunchRev + dinnerRev;
+  const daypartPct = {
+    morning: daypartTotal > 0 ? (morningRev / daypartTotal) * 100 : 0,
+    lunch:   daypartTotal > 0 ? (lunchRev   / daypartTotal) * 100 : 0,
+    dinner:  daypartTotal > 0 ? (dinnerRev  / daypartTotal) * 100 : 0,
+  };
+
+  // ── Top items (revenue) ──────────────────────────────────────────────
+  // Filter out very-low-order items (<5 distinct bills) per spec edge-case
+  // #4 — likely typos or one-off line items, not real menu performance.
+  const topItems = db.all(
+    `SELECT item_name,
+            COALESCE(SUM(gross_amount - COALESCE(discount, 0)), 0) as revenue,
+            COUNT(DISTINCT bill_no) as orders,
+            COALESCE(SUM(qty), 0) as qty
+     FROM restaurant_sales_actuals
+     WHERE bill_month >= ? AND bill_month <= ?
+       AND (status IS NULL OR status = 'Success')
+       AND item_name IS NOT NULL AND item_name != ''${bf.where}
+     GROUP BY item_name
+     HAVING orders >= 5
+     ORDER BY revenue DESC
+     LIMIT 10`,
+    startMonth, endMonth, ...bf.params
+  ).map((r: any) => ({
+    item: r.item_name,
+    revenue: r.revenue || 0,
+    orders: r.orders || 0,
+    qty: r.qty || 0,
+    pct: totals.revenue > 0 ? (r.revenue / totals.revenue) * 100 : 0,
+  }));
+  // Concentration risk = revenue share of the #1 item over total revenue.
+  const topItemConcentration = topItems[0]?.pct || 0;
+  const top5Concentration = topItems.slice(0, 5).reduce((s: number, i: any) => s + i.pct, 0);
+
+  // ── Categories (top 6, "Other" bucket for blanks) ────────────────────
+  const categories = db.all(
+    `SELECT COALESCE(NULLIF(TRIM(item_category), ''), 'Other') as category,
+            COALESCE(SUM(gross_amount - COALESCE(discount, 0)), 0) as revenue,
+            COUNT(DISTINCT bill_no) as orders
+     FROM restaurant_sales_actuals
+     WHERE bill_month >= ? AND bill_month <= ?
+       AND (status IS NULL OR status = 'Success')${bf.where}
+     GROUP BY category
+     ORDER BY revenue DESC
+     LIMIT 6`,
+    startMonth, endMonth, ...bf.params
+  ).map((r: any) => ({
+    category: r.category,
+    revenue: r.revenue || 0,
+    orders: r.orders || 0,
+    pct: totals.revenue > 0 ? (r.revenue / totals.revenue) * 100 : 0,
+  }));
+
+  // ── Server performance (dine-in only, excluding system users) ────────
+  // Spec edge-case: server names that are system users (e.g. "Harish" who
+  // takes every online/delivery order) should be excluded. Restricting to
+  // Dine-in channel handles this automatically — system users only appear
+  // on online channels.
+  const servers = db.all(
+    `SELECT server_name,
+            COALESCE(SUM(gross_amount - COALESCE(discount, 0)), 0) as revenue,
+            COUNT(DISTINCT bill_no) as orders
+     FROM restaurant_sales_actuals
+     WHERE bill_month >= ? AND bill_month <= ?
+       AND (status IS NULL OR status = 'Success')
+       AND order_channel = 'Dine-in'
+       AND server_name IS NOT NULL AND server_name != ''${bf.where}
+     GROUP BY server_name
+     ORDER BY revenue DESC
+     LIMIT 5`,
+    startMonth, endMonth, ...bf.params
+  ).map((r: any) => ({
+    server: r.server_name,
+    revenue: r.revenue || 0,
+    orders: r.orders || 0,
+    atv: r.orders > 0 ? r.revenue / r.orders : 0,
+  }));
+
   res.json({
     hasData: true,
     fy: { id: fy.id, label: fy.label, start: fyStart, end: fyEnd },
-    period: { start: startMonth, end: endMonth },
-    totals: { ...totals, atv },
+    period: { start: startMonth, end: endMonth, daysWithData, totalDays: daily.length },
+    totals: {
+      ...totals,
+      atv,
+      itemsPerOrder,
+      dailyAvg,
+      aggregatorRevenue,
+      aggregatorCommissionEstimate,
+      aggregatorRevenuePct: totals.revenue > 0 ? (aggregatorRevenue / totals.revenue) * 100 : 0,
+    },
     byChannel,
     monthly,
+    daily,
+    byPayment,
+    byHour,
+    topItems,
+    categories,
+    servers,
+    peaks: {
+      peakDay,
+      worstDay,
+      peakHour,
+      dowAvg,
+      daypartPct,
+      digitalPct,
+      cashPct,
+      topItemConcentration,
+      top5Concentration,
+    },
   });
 });
 
