@@ -259,6 +259,17 @@ export default function ImportPage() {
     return true;
   });
 
+  // When there's only one possible upload source (e.g. Petpooja for a
+  // restaurant tenant), auto-select it so the drop-zone appears immediately.
+  // Without this, the user has to click the source chip first before any
+  // upload UI shows up — which makes the green "Upload File" toggle at the
+  // top look like a broken button.
+  useEffect(() => {
+    if (sources.length === 1 && selected === null) {
+      setSelected(sources[0].key);
+    }
+  }, [sources.length, selected]);
+
   // Auto Sync source visibility:
   // - Healthplix (clinic): hidden on central_store (back-office, no
   //   clinic), shown on satellite + standalone.
@@ -461,16 +472,19 @@ export default function ImportPage() {
       <h1 className="mt-heading text-xl mb-0.5">Import Data</h1>
       <p className="text-xs mb-4" style={{ color: 'var(--mt-text-faint)' }}>Upload Excel reports{(showHpSync || showOgSync || showTuriaSync) ? ' or sync from integrations' : ''}</p>
 
-      {/* Mode Toggle */}
-      <div className="flex gap-2 mb-4">
-        <button
-          onClick={() => { setMode('upload'); reset(); }}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all"
-          style={modeBtnStyle(mode === 'upload')}
-        >
-          <Upload size={16} /> Upload File
-        </button>
-        {(showHpSync || showOgSync || showTuriaSync) && (
+      {/* Mode Toggle — only rendered when both modes are actually available.
+          Tenants without any sync-eligible integration (Petpooja-only is the
+          common case) used to see a lone "Upload File" button that looked
+          like an upload trigger but only re-set the already-active mode. */}
+      {(showHpSync || showOgSync || showTuriaSync) && (
+        <div className="flex gap-2 mb-4">
+          <button
+            onClick={() => { setMode('upload'); reset(); }}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all"
+            style={modeBtnStyle(mode === 'upload')}
+          >
+            <Upload size={16} /> Upload File
+          </button>
           <button
             onClick={() => { setMode('sync'); reset(); }}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all"
@@ -478,8 +492,8 @@ export default function ImportPage() {
           >
             <Cloud size={16} /> Auto Sync
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* UPLOAD MODE */}
       {mode === 'upload' && (
