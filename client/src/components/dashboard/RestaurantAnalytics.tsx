@@ -71,7 +71,31 @@ export default function RestaurantAnalytics({ isVisible, startMonth, endMonth }:
     </div>
   );
 
-  if (!data?.hasData) return null;
+  // Empty state — first-import users see what's expected and where to go
+  // next. Previously this returned null, which left the entire stream view
+  // blank and indistinguishable from a broken deploy.
+  if (!data?.hasData) return (
+    <div className="mt-5">
+      <div className="flex items-center gap-2 mb-3">
+        <UtensilsCrossed size={16} className="text-blue-400" />
+        <h2 className="text-base font-medium text-theme-heading">Restaurant Analytics</h2>
+        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400">Petpooja</span>
+      </div>
+      <div
+        className="rounded-xl px-4 py-6 text-center"
+        style={{ background: 'var(--mt-bg-raised)', border: '0.5px solid var(--mt-border)' }}
+      >
+        <UtensilsCrossed size={28} className="mx-auto mb-2" style={{ color: 'var(--mt-text-faint)' }} />
+        <p className="text-theme-heading text-sm font-medium">No Petpooja data for this period yet</p>
+        <p className="text-theme-faint text-xs mt-1.5 max-w-md mx-auto leading-relaxed">
+          Head to <b>Import Data</b> and pick the <b>Petpooja Sales</b> card.
+          Upload the <i>Item Report With Customer/Order Details</i> export
+          and this dashboard will populate with revenue, orders, ATV, and
+          per-channel mix.
+        </p>
+      </div>
+    </div>
+  );
 
   const { totals, byChannel = [] } = data;
   const totalRev    = totals?.revenue || 0;

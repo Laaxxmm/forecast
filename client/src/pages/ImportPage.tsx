@@ -3,13 +3,14 @@ import api from '../api/client';
 import { Stethoscope, Pill, ShoppingCart, Upload, CheckCircle, AlertCircle, Trash2,
          RefreshCw, Cloud, Settings as SettingsIcon, Calendar,
          LogIn, Building2, FileSearch, CalendarRange, Download, Database, Check, XCircle,
-         Phone, KeyRound, Briefcase, Package, ArrowLeftRight, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
+         Phone, KeyRound, Briefcase, Package, ArrowLeftRight, ChevronLeft, ChevronRight, CalendarDays,
+         UtensilsCrossed } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { downloadXlsx, CLINIC_EXPORT_COLUMNS, PHARMA_SALES_EXPORT_COLUMNS, PHARMA_PURCHASE_EXPORT_COLUMNS, STOCK_COLUMNS } from '../utils/xlsxExport';
 import { formatImportRange, formatIstTimestamp } from '../utils/format';
 import DataTable, { type ColumnDef } from '../components/common/DataTable';
 
-type Source = 'healthplix' | 'oneglance-sales' | 'oneglance-purchase' | 'oneglance-stock' | 'oneglance-transfer' | 'turia';
+type Source = 'healthplix' | 'oneglance-sales' | 'oneglance-purchase' | 'oneglance-stock' | 'oneglance-transfer' | 'turia' | 'petpooja-sales';
 type Mode = 'upload' | 'sync';
 type SyncSource = 'healthplix' | 'oneglance' | 'turia';
 type BranchRole = 'standalone' | 'central_store' | 'satellite';
@@ -47,6 +48,7 @@ const allSources: { key: Source; label: string; desc: string; icon: any; endpoin
   { key: 'oneglance-stock', label: 'Oneglance Stock', desc: 'Pharmacy stock snapshot', icon: Package, endpoint: '/import/oneglance-stock', integration: 'oneglance', roles: ['standalone', 'satellite'] },
   { key: 'oneglance-transfer', label: 'Stock Transfer', desc: 'Inter-branch stock transfers', icon: ArrowLeftRight, endpoint: '/import/oneglance-transfer', integration: 'oneglance', roles: ['satellite'] },
   { key: 'turia', label: 'Turia Invoices', desc: 'Consultancy invoice data', icon: Briefcase, endpoint: '/import/turia', integration: 'turia', roles: ['standalone', 'satellite'] },
+  { key: 'petpooja-sales', label: 'Petpooja Sales', desc: 'Restaurant bill-item report (all channels)', icon: UtensilsCrossed, endpoint: '/import/petpooja-sales', integration: 'petpooja', roles: ['standalone', 'satellite'] },
 ];
 
 function fmtDate(d: Date): string {
@@ -1072,11 +1074,13 @@ export default function ImportPage() {
             s === 'ONEGLANCE_STOCK_SYNC' ? 'OG Stock' :
             s === 'TURIA_SYNC' ? 'Turia Sync' :
             s === 'TURIA' ? 'Turia Upload' :
+            s === 'PETPOOJA' ? 'Petpooja Upload' :
             s;
           const sourceTone = (s: string) =>
             s === 'HEALTHPLIX_SYNC' ? 'mt-pill--info' :
             s.includes('ONEGLANCE') ? 'mt-pill--warn' :
             s.includes('TURIA') ? 'mt-pill--info' :
+            s.includes('PETPOOJA') ? 'mt-pill--info' :
             'mt-pill--success';
           const cols: ColumnDef<ImportLog>[] = [
             { key: 'source', header: 'Source', accessor: log => sourceLabel(log.source),
