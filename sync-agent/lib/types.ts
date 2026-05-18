@@ -188,6 +188,16 @@ export interface AgentConfig {
    * config saves. Set to false to silence all notifications.
    */
   notificationsEnabled?: boolean;
+  /**
+   * ISO timestamp the agent completed its one-shot 12-month monthly
+   * stock-summary backfill. Unset on installs that pre-date the
+   * quarterly→monthly extractor switch — the next sync overrides
+   * `syncFromDate` for the stock-summary step only, pulling 12 months back
+   * from today so monthly snapshots populate retroactively. Stamped to
+   * `new Date().toISOString()` after the first successful run so subsequent
+   * syncs use the normal `syncFromDate` window.
+   */
+  monthlyStockBackfillCompletedAt?: string;
 }
 
 export interface AgentStatus {

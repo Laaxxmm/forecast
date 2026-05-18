@@ -100,6 +100,16 @@ export interface PLStatement {
     grossProfit: Record<string, number>;
     grossMargin: Record<string, number>;
     netProfit: Record<string, number>;
+    /** Per-column opening stock value (from vcfo_stock_summary). Zero for
+     *  service-only tenants with no inventory. Surfaced so the UI can
+     *  render an explicit COGS breakdown row. */
+    stockOpening: Record<string, number>;
+    /** Per-column closing stock value. */
+    stockClosing: Record<string, number>;
+    /** COGS per column = directCosts + stockOpening − stockClosing. Equal to
+     *  what Tally labels "Opening Stock + Purchases + Direct Expenses −
+     *  Closing Stock" on the trading account. */
+    cogs: Record<string, number>;
   };
   grandTotals: {
     revenue: number;
@@ -108,6 +118,9 @@ export interface PLStatement {
     indirectExpenses: number;
     grossProfit: number;
     netProfit: number;
+    stockOpening: number;
+    stockClosing: number;
+    cogs: number;
   };
 }
 
@@ -371,9 +384,23 @@ function getLedgerMovements(
 }
 
 /**
- * Opening + closing stock for a period. Opening = as-of day-before-from;
- * closing = as-of to. Balance convention is credit-positive; stock is a
- * debit-side asset so `-balance.closing` is the display-positive stock value.
+ * Opening + closing stock value for a period, sourced from
+ * `vcfo_stock_summary` — monthly snapshots of Tally's StockItem inventory
+ * masters. For each item we pick the latest snapshot whose `period_to` is on
+ * or before the boundary date and sum `closing_value` across items.
+ *
+ *   opening = ∑ closing_value of latest snapshot with period_to ≤ (from − 1 day)
+ *   closing = ∑ closing_value of latest snapshot with period_to ≤ to
+ *
+ * `adjustment = closing − opening`. Inventory build-up (closing > opening)
+ * adds back to GP because purchases lumped into Direct Costs include stock
+ * not yet consumed — Tally's P&L applies the same convention.
+ *
+ * Why not the TB Stock-in-Hand ledger anymore: that ledger reflects manually
+ * booked Closing Stock journal entries (typically only at year-end) and was
+ * stale for monthly P&L columns. Inventory masters are the same source
+ * Tally's own P&L renders from, and the sync agent now emits monthly
+ * snapshots that mirror them.
  */
 function getStockAdjustment(
   db: DbHelper,
@@ -381,25 +408,72 @@ function getStockAdjustment(
   from: string,
   to: string,
 ): { opening: number; closing: number; adjustment: number } {
-  const stockGroups = new Set(getGroupTree(db, companyId, 'Stock-in-Hand'));
-  if (stockGroups.size === 0) return { opening: 0, closing: 0, adjustment: 0 };
+  // Opening uses strict `<` (period_to before the period starts) — equivalent
+  // to "as of day-before-from" but avoids local-timezone date arithmetic
+  // (`new Date('2026-01-01T00:00:00')` parses as IST and a setDate(-1) lands
+  // in the previous UTC day, off by one). String comparison on canonical
+  // YYYY-MM-DD is timezone-safe.
+  const opening = sumLatestStockClosingBefore(db, companyId, from);
+  const closing = sumLatestStockClosingAsOf(db, companyId, to);
+  return { opening, closing, adjustment: closing - opening };
+}
 
-  const sumStockClosing = (balances: LedgerBalance[]): number => {
-    // Assets are debit-side (closing < 0 in credit-positive convention);
-    // flip sign so stock values display as positive.
-    let total = 0;
-    for (const b of balances) {
-      if (b.groupName && stockGroups.has(b.groupName)) total += -b.closing;
-    }
-    return total;
-  };
+/**
+ * Sum closing_value of the latest stock_summary snapshot per item whose
+ * period_to is on or before `asOf`. Handles ragged coverage (an item with
+ * a Mar snapshot but no Apr snapshot still contributes its Mar closing to
+ * an end-of-April query) and zero-stock companies (returns 0 cleanly).
+ *
+ * Pass-through on negative closing_value is deliberate: a few Tally-side
+ * data-quality issues (negative inventory from un-tracked-batch sales)
+ * surface as negative COGS adjustments; clamping would hide them. The UI
+ * is expected to flag negative entries visually rather than silently zero
+ * them server-side.
+ */
+function sumLatestStockClosingAsOf(
+  db: DbHelper,
+  companyId: number,
+  asOf: string,
+): number {
+  const row = db.get(
+    `SELECT COALESCE(SUM(ss.closing_value), 0) AS total
+       FROM vcfo_stock_summary ss
+       INNER JOIN (
+         SELECT item_name, MAX(period_to) AS max_to
+           FROM vcfo_stock_summary
+          WHERE company_id = ? AND period_to <= ?
+          GROUP BY item_name
+       ) latest
+         ON latest.item_name = ss.item_name
+        AND latest.max_to    = ss.period_to
+      WHERE ss.company_id = ?`,
+    companyId, asOf, companyId,
+  );
+  return Number(row?.total) || 0;
+}
 
-  const opening = sumStockClosing(getBalancesBefore(db, companyId, from));
-  const closing = sumStockClosing(getBalancesAsOf(db, companyId, to));
-
-  // opening - closing: when closing stock > opening, stockAdjustment is negative
-  // (more inventory on hand = less COGS consumed = better GP).
-  return { opening, closing, adjustment: opening - closing };
+/** Like `sumLatestStockClosingAsOf` but strict `<` — used for opening stock,
+ *  which is "the value at end of day before the period starts". */
+function sumLatestStockClosingBefore(
+  db: DbHelper,
+  companyId: number,
+  beforeDate: string,
+): number {
+  const row = db.get(
+    `SELECT COALESCE(SUM(ss.closing_value), 0) AS total
+       FROM vcfo_stock_summary ss
+       INNER JOIN (
+         SELECT item_name, MAX(period_to) AS max_to
+           FROM vcfo_stock_summary
+          WHERE company_id = ? AND period_to < ?
+          GROUP BY item_name
+       ) latest
+         ON latest.item_name = ss.item_name
+        AND latest.max_to    = ss.period_to
+      WHERE ss.company_id = ?`,
+    companyId, beforeDate, companyId,
+  );
+  return Number(row?.total) || 0;
 }
 
 /**
@@ -576,12 +650,18 @@ export function buildProfitLoss(
   const sections: PLSection[] = [revenue, directCosts, indirectIncome, indirectExpenses];
 
   // Gross Profit / Margin / Net Profit per column.
-  // Stock adjustment (opening - closing) is folded into GP the same way as
-  // the pre-refactor builder — closing stock still on hand reduces COGS.
+  // Stock adjustment (closing - opening) is added to GP: inventory still on
+  // hand at period end was paid for via purchases (already in Direct Costs)
+  // but not yet consumed, so its cost must be added back. Matches Tally's
+  // P&L convention exactly.
   const grossProfit: Record<string, number> = {};
   const grossMargin: Record<string, number> = {};
   const netProfit: Record<string, number> = {};
+  const stockOpening: Record<string, number> = {};
+  const stockClosing: Record<string, number> = {};
+  const cogs: Record<string, number> = {};
   let gpGrand = 0, npGrand = 0;
+  let soGrand = 0, scGrand = 0, cogsGrand = 0;
 
   for (const col of columns) {
     const { from: cf, to: ct } = columnRange(col);
@@ -592,11 +672,18 @@ export function buildProfitLoss(
     const ie = indirectExpenses.values[col] || 0; // positive (expense)
     const gp = rev - dc + stock.adjustment;
     const np = gp + ii - ie;
+    const colCogs = dc + stock.opening - stock.closing; // = directCosts + (opening - closing)
     grossProfit[col] = gp;
     grossMargin[col] = rev !== 0 ? Math.round((gp / rev) * 10000) / 100 : 0;
     netProfit[col] = np;
+    stockOpening[col] = stock.opening;
+    stockClosing[col] = stock.closing;
+    cogs[col] = colCogs;
     gpGrand += gp;
     npGrand += np;
+    soGrand += stock.opening;
+    scGrand += stock.closing;
+    cogsGrand += colCogs;
   }
 
   return {
@@ -604,7 +691,7 @@ export function buildProfitLoss(
     view,
     columns,
     sections,
-    computed: { grossProfit, grossMargin, netProfit },
+    computed: { grossProfit, grossMargin, netProfit, stockOpening, stockClosing, cogs },
     grandTotals: {
       revenue: revenue.grandTotal,
       directCosts: directCosts.grandTotal,
@@ -612,6 +699,9 @@ export function buildProfitLoss(
       indirectExpenses: indirectExpenses.grandTotal,
       grossProfit: gpGrand,
       netProfit: npGrand,
+      stockOpening: soGrand,
+      stockClosing: scGrand,
+      cogs: cogsGrand,
     },
   };
 }
@@ -1084,8 +1174,15 @@ export function buildProfitLossMulti(
     return {
       period: { from, to }, view, columns: emptyCols, bifurcated: bifurcate,
       companies: [], sections: [],
-      computed: { grossProfit: zeros, grossMargin: zeros, netProfit: zeros },
-      grandTotals: { revenue: 0, directCosts: 0, indirectIncome: 0, indirectExpenses: 0, grossProfit: 0, netProfit: 0 },
+      computed: {
+        grossProfit: zeros, grossMargin: zeros, netProfit: zeros,
+        stockOpening: { ...zeros }, stockClosing: { ...zeros }, cogs: { ...zeros },
+      },
+      grandTotals: {
+        revenue: 0, directCosts: 0, indirectIncome: 0, indirectExpenses: 0,
+        grossProfit: 0, netProfit: 0,
+        stockOpening: 0, stockClosing: 0, cogs: 0,
+      },
     };
   }
 
@@ -1129,20 +1226,32 @@ export function buildProfitLossMulti(
       grossProfit: {} as Record<string, number>,
       grossMargin: {} as Record<string, number>,
       netProfit: {} as Record<string, number>,
+      stockOpening: {} as Record<string, number>,
+      stockClosing: {} as Record<string, number>,
+      cogs: {} as Record<string, number>,
     };
-    let gpGrand = 0, npGrand = 0;
+    let gpGrand = 0, npGrand = 0, soGrand = 0, scGrand = 0, cogsGrand = 0;
     for (const col of columns) {
-      let gp = 0, np = 0;
+      let gp = 0, np = 0, so = 0, sc = 0, cogsCol = 0;
       for (const { report } of perCompany) {
         gp += report.computed.grossProfit[col] || 0;
         np += report.computed.netProfit[col] || 0;
+        so += report.computed.stockOpening?.[col] || 0;
+        sc += report.computed.stockClosing?.[col] || 0;
+        cogsCol += report.computed.cogs?.[col] || 0;
       }
       computed.grossProfit[col] = gp;
       computed.netProfit[col] = np;
+      computed.stockOpening[col] = so;
+      computed.stockClosing[col] = sc;
+      computed.cogs[col] = cogsCol;
       const rev = revenue.values[col] || 0;
       computed.grossMargin[col] = rev !== 0 ? Math.round((gp / rev) * 10000) / 100 : 0;
       gpGrand += gp;
       npGrand += np;
+      soGrand += so;
+      scGrand += sc;
+      cogsGrand += cogsCol;
     }
 
     return {
@@ -1158,6 +1267,9 @@ export function buildProfitLossMulti(
         indirectExpenses: indirectExpenses.grandTotal,
         grossProfit: gpGrand,
         netProfit: npGrand,
+        stockOpening: soGrand,
+        stockClosing: scGrand,
+        cogs: cogsGrand,
       },
     };
   }
@@ -1217,21 +1329,41 @@ export function buildProfitLossMulti(
     grossProfit: {} as Record<string, number>,
     grossMargin: {} as Record<string, number>,
     netProfit: {} as Record<string, number>,
+    stockOpening: {} as Record<string, number>,
+    stockClosing: {} as Record<string, number>,
+    cogs: {} as Record<string, number>,
   };
-  for (const col of columns) computed.grossProfit[col] = 0;
-  for (const col of columns) computed.grossMargin[col] = 0;
-  for (const col of columns) computed.netProfit[col] = 0;
+  for (const col of columns) {
+    computed.grossProfit[col] = 0;
+    computed.grossMargin[col] = 0;
+    computed.netProfit[col] = 0;
+    computed.stockOpening[col] = 0;
+    computed.stockClosing[col] = 0;
+    computed.cogs[col] = 0;
+  }
 
-  let gpGrand = 0, npGrand = 0;
+  let gpGrand = 0, npGrand = 0, soGrand = 0, scGrand = 0, cogsGrand = 0;
   for (const { company, report } of perCompany) {
     const gp = report.grandTotals.grossProfit;
     const np = report.grandTotals.netProfit;
+    const so = report.grandTotals.stockOpening || 0;
+    const sc = report.grandTotals.stockClosing || 0;
+    const coCogs = report.grandTotals.cogs || 0;
     computed.grossProfit[compKey(company)] = gp;
     computed.netProfit[compKey(company)] = np;
+    computed.stockOpening[compKey(company)] = so;
+    computed.stockClosing[compKey(company)] = sc;
+    computed.cogs[compKey(company)] = coCogs;
     computed.grossProfit.total += gp;
     computed.netProfit.total += np;
+    computed.stockOpening.total += so;
+    computed.stockClosing.total += sc;
+    computed.cogs.total += coCogs;
     gpGrand += gp;
     npGrand += np;
+    soGrand += so;
+    scGrand += sc;
+    cogsGrand += coCogs;
     const rev = report.grandTotals.revenue;
     computed.grossMargin[compKey(company)] = rev !== 0 ? Math.round((gp / rev) * 10000) / 100 : 0;
   }
@@ -1251,6 +1383,9 @@ export function buildProfitLossMulti(
       indirectExpenses: indirectExpenses.grandTotal,
       grossProfit: gpGrand,
       netProfit: npGrand,
+      stockOpening: soGrand,
+      stockClosing: scGrand,
+      cogs: cogsGrand,
     },
   };
 }

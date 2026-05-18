@@ -25,6 +25,9 @@ interface PLStatement {
     grossProfit: Record<string, number>;
     grossMargin: Record<string, number>;
     netProfit: Record<string, number>;
+    stockOpening?: Record<string, number>;
+    stockClosing?: Record<string, number>;
+    cogs?: Record<string, number>;
   };
   grandTotals: {
     revenue: number;
@@ -33,6 +36,9 @@ interface PLStatement {
     indirectExpenses: number;
     grossProfit: number;
     netProfit: number;
+    stockOpening?: number;
+    stockClosing?: number;
+    cogs?: number;
   };
 }
 
@@ -128,6 +134,14 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
   // bifurcation already carries its own `total` column from the server.
   const showTrailingTotal = !bifurcated && reportView === 'monthly';
 
+  // Show the COGS breakdown rows (Opening/Closing Stock + COGS subtotal) only
+  // when this tenant actually carries inventory. Service-only companies
+  // (clinics with zero Stock-in-Hand) skip it to avoid visual noise.
+  const hasStock = columns.some(c =>
+    (computed.stockOpening?.[c] ?? 0) !== 0 ||
+    (computed.stockClosing?.[c] ?? 0) !== 0,
+  );
+
   const renderRow = (section: PLSection, depth: number): ReactNode => {
     const hasChildren = !!(section.children && section.children.length > 0);
     const isOpen = effectiveExpanded.has(section.key);
@@ -217,6 +231,70 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
           </thead>
           <tbody>
             {sections.map(section => renderRow(section, 0))}
+
+            {/* COGS breakdown — only shown when the tenant carries inventory.
+                Service-only tenants (clinics with no stock) skip this block
+                entirely. Negative values pass through unclamped — a Tally
+                data-quality signal worth surfacing rather than hiding. */}
+            {hasStock && (
+              <>
+                <tr className="border-b border-dark-400/20 hover:bg-dark-600/20">
+                  <td className="py-2 sticky left-0 bg-dark-800 font-normal text-[13px] text-rose-300" style={{ paddingLeft: 16, paddingRight: 16 }}>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span style={{ width: 14, display: 'inline-block' }} />
+                      + Opening Stock
+                    </span>
+                  </td>
+                  {columns.map(c => {
+                    const v = computed.stockOpening?.[c] ?? 0;
+                    return (
+                      <td key={c} className={`px-4 py-2 text-right font-mono font-normal text-[13px] ${v < 0 ? 'text-amber-400' : 'text-rose-300'}`}>
+                        {formatRs(v)}
+                      </td>
+                    );
+                  })}
+                  {showTrailingTotal && (
+                    <td className="px-4 py-2 text-right font-mono font-normal text-[13px] text-rose-300">
+                      {formatRs(data.grandTotals.stockOpening ?? 0)}
+                    </td>
+                  )}
+                </tr>
+                <tr className="border-b border-dark-400/20 hover:bg-dark-600/20">
+                  <td className="py-2 sticky left-0 bg-dark-800 font-normal text-[13px] text-emerald-300" style={{ paddingLeft: 16, paddingRight: 16 }}>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span style={{ width: 14, display: 'inline-block' }} />
+                      − Closing Stock
+                    </span>
+                  </td>
+                  {columns.map(c => {
+                    const v = computed.stockClosing?.[c] ?? 0;
+                    return (
+                      <td key={c} className={`px-4 py-2 text-right font-mono font-normal text-[13px] ${v < 0 ? 'text-amber-400' : 'text-emerald-300'}`}>
+                        {formatRs(v)}
+                      </td>
+                    );
+                  })}
+                  {showTrailingTotal && (
+                    <td className="px-4 py-2 text-right font-mono font-normal text-[13px] text-emerald-300">
+                      {formatRs(data.grandTotals.stockClosing ?? 0)}
+                    </td>
+                  )}
+                </tr>
+                <tr className="border-b border-dark-400/30 bg-dark-700/30">
+                  <td className="px-4 py-2 font-semibold text-rose-200 sticky left-0 bg-dark-700/30">COGS</td>
+                  {columns.map(c => (
+                    <td key={c} className="px-4 py-2 text-right text-rose-200 font-mono font-semibold">
+                      {formatRs(computed.cogs?.[c] ?? 0)}
+                    </td>
+                  ))}
+                  {showTrailingTotal && (
+                    <td className="px-4 py-2 text-right text-rose-200 font-mono font-semibold">
+                      {formatRs(data.grandTotals.cogs ?? 0)}
+                    </td>
+                  )}
+                </tr>
+              </>
+            )}
 
             {/* Gross Profit line */}
             <tr className="bg-dark-700/50 border-b border-accent-500/30">
