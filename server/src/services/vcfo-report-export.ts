@@ -14,6 +14,7 @@ import { Document, Packer, Paragraph, Table, TableCell, TableRow, HeadingLevel, 
 import type {
   TrialBalanceReport,
   PLStatement,
+  PLSection,
   BSStatement,
   CFStatement,
 } from './vcfo-report-builder.js';
@@ -39,6 +40,120 @@ const REPORT_TITLES: Record<ReportKind, string> = {
 export interface ExportContext {
   companyName: string;
   reportKind: ReportKind;
+}
+
+// ─── Shared P&L export-row builder ─────────────────────────────────────────
+// Flattens a PLStatement into the ordered sequence of rows the three
+// exporters render. Nested `section.children` get emitted with a `depth`
+// marker (parents indent their children visually). COGS-related rows
+// (Opening / Closing Stock / COGS subtotal) appear between Indirect
+// Expenses and Gross Profit, but only when the tenant carries inventory
+// — mirrors the UI's `hasStock` gate. Gross Margin is included for parity
+// with the on-screen P&L; its trailing total is suppressed because
+// percentages don't aggregate.
+
+interface PLExportRow {
+  label: string;
+  /** 0 for section parents, +1 per nesting level inside children. */
+  depth: number;
+  values: Record<string, number>;
+  grandTotal: number;
+  bold: boolean;
+  /** Render in red (expense) vs green (income) — matches the dashboard. */
+  tone: 'expense' | 'income' | 'neutral';
+  /** Percent rows skip the trailing-Total cell and render with `%` suffix. */
+  isPercentage?: boolean;
+  /** Visual separator above the row (e.g. double underline above Net Profit). */
+  separator?: 'thin' | 'double';
+}
+
+function buildPLExportRows(report: PLStatement): PLExportRow[] {
+  const rows: PLExportRow[] = [];
+
+  const walkSection = (sec: PLSection, depth: number) => {
+    rows.push({
+      label: sec.label,
+      depth,
+      values: sec.values,
+      grandTotal: sec.grandTotal,
+      bold: depth === 0,
+      tone: sec.isExpense ? 'expense' : 'income',
+    });
+    if (sec.children) for (const ch of sec.children) walkSection(ch, depth + 1);
+  };
+  for (const sec of report.sections) walkSection(sec, 0);
+
+  // Same hasStock check the UI uses — skip the COGS block when the tenant
+  // carries no inventory so service-only companies don't see zero rows.
+  const cols = report.columns;
+  const stockOpening = report.computed.stockOpening || {};
+  const stockClosing = report.computed.stockClosing || {};
+  const cogsByCol = report.computed.cogs || {};
+  const hasStock = cols.some(c => (stockOpening[c] ?? 0) !== 0 || (stockClosing[c] ?? 0) !== 0);
+  if (hasStock) {
+    rows.push({
+      label: '+ Opening Stock',
+      depth: 0,
+      values: stockOpening,
+      grandTotal: report.grandTotals.stockOpening ?? 0,
+      bold: false,
+      tone: 'expense',
+    });
+    rows.push({
+      label: '− Closing Stock',
+      depth: 0,
+      values: stockClosing,
+      grandTotal: report.grandTotals.stockClosing ?? 0,
+      bold: false,
+      tone: 'income', // reduces costs, displayed in green like other reducers
+    });
+    rows.push({
+      label: 'COGS',
+      depth: 0,
+      values: cogsByCol,
+      grandTotal: report.grandTotals.cogs ?? 0,
+      bold: true,
+      tone: 'expense',
+    });
+  }
+
+  rows.push({
+    label: 'Gross Profit',
+    depth: 0,
+    values: report.computed.grossProfit,
+    grandTotal: report.grandTotals.grossProfit,
+    bold: true,
+    tone: 'neutral',
+    separator: 'thin',
+  });
+  rows.push({
+    label: 'Gross Margin (%)',
+    depth: 0,
+    values: report.computed.grossMargin,
+    grandTotal: 0,
+    bold: false,
+    tone: 'neutral',
+    isPercentage: true,
+  });
+  rows.push({
+    label: 'Net Profit',
+    depth: 0,
+    values: report.computed.netProfit,
+    grandTotal: report.grandTotals.netProfit,
+    bold: true,
+    tone: 'neutral',
+    separator: 'double',
+  });
+
+  return rows;
+}
+
+/** Human-readable label for a P&L column. Bifurcated views carry
+ *  `columnLabels` mapping `co:<id>` to the company name; everything else
+ *  falls back to the raw column key (or 'Total' for the special total). */
+function plColumnLabel(report: PLStatement, col: string): string {
+  if (report.columnLabels && report.columnLabels[col]) return report.columnLabels[col];
+  return col === 'total' ? 'Total' : col;
 }
 
 // ─── XLSX ───────────────────────────────────────────────────────────────────
@@ -86,24 +201,37 @@ function writeTBSheet(ws: ExcelJS.Worksheet, report: TrialBalanceReport) {
 
 function writePLSheet(ws: ExcelJS.Worksheet, report: PLStatement) {
   const cols = report.columns;
-  const headerLabels = ['Section', ...cols.map(c => c === 'total' ? 'Total' : c), 'Total'];
+  const headerLabels = ['Section', ...cols.map(c => plColumnLabel(report, c)), 'Total'];
   const header = ws.addRow(headerLabels);
   header.font = { bold: true };
   header.eachCell(c => { c.border = { bottom: { style: 'thin' } }; });
 
-  for (const sec of report.sections) {
-    const row = [sec.label, ...cols.map(c => sec.values[c] || 0), sec.grandTotal];
-    const excelRow = ws.addRow(row);
-    if (sec.isExpense) excelRow.font = { color: { argb: 'FFB91C1C' } };
+  for (const r of buildPLExportRows(report)) {
+    const indented = (r.depth > 0 ? '  '.repeat(r.depth) : '') + r.label;
+    const trailingCell = r.isPercentage ? '' : r.grandTotal;
+    const rowCells: any[] = [indented, ...cols.map(c => r.isPercentage ? (r.values[c] ?? 0) : (r.values[c] || 0)), trailingCell];
+    const excelRow = ws.addRow(rowCells);
+
+    if (r.bold) excelRow.font = { bold: true, ...(excelRow.font || {}) };
+    if (r.tone === 'expense') {
+      excelRow.font = { ...(excelRow.font || {}), color: { argb: 'FFB91C1C' } };
+    } else if (r.tone === 'income') {
+      excelRow.font = { ...(excelRow.font || {}), color: { argb: 'FF047857' } };
+    }
+    if (r.separator === 'thin') {
+      excelRow.eachCell(c => { c.border = { ...(c.border || {}), top: { style: 'thin' } }; });
+    } else if (r.separator === 'double') {
+      excelRow.eachCell(c => { c.border = { top: { style: 'thin' }, bottom: { style: 'double' } }; });
+    }
+    if (r.isPercentage) {
+      // Per-column percentage cells get a `%` numFmt; trailing cell stays blank.
+      for (let i = 0; i < cols.length; i++) {
+        excelRow.getCell(2 + i).numFmt = '0.00"%"';
+      }
+    }
   }
 
-  const gp = ws.addRow(['Gross Profit', ...cols.map(c => report.computed.grossProfit[c] || 0), report.grandTotals.grossProfit]);
-  gp.font = { bold: true };
-  const np = ws.addRow(['Net Profit', ...cols.map(c => report.computed.netProfit[c] || 0), report.grandTotals.netProfit]);
-  np.font = { bold: true };
-  np.eachCell(c => { c.border = { top: { style: 'thin' }, bottom: { style: 'double' } }; });
-
-  ws.getColumn(1).width = 30;
+  ws.getColumn(1).width = 40;
   for (let c = 2; c <= cols.length + 2; c++) {
     ws.getColumn(c).width = 16;
     ws.getColumn(c).numFmt = '#,##0.00;(#,##0.00)';
@@ -256,27 +384,25 @@ function renderTBPdf(doc: PDFKit.PDFDocument, report: TrialBalanceReport) {
 
 function renderPLPdf(doc: PDFKit.PDFDocument, report: PLStatement) {
   const cols = report.columns;
-  const labels = ['Section', ...cols.map(c => c === 'total' ? 'Total' : c), 'Total'];
+  const labels = ['Section', ...cols.map(c => plColumnLabel(report, c)), 'Total'];
   const colCount = labels.length;
-  const firstCol = 180;
+  const firstCol = 220;
   const restCols = Math.floor((720 - firstCol) / (colCount - 1));
   const widths = [firstCol, ...Array(colCount - 1).fill(restCols)];
 
   const rows: Array<{ cells: string[]; bold?: boolean; expense?: boolean }> = [];
-  for (const sec of report.sections) {
+  for (const r of buildPLExportRows(report)) {
+    const indented = (r.depth > 0 ? '  '.repeat(r.depth) : '') + r.label;
+    const cells = [indented, ...cols.map(c => {
+      const v = r.values[c] ?? 0;
+      return r.isPercentage ? `${v.toFixed(2)}%` : INR(v);
+    }), r.isPercentage ? '' : INR(r.grandTotal)];
     rows.push({
-      cells: [sec.label, ...cols.map(c => INR(sec.values[c] || 0)), INR(sec.grandTotal)],
-      expense: sec.isExpense,
+      cells,
+      bold: r.bold,
+      expense: r.tone === 'expense',
     });
   }
-  rows.push({
-    cells: ['Gross Profit', ...cols.map(c => INR(report.computed.grossProfit[c] || 0)), INR(report.grandTotals.grossProfit)],
-    bold: true,
-  });
-  rows.push({
-    cells: ['Net Profit', ...cols.map(c => INR(report.computed.netProfit[c] || 0)), INR(report.grandTotals.netProfit)],
-    bold: true,
-  });
 
   pdfTable(doc, labels, rows, widths);
 }
@@ -412,19 +538,20 @@ function buildTBDocx(report: TrialBalanceReport): Table {
 
 function buildPLDocx(report: PLStatement): Table {
   const cols = report.columns;
-  const headers = ['Section', ...cols.map(c => c === 'total' ? 'Total' : c), 'Total'];
-  const rows: Array<{ cells: string[]; bold?: boolean; expense?: boolean }> = report.sections.map(sec => ({
-    cells: [sec.label, ...cols.map(c => INR(sec.values[c] || 0)), INR(sec.grandTotal)],
-    expense: sec.isExpense,
-  }));
-  rows.push({
-    cells: ['Gross Profit', ...cols.map(c => INR(report.computed.grossProfit[c] || 0)), INR(report.grandTotals.grossProfit)],
-    bold: true,
-  });
-  rows.push({
-    cells: ['Net Profit', ...cols.map(c => INR(report.computed.netProfit[c] || 0)), INR(report.grandTotals.netProfit)],
-    bold: true,
-  });
+  const headers = ['Section', ...cols.map(c => plColumnLabel(report, c)), 'Total'];
+  const rows: Array<{ cells: string[]; bold?: boolean; expense?: boolean }> = [];
+  for (const r of buildPLExportRows(report)) {
+    const indented = (r.depth > 0 ? '  '.repeat(r.depth) : '') + r.label;
+    const cells = [indented, ...cols.map(c => {
+      const v = r.values[c] ?? 0;
+      return r.isPercentage ? `${v.toFixed(2)}%` : INR(v);
+    }), r.isPercentage ? '' : INR(r.grandTotal)];
+    rows.push({
+      cells,
+      bold: r.bold,
+      expense: r.tone === 'expense',
+    });
+  }
   return docxTable(headers, rows);
 }
 
