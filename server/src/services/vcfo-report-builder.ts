@@ -536,14 +536,46 @@ function computePLForPeriod(
  * `{ [groupName]: { [col]: movement } }` in credit-positive convention —
  * callers apply display sign (flip for expense sides).
  */
-function getGroupMovementsByColumn(
+/** Parent → immediate children, restricted to PL groups in the company. The
+ *  inverse `childToParent` lets a child resolve its parent in O(1). Groups
+ *  whose parent_group is NULL, empty, or `Profit & Loss A/c` (Tally's grand
+ *  primary) are treated as roots — i.e. they have no parent we care about. */
+function loadPLGroupHierarchy(
+  db: DbHelper,
+  companyId: number,
+): { childrenByParent: Map<string, string[]>; parentByChild: Map<string, string | null> } {
+  const rows = db.all(
+    `SELECT group_name, parent_group FROM vcfo_account_groups
+     WHERE company_id = ? AND bs_pl = 'PL'`,
+    companyId,
+  );
+  const childrenByParent = new Map<string, string[]>();
+  const parentByChild = new Map<string, string | null>();
+  for (const r of rows) {
+    const name = r.group_name as string;
+    const parent = r.parent_group && r.parent_group !== 'Profit & Loss A/c'
+      ? (r.parent_group as string)
+      : null;
+    parentByChild.set(name, parent);
+    if (parent) {
+      if (!childrenByParent.has(parent)) childrenByParent.set(parent, []);
+      childrenByParent.get(parent)!.push(name);
+    }
+  }
+  return { childrenByParent, parentByChild };
+}
+
+/** Per-ledger per-column movement, joined with each ledger's direct group.
+ *  Credit-positive. Only ledgers whose group_name is in `groupNames` are
+ *  returned, so callers restrict the scan to one P&L section's group set. */
+function getLedgerMovementsByColumn(
   db: DbHelper,
   companyId: number,
   groupNames: Set<string>,
   columns: string[],
   columnRange: (col: string) => { from: string; to: string },
-): Map<string, Record<string, number>> {
-  const out = new Map<string, Record<string, number>>();
+): Map<string, { groupName: string; values: Record<string, number> }> {
+  const out = new Map<string, { groupName: string; values: Record<string, number> }>();
   if (groupNames.size === 0) return out;
   for (const col of columns) {
     const { from, to } = columnRange(col);
@@ -551,19 +583,37 @@ function getGroupMovementsByColumn(
     for (const b of balances) {
       if (!b.groupName || !groupNames.has(b.groupName)) continue;
       const mv = b.credit - b.debit;
-      if (!out.has(b.groupName)) out.set(b.groupName, {});
-      const bucket = out.get(b.groupName)!;
-      bucket[col] = (bucket[col] || 0) + mv;
+      const existing = out.get(b.ledgerName);
+      if (!existing) {
+        out.set(b.ledgerName, { groupName: b.groupName, values: { [col]: mv } });
+      } else {
+        existing.values[col] = (existing.values[col] || 0) + mv;
+      }
     }
   }
   return out;
 }
 
 /**
- * Build a parent P&L section from a set of Tally account groups. Emits one
- * child row per group that had nonzero movement in the window, sorted by
- * absolute contribution desc. Applies display sign (expense sides flip so
- * costs show as positive on screen).
+ * Build a P&L section as a HIERARCHICAL tree, mirroring Tally's Group Summary
+ * view. Each immediate child of the section root becomes a top-level child
+ * row; expanding it reveals its own sub-groups and direct ledgers, recursively
+ * down to ledger leaves. Replaces the earlier flat-list builder that emitted
+ * every descendant group as a sibling and obscured Tally's hierarchy.
+ *
+ * Sign convention: raw movements are credit-positive (credit − debit). Expense
+ * sections pass `displaySign = -1` so costs render as positive numbers on the
+ * UI; income sections pass `displaySign = +1` (credit movement is already
+ * positive).
+ *
+ * Roots within the section: a group is a "root" if its parent_group is not
+ * itself in `groupSet`. This naturally handles sections that span multiple
+ * Tally primaries (e.g. Revenue covers both `Sales Accounts` and
+ * `Direct Incomes`) — both surface as top-level children, each with their
+ * own sub-tree.
+ *
+ * Dormant nodes (zero net contribution across all columns) are pruned so
+ * the UI doesn't list groups/ledgers that contribute nothing in the window.
  */
 function buildPLSectionWithChildren(
   db: DbHelper,
@@ -576,39 +626,109 @@ function buildPLSectionWithChildren(
   columns: string[],
   columnRange: (col: string) => { from: string; to: string },
 ): PLSection {
-  const parentValues: Record<string, number> = {};
-  for (const c of columns) parentValues[c] = 0;
+  const hierarchy = loadPLGroupHierarchy(db, companyId);
+  const ledgerMoves = getLedgerMovementsByColumn(db, companyId, groupSet, columns, columnRange);
 
-  const raw = getGroupMovementsByColumn(db, companyId, groupSet, columns, columnRange);
-  const children: PLSection[] = [];
-  for (const [groupName, perCol] of raw.entries()) {
-    const values: Record<string, number> = {};
-    let grandTotal = 0;
-    for (const c of columns) {
-      const v = (perCol[c] || 0) * displaySign;
-      values[c] = v;
-      grandTotal += v;
-      parentValues[c] += v;
+  // Index ledgers by their direct group_name for O(1) lookup during the walk.
+  const ledgersByGroup = new Map<string, Array<{ name: string; values: Record<string, number> }>>();
+  for (const [ledgerName, info] of ledgerMoves) {
+    if (!ledgersByGroup.has(info.groupName)) ledgersByGroup.set(info.groupName, []);
+    ledgersByGroup.get(info.groupName)!.push({ name: ledgerName, values: info.values });
+  }
+
+  // Walk a single group sub-tree. Returns a PLSection with nested children
+  // (sub-groups + direct-leaf ledgers), or `null` if the entire sub-tree is
+  // dormant and should be pruned.
+  const walkGroup = (groupName: string, parentKey: string): PLSection | null => {
+    const nodeKey = `${parentKey}:${groupName}`;
+    const childNodes: PLSection[] = [];
+
+    // Recurse into sub-groups that belong to this section.
+    for (const childGroup of hierarchy.childrenByParent.get(groupName) || []) {
+      if (!groupSet.has(childGroup)) continue;
+      const node = walkGroup(childGroup, nodeKey);
+      if (node) childNodes.push(node);
     }
-    if (Math.abs(grandTotal) < 0.01) continue; // skip dormant groups
-    children.push({
-      key: `${key}:${groupName}`,
+
+    // Leaf ledgers attached directly to this group.
+    for (const ledger of ledgersByGroup.get(groupName) || []) {
+      const values: Record<string, number> = {};
+      let grand = 0;
+      for (const c of columns) {
+        const v = (ledger.values[c] || 0) * displaySign;
+        values[c] = v;
+        grand += v;
+      }
+      if (Math.abs(grand) < 0.01) continue;
+      childNodes.push({
+        key: `${nodeKey}::${ledger.name}`,
+        label: ledger.name,
+        isExpense,
+        values,
+        grandTotal: grand,
+      });
+    }
+
+    childNodes.sort((a, b) => Math.abs(b.grandTotal) - Math.abs(a.grandTotal));
+
+    // Aggregate this node from its children.
+    const values: Record<string, number> = {};
+    for (const c of columns) values[c] = 0;
+    for (const ch of childNodes) {
+      for (const c of columns) values[c] += ch.values[c] || 0;
+    }
+    const grandTotal = columns.reduce((s, c) => s + values[c], 0);
+    if (Math.abs(grandTotal) < 0.01 && childNodes.length === 0) return null;
+
+    return {
+      key: nodeKey,
       label: groupName,
       isExpense,
       values,
       grandTotal,
-    });
-  }
-  children.sort((a, b) => Math.abs(b.grandTotal) - Math.abs(a.grandTotal));
+      children: childNodes.length > 0 ? childNodes : undefined,
+    };
+  };
 
-  const parentGrandTotal = columns.reduce((s, c) => s + parentValues[c], 0);
+  // Find the roots within this section: groups whose parent_group is NOT in
+  // the section set (or is null entirely). For Revenue / Direct Costs this
+  // typically yields multiple Tally primaries (Sales Accounts + Direct Incomes
+  // / Purchase Accounts + Direct Expenses); for Indirect Income / Indirect
+  // Expenses it yields a single Tally primary.
+  const rootGroupNodes: PLSection[] = [];
+  for (const group of groupSet) {
+    const parent = hierarchy.parentByChild.get(group);
+    if (parent && groupSet.has(parent)) continue; // not a root within this set
+    const node = walkGroup(group, key);
+    if (node) rootGroupNodes.push(node);
+  }
+  rootGroupNodes.sort((a, b) => Math.abs(b.grandTotal) - Math.abs(a.grandTotal));
+
+  // When a section has exactly one Tally-primary root (e.g. Indirect Expenses,
+  // Indirect Income), the user-facing section row already labels it — showing
+  // the root again as the only child duplicates the row visually. Inline its
+  // children up to the section level. Multi-root sections (Revenue covering
+  // both Sales Accounts and Direct Incomes) keep the roots as separate
+  // expandable rows so users can tell them apart.
+  const sectionChildren = rootGroupNodes.length === 1
+    ? (rootGroupNodes[0].children || [])
+    : rootGroupNodes;
+
+  // Section parent aggregates from its effective children.
+  const parentValues: Record<string, number> = {};
+  for (const c of columns) parentValues[c] = 0;
+  for (const rc of sectionChildren) {
+    for (const c of columns) parentValues[c] += rc.values[c] || 0;
+  }
+  const parentGrand = columns.reduce((s, c) => s + parentValues[c], 0);
+
   return {
     key,
     label,
     isExpense,
     values: parentValues,
-    grandTotal: parentGrandTotal,
-    children,
+    grandTotal: parentGrand,
+    children: sectionChildren,
   };
 }
 
@@ -1111,28 +1231,46 @@ function companyColumnLabel(c: CompanyRef): string {
   return c.name;
 }
 
+/** Recursively merge several lists of PLSection children by label. Used by
+ *  multi-company consolidation: each company's tree may differ slightly (one
+ *  has a sub-group the other doesn't, or labels collide at different depths),
+ *  so we union by label at each level and recurse into nested `children`. */
 function mergeChildrenPL(children: PLSection[][]): PLSection[] {
-  const byLabel = new Map<string, PLSection>();
+  // Accumulator holds the merged section plus the raw per-source children
+  // arrays so we can merge the next level after this one is keyed.
+  const byLabel = new Map<string, { merged: PLSection; nestedSources: PLSection[][] }>();
   for (const list of children) {
     for (const ch of list) {
       const existing = byLabel.get(ch.label);
       if (!existing) {
         byLabel.set(ch.label, {
-          key: ch.key,
-          label: ch.label,
-          isExpense: ch.isExpense,
-          values: { ...ch.values },
-          grandTotal: ch.grandTotal,
+          merged: {
+            key: ch.key,
+            label: ch.label,
+            isExpense: ch.isExpense,
+            values: { ...ch.values },
+            grandTotal: ch.grandTotal,
+          },
+          nestedSources: ch.children ? [ch.children] : [],
         });
       } else {
         for (const [col, v] of Object.entries(ch.values)) {
-          existing.values[col] = (existing.values[col] || 0) + v;
+          existing.merged.values[col] = (existing.merged.values[col] || 0) + v;
         }
-        existing.grandTotal += ch.grandTotal;
+        existing.merged.grandTotal += ch.grandTotal;
+        if (ch.children) existing.nestedSources.push(ch.children);
       }
     }
   }
-  return [...byLabel.values()].sort((a, b) => Math.abs(b.grandTotal) - Math.abs(a.grandTotal));
+  const out: PLSection[] = [];
+  for (const { merged, nestedSources } of byLabel.values()) {
+    if (nestedSources.length > 0) {
+      const mergedChildren = mergeChildrenPL(nestedSources);
+      if (mergedChildren.length > 0) merged.children = mergedChildren;
+    }
+    out.push(merged);
+  }
+  return out.sort((a, b) => Math.abs(b.grandTotal) - Math.abs(a.grandTotal));
 }
 
 function mergeChildrenBS(children: BSSection[][]): BSSection[] {
@@ -1282,12 +1420,19 @@ export function buildProfitLossMulti(
   columnLabels.total = 'Total';
 
   // For each top-level section, one column per company = that company's
-  // grandTotal for that section. Children get the same treatment (by label).
+  // grandTotal for that section. Children inherit the same column shape
+  // recursively, so a sub-group like "Admin and Other Overhead" gets one
+  // column per company and a final `total`. The walk reuses each company's
+  // own hierarchical tree (built by `buildPLSectionWithChildren`) and unions
+  // nodes across companies by label at every depth.
   const buildBifurcatedSection = (key: string, label: string, isExpense: boolean): PLSection => {
     const values: Record<string, number> = Object.fromEntries(columns.map(c => [c, 0]));
     let grandTotal = 0;
-    const childrenAcc = new Map<string, { label: string; isExpense: boolean; values: Record<string, number>; grandTotal: number }>();
 
+    // Per-company source children lists for this section. We hand these to the
+    // recursive walker below so the bifurcated tree matches the depth of the
+    // underlying per-company trees.
+    const sourceChildren: Array<{ company: CompanyRef; children: PLSection[] }> = [];
     for (const { company, report } of perCompany) {
       const sec = report.sections.find(s => s.key === key);
       if (!sec) continue;
@@ -1295,29 +1440,59 @@ export function buildProfitLossMulti(
       values[compKey(company)] = total;
       values.total += total;
       grandTotal += total;
-
-      for (const ch of sec.children || []) {
-        if (!childrenAcc.has(ch.label)) {
-          childrenAcc.set(ch.label, {
-            label: ch.label, isExpense: ch.isExpense,
-            values: Object.fromEntries(columns.map(c => [c, 0])),
-            grandTotal: 0,
-          });
-        }
-        const acc = childrenAcc.get(ch.label)!;
-        acc.values[compKey(company)] = ch.grandTotal;
-        acc.values.total += ch.grandTotal;
-        acc.grandTotal += ch.grandTotal;
-      }
+      sourceChildren.push({ company, children: sec.children || [] });
     }
 
-    const children: PLSection[] = [...childrenAcc.entries()].map(([name, v]) => ({
-      key: `${key}:${name}`, label: v.label, isExpense: v.isExpense,
-      values: v.values, grandTotal: v.grandTotal,
-    }));
-    children.sort((a, b) => Math.abs(b.grandTotal) - Math.abs(a.grandTotal));
+    return {
+      key, label, isExpense, values, grandTotal,
+      children: bifurcateChildrenByLabel(sourceChildren, key),
+    };
+  };
 
-    return { key, label, isExpense, values, grandTotal, children };
+  // Recursively union per-company section trees by label. At each level, a
+  // child node's per-company column gets that company's contribution for the
+  // node, and the node's own `children` are produced by recursing into the
+  // per-company children lists carrying the same label.
+  const bifurcateChildrenByLabel = (
+    perCompanyChildren: Array<{ company: CompanyRef; children: PLSection[] }>,
+    parentKey: string,
+  ): PLSection[] => {
+    const byLabel = new Map<string, {
+      label: string;
+      isExpense: boolean;
+      values: Record<string, number>;
+      grandTotal: number;
+      sources: Array<{ company: CompanyRef; children: PLSection[] }>;
+    }>();
+    for (const { company, children } of perCompanyChildren) {
+      for (const ch of children) {
+        if (!byLabel.has(ch.label)) {
+          byLabel.set(ch.label, {
+            label: ch.label,
+            isExpense: ch.isExpense,
+            values: Object.fromEntries(columns.map(c => [c, 0])),
+            grandTotal: 0,
+            sources: [],
+          });
+        }
+        const acc = byLabel.get(ch.label)!;
+        acc.values[compKey(company)] = (acc.values[compKey(company)] || 0) + ch.grandTotal;
+        acc.values.total += ch.grandTotal;
+        acc.grandTotal += ch.grandTotal;
+        if (ch.children?.length) acc.sources.push({ company, children: ch.children });
+      }
+    }
+    const out: PLSection[] = [];
+    for (const [name, v] of byLabel) {
+      const nodeKey = `${parentKey}:${name}`;
+      const nested = v.sources.length > 0 ? bifurcateChildrenByLabel(v.sources, nodeKey) : undefined;
+      out.push({
+        key: nodeKey, label: v.label, isExpense: v.isExpense,
+        values: v.values, grandTotal: v.grandTotal,
+        children: nested && nested.length > 0 ? nested : undefined,
+      });
+    }
+    return out.sort((a, b) => Math.abs(b.grandTotal) - Math.abs(a.grandTotal));
   };
 
   const revenue = buildBifurcatedSection('revenue', 'Revenue', false);
