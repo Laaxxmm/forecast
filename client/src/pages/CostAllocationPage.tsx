@@ -17,7 +17,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowLeft, Plus, Pencil, Trash2, ToggleLeft, ToggleRight,
-  X, Save, AlertTriangle, Calculator, Loader2,
+  X, Save, AlertTriangle, Calculator, Loader2, ChevronDown,
 } from 'lucide-react';
 import api from '../api/client';
 
@@ -138,6 +138,81 @@ function sectionOptions(tree: SectionNode[]): JSX.Element[] {
       </option>
     );
   });
+}
+
+// ─── Multi-select section picker ─────────────────────────────────────────
+// Stores selection as either:
+//   - null (nothing selected)
+//   - "single-key-string" (back-compat with the single-select format)
+//   - '["key1","key2",...]' (JSON array, multi-select)
+// Engine on the server understands both. This helper hides the encoding
+// from callers: just hand it the raw value and get a normalised string[].
+
+function parseBasisKeys(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  const trimmed = String(raw).trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+    } catch { /* single-key fallback */ }
+  }
+  return [trimmed];
+}
+
+function encodeBasisKeys(keys: string[]): string | null {
+  if (keys.length === 0) return null;
+  if (keys.length === 1) return keys[0];
+  return JSON.stringify(keys);
+}
+
+function BasisMultiSelect(props: {
+  value: string | null;
+  onChange: (next: string | null) => void;
+  tree: SectionNode[];
+  placeholder?: string;  // when value is null/empty (used for the override picker's "inherit" label)
+}) {
+  const { value, onChange, tree, placeholder } = props;
+  const selected = parseBasisKeys(value);
+  const allOpts: Array<{ key: string; label: string; depth: number }> =
+    tree.length > 0 ? tree : PL_SECTIONS.map(s => ({ key: s.key, label: s.label, depth: 0 }));
+  const summary = selected.length === 0
+    ? (placeholder || '— choose one or more lines —')
+    : selected.length === 1
+      ? (allOpts.find(o => o.key === selected[0])?.label || selected[0])
+      : `${selected.length} lines selected`;
+  return (
+    <details className="bg-dark-700 border border-dark-400/40 rounded-lg">
+      <summary className="px-3 py-2 text-sm cursor-pointer font-mono flex items-center justify-between">
+        <span className="truncate">{summary}</span>
+        <ChevronDown size={14} className="text-theme-faint shrink-0 ml-2" />
+      </summary>
+      <div className="px-3 py-2 max-h-56 overflow-y-auto border-t border-dark-400/30 space-y-0.5">
+        {allOpts.map(o => {
+          const checked = selected.includes(o.key);
+          return (
+            <label key={o.key} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-dark-600/40 rounded px-1.5 py-0.5">
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={e => {
+                  const next = e.target.checked
+                    ? [...selected, o.key]
+                    : selected.filter(k => k !== o.key);
+                  onChange(encodeBasisKeys(next));
+                }}
+                className="w-3.5 h-3.5 accent-accent-500"
+              />
+              <span style={{ paddingLeft: o.depth * 12 }} className="font-mono">
+                {o.depth > 0 ? '↳ ' : ''}{o.label}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    </details>
+  );
 }
 
 function emptyRule(): Rule {
@@ -472,6 +547,28 @@ function RuleEditorModal(props: {
         if (sum <= 0) return 'Weighted ratio needs at least one non-zero weight';
       }
     } else {
+      // Cross-charge multi-branch: each branch self-checks (consumers,
+      // provider, optional pct override). Basis/pct/credit can come from
+      // the rule envelope or be overridden per branch.
+      if (isMultiBranch) {
+        for (const [i, bc] of (r.branch_configs as BranchConfig[]).entries()) {
+          const tag = bc.label?.trim() || `Branch ${i + 1}`;
+          if (bc.destinations.length === 0) return `${tag}: at least one consumer is required`;
+          if (!bc.provider_company_id) return `${tag}: provider company is required`;
+          if (bc.destinations.some(d => d.destination_company_id === bc.provider_company_id)) {
+            return `${tag}: provider cannot also be a consumer`;
+          }
+          const effectivePct = bc.charge_pct ?? r.charge_pct;
+          if (!effectivePct || effectivePct <= 0 || effectivePct > 100) {
+            return `${tag}: charge % must be in (0, 100] (got ${effectivePct ?? 'unset'})`;
+          }
+          const effectiveBasis = bc.charge_basis_section_key ?? r.charge_basis_section_key;
+          if (!effectiveBasis) return `${tag}: charge basis is required (set on rule or branch)`;
+        }
+        return null;
+      }
+
+      // Single-provider mode.
       if (r.destinations.length === 0) return 'At least one consumer is required';
       if (!r.provider_company_id) return 'Provider company is required';
       if (!r.charge_basis_section_key) return 'Charge basis section is required';
@@ -888,16 +985,16 @@ function RuleEditorModal(props: {
                   </div>
                 )}
                 <div>
-                  <label className="block text-xs text-theme-muted mb-1.5">Charge basis (P&amp;L line)</label>
-                  <select
-                    value={r.charge_basis_section_key || 'revenue'}
-                    onChange={e => set('charge_basis_section_key', e.target.value)}
-                    className="w-full bg-dark-700 border border-dark-400/40 rounded-lg px-3 py-2 text-sm font-mono"
-                  >
-                    {sectionOptions(sectionTree)}
-                  </select>
+                  <label className="block text-xs text-theme-muted mb-1.5">Charge basis (P&amp;L lines)</label>
+                  <BasisMultiSelect
+                    value={r.charge_basis_section_key}
+                    onChange={v => set('charge_basis_section_key', v)}
+                    tree={sectionTree}
+                  />
                   <p className="text-[10px] text-theme-faint mt-1">
-                    The consumer's value on this line is multiplied by Charge %. Indented entries are nested sub-lines.
+                    Each consumer's value across the selected lines is summed, then multiplied by Charge %.
+                    Pick multiple lines when the charging base spans more than one revenue stream
+                    (e.g. Diagnostics + Pathology).
                   </p>
                 </div>
                 <div>
@@ -1318,14 +1415,16 @@ function MultiBranchEditor(props: {
                 <div className="mt-2 grid grid-cols-2 gap-2 pl-2 border-l border-dark-400/30">
                   <div>
                     <label className="block text-[11px] text-theme-muted mb-1">Charge basis</label>
-                    <select
-                      value={bc.charge_basis_section_key || ''}
-                      onChange={e => update(i, { charge_basis_section_key: e.target.value || null })}
-                      className="w-full bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-[11px] font-mono"
-                    >
-                      <option value="">— inherit ({ruleDefaultBasisKey || 'revenue'}) —</option>
-                      {sectionOptions(sectionTree)}
-                    </select>
+                    <BasisMultiSelect
+                      value={bc.charge_basis_section_key ?? null}
+                      onChange={v => update(i, { charge_basis_section_key: v })}
+                      tree={sectionTree}
+                      placeholder={`— inherit (${
+                        parseBasisKeys(ruleDefaultBasisKey).length > 1
+                          ? `${parseBasisKeys(ruleDefaultBasisKey).length} lines`
+                          : (ruleDefaultBasisKey || 'revenue')
+                      }) —`}
+                    />
                   </div>
                   <div>
                     <label className="block text-[11px] text-theme-muted mb-1">Charge %</label>

@@ -213,6 +213,23 @@ function parseBranchConfigs(raw: string | null): BranchConfig[] | null {
   }
 }
 
+/** Parse a charge_basis_section_key value into a list of section keys.
+ *  Accepts either a single key (legacy single-select format) or a
+ *  JSON-encoded array (new multi-select format: ["revenue:Diagnostics",
+ *  "revenue:Pharmacy"]). Returns [] when the input is empty/null. */
+function parseBasisKeys(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  const trimmed = String(raw).trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+    } catch { /* fall through to single-key path */ }
+  }
+  return [trimmed];
+}
+
 // ─── PLStatement helpers ───────────────────────────────────────────────────
 
 /** Deep-clone the PLStatement so the engine can mutate freely. */
@@ -893,20 +910,25 @@ function applyOneCrossCharge(
     warnings.push(`${cfg.contextLabel}: missing provider_company_id; skipped`);
     return;
   }
-  if (!cfg.charge_basis_section_key) {
-    warnings.push(`${cfg.contextLabel}: missing charge_basis_section_key; skipped`);
-    return;
-  }
   if (cfg.charge_pct == null || cfg.charge_pct <= 0 || cfg.charge_pct > 100) {
     warnings.push(`${cfg.contextLabel}: charge_pct (${cfg.charge_pct}) must be in (0, 100]; skipped`);
     return;
   }
 
-  const basisSection = findSection(adjusted.sections, cfg.charge_basis_section_key);
-  if (!basisSection) {
-    warnings.push(`${cfg.contextLabel}: basis section '${cfg.charge_basis_section_key}' not found; skipped`);
+  // Charge basis can be a single section key OR a JSON-encoded array of keys.
+  // Multiple keys are summed per consumer — useful when the basis spans more
+  // than one P&L line (e.g. 30% of [Diagnostic Services + Pathology] revenue).
+  const basisKeys = parseBasisKeys(cfg.charge_basis_section_key);
+  const basisSections = basisKeys
+    .map(k => findSection(adjusted.sections, k))
+    .filter((s): s is PLSection => s !== null);
+  if (basisSections.length === 0) {
+    warnings.push(`${cfg.contextLabel}: no basis sections resolved from '${cfg.charge_basis_section_key}'; skipped`);
     return;
   }
+  const basisLabelDisplay = basisSections.length === 1
+    ? basisSections[0].label
+    : `[${basisSections.map(s => s.label).join(' + ')}]`;
 
   const targetSectionKey = cfg.target_pl_section_key || 'directCosts';
   const providerCreditSectionKey = cfg.provider_credit_section_key || 'directCosts';
@@ -921,9 +943,11 @@ function applyOneCrossCharge(
       continue;
     }
     const consumerCol = colFor(d.destination_company_id);
-    const basis = basisSection.values[consumerCol] || 0;
+    // Sum the consumer's value across every selected basis section.
+    let basis = 0;
+    for (const sec of basisSections) basis += sec.values[consumerCol] || 0;
     if (basis <= 0) {
-      warnings.push(`${cfg.contextLabel}: consumer ${consumerCol} has zero/negative basis on '${cfg.charge_basis_section_key}'; skipped`);
+      warnings.push(`${cfg.contextLabel}: consumer ${consumerCol} has zero/negative basis across ${basisLabelDisplay}; skipped`);
       continue;
     }
     const amount = basis * pctFrac;
@@ -943,7 +967,7 @@ function applyOneCrossCharge(
       destinationLabel: labelFor(adjusted, consumerCol),
       targetSectionKey,
       amount,
-      basisNote: `${cfg.charge_pct.toFixed(1)}% of ${basisSection.label} (₹${basis.toFixed(2)})`,
+      basisNote: `${cfg.charge_pct.toFixed(1)}% of ${basisLabelDisplay} (₹${basis.toFixed(2)})`,
     });
   }
 
