@@ -51,16 +51,25 @@ interface DestinationInput {
   sort_order?: number;
 }
 
-/** One entry in `branch_configs` — a self-contained (source, destinations) pair
- *  that the engine treats as an independent pool_split run. Multiple of these
- *  let one rule cover all branches. */
+/** One entry in `branch_configs`. Carries fields for BOTH rule kinds so the
+ *  same schema works for multi-branch pool_split (one rule, many sqft-split
+ *  branches) and multi-branch cross_charge (one rule, many regional lab
+ *  providers). The engine reads only the subset matching the parent rule's
+ *  rule_kind. */
 interface BranchConfigInput {
   label?: string | null;
-  source_type: SourceType;
+  // pool_split — source for this branch
+  source_type?: SourceType;
   source_company_id?: number | null;
   source_ledger_name?: string | null;
   source_pl_section_key?: string | null;
   source_custom_amount?: number | null;
+  // cross_charge — provider + per-branch overrides for basis/pct/credit
+  provider_company_id?: number | null;
+  charge_basis_section_key?: string | null;
+  charge_pct?: number | null;
+  provider_credit_section_key?: string | null;
+  // common
   destinations: DestinationInput[];
 }
 
@@ -144,16 +153,16 @@ function validateRulePayload(p: RuleInput): void {
     throw new Error('effective_to must be on or after effective_from');
   }
 
-  // Multi-branch mode: validate branch_configs, skip rule-level source/destinations.
-  // Only valid for pool_split.
+  // Multi-branch mode: validate branch_configs and skip rule-level fields.
+  // Supported for BOTH pool_split (each branch = one source-destinations
+  // group) and cross_charge (each branch = one provider-consumers group).
   const isMultiBranch = Array.isArray(p.branch_configs) && p.branch_configs.length > 0;
   if (isMultiBranch) {
-    if (p.rule_kind !== 'pool_split') {
-      throw new Error('branch_configs is only supported for pool_split rules');
-    }
-    if (!p.alloc_method) throw new Error('alloc_method is required for pool_split');
-    if (!['fixed_pct', 'equal_split', 'revenue_share', 'weighted_ratio', 'manual_amounts'].includes(p.alloc_method)) {
-      throw new Error("alloc_method must be 'fixed_pct' | 'equal_split' | 'revenue_share' | 'weighted_ratio' | 'manual_amounts'");
+    if (p.rule_kind === 'pool_split') {
+      if (!p.alloc_method) throw new Error('alloc_method is required for pool_split');
+      if (!['fixed_pct', 'equal_split', 'revenue_share', 'weighted_ratio', 'manual_amounts'].includes(p.alloc_method)) {
+        throw new Error("alloc_method must be 'fixed_pct' | 'equal_split' | 'revenue_share' | 'weighted_ratio' | 'manual_amounts'");
+      }
     }
     for (const [i, bc] of (p.branch_configs as BranchConfigInput[]).entries()) {
       const tag = bc.label || `branch ${i + 1}`;
@@ -170,32 +179,51 @@ function validateRulePayload(p: RuleInput): void {
         }
         bcDestIds.add(d.destination_company_id);
       }
-      if (!bc.source_type) throw new Error(`${tag}: source_type is required`);
-      if (!['ledger', 'pl_line', 'custom_amount'].includes(bc.source_type)) {
-        throw new Error(`${tag}: source_type must be ledger|pl_line|custom_amount`);
-      }
-      if (bc.source_type === 'ledger') {
-        if (!bc.source_company_id) throw new Error(`${tag}: source_company_id is required when source_type=ledger`);
-        if (!bc.source_ledger_name || !String(bc.source_ledger_name).trim()) {
-          throw new Error(`${tag}: source_ledger_name is required when source_type=ledger`);
+
+      if (p.rule_kind === 'pool_split') {
+        if (!bc.source_type) throw new Error(`${tag}: source_type is required`);
+        if (!['ledger', 'pl_line', 'custom_amount'].includes(bc.source_type)) {
+          throw new Error(`${tag}: source_type must be ledger|pl_line|custom_amount`);
         }
-      } else if (bc.source_type === 'pl_line') {
-        if (!bc.source_company_id) throw new Error(`${tag}: source_company_id is required when source_type=pl_line`);
-        if (!bc.source_pl_section_key) throw new Error(`${tag}: source_pl_section_key is required when source_type=pl_line`);
-      } else if (bc.source_type === 'custom_amount') {
-        if (!Number.isFinite(bc.source_custom_amount)) {
-          throw new Error(`${tag}: source_custom_amount must be a number when source_type=custom_amount`);
+        if (bc.source_type === 'ledger') {
+          if (!bc.source_company_id) throw new Error(`${tag}: source_company_id is required when source_type=ledger`);
+          if (!bc.source_ledger_name || !String(bc.source_ledger_name).trim()) {
+            throw new Error(`${tag}: source_ledger_name is required when source_type=ledger`);
+          }
+        } else if (bc.source_type === 'pl_line') {
+          if (!bc.source_company_id) throw new Error(`${tag}: source_company_id is required when source_type=pl_line`);
+          if (!bc.source_pl_section_key) throw new Error(`${tag}: source_pl_section_key is required when source_type=pl_line`);
+        } else if (bc.source_type === 'custom_amount') {
+          if (!Number.isFinite(bc.source_custom_amount)) {
+            throw new Error(`${tag}: source_custom_amount must be a number when source_type=custom_amount`);
+          }
         }
-      }
-      if (p.alloc_method === 'fixed_pct') {
-        const sum = bc.destinations.reduce((a, d) => a + Number(d.weight || 0), 0);
-        if (Math.abs(sum - 100) > 0.01) {
-          throw new Error(`${tag}: fixed_pct destinations must sum to 100 (got ${sum.toFixed(2)})`);
+        if (p.alloc_method === 'fixed_pct') {
+          const sum = bc.destinations.reduce((a, d) => a + Number(d.weight || 0), 0);
+          if (Math.abs(sum - 100) > 0.01) {
+            throw new Error(`${tag}: fixed_pct destinations must sum to 100 (got ${sum.toFixed(2)})`);
+          }
         }
-      }
-      if (p.alloc_method === 'weighted_ratio') {
-        const sum = bc.destinations.reduce((a, d) => a + Number(d.weight || 0), 0);
-        if (sum <= 0) throw new Error(`${tag}: weighted_ratio destinations must have at least one non-zero weight`);
+        if (p.alloc_method === 'weighted_ratio') {
+          const sum = bc.destinations.reduce((a, d) => a + Number(d.weight || 0), 0);
+          if (sum <= 0) throw new Error(`${tag}: weighted_ratio destinations must have at least one non-zero weight`);
+        }
+      } else {
+        // cross_charge per-branch validation. Each branch needs a provider
+        // and may either inherit basis/pct/credit from the rule envelope OR
+        // override on its own.
+        if (!bc.provider_company_id) throw new Error(`${tag}: provider_company_id is required`);
+        if (bcDestIds.has(bc.provider_company_id)) {
+          throw new Error(`${tag}: provider cannot also be a consumer`);
+        }
+        const effectivePct = bc.charge_pct ?? p.charge_pct;
+        if (!Number.isFinite(effectivePct) || (effectivePct as number) <= 0 || (effectivePct as number) > 100) {
+          throw new Error(`${tag}: charge_pct must be in (0, 100] (got ${effectivePct})`);
+        }
+        const effectiveBasis = bc.charge_basis_section_key ?? p.charge_basis_section_key;
+        if (!effectiveBasis) {
+          throw new Error(`${tag}: charge_basis_section_key is required (set on branch or rule)`);
+        }
       }
     }
     return;
@@ -304,24 +332,45 @@ function writeRule(
   const isPool = p.rule_kind === 'pool_split';
   const isCross = p.rule_kind === 'cross_charge';
 
-  // Multi-branch mode: rule-level source_* stays NULL because the engine
-  // ignores it. The branch_configs JSON column carries the per-branch data.
-  const isMultiBranch = isPool && Array.isArray(p.branch_configs) && p.branch_configs.length > 0;
+  // Multi-branch mode: rule-level provider/source fields stay NULL because
+  // the engine ignores them. The branch_configs JSON column carries the
+  // per-branch data. Supported for both pool_split and cross_charge.
+  const isMultiBranch = Array.isArray(p.branch_configs) && p.branch_configs.length > 0;
   const branchConfigsJson = isMultiBranch
-    ? JSON.stringify(p.branch_configs!.map(bc => ({
-        label: bc.label?.trim() || null,
-        source_type: bc.source_type,
-        source_company_id: bc.source_type === 'custom_amount' ? null : toIntOrNull(bc.source_company_id),
-        source_ledger_name: bc.source_type === 'ledger' ? (bc.source_ledger_name?.trim() || null) : null,
-        source_pl_section_key: bc.source_type === 'pl_line' ? (bc.source_pl_section_key || null) : null,
-        source_custom_amount: bc.source_type === 'custom_amount' ? toNumOrNull(bc.source_custom_amount) : null,
-        destinations: bc.destinations.map((d, i) => ({
-          destination_company_id: d.destination_company_id,
-          weight: Number.isFinite(d.weight) ? d.weight : 0,
-          weight_basis_label: d.weight_basis_label?.trim() || null,
-          sort_order: Number.isFinite(d.sort_order) ? d.sort_order : i,
-        })),
-      })))
+    ? JSON.stringify(p.branch_configs!.map(bc => {
+        if (isPool) {
+          return {
+            label: bc.label?.trim() || null,
+            source_type: bc.source_type,
+            source_company_id: bc.source_type === 'custom_amount' ? null : toIntOrNull(bc.source_company_id),
+            source_ledger_name: bc.source_type === 'ledger' ? (bc.source_ledger_name?.trim() || null) : null,
+            source_pl_section_key: bc.source_type === 'pl_line' ? (bc.source_pl_section_key || null) : null,
+            source_custom_amount: bc.source_type === 'custom_amount' ? toNumOrNull(bc.source_custom_amount) : null,
+            destinations: bc.destinations.map((d, i) => ({
+              destination_company_id: d.destination_company_id,
+              weight: Number.isFinite(d.weight) ? d.weight : 0,
+              weight_basis_label: d.weight_basis_label?.trim() || null,
+              sort_order: Number.isFinite(d.sort_order) ? d.sort_order : i,
+            })),
+          };
+        }
+        // cross_charge branch: provider + per-branch overrides + consumers list.
+        // weight is unused in the cross_charge engine path but keep the shape
+        // consistent with pool_split for the destinations array.
+        return {
+          label: bc.label?.trim() || null,
+          provider_company_id: toIntOrNull(bc.provider_company_id),
+          charge_basis_section_key: bc.charge_basis_section_key?.trim() || null,
+          charge_pct: toNumOrNull(bc.charge_pct),
+          provider_credit_section_key: bc.provider_credit_section_key?.trim() || null,
+          destinations: bc.destinations.map((d, i) => ({
+            destination_company_id: d.destination_company_id,
+            weight: 0,
+            weight_basis_label: null,
+            sort_order: Number.isFinite(d.sort_order) ? d.sort_order : i,
+          })),
+        };
+      }))
     : null;
 
   if (ruleId === 0) {
@@ -349,7 +398,10 @@ function writeRule(
       isPool && !isMultiBranch ? p.source_ledger_name?.trim() || null : null,
       isPool && !isMultiBranch ? p.source_pl_section_key || null : null,
       isPool && !isMultiBranch ? toNumOrNull(p.source_custom_amount) : null,
-      isCross ? toIntOrNull(p.provider_company_id) : null,
+      // For multi-branch cross_charge: provider_company_id is per-branch so
+      // rule-level value is NULL. The other fields (basis/pct/credit) stay
+      // as rule-level defaults that branches can inherit or override.
+      isCross && !isMultiBranch ? toIntOrNull(p.provider_company_id) : null,
       isCross ? p.charge_basis_section_key || null : null,
       isCross ? toNumOrNull(p.charge_pct) : null,
       isCross ? p.provider_credit_section_key || 'directCosts' : null,
@@ -384,7 +436,7 @@ function writeRule(
       isPool && !isMultiBranch ? p.source_ledger_name?.trim() || null : null,
       isPool && !isMultiBranch ? p.source_pl_section_key || null : null,
       isPool && !isMultiBranch ? toNumOrNull(p.source_custom_amount) : null,
-      isCross ? toIntOrNull(p.provider_company_id) : null,
+      isCross && !isMultiBranch ? toIntOrNull(p.provider_company_id) : null,
       isCross ? p.charge_basis_section_key || null : null,
       isCross ? toNumOrNull(p.charge_pct) : null,
       isCross ? p.provider_credit_section_key || 'directCosts' : null,

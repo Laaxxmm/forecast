@@ -35,16 +35,24 @@ interface RuleDestination {
   sort_order?: number;
 }
 
-/** One branch group inside a multi-branch rule. Each carries its own source +
- *  destinations and is treated as an independent pool-split run, sharing
- *  alloc_method + target_pl_section_key with the rule envelope. */
+/** One branch group inside a multi-branch rule. Carries fields for both
+ *  rule kinds; the editor reads only the subset matching the parent rule's
+ *  rule_kind. Pool-split branches use source_*; cross-charge branches use
+ *  provider_company_id + optional basis/pct/credit overrides. */
 interface BranchConfig {
   label?: string | null;
-  source_type: SourceType;
+  // pool_split fields
+  source_type?: SourceType;
   source_company_id?: number | null;
   source_ledger_name?: string | null;
   source_pl_section_key?: string | null;
   source_custom_amount?: number | null;
+  // cross_charge fields
+  provider_company_id?: number | null;
+  charge_basis_section_key?: string | null;
+  charge_pct?: number | null;
+  provider_credit_section_key?: string | null;
+  // common
   destinations: RuleDestination[];
 }
 
@@ -158,7 +166,7 @@ function emptyRule(): Rule {
   };
 }
 
-/** Empty branch_config shell — used when "Add another branch" is clicked. */
+/** Empty branch_config shell for pool_split rules. */
 function emptyBranchConfig(): BranchConfig {
   return {
     label: '',
@@ -167,6 +175,18 @@ function emptyBranchConfig(): BranchConfig {
     source_ledger_name: '',
     source_pl_section_key: 'indirectExpenses',
     source_custom_amount: 0,
+    destinations: [],
+  };
+}
+
+/** Empty branch_config shell for cross_charge rules. */
+function emptyCrossChargeBranch(): BranchConfig {
+  return {
+    label: '',
+    provider_company_id: null,
+    charge_basis_section_key: null,  // inherit from rule
+    charge_pct: null,                 // inherit from rule
+    provider_credit_section_key: null,// inherit from rule
     destinations: [],
   };
 }
@@ -609,38 +629,49 @@ function RuleEditorModal(props: {
             </div>
           </div>
 
-          {/* Multi-branch mode toggle (pool_split only). Lets one rule cover
-              every branch — e.g. one "Rent Adjustment" rule that splits rent
-              at each location by that location's sqft ratio. */}
-          {r.rule_kind === 'pool_split' && (
-            <div className="border-t border-dark-400/30 pt-4">
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={isMultiBranch}
-                  onChange={e => {
-                    if (e.target.checked) {
-                      // Switching on: seed the array with one branch built
-                      // from whatever rule-level source the user already filled in
-                      // (no data lost), so the editor starts populated.
-                      const seed: BranchConfig = {
-                        label: '',
-                        source_type: r.source_type || 'ledger',
-                        source_company_id: r.source_company_id,
-                        source_ledger_name: r.source_ledger_name,
-                        source_pl_section_key: r.source_pl_section_key,
-                        source_custom_amount: r.source_custom_amount,
-                        destinations: r.destinations,
-                      };
-                      set('branch_configs', [seed]);
-                    } else {
-                      // Switching off: collapse the first branch back into
-                      // rule-level fields so the single-source form stays usable.
-                      const first = r.branch_configs?.[0];
-                      if (first) {
+          {/* Multi-branch mode toggle — supported for both rule kinds. Lets
+              one rule cover every region: e.g. one "Rent Adjustment" rule
+              with a branch per location, or one "Diagnostics" rule with a
+              branch per regional lab provider. */}
+          <div className="border-t border-dark-400/30 pt-4">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={isMultiBranch}
+                onChange={e => {
+                  if (e.target.checked) {
+                    // Switching on: seed the array with one branch built
+                    // from whatever rule-level fields the user already filled in
+                    // (no data lost), so the editor starts populated.
+                    const seed: BranchConfig = r.rule_kind === 'pool_split'
+                      ? {
+                          label: '',
+                          source_type: r.source_type || 'ledger',
+                          source_company_id: r.source_company_id,
+                          source_ledger_name: r.source_ledger_name,
+                          source_pl_section_key: r.source_pl_section_key,
+                          source_custom_amount: r.source_custom_amount,
+                          destinations: r.destinations,
+                        }
+                      : {
+                          label: '',
+                          provider_company_id: r.provider_company_id,
+                          // Per-branch overrides start null = inherit from rule envelope.
+                          charge_basis_section_key: null,
+                          charge_pct: null,
+                          provider_credit_section_key: null,
+                          destinations: r.destinations,
+                        };
+                    set('branch_configs', [seed]);
+                  } else {
+                    // Switching off: collapse the first branch back into
+                    // rule-level fields so the single form stays usable.
+                    const first = r.branch_configs?.[0];
+                    if (first) {
+                      if (r.rule_kind === 'pool_split') {
                         setR(prev => ({
                           ...prev,
-                          source_type: first.source_type,
+                          source_type: first.source_type ?? 'ledger',
                           source_company_id: first.source_company_id ?? null,
                           source_ledger_name: first.source_ledger_name ?? null,
                           source_pl_section_key: first.source_pl_section_key ?? null,
@@ -649,22 +680,36 @@ function RuleEditorModal(props: {
                           branch_configs: null,
                         }));
                       } else {
-                        set('branch_configs', null);
+                        setR(prev => ({
+                          ...prev,
+                          provider_company_id: first.provider_company_id ?? null,
+                          charge_basis_section_key: first.charge_basis_section_key ?? prev.charge_basis_section_key,
+                          charge_pct: first.charge_pct ?? prev.charge_pct,
+                          provider_credit_section_key: first.provider_credit_section_key ?? prev.provider_credit_section_key,
+                          destinations: first.destinations,
+                          branch_configs: null,
+                        }));
                       }
+                    } else {
+                      set('branch_configs', null);
                     }
-                  }}
-                  className="mt-0.5 w-4 h-4 accent-accent-500"
-                />
-                <div>
-                  <div className="text-sm font-medium text-theme-primary">Multi-branch mode</div>
-                  <div className="text-[11px] text-theme-faint">
-                    One rule covers every branch. Add a separate (source → destinations) group per location —
-                    e.g. one "Rent Adjustment" rule that splits rent at each branch by its own sqft ratio.
-                  </div>
+                  }
+                }}
+                className="mt-0.5 w-4 h-4 accent-accent-500"
+              />
+              <div>
+                <div className="text-sm font-medium text-theme-primary">Multi-branch mode</div>
+                <div className="text-[11px] text-theme-faint">
+                  One rule covers every region.
+                  {r.rule_kind === 'pool_split' ? (
+                    <> Add a separate (source → destinations) group per location — e.g. one "Rent Adjustment" rule that splits rent at each branch by its own sqft ratio.</>
+                  ) : (
+                    <> Add a separate (provider → consumers) group per region — e.g. one "Diagnostics" rule where Jubilee Hills serves Hyderabad pharmacies and BTM serves Bangalore pharmacies.</>
+                  )}
                 </div>
-              </label>
-            </div>
-          )}
+              </div>
+            </label>
+          </div>
 
           {/* Pool-split fields (single-source mode) */}
           {r.rule_kind === 'pool_split' && !isMultiBranch && (
@@ -756,13 +801,17 @@ function RuleEditorModal(props: {
           {/* Multi-branch editor: per-branch (source → destinations) groups.
               Each branch is a self-contained pool-split run sharing
               alloc_method + target section with the rule envelope below. */}
-          {r.rule_kind === 'pool_split' && isMultiBranch && (
+          {isMultiBranch && (
             <MultiBranchEditor
+              ruleKind={r.rule_kind}
               configs={r.branch_configs as BranchConfig[]}
               onChange={configs => set('branch_configs', configs)}
               companies={companies}
               sectionTree={sectionTree}
               allocMethod={r.alloc_method}
+              ruleDefaultBasisKey={r.charge_basis_section_key}
+              ruleDefaultChargePct={r.charge_pct}
+              ruleDefaultCreditKey={r.provider_credit_section_key}
             />
           )}
 
@@ -804,27 +853,40 @@ function RuleEditorModal(props: {
             </>
           )}
 
-          {/* Cross-charge fields */}
+          {/* Cross-charge fields. Three layouts:
+                - single-provider (default): all four fields shown
+                - multi-branch: provider is per-branch (hidden here, shown in
+                  each branch card). Basis/pct/credit are rule-level
+                  DEFAULTS that each branch can override. */}
           {r.rule_kind === 'cross_charge' && (
             <div className="border-t border-dark-400/30 pt-4">
-              <h4 className="text-sm font-semibold text-theme-muted mb-3">Cross-charge</h4>
+              <h4 className="text-sm font-semibold text-theme-muted mb-3">
+                {isMultiBranch ? 'Cross-charge defaults' : 'Cross-charge'}
+              </h4>
               <p className="text-xs text-theme-faint mb-3">
-                Each consumer below is charged a percentage of <em>its own</em> metric.
-                The sum is credited back to the provider — typically reducing a cost the
-                provider already booked centrally (e.g. lab consumables).
+                {isMultiBranch ? (
+                  <>These values are inherited by every branch unless the branch
+                  overrides them. Provider company is per-branch (set inside each branch card below).</>
+                ) : (
+                  <>Each consumer below is charged a percentage of <em>its own</em> metric.
+                  The sum is credited back to the provider — typically reducing a cost the
+                  provider already booked centrally (e.g. lab consumables).</>
+                )}
               </p>
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs text-theme-muted mb-1.5">Provider company</label>
-                  <select
-                    value={r.provider_company_id || ''}
-                    onChange={e => set('provider_company_id', e.target.value ? parseInt(e.target.value) : null)}
-                    className="w-full bg-dark-700 border border-dark-400/40 rounded-lg px-3 py-2 text-sm"
-                  >
-                    <option value="">— choose provider —</option>
-                    {companies.map(c => <option key={c.id} value={c.id}>{companyLabel(c)}</option>)}
-                  </select>
-                </div>
+                {!isMultiBranch && (
+                  <div>
+                    <label className="block text-xs text-theme-muted mb-1.5">Provider company</label>
+                    <select
+                      value={r.provider_company_id || ''}
+                      onChange={e => set('provider_company_id', e.target.value ? parseInt(e.target.value) : null)}
+                      className="w-full bg-dark-700 border border-dark-400/40 rounded-lg px-3 py-2 text-sm"
+                    >
+                      <option value="">— choose provider —</option>
+                      {companies.map(c => <option key={c.id} value={c.id}>{companyLabel(c)}</option>)}
+                    </select>
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs text-theme-muted mb-1.5">Charge basis (P&amp;L line)</label>
                   <select
@@ -1040,13 +1102,20 @@ function RuleEditorModal(props: {
 // apply to every branch.
 
 function MultiBranchEditor(props: {
+  ruleKind: RuleKind;
   configs: BranchConfig[];
   onChange: (configs: BranchConfig[]) => void;
   companies: Company[];
   sectionTree: SectionNode[];
   allocMethod: AllocMethod | null;
+  // cross_charge: rule-level defaults branches inherit unless they override
+  ruleDefaultBasisKey: string | null;
+  ruleDefaultChargePct: number | null;
+  ruleDefaultCreditKey: string | null;
 }) {
-  const { configs, onChange, companies, sectionTree, allocMethod } = props;
+  const { ruleKind, configs, onChange, companies, sectionTree, allocMethod,
+          ruleDefaultBasisKey, ruleDefaultChargePct, ruleDefaultCreditKey } = props;
+  const isPool = ruleKind === 'pool_split';
 
   // Per-branch ledger lists are loaded on demand keyed by source_company_id.
   // Lookups stay cached across renders so the user doesn't see a flash.
@@ -1093,14 +1162,15 @@ function MultiBranchEditor(props: {
     onChange(configs.filter((_, i) => i !== idx));
   };
   const addBranch = () => {
-    onChange([...configs, emptyBranchConfig()]);
+    onChange([...configs, isPool ? emptyBranchConfig() : emptyCrossChargeBranch()]);
   };
 
-  // Auto-suggest a label from the source company when the user picks one
-  // and the label is still blank, to keep the cards skim-able.
+  // Auto-suggest a label from the relevant company (source for pool_split,
+  // provider for cross_charge) when blank.
   const suggestLabel = (bc: BranchConfig): string => {
     if (bc.label?.trim()) return bc.label.trim();
-    const co = companies.find(c => c.id === bc.source_company_id);
+    const cid = isPool ? bc.source_company_id : bc.provider_company_id;
+    const co = companies.find(c => c.id === cid);
     return co?.location || co?.name || '';
   };
 
@@ -1125,13 +1195,12 @@ function MultiBranchEditor(props: {
         {configs.map((bc, i) => {
           const ledgers = bc.source_company_id ? (ledgerCache[bc.source_company_id] || []) : [];
           const weightSum = bc.destinations.reduce((a, d) => a + Number(d.weight || 0), 0);
-          // Source company IS allowed as a destination — that's the standard
-          // rent-split pattern ("60% stays at Clinic, 40% moves to Pharmacy").
-          // The engine drains the full pool from source then adds back the
-          // source's share, so Clinic ends at 60% of original. We only
-          // exclude companies already in this branch's destinations list.
+          // Source company IS allowed as a destination for pool_split — the
+          // standard rent-split pattern. But for cross_charge the provider
+          // can't also be a consumer (engine would skip with a warning).
           const availableDests = companies.filter(c =>
-            !bc.destinations.some(d => d.destination_company_id === c.id)
+            !bc.destinations.some(d => d.destination_company_id === c.id) &&
+            (isPool || c.id !== bc.provider_company_id)
           );
           return (
             <div key={i} className="bg-dark-700/40 border border-dark-400/40 rounded-lg p-3 space-y-3">
@@ -1151,11 +1220,14 @@ function MultiBranchEditor(props: {
                 </button>
               </div>
 
+              {/* Pool-split per-branch fields */}
+              {isPool && (
+              <>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] text-theme-muted mb-1">Source type</label>
                   <select
-                    value={bc.source_type}
+                    value={bc.source_type || 'ledger'}
                     onChange={e => update(i, { source_type: e.target.value as SourceType })}
                     className="w-full bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-xs"
                   >
@@ -1220,22 +1292,87 @@ function MultiBranchEditor(props: {
                   />
                 </div>
               )}
+              </>
+              )}
 
-              {/* Destinations for this branch */}
+              {/* Cross-charge per-branch fields. Provider is REQUIRED.
+                  Basis/pct/credit are optional per-branch overrides — leaving
+                  them blank inherits from the rule envelope. */}
+              {!isPool && (
+              <>
+              <div>
+                <label className="block text-[11px] text-theme-muted mb-1">Provider company *</label>
+                <select
+                  value={bc.provider_company_id || ''}
+                  onChange={e => update(i, { provider_company_id: e.target.value ? parseInt(e.target.value) : null })}
+                  className="w-full bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-xs"
+                >
+                  <option value="">— choose provider —</option>
+                  {companies.map(c => <option key={c.id} value={c.id}>{companyLabel(c)}</option>)}
+                </select>
+              </div>
+              <details className="text-[11px]">
+                <summary className="cursor-pointer text-theme-faint hover:text-theme-secondary">
+                  Override defaults for this branch (basis / charge % / credit)
+                </summary>
+                <div className="mt-2 grid grid-cols-2 gap-2 pl-2 border-l border-dark-400/30">
+                  <div>
+                    <label className="block text-[11px] text-theme-muted mb-1">Charge basis</label>
+                    <select
+                      value={bc.charge_basis_section_key || ''}
+                      onChange={e => update(i, { charge_basis_section_key: e.target.value || null })}
+                      className="w-full bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-[11px] font-mono"
+                    >
+                      <option value="">— inherit ({ruleDefaultBasisKey || 'revenue'}) —</option>
+                      {sectionOptions(sectionTree)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-theme-muted mb-1">Charge %</label>
+                    <input
+                      type="number"
+                      value={bc.charge_pct ?? ''}
+                      onChange={e => update(i, { charge_pct: e.target.value === '' ? null : parseFloat(e.target.value) })}
+                      placeholder={`inherit (${ruleDefaultChargePct ?? '?'})`}
+                      className="w-full bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-[11px]"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="block text-[11px] text-theme-muted mb-1">Provider credit lands at</label>
+                    <select
+                      value={bc.provider_credit_section_key || ''}
+                      onChange={e => update(i, { provider_credit_section_key: e.target.value || null })}
+                      className="w-full bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-[11px] font-mono"
+                    >
+                      <option value="">— inherit ({ruleDefaultCreditKey || 'directCosts'}) —</option>
+                      {sectionOptions(sectionTree)}
+                    </select>
+                  </div>
+                </div>
+              </details>
+              </>
+              )}
+
+              {/* Destinations (pool_split) or Consumers (cross_charge) for this branch */}
               <div>
                 <div className="text-[11px] text-theme-muted mb-1.5 flex items-center justify-between">
                   <span>
-                    Destinations
-                    {allocMethod === 'weighted_ratio' && <span className="text-theme-faint ml-1">— enter sqft per company</span>}
-                    {allocMethod === 'fixed_pct' && <span className="text-theme-faint ml-1">— enter % per company (must sum to 100)</span>}
-                    {allocMethod === 'manual_amounts' && <span className="text-theme-faint ml-1">— enter ₹ per company</span>}
+                    {isPool ? 'Destinations' : 'Consumers'}
+                    {isPool && allocMethod === 'weighted_ratio' && <span className="text-theme-faint ml-1">— enter sqft per company</span>}
+                    {isPool && allocMethod === 'fixed_pct' && <span className="text-theme-faint ml-1">— enter % per company (must sum to 100)</span>}
+                    {isPool && allocMethod === 'manual_amounts' && <span className="text-theme-faint ml-1">— enter ₹ per company</span>}
+                    {!isPool && <span className="text-theme-faint ml-1">— charged % of each consumer's own metric</span>}
                   </span>
                   <span className="text-theme-faint">({bc.destinations.length})</span>
                 </div>
                 {bc.destinations.length === 0 ? (
                   <p className="text-[11px] text-theme-faint italic mb-1.5">
-                    Pick companies from the dropdown below. Each company gets its own
-                    {allocMethod === 'weighted_ratio' ? ' sqft' : allocMethod === 'fixed_pct' ? ' %' : allocMethod === 'manual_amounts' ? ' ₹' : ''} input once added.
+                    {isPool ? (
+                      <>Pick companies from the dropdown below. Each company gets its own
+                      {allocMethod === 'weighted_ratio' ? ' sqft' : allocMethod === 'fixed_pct' ? ' %' : allocMethod === 'manual_amounts' ? ' ₹' : ''} input once added.</>
+                    ) : (
+                      <>Pick the consumer companies that will be charged by this provider.</>
+                    )}
                   </p>
                 ) : (
                   <div className="space-y-1.5">
@@ -1247,7 +1384,7 @@ function MultiBranchEditor(props: {
                           <div className="flex-1 px-2 py-1.5 bg-dark-700 rounded border border-dark-400/40 truncate">
                             {co ? companyLabel(co) : `Company #${d.destination_company_id}`}
                           </div>
-                          {allocMethod !== 'equal_split' && allocMethod !== 'revenue_share' && (
+                          {isPool && allocMethod !== 'equal_split' && allocMethod !== 'revenue_share' && (
                             <>
                               <input
                                 type="number"
@@ -1268,12 +1405,12 @@ function MultiBranchEditor(props: {
                         </div>
                       );
                     })}
-                    {allocMethod === 'fixed_pct' && (
+                    {isPool && allocMethod === 'fixed_pct' && (
                       <div className="text-[10px] text-theme-faint pl-2">
                         Sum: <strong className={Math.abs(weightSum - 100) > 0.01 ? 'text-red-400' : 'text-emerald-400'}>{weightSum.toFixed(2)}%</strong>
                       </div>
                     )}
-                    {allocMethod === 'weighted_ratio' && weightSum > 0 && (
+                    {isPool && allocMethod === 'weighted_ratio' && weightSum > 0 && (
                       <div className="text-[10px] text-theme-faint pl-2">
                         Total: <strong className="text-theme-secondary">{weightSum.toFixed(0)} sqft</strong>
                         <span className="ml-2">→ engine normalises to percentages on apply.</span>
@@ -1287,7 +1424,7 @@ function MultiBranchEditor(props: {
                     onChange={e => { if (e.target.value) addDest(i, parseInt(e.target.value)); }}
                     className="mt-1.5 bg-dark-700 border border-dark-400/40 rounded px-2 py-1 text-[11px]"
                   >
-                    <option value="">+ Add destination</option>
+                    <option value="">+ Add {isPool ? 'destination' : 'consumer'}</option>
                     {availableDests.map(c => <option key={c.id} value={c.id}>{companyLabel(c)}</option>)}
                   </select>
                 )}

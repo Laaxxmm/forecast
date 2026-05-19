@@ -93,14 +93,28 @@ export interface AllocationRuleRow {
   branch_configs: string | null;
 }
 
-/** Parsed shape of one entry in `branch_configs`. */
+/** Parsed shape of one entry in `branch_configs`.
+ *
+ *  Carries BOTH pool_split and cross_charge fields — only the subset matching
+ *  the parent rule's `rule_kind` is meaningful. This lets one rule kind use
+ *  multi-branch (e.g. Rent Adjustment with branches for each location) and
+ *  another rule kind use multi-branch independently (e.g. central diagnostics
+ *  with branches for each city's lab provider). The engine dispatches on
+ *  rule_kind and reads only the relevant fields. */
 export interface BranchConfig {
   label?: string;
-  source_type: 'ledger' | 'pl_line' | 'custom_amount';
+  // pool_split fields
+  source_type?: 'ledger' | 'pl_line' | 'custom_amount';
   source_company_id?: number | null;
   source_ledger_name?: string | null;
   source_pl_section_key?: string | null;
   source_custom_amount?: number | null;
+  // cross_charge fields
+  provider_company_id?: number | null;
+  charge_basis_section_key?: string | null;
+  charge_pct?: number | null;
+  provider_credit_section_key?: string | null;
+  // common — pool_split destinations OR cross_charge consumers
   destinations: Array<{
     destination_company_id: number;
     weight: number;
@@ -611,7 +625,7 @@ function applyPoolSplit(
       const branchTag = bc.label || `branch ${i + 1}`;
       applyOneSplit(db, rule, {
         contextLabel: `${rule.name} · ${branchTag}`,
-        source_type: bc.source_type,
+        source_type: bc.source_type ?? null,
         source_company_id: bc.source_company_id ?? null,
         source_ledger_name: bc.source_ledger_name ?? null,
         source_pl_section_key: bc.source_pl_section_key ?? null,
@@ -815,70 +829,113 @@ function distributeForConfig(
 
 // ─── Apply: cross_charge ───────────────────────────────────────────────────
 
+/** Inputs needed to run a single cross-charge allocation. Shared shape
+ *  between rule-level (single-provider rules) and per-branch_config
+ *  (multi-region rules like "Diagnostics" with one lab provider per city). */
+interface CrossChargeConfig {
+  contextLabel: string;
+  provider_company_id: number | null;
+  charge_basis_section_key: string | null;
+  charge_pct: number | null;
+  provider_credit_section_key: string | null;
+  target_pl_section_key: string | null;
+  consumers: Array<{ destination_company_id: number }>;
+}
+
 function applyCrossCharge(
   rule: LoadedRule,
   adjusted: PLStatement,
   events: AdjustmentEvent[],
   warnings: string[],
 ): void {
-  if (!rule.provider_company_id) {
-    warnings.push(`Rule "${rule.name}": missing provider_company_id; skipped`);
-    return;
-  }
-  if (!rule.charge_basis_section_key) {
-    warnings.push(`Rule "${rule.name}": missing charge_basis_section_key; skipped`);
-    return;
-  }
-  if (rule.charge_pct == null || rule.charge_pct <= 0 || rule.charge_pct > 100) {
-    warnings.push(
-      `Rule "${rule.name}": charge_pct (${rule.charge_pct}) must be in (0, 100]; skipped`,
-    );
+  // Multi-branch mode: each branch_config is a self-contained cross-charge
+  // (its own provider, consumers, and optional overrides of basis/pct/credit
+  // section). Used when one rule covers multiple regional providers — e.g.
+  // "Diagnostics" with Jubilee Hills serving Hyderabad, BTM serving BLR.
+  if (rule.parsedBranchConfigs && rule.parsedBranchConfigs.length > 0) {
+    for (const [i, bc] of rule.parsedBranchConfigs.entries()) {
+      const branchTag = bc.label || `branch ${i + 1}`;
+      applyOneCrossCharge(rule, {
+        contextLabel: `${rule.name} · ${branchTag}`,
+        // Each branch CAN override the rule-level defaults; otherwise fall back.
+        provider_company_id: bc.provider_company_id ?? rule.provider_company_id,
+        charge_basis_section_key: bc.charge_basis_section_key ?? rule.charge_basis_section_key,
+        charge_pct: bc.charge_pct ?? rule.charge_pct,
+        provider_credit_section_key: bc.provider_credit_section_key ?? rule.provider_credit_section_key,
+        target_pl_section_key: rule.target_pl_section_key,
+        consumers: bc.destinations.map(d => ({ destination_company_id: d.destination_company_id })),
+      }, adjusted, events, warnings);
+    }
     return;
   }
 
-  const basisSection = findSection(adjusted.sections, rule.charge_basis_section_key);
+  // Single-provider mode: use rule-level fields + destinations table.
+  applyOneCrossCharge(rule, {
+    contextLabel: rule.name,
+    provider_company_id: rule.provider_company_id,
+    charge_basis_section_key: rule.charge_basis_section_key,
+    charge_pct: rule.charge_pct,
+    provider_credit_section_key: rule.provider_credit_section_key,
+    target_pl_section_key: rule.target_pl_section_key,
+    consumers: rule.destinations.map(d => ({ destination_company_id: d.destination_company_id })),
+  }, adjusted, events, warnings);
+}
+
+/** Core cross-charge runner. Operates on one (provider, consumers) group. */
+function applyOneCrossCharge(
+  rule: LoadedRule,
+  cfg: CrossChargeConfig,
+  adjusted: PLStatement,
+  events: AdjustmentEvent[],
+  warnings: string[],
+): void {
+  if (!cfg.provider_company_id) {
+    warnings.push(`${cfg.contextLabel}: missing provider_company_id; skipped`);
+    return;
+  }
+  if (!cfg.charge_basis_section_key) {
+    warnings.push(`${cfg.contextLabel}: missing charge_basis_section_key; skipped`);
+    return;
+  }
+  if (cfg.charge_pct == null || cfg.charge_pct <= 0 || cfg.charge_pct > 100) {
+    warnings.push(`${cfg.contextLabel}: charge_pct (${cfg.charge_pct}) must be in (0, 100]; skipped`);
+    return;
+  }
+
+  const basisSection = findSection(adjusted.sections, cfg.charge_basis_section_key);
   if (!basisSection) {
-    warnings.push(
-      `Rule "${rule.name}": basis section '${rule.charge_basis_section_key}' not found; skipped`,
-    );
+    warnings.push(`${cfg.contextLabel}: basis section '${cfg.charge_basis_section_key}' not found; skipped`);
     return;
   }
 
-  const targetSectionKey = rule.target_pl_section_key || 'directCosts';
-  const providerCreditSectionKey =
-    rule.provider_credit_section_key || 'directCosts';
-  const providerCol = colFor(rule.provider_company_id);
-  const pctFrac = rule.charge_pct / 100;
+  const targetSectionKey = cfg.target_pl_section_key || 'directCosts';
+  const providerCreditSectionKey = cfg.provider_credit_section_key || 'directCosts';
+  const providerCol = colFor(cfg.provider_company_id);
+  const pctFrac = cfg.charge_pct / 100;
 
   let totalCharged = 0;
 
-  for (const d of rule.destinations) {
-    if (d.destination_company_id === rule.provider_company_id) {
-      warnings.push(
-        `Rule "${rule.name}": provider appears in destinations list; skipped that row`,
-      );
+  for (const d of cfg.consumers) {
+    if (d.destination_company_id === cfg.provider_company_id) {
+      warnings.push(`${cfg.contextLabel}: provider appears in consumers list; skipped that row`);
       continue;
     }
     const consumerCol = colFor(d.destination_company_id);
     const basis = basisSection.values[consumerCol] || 0;
     if (basis <= 0) {
-      warnings.push(
-        `Rule "${rule.name}": consumer ${consumerCol} has zero/negative basis on '${rule.charge_basis_section_key}'; skipped`,
-      );
+      warnings.push(`${cfg.contextLabel}: consumer ${consumerCol} has zero/negative basis on '${cfg.charge_basis_section_key}'; skipped`);
       continue;
     }
     const amount = basis * pctFrac;
     const ok = applyDeltaToCell(adjusted, targetSectionKey, consumerCol, amount);
     if (!ok) {
-      warnings.push(
-        `Rule "${rule.name}": consumer ${consumerCol} target cell not found; skipped`,
-      );
+      warnings.push(`${cfg.contextLabel}: consumer ${consumerCol} target cell not found; skipped`);
       continue;
     }
     totalCharged += amount;
     events.push({
       ruleId: rule.id,
-      ruleName: rule.name,
+      ruleName: cfg.contextLabel,
       ruleKind: 'cross_charge',
       sourceCol: '',
       sourceLabel: '',
@@ -886,27 +943,18 @@ function applyCrossCharge(
       destinationLabel: labelFor(adjusted, consumerCol),
       targetSectionKey,
       amount,
-      basisNote: `${rule.charge_pct.toFixed(1)}% of ${basisSection.label} (₹${basis.toFixed(2)})`,
+      basisNote: `${cfg.charge_pct.toFixed(1)}% of ${basisSection.label} (₹${basis.toFixed(2)})`,
     });
   }
 
   if (totalCharged > 0) {
-    // Credit the provider (decrease its booked cost). For an expense
-    // section a negative delta is what we want.
-    const ok = applyDeltaToCell(
-      adjusted,
-      providerCreditSectionKey,
-      providerCol,
-      -totalCharged,
-    );
+    const ok = applyDeltaToCell(adjusted, providerCreditSectionKey, providerCol, -totalCharged);
     if (!ok) {
-      warnings.push(
-        `Rule "${rule.name}": provider credit cell (${providerCreditSectionKey} @ ${providerCol}) not found`,
-      );
+      warnings.push(`${cfg.contextLabel}: provider credit cell (${providerCreditSectionKey} @ ${providerCol}) not found`);
     }
     events.push({
       ruleId: rule.id,
-      ruleName: rule.name,
+      ruleName: cfg.contextLabel,
       ruleKind: 'cross_charge',
       sourceCol: '',
       sourceLabel: '',
@@ -914,7 +962,7 @@ function applyCrossCharge(
       destinationLabel: `${labelFor(adjusted, providerCol)} (provider credit)`,
       targetSectionKey: providerCreditSectionKey,
       amount: -totalCharged,
-      basisNote: `sum of ${rule.destinations.length} consumer charges`,
+      basisNote: `sum of ${cfg.consumers.length} consumer charges`,
     });
   }
 }
