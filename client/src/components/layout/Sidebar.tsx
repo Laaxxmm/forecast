@@ -3,7 +3,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, TrendingUp, Upload, Settings, LogOut, BarChart3, Building2, ArrowLeftRight,
   MapPin, ChevronDown, Sun, Moon, ArrowRight, Activity, PieChart,
-  Pin, PinOff, X, Table, CalendarCheck, ClipboardList, GitCompare,
+  Pin, PinOff, X, Table, CalendarCheck, ClipboardList, GitCompare, Calculator,
 } from 'lucide-react';
 import api from '../../api/client';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -24,9 +24,13 @@ const forecastLinks = [
 //   matchPrefix keeps it highlighted across sub-routes; matchExclude prevents
 //   the prefix from bleeding into sibling routes like /vcfo/compliances.
 const vcfoLinks = [
-  { to: '/vcfo', icon: Table, label: 'Table View', clientAdminOnly: false, requiresModule: '', matchPrefix: '/vcfo', matchExclude: ['/vcfo/compliances', '/vcfo/accounting-tasks'] },
+  { to: '/vcfo', icon: Table, label: 'Table View', clientAdminOnly: false, requiresModule: '', matchPrefix: '/vcfo', matchExclude: ['/vcfo/compliances', '/vcfo/accounting-tasks', '/vcfo/cost-allocation'] },
   { to: '/vcfo/compliances', icon: CalendarCheck, label: 'Compliances', clientAdminOnly: false, requiresModule: '' },
   { to: '/vcfo/accounting-tasks', icon: ClipboardList, label: 'Accounting Tracker', clientAdminOnly: false, requiresModule: '' },
+  // Cost-allocation rules — drive the management P&L view below the books
+  // table on /vcfo/profit-loss. Admin-only because rules change reported
+  // numbers (route gate matches ClientAdminRoute in App.tsx).
+  { to: '/vcfo/cost-allocation', icon: Calculator, label: 'Cost Allocation', clientAdminOnly: true, requiresModule: '' },
 ];
 
 // Utility links — bottom section above logout
