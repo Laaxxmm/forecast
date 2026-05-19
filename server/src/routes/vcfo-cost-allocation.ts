@@ -239,9 +239,9 @@ function validateRulePayload(p: RuleInput): void {
     if (!['fixed_pct', 'equal_split', 'revenue_share', 'weighted_ratio', 'manual_amounts'].includes(p.alloc_method)) {
       throw new Error("alloc_method must be 'fixed_pct' | 'equal_split' | 'revenue_share' | 'weighted_ratio' | 'manual_amounts'");
     }
-    if (p.source_company_id && destIds.has(p.source_company_id)) {
-      throw new Error('source company cannot also be a destination');
-    }
+    // Source company IS allowed as a destination — standard rent-split
+    // case where source keeps its share. Engine handles it by draining
+    // the full pool then adding back the source's allocated portion.
     if (p.alloc_method === 'fixed_pct') {
       const sum = p.destinations.reduce((a, d) => a + Number(d.weight || 0), 0);
       if (Math.abs(sum - 100) > 0.01) {

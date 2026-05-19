@@ -654,10 +654,25 @@ function applyOneSplit(
   for (const d of distribution) {
     const destCol = colFor(d.destinationCompanyId);
     if (sourceCol && destCol === sourceCol) {
-      warnings.push(`${cfg.contextLabel}: destination ${destCol} equals source; net adjustment for that company is zero`);
-      // We already subtracted the full amount from source; add back the
-      // would-have-been-allocated portion so the net effect is zero.
+      // Source IS one of the destinations — the standard rent-split case
+      // ("60% stays at Clinic, 40% moves to Pharmacy"). The full pool was
+      // already drained from source above; here we add back the source's
+      // allocated share so the net effect for source = -(pool) + (share),
+      // i.e. source LOSES the portion that moved to other destinations.
+      // No warning — this is the intended path, not an error.
       applyDeltaToCell(adjusted, targetSectionKey, destCol, d.amount);
+      events.push({
+        ruleId: rule.id,
+        ruleName: cfg.contextLabel,
+        ruleKind: 'pool_split',
+        sourceCol: sourceCol,
+        sourceLabel: labelFor(adjusted, sourceCol),
+        destinationCol: destCol,
+        destinationLabel: `${labelFor(adjusted, destCol)} (kept share)`,
+        targetSectionKey,
+        amount: d.amount,
+        basisNote: d.basisNote ? `${d.basisNote} (stays at source)` : 'stays at source',
+      });
       continue;
     }
     const ok = applyDeltaToCell(adjusted, targetSectionKey, destCol, d.amount);

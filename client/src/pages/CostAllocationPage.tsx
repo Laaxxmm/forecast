@@ -441,9 +441,8 @@ function RuleEditorModal(props: {
         if (!r.source_company_id) return 'Source company is required for P&L line source';
         if (!r.source_pl_section_key) return 'Source P&L section is required';
       }
-      if (r.source_company_id && r.destinations.some(d => d.destination_company_id === r.source_company_id)) {
-        return 'Source company cannot also be a destination';
-      }
+      // Note: source company IS allowed as a destination — that's the
+      // standard rent-split case (source company keeps its share).
       if (r.alloc_method === 'fixed_pct') {
         const sum = r.destinations.reduce((a, d) => a + Number(d.weight || 0), 0);
         if (Math.abs(sum - 100) > 0.01) return `Fixed % destinations must sum to 100 (currently ${sum.toFixed(2)})`;
@@ -514,9 +513,11 @@ function RuleEditorModal(props: {
     }
   };
 
+  // Single-source mode: source company is allowed as a destination (standard
+  // rent-split where the source keeps its share). Cross-charge provider is
+  // NOT allowed — provider is the credit recipient, can't also be a consumer.
   const availableDests = companies.filter(c =>
     !r.destinations.some(d => d.destination_company_id === c.id) &&
-    c.id !== r.source_company_id &&
     c.id !== r.provider_company_id
   );
 
@@ -1124,9 +1125,13 @@ function MultiBranchEditor(props: {
         {configs.map((bc, i) => {
           const ledgers = bc.source_company_id ? (ledgerCache[bc.source_company_id] || []) : [];
           const weightSum = bc.destinations.reduce((a, d) => a + Number(d.weight || 0), 0);
+          // Source company IS allowed as a destination — that's the standard
+          // rent-split pattern ("60% stays at Clinic, 40% moves to Pharmacy").
+          // The engine drains the full pool from source then adds back the
+          // source's share, so Clinic ends at 60% of original. We only
+          // exclude companies already in this branch's destinations list.
           const availableDests = companies.filter(c =>
-            !bc.destinations.some(d => d.destination_company_id === c.id) &&
-            c.id !== bc.source_company_id
+            !bc.destinations.some(d => d.destination_company_id === c.id)
           );
           return (
             <div key={i} className="bg-dark-700/40 border border-dark-400/40 rounded-lg p-3 space-y-3">
