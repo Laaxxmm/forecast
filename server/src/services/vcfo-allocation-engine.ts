@@ -253,6 +253,30 @@ function findSection(
   return null;
 }
 
+/**
+ * Variant of findSection that returns the FULL ancestor chain from the root
+ * of `sections` down to the target. Used by applyDeltaToCell to propagate a
+ * cell mutation up through every parent so aggregates stay coherent.
+ *
+ * Without this, a drain from a child section (e.g. 'indirectExpenses:Rental
+ * Expenses') wouldn't update the parent 'indirectExpenses' row, leaving the
+ * Net Profit recompute reading a stale parent value and surfacing a wrong
+ * delta in the adjusted view.
+ */
+function findSectionPath(
+  sections: PLSection[],
+  key: string,
+): PLSection[] | null {
+  for (const s of sections) {
+    if (s.key === key) return [s];
+    if (s.children) {
+      const sub = findSectionPath(s.children, key);
+      if (sub) return [s, ...sub];
+    }
+  }
+  return null;
+}
+
 /** Column key for a company in the bifurcated view. */
 function colFor(companyId: number): string {
   return `co:${companyId}`;
@@ -461,20 +485,28 @@ function applyDeltaToCell(
   col: string,
   delta: number,
 ): boolean {
-  const section = findSection(statement.sections, sectionKey);
-  if (!section) return false;
-  if (!(col in section.values)) {
+  // Use findSectionPath (not findSection) so the delta propagates to every
+  // ancestor section, not just the target. This matters for nested-source
+  // rules like "drain indirectExpenses:Rental Expenses": without ancestor
+  // propagation the parent indirectExpenses keeps its pre-drain value, and
+  // the Net Profit recompute reads a stale total — manifesting as an
+  // all-negative NP-delta card with no offsetting source drain.
+  const path = findSectionPath(statement.sections, sectionKey);
+  if (!path || path.length === 0) return false;
+  const target = path[path.length - 1];
+  if (!(col in target.values)) {
     // Column may legitimately not exist if the destination company isn't in
     // the report (e.g. a rule references a company outside the user's
     // accessible set). Caller decides whether to warn.
     return false;
   }
-  section.values[col] = (section.values[col] || 0) + delta;
-  // Always update the 'total' column too so aggregates stay coherent.
-  if (col !== 'total' && 'total' in section.values) {
-    section.values.total = (section.values.total || 0) + delta;
+  for (const section of path) {
+    section.values[col] = (section.values[col] || 0) + delta;
+    if (col !== 'total' && 'total' in section.values) {
+      section.values.total = (section.values.total || 0) + delta;
+    }
+    section.grandTotal = section.grandTotal + delta;
   }
-  section.grandTotal = section.grandTotal + delta;
   return true;
 }
 
@@ -649,6 +681,22 @@ function applyOneSplit(
     if (!ok) {
       warnings.push(`${cfg.contextLabel}: could not locate source cell (${sourceSectionKey} @ ${sourceCol})`);
     }
+    // Emit an explicit "source drained" event with the negative pool amount.
+    // The UI sums events per (ruleId, destinationCol) to derive the net
+    // adjustment per company; without this event the source-side decrement
+    // would be invisible to that calculation.
+    events.push({
+      ruleId: rule.id,
+      ruleName: cfg.contextLabel,
+      ruleKind: 'pool_split',
+      sourceCol: '',
+      sourceLabel: '',
+      destinationCol: sourceCol,
+      destinationLabel: `${labelFor(adjusted, sourceCol)} (pool drained)`,
+      targetSectionKey: sourceSectionKey,
+      amount: -sourceAmount,
+      basisNote: 'full pool subtracted from source',
+    });
   }
 
   for (const d of distribution) {

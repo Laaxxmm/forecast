@@ -599,7 +599,14 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
         true,
       )}
       {data.adjustments && data.adjustments.events.length > 0 && (
-        <AdjustmentsBlockCard adjustments={data.adjustments} columnLabels={data.columnLabels} />
+        <AdjustmentsBlockCard
+          adjustments={data.adjustments}
+          columnLabels={data.columnLabels}
+          groupResult={groupResult}
+          displayCols={displayCols}
+          labelFor={labelFor}
+          showTrailingTotal={showTrailingTotal}
+        />
       )}
       {data.adjustments && data.adjustments.events.length > 0 && (
         <DeltaVsBooksCard
@@ -637,23 +644,81 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
 }
 
 // ─── Adjustments Block card ──────────────────────────────────────────────
-// Lists each adjustment event grouped by rule. Rule name bold, destinations
-// indented underneath. Warnings show as amber callouts at the bottom.
+// Columnar table in the same shape as the P&L above (Particulars sticky +
+// location-grouped company columns + Total). One row per rule, with each
+// cell showing the NET adjustment delta at that company column.
+//
+// The "NET delta" is computed by summing all events for that (ruleId, col).
+// The engine emits a "(pool drained)" event with -pool at the source so
+// summing yields the true net impact (source loses pool, source gets back
+// its kept share if it's also a destination, other destinations get their
+// allocated share — sum at source = -(pool) + (kept share), sum at other
+// dest = +(allocated share)).
+//
+// Sign convention: cells show the EXPENSE-side delta (matches the P&L
+// table's expense rows). Positive = more expense at that company,
+// negative = less expense at that company.
 
 function AdjustmentsBlockCard(props: {
   adjustments: AdjustmentsBlock;
   columnLabels: Record<string, string> | undefined;
+  groupResult: LocationGroupResult | null;
+  displayCols: string[];
+  labelFor: (col: string) => string;
+  showTrailingTotal: boolean;
 }) {
-  const { adjustments, columnLabels } = props;
-  const labelOf = (col: string) => columnLabels?.[col] || col;
+  const { adjustments, groupResult, displayCols, labelFor, showTrailingTotal } = props;
+  const events = adjustments.events;
 
-  // Group events by ruleId so each rule renders as one block.
-  const byRule = new Map<number, AdjustmentEvent[]>();
-  for (const ev of adjustments.events) {
-    if (!byRule.has(ev.ruleId)) byRule.set(ev.ruleId, []);
-    byRule.get(ev.ruleId)!.push(ev);
+  // Build per-rule per-column NET deltas by summing events.
+  interface RuleSummary {
+    ruleId: number;
+    ruleName: string;
+    ruleKind: 'pool_split' | 'cross_charge';
+    perCol: Record<string, number>;
   }
-  const ruleIds = [...byRule.keys()];
+  const ruleSummaries: RuleSummary[] = [];
+  const byRule = new Map<number, RuleSummary>();
+  for (const ev of events) {
+    // For multi-branch rules the engine prefixes the rule name with the
+    // branch label (e.g. "Rent · BTM"). We want one ROW per rule (not per
+    // branch), so peel that prefix off and aggregate.
+    const dotIdx = ev.ruleName.indexOf(' · ');
+    const ruleHeadline = dotIdx > 0 ? ev.ruleName.slice(0, dotIdx) : ev.ruleName;
+    if (!byRule.has(ev.ruleId)) {
+      const summary: RuleSummary = {
+        ruleId: ev.ruleId,
+        ruleName: ruleHeadline,
+        ruleKind: ev.ruleKind,
+        perCol: {},
+      };
+      byRule.set(ev.ruleId, summary);
+      ruleSummaries.push(summary);
+    }
+    const s = byRule.get(ev.ruleId)!;
+    s.perCol[ev.destinationCol] = (s.perCol[ev.destinationCol] || 0) + ev.amount;
+  }
+
+  // Compute the column-wise totals across all rules (renders as a footer row).
+  const totalsPerCol: Record<string, number> = {};
+  for (const s of ruleSummaries) {
+    for (const [col, val] of Object.entries(s.perCol)) {
+      totalsPerCol[col] = (totalsPerCol[col] || 0) + val;
+    }
+  }
+
+  // Em-dash for zero cells (matches the P&L table convention).
+  const fmtAdj = (v: number | undefined): string => {
+    const n = Math.round(v || 0);
+    if (n === 0) return '—';
+    const sign = n < 0 ? '−' : '+';
+    return `${sign}${formatRs(Math.abs(n))}`;
+  };
+  const toneClass = (v: number | undefined): string => {
+    const n = v || 0;
+    if (n === 0) return 'text-theme-faint';
+    return n < 0 ? 'text-emerald-300' : 'text-rose-300';
+  };
 
   return (
     <div className="bg-dark-800 border border-amber-500/25 rounded-2xl shadow-elev-2 overflow-hidden">
@@ -664,45 +729,131 @@ function AdjustmentsBlockCard(props: {
             Adjustments
           </h3>
           <div className="text-[11px] text-theme-faint mt-0.5">
-            Reallocations applied to derive the true-cost view below — books table above is unchanged.
+            {ruleSummaries.length} {ruleSummaries.length === 1 ? 'rule' : 'rules'} applied · cell = expense delta at that company (negative = expense reduced, positive = expense added)
           </div>
         </div>
         <Link to="/vcfo/cost-allocation" className="inline-flex items-center gap-1 text-accent-400 hover:text-accent-300 text-xs shrink-0">
           Manage rules <ArrowRight size={12} />
         </Link>
       </div>
-      <div className="px-5 py-4 space-y-4">
-        {ruleIds.map(rid => {
-          const events = byRule.get(rid)!;
-          const first = events[0];
-          return (
-            <div key={rid}>
-              <div className="text-sm font-semibold text-theme-primary mb-1.5 flex items-center gap-2">
-                {first.ruleName}
-                <span className={`px-1.5 py-0.5 rounded text-[10px] ${first.ruleKind === 'pool_split' ? 'bg-blue-500/15 text-blue-300' : 'bg-purple-500/15 text-purple-300'}`}>
-                  {first.ruleKind === 'pool_split' ? 'Pool split' : 'Cross-charge'}
-                </span>
-              </div>
-              <ul className="space-y-1 text-xs text-theme-muted pl-3 border-l border-dark-400/30">
-                {events.map((ev, i) => (
-                  <li key={i} className="flex items-center gap-2">
-                    <span className="text-theme-faint">
-                      {ev.sourceLabel ? `${labelOf(ev.sourceCol) || ev.sourceLabel} ` : ''}
-                    </span>
-                    {ev.sourceLabel && <ArrowRight size={11} className="text-theme-faint" />}
-                    <span className="text-theme-primary font-medium">{labelOf(ev.destinationCol) || ev.destinationLabel}</span>
-                    <span className={`font-mono ${ev.amount < 0 ? 'text-emerald-400' : 'text-rose-300'}`}>
-                      {ev.amount < 0 ? '−' : '+'}{formatRs(Math.abs(ev.amount))}
-                    </span>
-                    {ev.basisNote && <span className="text-theme-faint italic">· {ev.basisNote}</span>}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          );
-        })}
 
-        {adjustments.warnings.length > 0 && (
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-sm" style={{ minWidth: 1000 }}>
+          <thead className="bg-dark-700">
+            {groupResult ? (
+              <>
+                {/* Same two-row location-grouped header as the P&L. */}
+                <tr className="text-xs font-semibold text-theme-muted uppercase tracking-wide">
+                  <th
+                    rowSpan={2}
+                    className="text-left px-4 py-2.5 border-b border-dark-400/30 sticky left-0 bg-dark-700 z-10"
+                  >
+                    Rule
+                  </th>
+                  {groupResult.groups.map(g => (
+                    <th
+                      key={g.location}
+                      colSpan={g.cells.length}
+                      className="px-2 py-2 text-center border-b border-dark-400/30"
+                      style={{
+                        background: LOCATION_PALETTE[g.paletteIndex],
+                        color: '#1f2937',
+                        borderRight: '0.5px solid rgba(148, 163, 184, 0.25)',
+                        fontSize: 11,
+                      }}
+                    >
+                      {g.location}
+                    </th>
+                  ))}
+                  {groupResult.unparsedCols.map(c => (
+                    <th key={c} rowSpan={2} className="text-right px-4 py-2.5 border-b border-dark-400/30 whitespace-nowrap">
+                      {labelFor(c)}
+                    </th>
+                  ))}
+                  {groupResult.totalCol && (
+                    <th rowSpan={2} className="text-right px-4 py-2.5 border-b border-dark-400/30">
+                      Total
+                    </th>
+                  )}
+                </tr>
+                <tr className="text-[10px] font-normal text-theme-secondary uppercase tracking-wide">
+                  {groupResult.groups.flatMap(g =>
+                    g.cells.map((cell, i) => (
+                      <th
+                        key={cell.col}
+                        className="text-right px-3 py-1.5 border-b border-dark-400/30"
+                        style={{
+                          background: LOCATION_PALETTE[g.paletteIndex],
+                          color: '#374151',
+                          borderRight: i === g.cells.length - 1 ? '0.5px solid rgba(148, 163, 184, 0.25)' : undefined,
+                        }}
+                      >
+                        {cell.entityType}
+                      </th>
+                    ))
+                  )}
+                </tr>
+              </>
+            ) : (
+              <tr className="text-xs font-semibold text-theme-muted uppercase tracking-wide">
+                <th className="text-left px-4 py-2.5 border-b border-dark-400/30 sticky left-0 bg-dark-700 z-10">Rule</th>
+                {displayCols.map(c => (
+                  <th key={c} className="text-right px-4 py-2.5 border-b border-dark-400/30 whitespace-nowrap">
+                    {labelFor(c)}
+                  </th>
+                ))}
+                {showTrailingTotal && (
+                  <th className="text-right px-4 py-2.5 border-b border-dark-400/30">Total</th>
+                )}
+              </tr>
+            )}
+          </thead>
+          <tbody>
+            {ruleSummaries.map(s => (
+              <tr key={s.ruleId} className="border-b border-dark-400/20 hover:bg-dark-600/20">
+                <td className="py-2 sticky left-0 bg-dark-800 font-medium text-[13px] text-theme-primary" style={{ paddingLeft: 16, paddingRight: 16 }}>
+                  <span className="inline-flex items-center gap-1.5">
+                    {s.ruleName}
+                    <span className={`px-1.5 py-0.5 rounded text-[9px] ${s.ruleKind === 'pool_split' ? 'bg-blue-500/15 text-blue-300' : 'bg-purple-500/15 text-purple-300'}`}>
+                      {s.ruleKind === 'pool_split' ? 'Pool split' : 'Cross-charge'}
+                    </span>
+                  </span>
+                </td>
+                {displayCols.map(c => (
+                  <td
+                    key={c}
+                    className={`px-4 py-2 text-right font-mono text-[13px] ${toneClass(s.perCol[c])}`}
+                    style={separatorBetweenLocationGroups(groupResult, c)}
+                  >
+                    {fmtAdj(s.perCol[c])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+          {ruleSummaries.length > 1 && (
+            <tfoot>
+              <tr className="bg-dark-700/50 border-t-2 border-amber-500/30">
+                <td className="px-4 py-2.5 font-semibold text-amber-300 sticky left-0 bg-dark-700/50 text-[13px]">
+                  Net adjustments
+                </td>
+                {displayCols.map(c => (
+                  <td
+                    key={c}
+                    className={`px-4 py-2.5 text-right font-mono font-semibold text-[13px] ${toneClass(totalsPerCol[c])}`}
+                    style={separatorBetweenLocationGroups(groupResult, c)}
+                  >
+                    {fmtAdj(totalsPerCol[c])}
+                  </td>
+                ))}
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
+
+      {adjustments.warnings.length > 0 && (
+        <div className="px-5 py-4 border-t border-dark-400/30">
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 text-amber-300 text-xs space-y-1">
             <div className="flex items-center gap-1.5 font-semibold">
               <AlertTriangle size={12} /> Engine warnings
@@ -711,10 +862,22 @@ function AdjustmentsBlockCard(props: {
               {adjustments.warnings.map((w, i) => <li key={i}>{w}</li>)}
             </ul>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
+}
+
+/** Inline separator-after-column style used by the Adjustments table.
+ *  Mirrors the P&L's `separatorAfterCol` Set lookup but takes the groupResult
+ *  directly so the Adjustments table doesn't need to be re-given the Set. */
+function separatorBetweenLocationGroups(groupResult: LocationGroupResult | null, col: string): React.CSSProperties | undefined {
+  if (!groupResult) return undefined;
+  for (const g of groupResult.groups) {
+    const last = g.cells[g.cells.length - 1];
+    if (last && last.col === col) return { borderRight: '0.5px solid rgba(148, 163, 184, 0.25)' };
+  }
+  return undefined;
 }
 
 // ─── Delta vs Books card ─────────────────────────────────────────────────
