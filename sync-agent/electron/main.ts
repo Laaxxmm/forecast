@@ -87,20 +87,6 @@ function defaultSyncFromDate(): string {
   return `${year}-04-01`;
 }
 
-/** Earlier of two YYYY-MM-DD strings (lexicographic compare works for ISO). */
-function minDate(a: string, b: string): string {
-  return a < b ? a : b;
-}
-
-/** First day of the month that is 12 calendar months before `dateIso`. */
-function twelveMonthsBack(dateIso: string): string {
-  const d = new Date(dateIso + 'T00:00:00Z');
-  const back = new Date(Date.UTC(d.getUTCFullYear() - 1, d.getUTCMonth(), 1));
-  const y = back.getUTCFullYear();
-  const m = String(back.getUTCMonth() + 1).padStart(2, '0');
-  return `${y}-${m}-01`;
-}
-
 // Enumerate every Indian FY start (April 1) that falls inside [fromDate, toDate].
 // Dynamic TB needs a per-FY opening snapshot so reports spanning multiple FYs
 // can anchor to the correct opening.
@@ -897,25 +883,18 @@ async function runSync(): Promise<SyncResult> {
           });
         }
 
-        // Stock summary — chunked into calendar months by the extractor.
+        // Stock summary — chunked into Indian FY quarters by the extractor.
         // Window: ALWAYS syncFromDate→today (not the voucher cursor). Stock
         // is a cumulative, point-in-time metric — asking Tally for just the
         // last day's delta would produce single-row "period = today/today"
         // entries that the dashboard's `MAX(period_to)` query would pick as
         // the entire stock picture.
         //
-        // First-boot monthly backfill: when the extractor switched from
-        // quarterly to monthly chunks, existing tenants had only quarterly
-        // snapshots in `vcfo_stock_summary` — too coarse for monthly P&L
-        // columns. On the first sync after upgrade we widen the window to
-        // 12 months back so monthly snapshots fill in retroactively, then
-        // stamp `monthlyStockBackfillCompletedAt` so subsequent syncs use
-        // the normal syncFromDate.
-        const normalStockFrom = config.syncFromDate || defaultSyncFromDate();
-        const needsMonthlyBackfill = !config.monthlyStockBackfillCompletedAt;
-        const stockFrom = needsMonthlyBackfill
-          ? minDate(normalStockFrom, twelveMonthsBack(toDate))
-          : normalStockFrom;
+        // For tenants that track inventory externally (no Tally StockItems),
+        // this step pulls effectively nothing and the P&L reads stock value
+        // from the TB Stock-in-hand ledger instead — see
+        // `getStockAdjustment` in vcfo-report-builder.ts.
+        const stockFrom = config.syncFromDate || defaultSyncFromDate();
         await runStep('stockSummary', companyName, client, steps, counts, async () => {
           const rows = await extractStockSummary(conn, companyName, stockFrom, toDate);
           if (rows.length === 0) return { sent: 0, accepted: 0 };
@@ -1001,20 +980,6 @@ async function runSync(): Promise<SyncResult> {
           };
           saveConfig(config);
         }
-      }
-    }
-
-    // Stamp the monthly-stock backfill flag once at least one company
-    // returned a successful stockSummary step in this run. The flag gates the
-    // 12-months-back window override on subsequent syncs so we only widen
-    // the window once. Failures don't block the stamp — partial coverage is
-    // acceptable, and operators can force-resync the rest individually.
-    if (!config.monthlyStockBackfillCompletedAt) {
-      const anyStockOk = steps.some((s) => s.kind === 'stockSummary' && s.ok);
-      if (anyStockOk) {
-        config = { ...config, monthlyStockBackfillCompletedAt: new Date().toISOString() };
-        saveConfig(config);
-        logger.info('sync.monthlyStockBackfill.completed', { at: config.monthlyStockBackfillCompletedAt });
       }
     }
 

@@ -495,18 +495,21 @@ function iso(d: Date): string {
 
 /**
  * Extract stock-summary rows for [fromDate, toDate], fanned out across
- * calendar-month windows. Items that don't move in a given month still get
+ * quarterly windows. Items that don't move in a given quarter still get
  * a row (with opening==closing, in/out==0) so the server can track item
  * masters over time.
  *
- * Monthly granularity is required for the P&L's COGS line: opening stock
- * for an April column is the stock value as of 31 March, closing as of
- * 30 April — quarterly snapshots can't answer that.
- *
- * Per-month errors are swallowed and recorded to console — one bad
- * month shouldn't abort the whole multi-month pull. This is
+ * Per-quarter errors are swallowed and recorded to console — one bad
+ * quarter shouldn't abort the whole multi-quarter pull. This is
  * deliberate: a fresh company might have no StockItem records at all,
  * and rowsFromReport throws on a truly empty response body.
+ *
+ * Note: this table is populated for any tenant that uses Tally's
+ * inventory module. Tenants who track stock externally and book a
+ * monthly Closing Stock journal entry don't use this — their P&L
+ * reads the TB Stock-in-hand ledger directly. We still keep this
+ * extractor running so a future tenant who does use Tally inventory
+ * has the data immediately available.
  */
 export async function extractStockSummary(
   conn: TallyConnector,
@@ -515,7 +518,7 @@ export async function extractStockSummary(
   toDate: string,
 ): Promise<StockSummaryRow[]> {
   if (!companyName) throw new Error('companyName required for extractStockSummary');
-  const chunks = monthChunksForStock(fromDate, toDate);
+  const chunks = quarterChunks(fromDate, toDate);
   const out: StockSummaryRow[] = [];
   for (const { periodFrom, periodTo, queryFrom, queryTo } of chunks) {
     let rows: any[] = [];
@@ -523,11 +526,11 @@ export async function extractStockSummary(
       const raw = await conn.sendXML(tdlStockSummary(companyName, queryFrom, queryTo));
       rows = rowsFromReport(raw);
     } catch (err: any) {
-      // Log and continue to the next month. A 0-item or
-      // 0-response month is not a reason to fail the whole extract.
+      // Log and continue to the next quarter. A 0-item or
+      // 0-response quarter is not a reason to fail the whole extract.
       // eslint-disable-next-line no-console
       console.warn(
-        `[tally] stockSummary month ${periodFrom}..${periodTo} (query ${queryFrom}..${queryTo}) failed: ${err?.message || err}`,
+        `[tally] stockSummary quarter ${periodFrom}..${periodTo} (query ${queryFrom}..${queryTo}) failed: ${err?.message || err}`,
       );
       continue;
     }
@@ -535,7 +538,7 @@ export async function extractStockSummary(
       const itemName = cleanString(r.F01);
       if (!itemName) continue;
       out.push({
-        // Store canonical month boundaries (stable DB key across re-syncs),
+        // Store canonical quarter boundaries (stable DB key across re-syncs),
         // not the clipped query window.
         periodFrom,
         periodTo,
@@ -553,43 +556,6 @@ export async function extractStockSummary(
     }
   }
   return out;
-}
-
-/**
- * Calendar-month chunks for the stock-summary extractor. Differs from the
- * generic `monthChunks` by also emitting a clipped query window so we don't
- * ask Tally for data past `toDate` — Tally's opening/closing evaluate against
- * SVFROMDATE/SVTODATE, so for an in-progress month the closing reflects
- * "as-of today" while the canonical period_to label still anchors to month
- * end. Repeated syncs of the same in-progress month collapse via REPLACE on
- * UNIQUE(company_id, period_from, period_to, item_name).
- */
-function monthChunksForStock(
-  fromDate: string,
-  toDate: string,
-): { periodFrom: string; periodTo: string; queryFrom: string; queryTo: string }[] {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) throw new Error('fromDate must be YYYY-MM-DD');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(toDate)) throw new Error('toDate must be YYYY-MM-DD');
-  if (fromDate > toDate) throw new Error(`fromDate ${fromDate} is after toDate ${toDate}`);
-
-  const chunks: { periodFrom: string; periodTo: string; queryFrom: string; queryTo: string }[] = [];
-  const start = new Date(fromDate + 'T00:00:00Z');
-  const end = new Date(toDate + 'T00:00:00Z');
-  let cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
-  // Safety valve — at most 240 months (20 years).
-  for (let i = 0; i < 240 && cursor <= end; i++) {
-    const monthStart = cursor;
-    const monthEnd = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0));
-    const queryEnd = monthEnd > end ? end : monthEnd;
-    chunks.push({
-      periodFrom: iso(monthStart),
-      periodTo: iso(monthEnd),
-      queryFrom: iso(monthStart),
-      queryTo: iso(queryEnd),
-    });
-    cursor = new Date(Date.UTC(monthEnd.getUTCFullYear(), monthEnd.getUTCMonth(), monthEnd.getUTCDate() + 1));
-  }
-  return chunks;
 }
 
 // ── Trial balance ───────────────────────────────────────────────────────────

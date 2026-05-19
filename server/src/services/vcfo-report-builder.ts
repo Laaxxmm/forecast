@@ -384,23 +384,32 @@ function getLedgerMovements(
 }
 
 /**
- * Opening + closing stock value for a period, sourced from
- * `vcfo_stock_summary` — monthly snapshots of Tally's StockItem inventory
- * masters. For each item we pick the latest snapshot whose `period_to` is on
- * or before the boundary date and sum `closing_value` across items.
+ * Opening + closing stock value for a period, sourced from the
+ * `Stock-in-hand` group in `vcfo_trial_balance`. Tenants whose inventory
+ * is tracked externally (Excel/separate system) book the month-end
+ * closing stock as a manual journal entry — that entry shows up in this
+ * ledger group, which is what Tally's own P&L screen also reads. The
+ * value updates monthly because the entry is re-booked each month.
  *
- *   opening = ∑ closing_value of latest snapshot with period_to ≤ (from − 1 day)
- *   closing = ∑ closing_value of latest snapshot with period_to ≤ to
+ *   opening = stock value at end of (from − 1 day)  ← cumulative TB balance
+ *   closing = stock value at end of `to`            ← cumulative TB balance
+ *   adjustment = closing − opening
  *
- * `adjustment = closing − opening`. Inventory build-up (closing > opening)
- * adds back to GP because purchases lumped into Direct Costs include stock
- * not yet consumed — Tally's P&L applies the same convention.
+ * Inventory build-up (closing > opening) adds back to GP because the
+ * purchases lumped into Direct Costs include stock not yet consumed —
+ * matches Tally's trading-account convention exactly.
  *
- * Why not the TB Stock-in-Hand ledger anymore: that ledger reflects manually
- * booked Closing Stock journal entries (typically only at year-end) and was
- * stale for monthly P&L columns. Inventory masters are the same source
- * Tally's own P&L renders from, and the sync agent now emits monthly
- * snapshots that mirror them.
+ * History: an earlier revision read from `vcfo_stock_summary` (Tally's
+ * StockItem inventory masters), but the design clients we ship to don't
+ * maintain Tally inventory — stock is external-only, with a monthly
+ * journal entry. The stock-item rollup produced unrelated numbers
+ * (different valuation, phantom items). The TB ledger is the source of
+ * truth for these clients, and is what Tally's P&L itself displays.
+ *
+ * Group-name casing: Tally exports the primary group as `Stock-in-hand`
+ * (lowercase 'h'). SQLite string compare is case-sensitive — looking up
+ * `'Stock-in-Hand'` returned an empty set across all 15 Magna entities,
+ * silently zeroing this whole function. Keep the lowercase 'h' here.
  */
 function getStockAdjustment(
   db: DbHelper,
@@ -408,72 +417,23 @@ function getStockAdjustment(
   from: string,
   to: string,
 ): { opening: number; closing: number; adjustment: number } {
-  // Opening uses strict `<` (period_to before the period starts) — equivalent
-  // to "as of day-before-from" but avoids local-timezone date arithmetic
-  // (`new Date('2026-01-01T00:00:00')` parses as IST and a setDate(-1) lands
-  // in the previous UTC day, off by one). String comparison on canonical
-  // YYYY-MM-DD is timezone-safe.
-  const opening = sumLatestStockClosingBefore(db, companyId, from);
-  const closing = sumLatestStockClosingAsOf(db, companyId, to);
+  const stockGroups = new Set(getGroupTree(db, companyId, 'Stock-in-hand'));
+  if (stockGroups.size === 0) return { opening: 0, closing: 0, adjustment: 0 };
+
+  const sumStockClosing = (balances: LedgerBalance[]): number => {
+    // Assets are debit-side (closing < 0 in credit-positive convention);
+    // flip sign so stock values display as positive.
+    let total = 0;
+    for (const b of balances) {
+      if (b.groupName && stockGroups.has(b.groupName)) total += -b.closing;
+    }
+    return total;
+  };
+
+  const opening = sumStockClosing(getBalancesBefore(db, companyId, from));
+  const closing = sumStockClosing(getBalancesAsOf(db, companyId, to));
+
   return { opening, closing, adjustment: closing - opening };
-}
-
-/**
- * Sum closing_value of the latest stock_summary snapshot per item whose
- * period_to is on or before `asOf`. Handles ragged coverage (an item with
- * a Mar snapshot but no Apr snapshot still contributes its Mar closing to
- * an end-of-April query) and zero-stock companies (returns 0 cleanly).
- *
- * Pass-through on negative closing_value is deliberate: a few Tally-side
- * data-quality issues (negative inventory from un-tracked-batch sales)
- * surface as negative COGS adjustments; clamping would hide them. The UI
- * is expected to flag negative entries visually rather than silently zero
- * them server-side.
- */
-function sumLatestStockClosingAsOf(
-  db: DbHelper,
-  companyId: number,
-  asOf: string,
-): number {
-  const row = db.get(
-    `SELECT COALESCE(SUM(ss.closing_value), 0) AS total
-       FROM vcfo_stock_summary ss
-       INNER JOIN (
-         SELECT item_name, MAX(period_to) AS max_to
-           FROM vcfo_stock_summary
-          WHERE company_id = ? AND period_to <= ?
-          GROUP BY item_name
-       ) latest
-         ON latest.item_name = ss.item_name
-        AND latest.max_to    = ss.period_to
-      WHERE ss.company_id = ?`,
-    companyId, asOf, companyId,
-  );
-  return Number(row?.total) || 0;
-}
-
-/** Like `sumLatestStockClosingAsOf` but strict `<` — used for opening stock,
- *  which is "the value at end of day before the period starts". */
-function sumLatestStockClosingBefore(
-  db: DbHelper,
-  companyId: number,
-  beforeDate: string,
-): number {
-  const row = db.get(
-    `SELECT COALESCE(SUM(ss.closing_value), 0) AS total
-       FROM vcfo_stock_summary ss
-       INNER JOIN (
-         SELECT item_name, MAX(period_to) AS max_to
-           FROM vcfo_stock_summary
-          WHERE company_id = ? AND period_to < ?
-          GROUP BY item_name
-       ) latest
-         ON latest.item_name = ss.item_name
-        AND latest.max_to    = ss.period_to
-      WHERE ss.company_id = ?`,
-    companyId, beforeDate, companyId,
-  );
-  return Number(row?.total) || 0;
 }
 
 /**
