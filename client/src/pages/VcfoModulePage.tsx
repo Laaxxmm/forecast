@@ -19,7 +19,7 @@
 //   - `bifurcate = true` (only meaningful when scope has >1 companies)
 //     → server emits one column per company + a `total` column
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import api from '../api/client';
 import { LayoutDashboard, FileSpreadsheet, TrendingUp, Scale, Banknote, Columns, Trash2 } from 'lucide-react';
@@ -51,6 +51,74 @@ function detectActiveReportKey(): ReportKey {
   if (path.endsWith('/balance-sheet')) return 'bs';
   if (path.endsWith('/cash-flow')) return 'cf';
   return 'db'; // default landing tab
+}
+
+// ─── URL persistence for the period picker ────────────────────────────────
+// Encoding scheme:
+//   ?period=fy                                  full year (of the active FY)
+//   ?period=q1   ?period=q2 ... ?period=q4      one of the four FY quarters
+//   ?period=mtd                                 this calendar month → today
+//   ?period=2026-09                             single month (year-month)
+//   ?period=custom&from=YYYY-MM-DD&to=YYYY-MM-DD  arbitrary date range
+//
+// Round-trip stable: serializePeriod(deserializePeriod(...)) == original.
+
+function serializePeriodToUrl(p: PeriodValue): { period: string; from?: string; to?: string } {
+  switch (p.preset) {
+    case 'fy':  return { period: 'fy' };
+    case 'q1': case 'q2': case 'q3': case 'q4': return { period: p.preset };
+    case 'mtd': return { period: 'mtd' };
+    case 'month': {
+      // Encode as YYYY-MM. Year inferred from monthIndex + the from-date the
+      // picker already computed (avoids re-deriving FY logic here).
+      const year = p.from.slice(0, 4);
+      const month = String(p.monthIndex || 1).padStart(2, '0');
+      return { period: `${year}-${month}` };
+    }
+    case 'custom': return { period: 'custom', from: p.from, to: p.to };
+  }
+}
+
+function deserializePeriodFromUrl(
+  searchParams: URLSearchParams,
+  fyStart: string,
+  fyEnd: string,
+): PeriodValue | null {
+  const raw = searchParams.get('period');
+  if (!raw) return null;
+  const fyYear = parseInt(fyStart.slice(0, 4), 10);
+  const today = new Date().toISOString().slice(0, 10);
+  const pad = (n: number) => String(n).padStart(2, '0');
+
+  if (raw === 'fy') return { preset: 'fy', from: fyStart, to: fyEnd };
+  if (raw === 'q1') return { preset: 'q1', from: `${fyYear}-04-01`,     to: `${fyYear}-06-30` };
+  if (raw === 'q2') return { preset: 'q2', from: `${fyYear}-07-01`,     to: `${fyYear}-09-30` };
+  if (raw === 'q3') return { preset: 'q3', from: `${fyYear}-10-01`,     to: `${fyYear}-12-31` };
+  if (raw === 'q4') return { preset: 'q4', from: `${fyYear + 1}-01-01`, to: `${fyYear + 1}-03-31` };
+  if (raw === 'mtd') {
+    const d = new Date();
+    return { preset: 'mtd', from: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-01`, to: today };
+  }
+  if (raw === 'custom') {
+    const from = searchParams.get('from') || fyStart;
+    const to   = searchParams.get('to')   || fyEnd;
+    return { preset: 'custom', from, to };
+  }
+  // YYYY-MM single-month form. Validate before accepting so a typo doesn't
+  // leave the picker in an inconsistent state.
+  const m = raw.match(/^(\d{4})-(\d{2})$/);
+  if (m) {
+    const year = parseInt(m[1], 10);
+    const month = parseInt(m[2], 10);
+    if (month >= 1 && month <= 12) {
+      const lastDay = new Date(year, month, 0).getDate();
+      const start = `${year}-${pad(month)}-01`;
+      const fullEnd = `${year}-${pad(month)}-${pad(lastDay)}`;
+      const end = fullEnd > today ? today : fullEnd;
+      return { preset: 'month', monthIndex: month, from: start, to: end };
+    }
+  }
+  return null;
 }
 
 export default function VcfoModulePage() {
@@ -117,16 +185,47 @@ export default function VcfoModulePage() {
       });
   }, []);
 
-  // Once an FY is picked, seed the period to "FY" preset spanning its range.
+  // Track whether the URL has already been consumed once, so an explicit
+  // ?period= takes precedence over the default-FY seed but only on the very
+  // first FY-load (later FY changes shouldn't keep re-applying a stale URL).
+  const consumedUrlRef = useRef(false);
+
+  // Once an FY is picked, seed the period — preferring (a) an explicit URL
+  // ?period= on first load, then (b) any user-set period inside the new FY,
+  // then (c) the default FY range.
   useEffect(() => {
     if (!selectedFY) return;
     setPeriod(p => {
+      if (!consumedUrlRef.current) {
+        consumedUrlRef.current = true;
+        const params = new URLSearchParams(window.location.search);
+        const fromUrl = deserializePeriodFromUrl(params, selectedFY.start_date, selectedFY.end_date);
+        if (fromUrl) return fromUrl;
+      }
       // Preserve any custom range the user has already set — only seed on first
       // load or when the current period sits outside the new FY.
       if (p && p.preset !== 'fy') return p;
       return { preset: 'fy', from: selectedFY.start_date, to: selectedFY.end_date };
     });
   }, [selectedFY]);
+
+  // Mirror the current period back to ?period= so refresh + back/forward
+  // restore the same selection. Uses replaceState (not pushState) so each
+  // click doesn't pollute browser history with an entry per selection.
+  useEffect(() => {
+    if (!period) return;
+    const encoded = serializePeriodToUrl(period);
+    const params = new URLSearchParams(window.location.search);
+    // Strip any pre-existing period-related params before re-adding.
+    params.delete('period');
+    params.delete('from');
+    params.delete('to');
+    params.set('period', encoded.period);
+    if (encoded.from) params.set('from', encoded.from);
+    if (encoded.to)   params.set('to',   encoded.to);
+    const next = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
+    window.history.replaceState(null, '', next);
+  }, [period]);
 
   // Load companies. The server returns only companies mapped to the active
   // branch/stream context (filtered in `listAccessibleCompanies`). On first
