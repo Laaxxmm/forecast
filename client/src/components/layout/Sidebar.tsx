@@ -599,14 +599,20 @@ export default function Sidebar({ expanded, onExpandedChange, pinned, onPinnedCh
         </div>
       )}
 
-      {/* Stream selector — shows when the branch has 2+ active streams.
-          Tenants with a single stream (e.g. a restaurant onboarded with one
-          catch-all "Restaurant" stream) don't need an All/<name> toggle —
-          both chips would render identical data. The auto-select effect
-          below routes single-stream tenants straight to their stream view
-          so they land on the analytics dashboard instead of the legacy
-          All overview (which still expects clinic + pharma cards). */}
-      {isMultiBranch && !(isSuperAdmin && isOwner) && expanded && getBranchStreams().length > 1 && selectedBranchId !== 'all' && (
+      {/* Stream selector — shows when the tenant has 2+ active streams.
+          Renders for both specific-branch picks AND "All Branches": in the
+          all-branches case `getBranchStreams()` falls back to the
+          client-level stream list in `localStorage.streams` (populated at
+          login), so clicking "Clinic" filters every branch's companies
+          down to the Clinic stream — the consolidated dashboard then
+          shows all clinics combined. Tenants with a single stream
+          (e.g. a restaurant onboarded with one catch-all "Restaurant"
+          stream) don't need an All/<name> toggle — both chips would
+          render identical data. The auto-select effect above routes
+          single-stream tenants straight to their stream view so they
+          land on the analytics dashboard instead of the legacy All
+          overview (which still expects clinic + pharma cards). */}
+      {isMultiBranch && !(isSuperAdmin && isOwner) && expanded && getBranchStreams().length > 1 && (
         <div
           className="px-3 py-2 flex-shrink-0"
           style={{ borderBottom: '1px solid var(--mt-border)' }}
