@@ -25,6 +25,7 @@ import {
   buildBalanceSheetMulti,
   buildCashFlowMulti,
 } from '../services/vcfo-report-builder.js';
+import { applyAllocationRules } from '../services/vcfo-allocation-engine.js';
 import { buildDashboard } from '../services/vcfo-dashboard-builder.js';
 import { listAccessibleCompanies } from '../services/accessible-companies.js';
 import {
@@ -244,7 +245,29 @@ router.get('/profit-loss', async (req, res) => {
     const to = requireDate(req.query.to, 'to');
     const view = validView(req.query.view);
     const bifurcate = validBool(req.query.bifurcate);
+    const withAdjustments = validBool(req.query.withAdjustments);
     const report = buildProfitLossMulti(req.tenantDb!, companies, from, to, view, bifurcate);
+
+    // Opt-in management-P&L layer. Backward-compatible: callers that don't
+    // pass `withAdjustments=1` see the response shape unchanged. When opted
+    // in, the engine returns the base report (unchanged) plus an `adjusted`
+    // PLStatement with allocation rules applied, the per-rule events list,
+    // and any warnings (e.g. a rule whose source resolved to ₹0).
+    if (withAdjustments && bifurcate) {
+      const result = applyAllocationRules(req.tenantDb!, report, {
+        effectiveFrom: from,
+        effectiveTo: to,
+      });
+      return res.json({
+        ...report,
+        adjustments: {
+          events: result.events,
+          warnings: result.warnings,
+          adjusted: result.adjusted,
+        },
+      });
+    }
+
     res.json(report);
   } catch (err: any) {
     console.error('[vcfo-reports] /profit-loss error', err);
@@ -314,7 +337,21 @@ router.get('/download', async (req, res) => {
       const from = requireDate(req.query.from, 'from');
       const to = requireDate(req.query.to, 'to');
       const view = validView(req.query.view);
+      const withAdjustments = validBool(req.query.withAdjustments);
       built = buildProfitLossMulti(req.tenantDb!, companies, from, to, view, bifurcate);
+      // For bifurcated PL exports we mirror the JSON endpoint: attach the
+      // adjustments block so renderers can print the events list + adjusted
+      // P&L below the books table. Renderers ignore it when absent.
+      if (withAdjustments && bifurcate) {
+        const result = applyAllocationRules(req.tenantDb!, built, {
+          effectiveFrom: from, effectiveTo: to,
+        });
+        built.adjustments = {
+          events: result.events,
+          warnings: result.warnings,
+          adjusted: result.adjusted,
+        };
+      }
       dateLabel = `${from}_${to}`;
     } else if (report === 'bs') {
       const asOf = requireDate(req.query.asOf, 'asOf');

@@ -305,6 +305,10 @@ export default function VcfoModulePage() {
       params.set('from', fromDate);
       params.set('to', toDate);
       params.set('view', viewMode);
+      // Include the management-P&L adjustments block in the export when
+      // bifurcated — same opt-in the JSON endpoint uses. Monthly / single-
+      // company views skip it (engine returns no events there).
+      if (bifurcate && canBifurcate) params.set('withAdjustments', '1');
     } else {
       params.set('from', fromDate);
       params.set('to', toDate);

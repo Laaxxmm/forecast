@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ChevronRight, ChevronDown } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { ChevronRight, ChevronDown, Calculator, AlertTriangle, ArrowRight } from 'lucide-react';
 import api from '../../api/client';
 import { formatRs, getMonthLabel } from '../../pages/ForecastModulePage';
 import StatementSearch, { filterSectionTree } from '../common/StatementSearch';
@@ -9,7 +10,28 @@ import {
   buildSeparatorSet,
   fmtCell as fmtCellShared,
   separatorStyle,
+  type LocationGroupResult,
 } from './locationGrouping';
+
+// ─── Adjustment types (mirrored from server vcfo-allocation-engine.ts) ──
+interface AdjustmentEvent {
+  ruleId: number;
+  ruleName: string;
+  ruleKind: 'pool_split' | 'cross_charge';
+  sourceCol: string;
+  sourceLabel: string;
+  destinationCol: string;
+  destinationLabel: string;
+  targetSectionKey: string;
+  amount: number;
+  basisNote?: string;
+}
+
+interface AdjustmentsBlock {
+  events: AdjustmentEvent[];
+  warnings: string[];
+  adjusted: PLStatement;
+}
 
 // ─── Period-name formatting ───────────────────────────────────────────────
 // Replaces the raw-ISO "2026-04-01 → 2027-03-31" in the card header with
@@ -117,6 +139,8 @@ interface PLStatement {
     stockClosing?: number;
     cogs?: number;
   };
+  /** Present when /profit-loss was called with ?withAdjustments=1. */
+  adjustments?: AdjustmentsBlock;
 }
 
 interface Props {
@@ -146,7 +170,13 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
     const params: Record<string, any> = { from, to, view };
     if (companyId) params.companyId = companyId;
     else if (companyIds) params.companyIds = companyIds;
-    if (bifurcate) params.bifurcate = 'true';
+    if (bifurcate) {
+      params.bifurcate = 'true';
+      // Adjustments only kick in for bifurcated views; ask for them at the
+      // same time so the page can render the "true P&L" card below the
+      // books table without a second round-trip.
+      params.withAdjustments = '1';
+    }
     api
       .get('/vcfo/profit-loss', { params })
       .then(res => setData(res.data))
@@ -292,18 +322,33 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
     );
   };
 
-  return (
-    <div className="bg-dark-800 border border-dark-400/30 rounded-2xl shadow-elev-2 overflow-hidden">
+  // Helper to render one card. Used twice: books (the as-booked view) and,
+  // when allocation rules are present, the "true P&L" adjusted view below.
+  // The two cards share the same column layout & search state but pull
+  // their numbers from different statements. The renderer takes a triple
+  // (sections, computed, grandTotals) so the same JSX renders either the
+  // base PL or the post-rule adjusted PL without duplication.
+  const renderCard = (
+    src: { sections: PLSection[]; computed: PLStatement['computed']; grandTotals: PLStatement['grandTotals'] },
+    title: string,
+    subtitle: string | null,
+    showSearch: boolean,
+    highlight: boolean = false,
+  ) => {
+    const filtered = filterSectionTree(src.sections, search);
+    const cardSections = filtered.sections;
+    return (
+    <div className={`bg-dark-800 border ${highlight ? 'border-accent-500/40' : 'border-dark-400/30'} rounded-2xl shadow-elev-2 overflow-hidden`}>
       {/* Card header — two-column layout. Left side identifies the report
           and the scope (company count + grouping); right side names the
           active period and its date range in human-friendly format. */}
       <div className="px-5 py-4 border-b border-dark-400/30 flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h3 className="text-[18px] font-medium text-theme-primary leading-tight">Profit &amp; Loss</h3>
+          <h3 className="text-[18px] font-medium text-theme-primary leading-tight">{title}</h3>
           <div className="text-[11px] text-theme-faint mt-0.5">
-            {bifurcated
+            {subtitle ?? (bifurcated
               ? `Across ${companyCount} ${companyCount === 1 ? 'company' : 'companies'} · grouped by location`
-              : reportView === 'monthly' ? 'Monthly view' : 'Yearly view'}
+              : reportView === 'monthly' ? 'Monthly view' : 'Yearly view')}
           </div>
         </div>
         <div className="text-right shrink-0">
@@ -313,14 +358,16 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
           )}
         </div>
       </div>
+      {showSearch && (
       <div className="px-5 pt-3">
         <StatementSearch
           value={search}
           onChange={setSearch}
           placeholder="Find line item in P&L…"
-          resultLabel={`${sections.length} of ${allSections.length} sections`}
+          resultLabel={`${cardSections.length} of ${src.sections.length} sections`}
         />
       </div>
+      )}
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-sm" style={{ minWidth: 1000 }}>
           <thead className="bg-dark-700">
@@ -405,7 +452,7 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
                 after the indirect P&L items. Only renders for inventory-
                 carrying tenants (hasStock). Negative values pass through
                 unclamped to surface Tally data-quality signals. */}
-            {sections.flatMap(section => {
+            {cardSections.flatMap(section => {
               const sectionNode = renderRow(section, 0);
               if (!(hasStock && section.key === 'directCosts')) return sectionNode;
               return [
@@ -418,7 +465,7 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
                     </span>
                   </td>
                   {displayCols.map(c => {
-                    const v = computed.stockOpening?.[c] ?? 0;
+                    const v = src.computed.stockOpening?.[c] ?? 0;
                     return (
                       <td
                         key={c}
@@ -431,7 +478,7 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
                   })}
                   {showTrailingTotal && (
                     <td className="px-4 py-2 text-right font-mono font-normal text-[13px] text-rose-300">
-                      {fmtCell(data.grandTotals.stockOpening)}
+                      {fmtCell(src.grandTotals.stockOpening)}
                     </td>
                   )}
                 </tr>,
@@ -443,7 +490,7 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
                     </span>
                   </td>
                   {displayCols.map(c => {
-                    const v = computed.stockClosing?.[c] ?? 0;
+                    const v = src.computed.stockClosing?.[c] ?? 0;
                     return (
                       <td
                         key={c}
@@ -456,7 +503,7 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
                   })}
                   {showTrailingTotal && (
                     <td className="px-4 py-2 text-right font-mono font-normal text-[13px] text-emerald-300">
-                      {fmtCell(data.grandTotals.stockClosing)}
+                      {fmtCell(src.grandTotals.stockClosing)}
                     </td>
                   )}
                 </tr>,
@@ -468,12 +515,12 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
                       className="px-4 py-2 text-right text-rose-200 font-mono font-semibold"
                       style={separatorAfterCol.has(c) ? { borderRight: '0.5px solid rgba(148, 163, 184, 0.25)' } : undefined}
                     >
-                      {fmtCell(computed.cogs?.[c])}
+                      {fmtCell(src.computed.cogs?.[c])}
                     </td>
                   ))}
                   {showTrailingTotal && (
                     <td className="px-4 py-2 text-right text-rose-200 font-mono font-semibold">
-                      {fmtCell(data.grandTotals.cogs)}
+                      {fmtCell(src.grandTotals.cogs)}
                     </td>
                   )}
                 </tr>,
@@ -489,12 +536,12 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
                   className="px-4 py-2.5 text-right text-accent-300 font-mono font-semibold"
                   style={separatorAfterCol.has(c) ? { borderRight: '0.5px solid rgba(148, 163, 184, 0.25)' } : undefined}
                 >
-                  {fmtCell(computed.grossProfit[c])}
+                  {fmtCell(src.computed.grossProfit[c])}
                 </td>
               ))}
               {showTrailingTotal && (
                 <td className="px-4 py-2.5 text-right text-accent-300 font-mono font-semibold">
-                  {fmtCell(data.grandTotals.grossProfit)}
+                  {fmtCell(src.grandTotals.grossProfit)}
                 </td>
               )}
             </tr>
@@ -508,7 +555,7 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
                   className="px-4 py-1.5 text-right text-theme-faint font-mono text-xs"
                   style={separatorAfterCol.has(c) ? { borderRight: '0.5px solid rgba(148, 163, 184, 0.25)' } : undefined}
                 >
-                  {(computed.grossMargin[c] ?? 0).toFixed(2)}%
+                  {(src.computed.grossMargin[c] ?? 0).toFixed(2)}%
                 </td>
               ))}
               {showTrailingTotal && <td></td>}
@@ -523,17 +570,220 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
                   className="px-4 py-3 text-right text-accent-300 font-mono font-bold"
                   style={separatorAfterCol.has(c) ? { borderRight: '0.5px solid rgba(148, 163, 184, 0.25)' } : undefined}
                 >
-                  {fmtCell(computed.netProfit[c])}
+                  {fmtCell(src.computed.netProfit[c])}
                 </td>
               ))}
               {showTrailingTotal && (
                 <td className="px-4 py-3 text-right text-accent-300 font-mono font-bold">
-                  {fmtCell(data.grandTotals.netProfit)}
+                  {fmtCell(src.grandTotals.netProfit)}
                 </td>
               )}
             </tr>
           </tfoot>
         </table>
+      </div>
+    </div>
+    );
+  };
+
+  // Books table + (optional) Adjustments block + Adjusted "true P&L" table.
+  // The adjustments block + adjusted card only render when the server
+  // returned an `adjustments` payload (i.e. bifurcated view with rules
+  // defined and enabled in this tenant).
+  return (
+    <div className="space-y-6">
+      {renderCard(
+        { sections: data.sections, computed, grandTotals: data.grandTotals },
+        'Profit & Loss',
+        null,
+        true,
+      )}
+      {data.adjustments && data.adjustments.events.length > 0 && (
+        <AdjustmentsBlockCard adjustments={data.adjustments} columnLabels={data.columnLabels} />
+      )}
+      {data.adjustments && data.adjustments.events.length > 0 && (
+        <DeltaVsBooksCard
+          base={{ netProfit: computed.netProfit, columns: data.columns }}
+          adjusted={{ netProfit: data.adjustments.adjusted.computed.netProfit }}
+          columnLabels={data.columnLabels}
+          groupResult={groupResult}
+        />
+      )}
+      {data.adjustments && data.adjustments.events.length > 0 && (
+        renderCard(
+          {
+            sections: data.adjustments.adjusted.sections,
+            computed: data.adjustments.adjusted.computed,
+            grandTotals: data.adjustments.adjusted.grandTotals,
+          },
+          'True P&L (after adjustments)',
+          `${data.adjustments.events.length} adjustment${data.adjustments.events.length === 1 ? '' : 's'} applied · ${companyCount} ${companyCount === 1 ? 'company' : 'companies'}`,
+          false,
+          true,
+        )
+      )}
+      {data.adjustments && data.adjustments.events.length === 0 && (
+        <div className="bg-dark-800 border border-dark-400/30 rounded-2xl px-5 py-4 text-sm text-theme-faint flex items-center justify-between">
+          <span>
+            No cost-allocation adjustments applied to this period. The view above is your true P&amp;L.
+          </span>
+          <Link to="/vcfo/cost-allocation" className="inline-flex items-center gap-1 text-accent-400 hover:text-accent-300 text-xs">
+            <Calculator size={12} /> Manage rules
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Adjustments Block card ──────────────────────────────────────────────
+// Lists each adjustment event grouped by rule. Rule name bold, destinations
+// indented underneath. Warnings show as amber callouts at the bottom.
+
+function AdjustmentsBlockCard(props: {
+  adjustments: AdjustmentsBlock;
+  columnLabels: Record<string, string> | undefined;
+}) {
+  const { adjustments, columnLabels } = props;
+  const labelOf = (col: string) => columnLabels?.[col] || col;
+
+  // Group events by ruleId so each rule renders as one block.
+  const byRule = new Map<number, AdjustmentEvent[]>();
+  for (const ev of adjustments.events) {
+    if (!byRule.has(ev.ruleId)) byRule.set(ev.ruleId, []);
+    byRule.get(ev.ruleId)!.push(ev);
+  }
+  const ruleIds = [...byRule.keys()];
+
+  return (
+    <div className="bg-dark-800 border border-amber-500/25 rounded-2xl shadow-elev-2 overflow-hidden">
+      <div className="px-5 py-4 border-b border-dark-400/30 flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h3 className="text-[18px] font-medium text-theme-primary leading-tight flex items-center gap-2">
+            <Calculator size={16} className="text-amber-400" />
+            Adjustments
+          </h3>
+          <div className="text-[11px] text-theme-faint mt-0.5">
+            Reallocations applied to derive the true-cost view below — books table above is unchanged.
+          </div>
+        </div>
+        <Link to="/vcfo/cost-allocation" className="inline-flex items-center gap-1 text-accent-400 hover:text-accent-300 text-xs shrink-0">
+          Manage rules <ArrowRight size={12} />
+        </Link>
+      </div>
+      <div className="px-5 py-4 space-y-4">
+        {ruleIds.map(rid => {
+          const events = byRule.get(rid)!;
+          const first = events[0];
+          return (
+            <div key={rid}>
+              <div className="text-sm font-semibold text-theme-primary mb-1.5 flex items-center gap-2">
+                {first.ruleName}
+                <span className={`px-1.5 py-0.5 rounded text-[10px] ${first.ruleKind === 'pool_split' ? 'bg-blue-500/15 text-blue-300' : 'bg-purple-500/15 text-purple-300'}`}>
+                  {first.ruleKind === 'pool_split' ? 'Pool split' : 'Cross-charge'}
+                </span>
+              </div>
+              <ul className="space-y-1 text-xs text-theme-muted pl-3 border-l border-dark-400/30">
+                {events.map((ev, i) => (
+                  <li key={i} className="flex items-center gap-2">
+                    <span className="text-theme-faint">
+                      {ev.sourceLabel ? `${labelOf(ev.sourceCol) || ev.sourceLabel} ` : ''}
+                    </span>
+                    {ev.sourceLabel && <ArrowRight size={11} className="text-theme-faint" />}
+                    <span className="text-theme-primary font-medium">{labelOf(ev.destinationCol) || ev.destinationLabel}</span>
+                    <span className={`font-mono ${ev.amount < 0 ? 'text-emerald-400' : 'text-rose-300'}`}>
+                      {ev.amount < 0 ? '−' : '+'}{formatRs(Math.abs(ev.amount))}
+                    </span>
+                    {ev.basisNote && <span className="text-theme-faint italic">· {ev.basisNote}</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })}
+
+        {adjustments.warnings.length > 0 && (
+          <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 text-amber-300 text-xs space-y-1">
+            <div className="flex items-center gap-1.5 font-semibold">
+              <AlertTriangle size={12} /> Engine warnings
+            </div>
+            <ul className="list-disc pl-4 space-y-0.5">
+              {adjustments.warnings.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Delta vs Books card ─────────────────────────────────────────────────
+// Compact card showing per-column Net Profit movement (adjusted − books).
+// Positive deltas in emerald (gained money), negative in rose (gave money up).
+// Companies are ordered to mirror the location-grouped table layout so the
+// eye can scan the same column the user just looked at above.
+
+function DeltaVsBooksCard(props: {
+  base: { netProfit: Record<string, number>; columns: string[] };
+  adjusted: { netProfit: Record<string, number> };
+  columnLabels: Record<string, string> | undefined;
+  groupResult: LocationGroupResult | null;
+}) {
+  const { base, adjusted, columnLabels, groupResult } = props;
+
+  // Skip the 'total' column — it's zero-sum across cost-allocation rules.
+  // We surface per-company deltas only.
+  const ordered = (groupResult ? groupResult.displayOrder : base.columns).filter(c => c !== 'total');
+
+  const labelOf = (col: string) => columnLabels?.[col] || col;
+  const deltas = ordered.map(col => ({
+    col,
+    delta: (adjusted.netProfit[col] || 0) - (base.netProfit[col] || 0),
+    baseNP: base.netProfit[col] || 0,
+    adjustedNP: adjusted.netProfit[col] || 0,
+  }));
+
+  const maxAbsDelta = Math.max(1, ...deltas.map(d => Math.abs(d.delta)));
+  const movers = deltas.filter(d => Math.abs(d.delta) > 1).length;
+
+  return (
+    <div className="bg-dark-800 border border-dark-400/30 rounded-2xl shadow-elev-2 overflow-hidden">
+      <div className="px-5 py-4 border-b border-dark-400/30">
+        <h3 className="text-[18px] font-medium text-theme-primary leading-tight">Net Profit Delta (vs books)</h3>
+        <div className="text-[11px] text-theme-faint mt-0.5">
+          {movers} {movers === 1 ? 'company' : 'companies'} shifted by allocation rules · positive = gained, negative = absorbed
+        </div>
+      </div>
+      <div className="px-5 py-4">
+        <div className="space-y-1.5">
+          {deltas.map(d => {
+            const pct = (Math.abs(d.delta) / maxAbsDelta) * 100;
+            const isPositive = d.delta > 0;
+            const isZero = Math.abs(d.delta) <= 1;
+            return (
+              <div key={d.col} className="grid grid-cols-[1fr_auto_120px_auto] gap-2 items-center text-xs">
+                <span className="text-theme-muted truncate">{labelOf(d.col)}</span>
+                <span className={`font-mono ${isZero ? 'text-theme-faint' : isPositive ? 'text-emerald-300' : 'text-rose-300'}`}>
+                  {isZero ? '—' : `${isPositive ? '+' : '−'}${formatRs(Math.abs(d.delta))}`}
+                </span>
+                <div className="relative h-1.5 bg-dark-700 rounded-full">
+                  <div
+                    className={`absolute top-0 h-full rounded-full ${isPositive ? 'bg-emerald-400/60' : 'bg-rose-400/60'}`}
+                    style={{
+                      width: `${pct / 2}%`,
+                      // Centre the bar at 50%; positive grows right, negative grows left.
+                      left: isPositive ? '50%' : `${50 - pct / 2}%`,
+                    }}
+                  />
+                  <div className="absolute top-0 h-full w-px bg-dark-400/60" style={{ left: '50%' }} />
+                </div>
+                <span className="text-theme-faint font-mono text-right" style={{ minWidth: 60 }}>
+                  → {formatRs(d.adjustedNP)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

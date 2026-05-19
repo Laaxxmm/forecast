@@ -122,6 +122,15 @@ export interface PLStatement {
     stockClosing: number;
     cogs: number;
   };
+  /** Present when callers opt into the management-P&L adjustments layer.
+   *  Carries the per-rule event list, warnings, and the post-rule adjusted
+   *  PLStatement so downstream renderers (HTTP response, XLSX/PDF/DOCX
+   *  exporters) can surface the true-cost view alongside the books. */
+  adjustments?: {
+    events: any[];
+    warnings: string[];
+    adjusted: PLStatement;
+  };
 }
 
 export interface BSSection {
@@ -364,7 +373,7 @@ function groupTBRows(rows: TrialBalanceRow[]): TrialBalanceGroup[] {
  * Movement is credit-positive (credit - debit). Derived from the voucher-level
  * dynamic TB so the result is day-accurate regardless of FY-start alignment.
  */
-function getLedgerMovements(
+export function getLedgerMovements(
   db: DbHelper,
   companyId: number,
   from: string,

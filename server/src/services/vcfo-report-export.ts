@@ -243,6 +243,95 @@ function writePLSheet(ws: ExcelJS.Worksheet, report: PLStatement) {
     ws.getColumn(c).width = 16;
     ws.getColumn(c).numFmt = '#,##0.00;(#,##0.00)';
   }
+
+  // ── Adjustments block + Adjusted P&L ─────────────────────────────────
+  // Rendered only when the caller opted into ?withAdjustments=1 and the
+  // engine actually produced events. Empty events = no rules applied =
+  // skip the whole block to keep simple-tenant exports clean.
+  if (report.adjustments && report.adjustments.events.length > 0) {
+    writePLAdjustments(ws, report);
+  }
+}
+
+function writePLAdjustments(ws: ExcelJS.Worksheet, report: PLStatement) {
+  if (!report.adjustments) return;
+  const { events, warnings, adjusted } = report.adjustments;
+  const cols = report.columns;
+
+  ws.addRow([]);
+  ws.addRow([]);
+  const heading = ws.addRow(['ADJUSTMENTS — true management P&L below']);
+  heading.font = { bold: true, size: 12 };
+  ws.addRow([]);
+
+  // Group events by ruleId so each rule is its own sub-block.
+  const byRule = new Map<number, typeof events>();
+  for (const ev of events) {
+    const arr = byRule.get(ev.ruleId) || [];
+    arr.push(ev);
+    byRule.set(ev.ruleId, arr);
+  }
+  for (const arr of byRule.values()) {
+    const first = arr[0];
+    const ruleHeader = ws.addRow([
+      `${first.ruleName} (${first.ruleKind === 'pool_split' ? 'Pool split' : 'Cross-charge'})`,
+    ]);
+    ruleHeader.font = { bold: true };
+    for (const ev of arr) {
+      const sourceLabel = ev.sourceLabel
+        ? (report.columnLabels?.[ev.sourceCol] || ev.sourceLabel) + ' → '
+        : '';
+      const destLabel = report.columnLabels?.[ev.destinationCol] || ev.destinationLabel;
+      const sign = ev.amount < 0 ? -1 : 1;
+      const r = ws.addRow([
+        `    ${sourceLabel}${destLabel}${ev.basisNote ? ` (${ev.basisNote})` : ''}`,
+        ev.amount,
+      ]);
+      r.getCell(2).numFmt = '#,##0.00;(#,##0.00)';
+      r.getCell(2).font = { color: { argb: sign < 0 ? 'FF047857' : 'FFB91C1C' } };
+    }
+  }
+
+  if (warnings.length > 0) {
+    ws.addRow([]);
+    const wh = ws.addRow(['WARNINGS']);
+    wh.font = { bold: true, color: { argb: 'FFB45309' } };
+    for (const w of warnings) {
+      const wr = ws.addRow([`    ${w}`]);
+      wr.font = { color: { argb: 'FFB45309' } };
+    }
+  }
+
+  ws.addRow([]);
+  ws.addRow([]);
+  const trueHeading = ws.addRow(['TRUE P&L (after adjustments)']);
+  trueHeading.font = { bold: true, size: 12 };
+  ws.addRow([]);
+
+  // Re-render the table for the adjusted statement using the SAME writer.
+  // We can't recurse (would loop on adjustments field) so write directly:
+  const headerLabels = ['Section', ...cols.map(c => plColumnLabel(adjusted, c)), 'Total'];
+  const header = ws.addRow(headerLabels);
+  header.font = { bold: true };
+  header.eachCell(c => { c.border = { bottom: { style: 'thin' } }; });
+  for (const r of buildPLExportRows(adjusted)) {
+    const indented = (r.depth > 0 ? '  '.repeat(r.depth) : '') + r.label;
+    const trailingCell = r.isPercentage ? '' : r.grandTotal;
+    const rowCells: any[] = [
+      indented,
+      ...cols.map(c => r.isPercentage ? (r.values[c] ?? 0) : (r.values[c] || 0)),
+      trailingCell,
+    ];
+    const excelRow = ws.addRow(rowCells);
+    if (r.bold) excelRow.font = { bold: true, ...(excelRow.font || {}) };
+    if (r.tone === 'expense') excelRow.font = { ...(excelRow.font || {}), color: { argb: 'FFB91C1C' } };
+    else if (r.tone === 'income') excelRow.font = { ...(excelRow.font || {}), color: { argb: 'FF047857' } };
+    if (r.separator === 'thin') excelRow.eachCell(c => { c.border = { ...(c.border || {}), top: { style: 'thin' } }; });
+    else if (r.separator === 'double') excelRow.eachCell(c => { c.border = { top: { style: 'thin' }, bottom: { style: 'double' } }; });
+    if (r.isPercentage) {
+      for (let i = 0; i < cols.length; i++) excelRow.getCell(2 + i).numFmt = '0.00"%"';
+    }
+  }
 }
 
 function writeBSSheet(ws: ExcelJS.Worksheet, report: BSStatement) {
@@ -390,6 +479,49 @@ function renderTBPdf(doc: PDFKit.PDFDocument, report: TrialBalanceReport) {
 }
 
 function renderPLPdf(doc: PDFKit.PDFDocument, report: PLStatement) {
+  renderOnePLTable(doc, report);
+
+  // Adjustments + true P&L appended below the books table when present.
+  if (report.adjustments && report.adjustments.events.length > 0) {
+    const { events, warnings, adjusted } = report.adjustments;
+    doc.moveDown(1).fontSize(12).font('Helvetica-Bold').text('Adjustments — true management P&L below');
+    doc.moveDown(0.5).fontSize(10).font('Helvetica');
+
+    const byRule = new Map<number, typeof events>();
+    for (const ev of events) {
+      const arr = byRule.get(ev.ruleId) || [];
+      arr.push(ev); byRule.set(ev.ruleId, arr);
+    }
+    for (const arr of byRule.values()) {
+      const first = arr[0];
+      doc.font('Helvetica-Bold').text(
+        `${first.ruleName} (${first.ruleKind === 'pool_split' ? 'Pool split' : 'Cross-charge'})`,
+      );
+      doc.font('Helvetica');
+      for (const ev of arr) {
+        const sourceLabel = ev.sourceLabel
+          ? (report.columnLabels?.[ev.sourceCol] || ev.sourceLabel) + ' → '
+          : '';
+        const destLabel = report.columnLabels?.[ev.destinationCol] || ev.destinationLabel;
+        const sign = ev.amount < 0 ? '−' : '+';
+        doc.text(`    ${sourceLabel}${destLabel}: ${sign}${INR(Math.abs(ev.amount))}${ev.basisNote ? ` (${ev.basisNote})` : ''}`);
+      }
+      doc.moveDown(0.3);
+    }
+    if (warnings.length > 0) {
+      doc.moveDown(0.5).fillColor('#b45309').font('Helvetica-Bold').text('Warnings');
+      doc.font('Helvetica');
+      for (const w of warnings) doc.text(`    ${w}`);
+      doc.fillColor('black');
+    }
+    doc.moveDown(1).fontSize(12).font('Helvetica-Bold').text('True P&L (after adjustments)').fontSize(10).font('Helvetica');
+    doc.moveDown(0.5);
+    renderOnePLTable(doc, adjusted);
+  }
+}
+
+/** Shared table-render helper used by both the books and the adjusted views. */
+function renderOnePLTable(doc: PDFKit.PDFDocument, report: PLStatement) {
   const cols = report.columns;
   const labels = ['Section', ...cols.map(c => plColumnLabel(report, c)), 'Total'];
   const colCount = labels.length;
@@ -491,7 +623,7 @@ export async function renderDocx(ctx: ExportContext, report: AnyReport): Promise
   children.push(new Paragraph({ text: '' }));
 
   if (ctx.reportKind === 'tb') children.push(buildTBDocx(report as TrialBalanceReport));
-  else if (ctx.reportKind === 'pl') children.push(buildPLDocx(report as PLStatement));
+  else if (ctx.reportKind === 'pl') children.push(...buildPLDocx(report as PLStatement));
   else if (ctx.reportKind === 'bs') children.push(buildBSDocx(report as BSStatement));
   else if (ctx.reportKind === 'cf') children.push(buildCFDocx(report as CFStatement));
 
@@ -543,7 +675,71 @@ function buildTBDocx(report: TrialBalanceReport): Table {
   return docxTable(['Ledger', 'Group', 'Opening', 'Debit', 'Credit', 'Closing'], rows);
 }
 
-function buildPLDocx(report: PLStatement): Table {
+function buildPLDocx(report: PLStatement): Array<Paragraph | Table> {
+  const out: Array<Paragraph | Table> = [];
+  out.push(buildOnePLDocxTable(report));
+
+  if (report.adjustments && report.adjustments.events.length > 0) {
+    const { events, warnings, adjusted } = report.adjustments;
+
+    out.push(new Paragraph({ text: '' }));
+    out.push(new Paragraph({
+      heading: HeadingLevel.HEADING_3,
+      children: [new TextRun({ text: 'Adjustments — true management P&L below', bold: true })],
+    }));
+
+    const byRule = new Map<number, typeof events>();
+    for (const ev of events) {
+      const arr = byRule.get(ev.ruleId) || [];
+      arr.push(ev); byRule.set(ev.ruleId, arr);
+    }
+    for (const arr of byRule.values()) {
+      const first = arr[0];
+      out.push(new Paragraph({
+        children: [new TextRun({
+          text: `${first.ruleName} (${first.ruleKind === 'pool_split' ? 'Pool split' : 'Cross-charge'})`,
+          bold: true,
+        })],
+      }));
+      for (const ev of arr) {
+        const sourceLabel = ev.sourceLabel
+          ? (report.columnLabels?.[ev.sourceCol] || ev.sourceLabel) + ' → '
+          : '';
+        const destLabel = report.columnLabels?.[ev.destinationCol] || ev.destinationLabel;
+        const sign = ev.amount < 0 ? '−' : '+';
+        out.push(new Paragraph({
+          children: [
+            new TextRun({
+              text: `    ${sourceLabel}${destLabel}: ${sign}${INR(Math.abs(ev.amount))}${ev.basisNote ? ` (${ev.basisNote})` : ''}`,
+            }),
+          ],
+        }));
+      }
+    }
+
+    if (warnings.length > 0) {
+      out.push(new Paragraph({ text: '' }));
+      out.push(new Paragraph({
+        children: [new TextRun({ text: 'Warnings', bold: true, color: 'B45309' })],
+      }));
+      for (const w of warnings) {
+        out.push(new Paragraph({
+          children: [new TextRun({ text: `    ${w}`, color: 'B45309' })],
+        }));
+      }
+    }
+
+    out.push(new Paragraph({ text: '' }));
+    out.push(new Paragraph({
+      heading: HeadingLevel.HEADING_3,
+      children: [new TextRun({ text: 'True P&L (after adjustments)', bold: true })],
+    }));
+    out.push(buildOnePLDocxTable(adjusted));
+  }
+  return out;
+}
+
+function buildOnePLDocxTable(report: PLStatement): Table {
   const cols = report.columns;
   const headers = ['Section', ...cols.map(c => plColumnLabel(report, c)), 'Total'];
   const rows: Array<{ cells: string[]; bold?: boolean; expense?: boolean }> = [];

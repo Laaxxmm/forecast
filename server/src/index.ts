@@ -37,6 +37,7 @@ import vcfoReportsRoutes from './routes/vcfo-reports.js';
 import vcfoComplianceRoutes from './routes/vcfo-compliances.js';
 import vcfoComplianceServicesRoutes from './routes/vcfo-compliance-services.js';
 import vcfoAccountingTasksRoutes from './routes/vcfo-accounting-tasks.js';
+import vcfoCostAllocationRoutes from './routes/vcfo-cost-allocation.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -264,6 +265,9 @@ app.use('/api/forecast-module', ...forecastOps, forecastModuleRoutes);
 app.use('/api/vcfo/accounting-tasks', ...vcfoOps, vcfoAccountingTasksRoutes);
 app.use('/api/vcfo/compliance-services', ...vcfoOps, vcfoComplianceServicesRoutes);
 app.use('/api/vcfo/compliances', ...vcfoOps, vcfoComplianceRoutes);
+// Cost-allocation rules. Mount before the /api/vcfo catch-all so the
+// dedicated paths win route matching.
+app.use('/api/vcfo/cost-allocation-rules', ...vcfoOps, vcfoCostAllocationRoutes);
 app.use('/api/vcfo', ...vcfoOps, vcfoReportsRoutes);
 app.use('/api/dashboard-actuals', ...forecastOps, dashboardActualsRoutes);
 // /api/sync/auto must mount BEFORE the /api/sync catch-all so its sub-paths

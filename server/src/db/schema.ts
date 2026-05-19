@@ -534,6 +534,83 @@ export function initializeSchema(db: DbHelper) {
     CREATE INDEX IF NOT EXISTS idx_stock_closing_company_date
       ON vcfo_stock_closing_balances(company_id, as_of_date);
 
+    -- ── VCFO Cost Allocation Rules ─────────────────────────────────────────
+    -- Management-P&L adjustments that sit on top of the as-booked numbers.
+    -- The books table at /vcfo/profit-loss stays the audit trail; this engine
+    -- produces a true-cost view below it where costs land where they were
+    -- actually consumed, not where the accountant happened to post them.
+    --
+    -- Two rule kinds cover the patterns this client (Magna) needs:
+    --   pool_split    — one source bucket fanned out to many destinations
+    --                   (e.g. Rent booked at the BTM Clinic split between
+    --                    BTM Clinic and BTM Pharmacy by occupied sqft;
+    --                    Head-Office expenses redistributed across 15 entities).
+    --   cross_charge  — many destinations charged X% of their OWN metric, and
+    --                   the sum credited to a single provider (e.g. Jubilee
+    --                    Hills runs central diagnostics for every Hyderabad
+    --                    branch; each consuming branch is charged 30% of its
+    --                    own diagnostics revenue, sum offsets Jubilee Hills'
+    --                    actual consumables expense).
+    --
+    -- Rules live at tenant scope, not company scope, because one rule can move
+    -- money across multiple companies. The rule_kind column is the
+    -- discriminator -- only a subset of columns is meaningful for each kind.
+    CREATE TABLE IF NOT EXISTS vcfo_allocation_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      effective_from TEXT,
+      effective_to TEXT,
+      priority INTEGER NOT NULL DEFAULT 100,
+      rule_kind TEXT NOT NULL DEFAULT 'pool_split'
+        CHECK(rule_kind IN ('pool_split','cross_charge')),
+
+      -- POOL_SPLIT: one source -> many destinations
+      source_type TEXT
+        CHECK(source_type IS NULL OR source_type IN ('ledger','pl_line','custom_amount')),
+      source_company_id INTEGER REFERENCES vcfo_companies(id) ON DELETE CASCADE,
+      source_ledger_name TEXT,
+      source_pl_section_key TEXT,
+      source_custom_amount REAL,
+
+      -- CROSS_CHARGE: many destinations -> one provider
+      provider_company_id INTEGER REFERENCES vcfo_companies(id) ON DELETE CASCADE,
+      charge_basis_section_key TEXT,
+      charge_pct REAL,
+      provider_credit_section_key TEXT DEFAULT 'directCosts',
+
+      -- pool_split only: how the source is distributed across destinations
+      alloc_method TEXT
+        CHECK(alloc_method IS NULL OR alloc_method IN
+          ('fixed_pct','equal_split','revenue_share','weighted_ratio','manual_amounts')),
+      target_pl_section_key TEXT DEFAULT 'indirectExpenses',
+
+      created_by INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_vcfo_alloc_rules_enabled
+      ON vcfo_allocation_rules(enabled, priority);
+
+    -- Destination rows for both rule kinds. For pool_split rules the weight
+    -- column carries the basis number (sqft / pct / headcount / manual rupee);
+    -- the engine interprets it per the rule's alloc_method. For cross_charge
+    -- rules the row simply marks the company as a consumer -- the amount is
+    -- computed at apply time from rules.charge_basis_section_key x charge_pct
+    -- against the consumer's own P&L column.
+    CREATE TABLE IF NOT EXISTS vcfo_allocation_rule_destinations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      rule_id INTEGER NOT NULL REFERENCES vcfo_allocation_rules(id) ON DELETE CASCADE,
+      destination_company_id INTEGER NOT NULL REFERENCES vcfo_companies(id) ON DELETE CASCADE,
+      weight REAL NOT NULL DEFAULT 0,
+      weight_basis_label TEXT,
+      sort_order INTEGER DEFAULT 0,
+      UNIQUE(rule_id, destination_company_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_vcfo_alloc_rule_dest_rule
+      ON vcfo_allocation_rule_destinations(rule_id);
+
     -- Curated master list of compliances. Seeded on tenant DB init (see
     -- seedComplianceCatalog). state = NULL means "applies everywhere";
     -- otherwise two-letter code (KA, MH, etc.) restricts to that state.
