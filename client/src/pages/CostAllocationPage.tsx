@@ -907,7 +907,7 @@ function RuleEditorModal(props: {
                             type="number"
                             value={d.weight}
                             onChange={e => setDest(i, { weight: parseFloat(e.target.value) || 0 })}
-                            placeholder={r.alloc_method === 'fixed_pct' ? '%' : r.alloc_method === 'weighted_ratio' ? 'units' : '₹'}
+                            placeholder={r.alloc_method === 'fixed_pct' ? '%' : r.alloc_method === 'weighted_ratio' ? 'sqft' : '₹'}
                             className="w-24 bg-dark-700 border border-dark-400/40 rounded px-2 py-2 text-sm text-right"
                           />
                           <div className="w-20 text-[11px] text-theme-faint text-right">
@@ -1218,9 +1218,20 @@ function MultiBranchEditor(props: {
 
               {/* Destinations for this branch */}
               <div>
-                <div className="text-[11px] text-theme-muted mb-1.5">Destinations ({bc.destinations.length})</div>
+                <div className="text-[11px] text-theme-muted mb-1.5 flex items-center justify-between">
+                  <span>
+                    Destinations
+                    {allocMethod === 'weighted_ratio' && <span className="text-theme-faint ml-1">— enter sqft per company</span>}
+                    {allocMethod === 'fixed_pct' && <span className="text-theme-faint ml-1">— enter % per company (must sum to 100)</span>}
+                    {allocMethod === 'manual_amounts' && <span className="text-theme-faint ml-1">— enter ₹ per company</span>}
+                  </span>
+                  <span className="text-theme-faint">({bc.destinations.length})</span>
+                </div>
                 {bc.destinations.length === 0 ? (
-                  <p className="text-[11px] text-theme-faint italic mb-1.5">No destinations added yet for this branch.</p>
+                  <p className="text-[11px] text-theme-faint italic mb-1.5">
+                    Pick companies from the dropdown below. Each company gets its own
+                    {allocMethod === 'weighted_ratio' ? ' sqft' : allocMethod === 'fixed_pct' ? ' %' : allocMethod === 'manual_amounts' ? ' ₹' : ''} input once added.
+                  </p>
                 ) : (
                   <div className="space-y-1.5">
                     {bc.destinations.map((d, j) => {
@@ -1236,9 +1247,9 @@ function MultiBranchEditor(props: {
                               <input
                                 type="number"
                                 value={d.weight}
-                                onChange={e => updateDest(i, j, { weight: parseFloat(e.target.value) || 0 })}
-                                placeholder={allocMethod === 'fixed_pct' ? '%' : allocMethod === 'weighted_ratio' ? 'units' : '₹'}
-                                className="w-20 bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-xs text-right"
+                                onChange={e => updateDest(i, j, { weight: parseFloat(e.target.value) || 0, weight_basis_label: allocMethod === 'weighted_ratio' ? (d.weight_basis_label || 'sqft') : d.weight_basis_label })}
+                                placeholder={allocMethod === 'fixed_pct' ? '%' : allocMethod === 'weighted_ratio' ? 'sqft' : '₹'}
+                                className="w-24 bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-xs text-right"
                               />
                               <div className="w-16 text-[10px] text-theme-faint text-right">
                                 {allocMethod === 'weighted_ratio' && weightSum > 0 && (<>≈ {derivedPct.toFixed(1)}%</>)}
@@ -1255,6 +1266,12 @@ function MultiBranchEditor(props: {
                     {allocMethod === 'fixed_pct' && (
                       <div className="text-[10px] text-theme-faint pl-2">
                         Sum: <strong className={Math.abs(weightSum - 100) > 0.01 ? 'text-red-400' : 'text-emerald-400'}>{weightSum.toFixed(2)}%</strong>
+                      </div>
+                    )}
+                    {allocMethod === 'weighted_ratio' && weightSum > 0 && (
+                      <div className="text-[10px] text-theme-faint pl-2">
+                        Total: <strong className="text-theme-secondary">{weightSum.toFixed(0)} sqft</strong>
+                        <span className="ml-2">→ engine normalises to percentages on apply.</span>
                       </div>
                     )}
                   </div>
