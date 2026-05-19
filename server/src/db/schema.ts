@@ -384,6 +384,26 @@ export function initializeSchema(db: DbHelper) {
   // create them at runtime via its own db/tenant.js). Keep CREATE TABLE IF
   // NOT EXISTS statements idempotent so existing tenants who already have
   // these tables from the TallyVision era are not re-initialised.
+  //
+  // ── Legacy table drop: vcfo_allocation_rules ─────────────────────────────
+  // A retired TallyVision build wrote a different-shaped `vcfo_allocation_rules`
+  // table to some tenant DBs (the Magna one in particular). CREATE TABLE IF NOT
+  // EXISTS is a no-op against that legacy table, so the new columns
+  // (rule_kind, enabled, effective_from, …) never land, and every /profit-loss
+  // request that triggers the allocation engine crashes with
+  // "no such column: enabled". The legacy table was NEVER wired to any current
+  // route, so dropping it is safe — but we only drop when we detect the
+  // legacy shape (missing `rule_kind`) so a tenant whose CREATE TABLE already
+  // succeeded in the new shape doesn't lose configured rules.
+  try {
+    const tableInfo = db.all(`PRAGMA table_info(vcfo_allocation_rules)`) as Array<{ name: string }>;
+    if (tableInfo.length > 0 && !tableInfo.some(c => c.name === 'rule_kind')) {
+      console.log('[schema] Dropping legacy vcfo_allocation_rules (TallyVision-era shape)');
+      db.exec('DROP TABLE IF EXISTS vcfo_allocation_rule_destinations');
+      db.exec('DROP TABLE IF EXISTS vcfo_allocation_rules');
+    }
+  } catch { /* PRAGMA failures are non-fatal — CREATE TABLE below handles fresh tenants */ }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS vcfo_companies (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
