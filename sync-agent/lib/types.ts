@@ -47,6 +47,7 @@ export interface SyncStepLog {
     | 'voucherLedgerEntries'
     | 'fyOpeningBalances'
     | `fyOpeningBalances:${string}`
+    | 'stockMonthlyBalances'
     | 'skipped'
     | 'retry';
   /** When kind='retry', this holds the original ingest kind being replayed. */

@@ -14,6 +14,7 @@ import type {
   TrialBalanceRow,
   VoucherLedgerEntryRow,
   FyOpeningBalanceRow,
+  StockMonthlyBalanceRow,
 } from './tally/extractors';
 
 export interface IngestPingPayload {
@@ -36,7 +37,8 @@ export type IngestKind =
   | 'stockSummary'
   | 'trialBalance'
   | 'voucherLedgerEntries'
-  | 'fyOpeningBalances';
+  | 'fyOpeningBalances'
+  | 'stockMonthlyBalances';
 
 export interface IngestBatchPayload {
   kind: IngestKind;
@@ -50,7 +52,8 @@ export interface IngestBatchPayload {
     | StockSummaryRow[]
     | TrialBalanceRow[]
     | VoucherLedgerEntryRow[]
-    | FyOpeningBalanceRow[];
+    | FyOpeningBalanceRow[]
+    | StockMonthlyBalanceRow[];
   /**
    * Slice 3 multi-client tagging. Filled in by the sync loop (or by the
    * queue drainer) so replayed payloads can be routed back to the correct
