@@ -168,6 +168,13 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
     expandKeys.forEach(k => next.add(k));
     return next;
   }, [expanded, expandKeys, search]);
+  // Location-grouping useMemos also live above the early returns. Null-safe
+  // against `data` so the first render (data still loading) doesn't crash.
+  const groupResult = useMemo(
+    () => data ? buildLocationGroups(data.columns, data.columnLabels, !!data.bifurcated) : null,
+    [data],
+  );
+  const separatorAfterCol = useMemo(() => buildSeparatorSet(groupResult), [groupResult]);
 
   if (!companyId && !companyIds) {
     return (
@@ -219,17 +226,11 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
     (computed.stockClosing?.[c] ?? 0) !== 0,
   );
 
-  // Try to group columns by location for bifurcated multi-tenant views.
-  // null = grouping doesn't apply (single tenant, monthly columns, or
-  // columnLabels don't parse) → fall back to flat layout.
-  const groupResult = useMemo(
-    () => buildLocationGroups(columns, columnLabels, !!bifurcated),
-    [columns, columnLabels, bifurcated],
-  );
+  // `groupResult` + `separatorAfterCol` are computed above the early returns
+  // (so the hook count stays stable across data-state transitions). Here we
+  // only derive the display-order array, which is plain reassignment, not a
+  // hook.
   const displayCols = groupResult ? groupResult.displayOrder : columns;
-  // How many vertical separator borders to draw — one at the end of each
-  // location group's last sub-cell.
-  const separatorAfterCol = useMemo(() => buildSeparatorSet(groupResult), [groupResult]);
 
   // Period header strings (replaces the raw-ISO `from → to` line).
   const periodHeader = formatPeriodHeader(data.period.from, data.period.to);

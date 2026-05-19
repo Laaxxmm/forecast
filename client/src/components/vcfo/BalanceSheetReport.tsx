@@ -93,6 +93,14 @@ export default function BalanceSheetReport({ companyId, companyIds, asOf, view, 
     expandKeys.forEach(k => next.add(k));
     return next;
   }, [expanded, expandKeys, search]);
+  // Location-grouping useMemos hoisted here (above the early returns) so
+  // the hook count stays stable across data-state transitions. Null-safe
+  // against `data` so the loading-state render doesn't crash.
+  const groupResult: LocationGroupResult | null = useMemo(
+    () => data ? buildLocationGroups(data.columns, data.columnLabels, !!data.bifurcated) : null,
+    [data],
+  );
+  const separatorAfterCol = useMemo(() => buildSeparatorSet(groupResult), [groupResult]);
 
   if (!companyId && !companyIds) {
     return (
@@ -123,15 +131,10 @@ export default function BalanceSheetReport({ companyId, companyIds, asOf, view, 
   };
   const showTrailingTotal = !bifurcated && reportView === 'monthly';
 
-  // Location-grouped column layout — same logic as the P&L. Falls back to
-  // the flat single-row header when grouping doesn't apply (single tenant,
-  // monthly columns, or no parseable columnLabels).
-  const groupResult: LocationGroupResult | null = useMemo(
-    () => buildLocationGroups(columns, columnLabels, !!bifurcated),
-    [columns, columnLabels, bifurcated],
-  );
+  // `groupResult` + `separatorAfterCol` are computed above the early returns
+  // (so the hook count stays stable). Here we only derive the display-order
+  // array, which is plain reassignment, not a hook.
   const displayCols = groupResult ? groupResult.displayOrder : columns;
-  const separatorAfterCol = useMemo(() => buildSeparatorSet(groupResult), [groupResult]);
   const companyCount = data.companies?.length ?? columns.filter(c => c !== 'total').length;
 
   const toggle = (key: string) => {
