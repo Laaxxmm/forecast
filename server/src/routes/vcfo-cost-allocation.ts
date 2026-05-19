@@ -51,6 +51,19 @@ interface DestinationInput {
   sort_order?: number;
 }
 
+/** One entry in `branch_configs` — a self-contained (source, destinations) pair
+ *  that the engine treats as an independent pool_split run. Multiple of these
+ *  let one rule cover all branches. */
+interface BranchConfigInput {
+  label?: string | null;
+  source_type: SourceType;
+  source_company_id?: number | null;
+  source_ledger_name?: string | null;
+  source_pl_section_key?: string | null;
+  source_custom_amount?: number | null;
+  destinations: DestinationInput[];
+}
+
 interface RuleInput {
   name: string;
   description?: string | null;
@@ -60,7 +73,7 @@ interface RuleInput {
   priority?: number;
   rule_kind: RuleKind;
 
-  // pool_split
+  // pool_split (single-source mode)
   source_type?: SourceType | null;
   source_company_id?: number | null;
   source_ledger_name?: string | null;
@@ -76,7 +89,15 @@ interface RuleInput {
   alloc_method?: AllocMethod | null;
   target_pl_section_key?: string | null;
 
+  /** Single-source mode destinations. Required for single-source pool_split
+   *  rules and all cross_charge rules. Ignored when branch_configs is present
+   *  (multi-branch mode). */
   destinations: DestinationInput[];
+
+  /** Multi-branch mode: one config per branch. When present and non-empty,
+   *  takes precedence over rule-level source_* and the destinations array.
+   *  Only meaningful for pool_split rules. */
+  branch_configs?: BranchConfigInput[];
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -119,11 +140,70 @@ function validateRulePayload(p: RuleInput): void {
   if (p.rule_kind !== 'pool_split' && p.rule_kind !== 'cross_charge') {
     throw new Error("rule_kind must be 'pool_split' or 'cross_charge'");
   }
-  if (!Array.isArray(p.destinations) || p.destinations.length === 0) {
-    throw new Error('at least one destination is required');
-  }
   if (p.effective_from && p.effective_to && p.effective_to < p.effective_from) {
     throw new Error('effective_to must be on or after effective_from');
+  }
+
+  // Multi-branch mode: validate branch_configs, skip rule-level source/destinations.
+  // Only valid for pool_split.
+  const isMultiBranch = Array.isArray(p.branch_configs) && p.branch_configs.length > 0;
+  if (isMultiBranch) {
+    if (p.rule_kind !== 'pool_split') {
+      throw new Error('branch_configs is only supported for pool_split rules');
+    }
+    if (!p.alloc_method) throw new Error('alloc_method is required for pool_split');
+    if (!['fixed_pct', 'equal_split', 'revenue_share', 'weighted_ratio', 'manual_amounts'].includes(p.alloc_method)) {
+      throw new Error("alloc_method must be 'fixed_pct' | 'equal_split' | 'revenue_share' | 'weighted_ratio' | 'manual_amounts'");
+    }
+    for (const [i, bc] of (p.branch_configs as BranchConfigInput[]).entries()) {
+      const tag = bc.label || `branch ${i + 1}`;
+      if (!Array.isArray(bc.destinations) || bc.destinations.length === 0) {
+        throw new Error(`${tag}: at least one destination is required`);
+      }
+      const bcDestIds = new Set<number>();
+      for (const d of bc.destinations) {
+        if (!Number.isFinite(d.destination_company_id)) {
+          throw new Error(`${tag}: each destination needs a destination_company_id`);
+        }
+        if (bcDestIds.has(d.destination_company_id)) {
+          throw new Error(`${tag}: duplicate destination_company_id ${d.destination_company_id}`);
+        }
+        bcDestIds.add(d.destination_company_id);
+      }
+      if (!bc.source_type) throw new Error(`${tag}: source_type is required`);
+      if (!['ledger', 'pl_line', 'custom_amount'].includes(bc.source_type)) {
+        throw new Error(`${tag}: source_type must be ledger|pl_line|custom_amount`);
+      }
+      if (bc.source_type === 'ledger') {
+        if (!bc.source_company_id) throw new Error(`${tag}: source_company_id is required when source_type=ledger`);
+        if (!bc.source_ledger_name || !String(bc.source_ledger_name).trim()) {
+          throw new Error(`${tag}: source_ledger_name is required when source_type=ledger`);
+        }
+      } else if (bc.source_type === 'pl_line') {
+        if (!bc.source_company_id) throw new Error(`${tag}: source_company_id is required when source_type=pl_line`);
+        if (!bc.source_pl_section_key) throw new Error(`${tag}: source_pl_section_key is required when source_type=pl_line`);
+      } else if (bc.source_type === 'custom_amount') {
+        if (!Number.isFinite(bc.source_custom_amount)) {
+          throw new Error(`${tag}: source_custom_amount must be a number when source_type=custom_amount`);
+        }
+      }
+      if (p.alloc_method === 'fixed_pct') {
+        const sum = bc.destinations.reduce((a, d) => a + Number(d.weight || 0), 0);
+        if (Math.abs(sum - 100) > 0.01) {
+          throw new Error(`${tag}: fixed_pct destinations must sum to 100 (got ${sum.toFixed(2)})`);
+        }
+      }
+      if (p.alloc_method === 'weighted_ratio') {
+        const sum = bc.destinations.reduce((a, d) => a + Number(d.weight || 0), 0);
+        if (sum <= 0) throw new Error(`${tag}: weighted_ratio destinations must have at least one non-zero weight`);
+      }
+    }
+    return;
+  }
+
+  // Single-source mode: validate rule-level fields + destinations table.
+  if (!Array.isArray(p.destinations) || p.destinations.length === 0) {
+    throw new Error('at least one destination is required');
   }
 
   const destIds = new Set<number>();
@@ -188,6 +268,10 @@ function validateRulePayload(p: RuleInput): void {
 /**
  * Hydrate a rule row with its destinations array, ready to send to the client.
  * Returns null if the row doesn't exist (e.g. after a DELETE race).
+ *
+ * `branch_configs` is stored as JSON text in the DB; we parse it back into an
+ * array here so the client can consume it directly. Falsy / malformed JSON
+ * becomes `null` — the client treats null as single-source mode.
  */
 function loadRuleWithDestinations(db: any, ruleId: number): any | null {
   const rule = db.get(`SELECT * FROM vcfo_allocation_rules WHERE id = ?`, ruleId);
@@ -198,7 +282,12 @@ function loadRuleWithDestinations(db: any, ruleId: number): any | null {
        ORDER BY sort_order ASC, id ASC`,
     ruleId,
   );
-  return { ...rule, destinations };
+  let branch_configs = null;
+  if (rule.branch_configs) {
+    try { branch_configs = JSON.parse(rule.branch_configs); }
+    catch { branch_configs = null; }
+  }
+  return { ...rule, destinations, branch_configs };
 }
 
 function writeRule(
@@ -215,6 +304,26 @@ function writeRule(
   const isPool = p.rule_kind === 'pool_split';
   const isCross = p.rule_kind === 'cross_charge';
 
+  // Multi-branch mode: rule-level source_* stays NULL because the engine
+  // ignores it. The branch_configs JSON column carries the per-branch data.
+  const isMultiBranch = isPool && Array.isArray(p.branch_configs) && p.branch_configs.length > 0;
+  const branchConfigsJson = isMultiBranch
+    ? JSON.stringify(p.branch_configs!.map(bc => ({
+        label: bc.label?.trim() || null,
+        source_type: bc.source_type,
+        source_company_id: bc.source_type === 'custom_amount' ? null : toIntOrNull(bc.source_company_id),
+        source_ledger_name: bc.source_type === 'ledger' ? (bc.source_ledger_name?.trim() || null) : null,
+        source_pl_section_key: bc.source_type === 'pl_line' ? (bc.source_pl_section_key || null) : null,
+        source_custom_amount: bc.source_type === 'custom_amount' ? toNumOrNull(bc.source_custom_amount) : null,
+        destinations: bc.destinations.map((d, i) => ({
+          destination_company_id: d.destination_company_id,
+          weight: Number.isFinite(d.weight) ? d.weight : 0,
+          weight_basis_label: d.weight_basis_label?.trim() || null,
+          sort_order: Number.isFinite(d.sort_order) ? d.sort_order : i,
+        })),
+      })))
+    : null;
+
   if (ruleId === 0) {
     const info = db.run(
       `INSERT INTO vcfo_allocation_rules (
@@ -222,8 +331,9 @@ function writeRule(
          source_type, source_company_id, source_ledger_name, source_pl_section_key, source_custom_amount,
          provider_company_id, charge_basis_section_key, charge_pct, provider_credit_section_key,
          alloc_method, target_pl_section_key,
+         branch_configs,
          created_by
-       ) VALUES (?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?, ?)`,
+       ) VALUES (?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?, ?, ?)`,
       p.name.trim(),
       p.description?.trim() || null,
       enabled,
@@ -231,17 +341,21 @@ function writeRule(
       isoDateOrNull(p.effective_to),
       priority,
       p.rule_kind,
-      isPool ? p.source_type || null : null,
-      isPool ? toIntOrNull(p.source_company_id) : null,
-      isPool ? p.source_ledger_name?.trim() || null : null,
-      isPool ? p.source_pl_section_key || null : null,
-      isPool ? toNumOrNull(p.source_custom_amount) : null,
+      // In multi-branch mode the rule-level source fields are NOT used by the
+      // engine, so we deliberately store them as NULL even if the client
+      // happened to send them. Keeps the row honest.
+      isPool && !isMultiBranch ? p.source_type || null : null,
+      isPool && !isMultiBranch ? toIntOrNull(p.source_company_id) : null,
+      isPool && !isMultiBranch ? p.source_ledger_name?.trim() || null : null,
+      isPool && !isMultiBranch ? p.source_pl_section_key || null : null,
+      isPool && !isMultiBranch ? toNumOrNull(p.source_custom_amount) : null,
       isCross ? toIntOrNull(p.provider_company_id) : null,
       isCross ? p.charge_basis_section_key || null : null,
       isCross ? toNumOrNull(p.charge_pct) : null,
       isCross ? p.provider_credit_section_key || 'directCosts' : null,
       isPool ? p.alloc_method || null : null,
       p.target_pl_section_key || (isCross ? 'directCosts' : 'indirectExpenses'),
+      branchConfigsJson,
       userId,
     );
     ruleId = info.lastInsertRowid;
@@ -255,6 +369,7 @@ function writeRule(
          provider_company_id = ?, charge_basis_section_key = ?, charge_pct = ?,
          provider_credit_section_key = ?,
          alloc_method = ?, target_pl_section_key = ?,
+         branch_configs = ?,
          updated_at = datetime('now')
        WHERE id = ?`,
       p.name.trim(),
@@ -264,35 +379,42 @@ function writeRule(
       isoDateOrNull(p.effective_to),
       priority,
       p.rule_kind,
-      isPool ? p.source_type || null : null,
-      isPool ? toIntOrNull(p.source_company_id) : null,
-      isPool ? p.source_ledger_name?.trim() || null : null,
-      isPool ? p.source_pl_section_key || null : null,
-      isPool ? toNumOrNull(p.source_custom_amount) : null,
+      isPool && !isMultiBranch ? p.source_type || null : null,
+      isPool && !isMultiBranch ? toIntOrNull(p.source_company_id) : null,
+      isPool && !isMultiBranch ? p.source_ledger_name?.trim() || null : null,
+      isPool && !isMultiBranch ? p.source_pl_section_key || null : null,
+      isPool && !isMultiBranch ? toNumOrNull(p.source_custom_amount) : null,
       isCross ? toIntOrNull(p.provider_company_id) : null,
       isCross ? p.charge_basis_section_key || null : null,
       isCross ? toNumOrNull(p.charge_pct) : null,
       isCross ? p.provider_credit_section_key || 'directCosts' : null,
       isPool ? p.alloc_method || null : null,
       p.target_pl_section_key || (isCross ? 'directCosts' : 'indirectExpenses'),
+      branchConfigsJson,
       ruleId,
     );
     // Wipe-and-rewrite destinations is simpler than diffing — the table is
-    // tiny (≤ 15 rows per rule for Magna).
+    // tiny (≤ 15 rows per rule for Magna). In multi-branch mode we wipe
+    // anyway since the destinations table is unused; the JSON column is
+    // the source of truth.
     db.run(`DELETE FROM vcfo_allocation_rule_destinations WHERE rule_id = ?`, ruleId);
   }
 
-  for (const [i, d] of p.destinations.entries()) {
-    db.run(
-      `INSERT INTO vcfo_allocation_rule_destinations
-         (rule_id, destination_company_id, weight, weight_basis_label, sort_order)
-         VALUES (?, ?, ?, ?, ?)`,
-      ruleId,
-      d.destination_company_id,
-      Number.isFinite(d.weight) ? d.weight : 0,
-      d.weight_basis_label?.trim() || null,
-      Number.isFinite(d.sort_order) ? d.sort_order : i,
-    );
+  // Only write destinations table rows in single-source mode. Multi-branch
+  // rules carry their destinations inside the branch_configs JSON.
+  if (!isMultiBranch) {
+    for (const [i, d] of p.destinations.entries()) {
+      db.run(
+        `INSERT INTO vcfo_allocation_rule_destinations
+           (rule_id, destination_company_id, weight, weight_basis_label, sort_order)
+           VALUES (?, ?, ?, ?, ?)`,
+        ruleId,
+        d.destination_company_id,
+        Number.isFinite(d.weight) ? d.weight : 0,
+        d.weight_basis_label?.trim() || null,
+        Number.isFinite(d.sort_order) ? d.sort_order : i,
+      );
+    }
   }
 
   return ruleId;
@@ -322,7 +444,14 @@ router.get('/', async (req: Request, res: Response) => {
       byRule.get(d.rule_id)!.push(d);
     }
     res.json(
-      rules.map((r: any) => ({ ...r, destinations: byRule.get(r.id) || [] })),
+      rules.map((r: any) => {
+        let branch_configs = null;
+        if (r.branch_configs) {
+          try { branch_configs = JSON.parse(r.branch_configs); }
+          catch { branch_configs = null; }
+        }
+        return { ...r, destinations: byRule.get(r.id) || [], branch_configs };
+      }),
     );
   } catch (err: any) {
     console.error('[cost-allocation] GET / error', err);
@@ -483,6 +612,24 @@ router.post('/_preview', async (req: Request, res: Response) => {
         weight_basis_label: d.weight_basis_label || null,
         sort_order: d.sort_order ?? i,
       })),
+      // Multi-branch: pass parsed configs directly so loadActiveRules's JSON
+      // parse isn't needed. branch_configs (the raw string column) stays null.
+      branch_configs: null,
+      parsedBranchConfigs: Array.isArray(payload.branch_configs) && payload.branch_configs.length > 0
+        ? payload.branch_configs.map(bc => ({
+            label: bc.label || undefined,
+            source_type: bc.source_type,
+            source_company_id: bc.source_company_id ?? null,
+            source_ledger_name: bc.source_ledger_name ?? null,
+            source_pl_section_key: bc.source_pl_section_key ?? null,
+            source_custom_amount: bc.source_custom_amount ?? null,
+            destinations: bc.destinations.map(d => ({
+              destination_company_id: d.destination_company_id,
+              weight: d.weight,
+              weight_basis_label: d.weight_basis_label ?? null,
+            })),
+          }))
+        : null,
     };
 
     const companies = accessible.map(c => ({ id: c.id, name: c.name }));

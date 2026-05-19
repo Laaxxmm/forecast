@@ -35,6 +35,19 @@ interface RuleDestination {
   sort_order?: number;
 }
 
+/** One branch group inside a multi-branch rule. Each carries its own source +
+ *  destinations and is treated as an independent pool-split run, sharing
+ *  alloc_method + target_pl_section_key with the rule envelope. */
+interface BranchConfig {
+  label?: string | null;
+  source_type: SourceType;
+  source_company_id?: number | null;
+  source_ledger_name?: string | null;
+  source_pl_section_key?: string | null;
+  source_custom_amount?: number | null;
+  destinations: RuleDestination[];
+}
+
 interface Rule {
   id: number;
   name: string;
@@ -56,6 +69,9 @@ interface Rule {
   alloc_method: AllocMethod | null;
   target_pl_section_key: string | null;
   destinations: RuleDestination[];
+  /** Multi-branch mode: non-null array means use these per-branch (source,
+   *  destinations) groups instead of rule-level source/destinations. */
+  branch_configs?: BranchConfig[] | null;
 }
 
 interface Company {
@@ -138,6 +154,20 @@ function emptyRule(): Rule {
     alloc_method: 'weighted_ratio',
     target_pl_section_key: 'indirectExpenses',
     destinations: [],
+    branch_configs: null,
+  };
+}
+
+/** Empty branch_config shell — used when "Add another branch" is clicked. */
+function emptyBranchConfig(): BranchConfig {
+  return {
+    label: '',
+    source_type: 'ledger',
+    source_company_id: null,
+    source_ledger_name: '',
+    source_pl_section_key: 'indirectExpenses',
+    source_custom_amount: 0,
+    destinations: [],
   };
 }
 
@@ -151,6 +181,10 @@ function summariseSource(r: Rule, companies: Company[]): string {
   if (r.rule_kind === 'cross_charge') {
     const provider = companies.find(c => c.id === r.provider_company_id);
     return `${r.charge_pct?.toFixed(0) || '?'}% → ${provider?.name || 'Provider?'}`;
+  }
+  // Multi-branch: roll up the count so the row stays readable.
+  if (r.branch_configs && r.branch_configs.length > 0) {
+    return `${r.branch_configs.length} branches`;
   }
   if (r.source_type === 'ledger') {
     const co = companies.find(c => c.id === r.source_company_id);
@@ -360,15 +394,45 @@ function RuleEditorModal(props: {
     setR(prev => ({ ...prev, destinations: prev.destinations.filter((_, i) => i !== idx) }));
   };
 
+  const isMultiBranch = !!(r.branch_configs && r.branch_configs.length > 0);
+
   // Client-side validation.
   const validation = useMemo(() => {
     if (!r.name.trim()) return 'Name is required';
-    if (r.destinations.length === 0) return 'At least one destination is required';
     if (r.effective_from && r.effective_to && r.effective_to < r.effective_from) {
       return 'Effective "to" date must be on or after "from" date';
     }
 
     if (r.rule_kind === 'pool_split') {
+      if (!r.alloc_method) return 'Allocation method is required';
+
+      // Multi-branch validation: each branch self-checks.
+      if (isMultiBranch) {
+        for (const [i, bc] of (r.branch_configs as BranchConfig[]).entries()) {
+          const tag = bc.label?.trim() || `Branch ${i + 1}`;
+          if (bc.destinations.length === 0) return `${tag}: at least one destination is required`;
+          if (!bc.source_type) return `${tag}: source type is required`;
+          if (bc.source_type === 'ledger') {
+            if (!bc.source_company_id) return `${tag}: source company is required for ledger source`;
+            if (!bc.source_ledger_name?.trim()) return `${tag}: source ledger name is required`;
+          } else if (bc.source_type === 'pl_line') {
+            if (!bc.source_company_id) return `${tag}: source company is required for P&L line source`;
+            if (!bc.source_pl_section_key) return `${tag}: source P&L section is required`;
+          }
+          if (r.alloc_method === 'fixed_pct') {
+            const sum = bc.destinations.reduce((a, d) => a + Number(d.weight || 0), 0);
+            if (Math.abs(sum - 100) > 0.01) return `${tag}: fixed % destinations must sum to 100 (currently ${sum.toFixed(2)})`;
+          }
+          if (r.alloc_method === 'weighted_ratio') {
+            const sum = bc.destinations.reduce((a, d) => a + Number(d.weight || 0), 0);
+            if (sum <= 0) return `${tag}: weighted ratio needs at least one non-zero weight`;
+          }
+        }
+        return null;
+      }
+
+      // Single-source mode (legacy path).
+      if (r.destinations.length === 0) return 'At least one destination is required';
       if (!r.source_type) return 'Source type is required';
       if (r.source_type === 'ledger') {
         if (!r.source_company_id) return 'Source company is required for ledger source';
@@ -377,7 +441,6 @@ function RuleEditorModal(props: {
         if (!r.source_company_id) return 'Source company is required for P&L line source';
         if (!r.source_pl_section_key) return 'Source P&L section is required';
       }
-      if (!r.alloc_method) return 'Allocation method is required';
       if (r.source_company_id && r.destinations.some(d => d.destination_company_id === r.source_company_id)) {
         return 'Source company cannot also be a destination';
       }
@@ -390,6 +453,7 @@ function RuleEditorModal(props: {
         if (sum <= 0) return 'Weighted ratio needs at least one non-zero weight';
       }
     } else {
+      if (r.destinations.length === 0) return 'At least one consumer is required';
       if (!r.provider_company_id) return 'Provider company is required';
       if (!r.charge_basis_section_key) return 'Charge basis section is required';
       if (!r.charge_pct || r.charge_pct <= 0 || r.charge_pct > 100) return 'Charge % must be in (0, 100]';
@@ -398,7 +462,7 @@ function RuleEditorModal(props: {
       }
     }
     return null;
-  }, [r]);
+  }, [r, isMultiBranch]);
 
   // Live preview of derived percentages for weighted_ratio.
   const weightSum = useMemo(
@@ -544,8 +608,65 @@ function RuleEditorModal(props: {
             </div>
           </div>
 
-          {/* Pool-split fields */}
+          {/* Multi-branch mode toggle (pool_split only). Lets one rule cover
+              every branch — e.g. one "Rent Adjustment" rule that splits rent
+              at each location by that location's sqft ratio. */}
           {r.rule_kind === 'pool_split' && (
+            <div className="border-t border-dark-400/30 pt-4">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isMultiBranch}
+                  onChange={e => {
+                    if (e.target.checked) {
+                      // Switching on: seed the array with one branch built
+                      // from whatever rule-level source the user already filled in
+                      // (no data lost), so the editor starts populated.
+                      const seed: BranchConfig = {
+                        label: '',
+                        source_type: r.source_type || 'ledger',
+                        source_company_id: r.source_company_id,
+                        source_ledger_name: r.source_ledger_name,
+                        source_pl_section_key: r.source_pl_section_key,
+                        source_custom_amount: r.source_custom_amount,
+                        destinations: r.destinations,
+                      };
+                      set('branch_configs', [seed]);
+                    } else {
+                      // Switching off: collapse the first branch back into
+                      // rule-level fields so the single-source form stays usable.
+                      const first = r.branch_configs?.[0];
+                      if (first) {
+                        setR(prev => ({
+                          ...prev,
+                          source_type: first.source_type,
+                          source_company_id: first.source_company_id ?? null,
+                          source_ledger_name: first.source_ledger_name ?? null,
+                          source_pl_section_key: first.source_pl_section_key ?? null,
+                          source_custom_amount: first.source_custom_amount ?? null,
+                          destinations: first.destinations,
+                          branch_configs: null,
+                        }));
+                      } else {
+                        set('branch_configs', null);
+                      }
+                    }
+                  }}
+                  className="mt-0.5 w-4 h-4 accent-accent-500"
+                />
+                <div>
+                  <div className="text-sm font-medium text-theme-primary">Multi-branch mode</div>
+                  <div className="text-[11px] text-theme-faint">
+                    One rule covers every branch. Add a separate (source → destinations) group per location —
+                    e.g. one "Rent Adjustment" rule that splits rent at each branch by its own sqft ratio.
+                  </div>
+                </div>
+              </label>
+            </div>
+          )}
+
+          {/* Pool-split fields (single-source mode) */}
+          {r.rule_kind === 'pool_split' && !isMultiBranch && (
             <>
               <div className="border-t border-dark-400/30 pt-4">
                 <h4 className="text-sm font-semibold text-theme-muted mb-3">Source</h4>
@@ -628,7 +749,26 @@ function RuleEditorModal(props: {
                   </div>
                 )}
               </div>
+            </>
+          )}
 
+          {/* Multi-branch editor: per-branch (source → destinations) groups.
+              Each branch is a self-contained pool-split run sharing
+              alloc_method + target section with the rule envelope below. */}
+          {r.rule_kind === 'pool_split' && isMultiBranch && (
+            <MultiBranchEditor
+              configs={r.branch_configs as BranchConfig[]}
+              onChange={configs => set('branch_configs', configs)}
+              companies={companies}
+              sectionTree={sectionTree}
+              allocMethod={r.alloc_method}
+            />
+          )}
+
+          {/* Distribution section — applies to BOTH single-source and
+              multi-branch pool_split rules (shared alloc_method + target). */}
+          {r.rule_kind === 'pool_split' && (
+            <>
               <div className="border-t border-dark-400/30 pt-4">
                 <h4 className="text-sm font-semibold text-theme-muted mb-3">Distribution</h4>
                 <div className="grid grid-cols-2 gap-4">
@@ -720,7 +860,9 @@ function RuleEditorModal(props: {
             </div>
           )}
 
-          {/* Destinations */}
+          {/* Destinations (rule-level — single-source pool_split + all cross_charge).
+              Hidden in multi-branch mode: each branch carries its own dests. */}
+          {!isMultiBranch && (
           <div className="border-t border-dark-400/30 pt-4">
             <h4 className="text-sm font-semibold text-theme-muted mb-3">
               {r.rule_kind === 'pool_split' ? 'Destinations' : 'Consumers'}
@@ -805,6 +947,7 @@ function RuleEditorModal(props: {
               </div>
             )}
           </div>
+          )}
 
           {/* Preview impact — debounced dry-run against the server */}
           {!validation && (
@@ -885,6 +1028,256 @@ function RuleEditorModal(props: {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── Multi-branch editor ─────────────────────────────────────────────────
+// Renders one collapsible card per branch_config. Each card carries its
+// own source picker (ledger / pl_line / custom_amount) + its own destinations
+// table. The rule envelope owns alloc_method + target_pl_section_key, which
+// apply to every branch.
+
+function MultiBranchEditor(props: {
+  configs: BranchConfig[];
+  onChange: (configs: BranchConfig[]) => void;
+  companies: Company[];
+  sectionTree: SectionNode[];
+  allocMethod: AllocMethod | null;
+}) {
+  const { configs, onChange, companies, sectionTree, allocMethod } = props;
+
+  // Per-branch ledger lists are loaded on demand keyed by source_company_id.
+  // Lookups stay cached across renders so the user doesn't see a flash.
+  const [ledgerCache, setLedgerCache] = useState<Record<number, Ledger[]>>({});
+  useEffect(() => {
+    const need = new Set<number>();
+    for (const bc of configs) {
+      if (bc.source_type === 'ledger' && bc.source_company_id && !ledgerCache[bc.source_company_id]) {
+        need.add(bc.source_company_id);
+      }
+    }
+    if (need.size === 0) return;
+    for (const cid of need) {
+      api.get(`/vcfo/cost-allocation-rules/_helpers/ledgers/${cid}`)
+        .then(res => setLedgerCache(prev => ({ ...prev, [cid]: res.data })))
+        .catch(() => setLedgerCache(prev => ({ ...prev, [cid]: [] })));
+    }
+  }, [configs, ledgerCache]);
+
+  const update = (idx: number, patch: Partial<BranchConfig>) => {
+    onChange(configs.map((c, i) => i === idx ? { ...c, ...patch } : c));
+  };
+  const updateDest = (branchIdx: number, destIdx: number, patch: Partial<RuleDestination>) => {
+    onChange(configs.map((c, i) => i === branchIdx
+      ? { ...c, destinations: c.destinations.map((d, j) => j === destIdx ? { ...d, ...patch } : d) }
+      : c));
+  };
+  const addDest = (branchIdx: number, companyId: number) => {
+    onChange(configs.map((c, i) => i === branchIdx
+      ? {
+          ...c,
+          destinations: c.destinations.some(d => d.destination_company_id === companyId)
+            ? c.destinations
+            : [...c.destinations, { destination_company_id: companyId, weight: 0, sort_order: c.destinations.length }],
+        }
+      : c));
+  };
+  const removeDest = (branchIdx: number, destIdx: number) => {
+    onChange(configs.map((c, i) => i === branchIdx
+      ? { ...c, destinations: c.destinations.filter((_, j) => j !== destIdx) }
+      : c));
+  };
+  const removeBranch = (idx: number) => {
+    onChange(configs.filter((_, i) => i !== idx));
+  };
+  const addBranch = () => {
+    onChange([...configs, emptyBranchConfig()]);
+  };
+
+  // Auto-suggest a label from the source company when the user picks one
+  // and the label is still blank, to keep the cards skim-able.
+  const suggestLabel = (bc: BranchConfig): string => {
+    if (bc.label?.trim()) return bc.label.trim();
+    const co = companies.find(c => c.id === bc.source_company_id);
+    return co?.location || co?.name || '';
+  };
+
+  return (
+    <div className="border-t border-dark-400/30 pt-4">
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-sm font-semibold text-theme-muted">
+          Branches
+          <span className="text-theme-faint ml-2 font-normal text-[11px]">
+            {configs.length} added
+          </span>
+        </h4>
+        <button
+          onClick={addBranch}
+          className="inline-flex items-center gap-1 text-xs text-accent-400 hover:text-accent-300"
+        >
+          <Plus size={12} /> Add another branch
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        {configs.map((bc, i) => {
+          const ledgers = bc.source_company_id ? (ledgerCache[bc.source_company_id] || []) : [];
+          const weightSum = bc.destinations.reduce((a, d) => a + Number(d.weight || 0), 0);
+          const availableDests = companies.filter(c =>
+            !bc.destinations.some(d => d.destination_company_id === c.id) &&
+            c.id !== bc.source_company_id
+          );
+          return (
+            <div key={i} className="bg-dark-700/40 border border-dark-400/40 rounded-lg p-3 space-y-3">
+              <div className="flex items-center gap-2">
+                <input
+                  value={bc.label || ''}
+                  onChange={e => update(i, { label: e.target.value })}
+                  placeholder={suggestLabel(bc) || `Branch ${i + 1} label (optional)`}
+                  className="flex-1 bg-dark-700 border border-dark-400/40 rounded px-2 py-1 text-sm font-medium"
+                />
+                <button
+                  onClick={() => removeBranch(i)}
+                  className="text-theme-faint hover:text-red-400 p-1"
+                  title="Remove this branch"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] text-theme-muted mb-1">Source type</label>
+                  <select
+                    value={bc.source_type}
+                    onChange={e => update(i, { source_type: e.target.value as SourceType })}
+                    className="w-full bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-xs"
+                  >
+                    <option value="ledger">Tally ledger</option>
+                    <option value="pl_line">P&amp;L section</option>
+                    <option value="custom_amount">Custom amount</option>
+                  </select>
+                </div>
+                {bc.source_type !== 'custom_amount' && (
+                  <div>
+                    <label className="block text-[11px] text-theme-muted mb-1">Source company</label>
+                    <select
+                      value={bc.source_company_id || ''}
+                      onChange={e => update(i, { source_company_id: e.target.value ? parseInt(e.target.value) : null })}
+                      className="w-full bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-xs"
+                    >
+                      <option value="">— choose company —</option>
+                      {companies.map(c => <option key={c.id} value={c.id}>{companyLabel(c)}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {bc.source_type === 'ledger' && (
+                <div>
+                  <label className="block text-[11px] text-theme-muted mb-1">Ledger</label>
+                  <select
+                    value={bc.source_ledger_name || ''}
+                    onChange={e => update(i, { source_ledger_name: e.target.value })}
+                    disabled={!bc.source_company_id || ledgers.length === 0}
+                    className="w-full bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-xs disabled:opacity-50"
+                  >
+                    <option value="">— choose ledger —</option>
+                    {ledgers.map(l => (
+                      <option key={l.name} value={l.name}>
+                        {l.name} {l.group_name ? `· ${l.group_name}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {bc.source_type === 'pl_line' && (
+                <div>
+                  <label className="block text-[11px] text-theme-muted mb-1">P&amp;L section / sub-line</label>
+                  <select
+                    value={bc.source_pl_section_key || 'indirectExpenses'}
+                    onChange={e => update(i, { source_pl_section_key: e.target.value })}
+                    className="w-full bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-xs font-mono"
+                  >
+                    {sectionOptions(sectionTree)}
+                  </select>
+                </div>
+              )}
+              {bc.source_type === 'custom_amount' && (
+                <div>
+                  <label className="block text-[11px] text-theme-muted mb-1">Custom amount (₹)</label>
+                  <input
+                    type="number"
+                    value={bc.source_custom_amount || 0}
+                    onChange={e => update(i, { source_custom_amount: parseFloat(e.target.value) || 0 })}
+                    className="w-full bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-xs"
+                  />
+                </div>
+              )}
+
+              {/* Destinations for this branch */}
+              <div>
+                <div className="text-[11px] text-theme-muted mb-1.5">Destinations ({bc.destinations.length})</div>
+                {bc.destinations.length === 0 ? (
+                  <p className="text-[11px] text-theme-faint italic mb-1.5">No destinations added yet for this branch.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {bc.destinations.map((d, j) => {
+                      const co = companies.find(c => c.id === d.destination_company_id);
+                      const derivedPct = weightSum > 0 ? (Number(d.weight || 0) / weightSum) * 100 : 0;
+                      return (
+                        <div key={j} className="flex items-center gap-2 text-xs">
+                          <div className="flex-1 px-2 py-1.5 bg-dark-700 rounded border border-dark-400/40 truncate">
+                            {co ? companyLabel(co) : `Company #${d.destination_company_id}`}
+                          </div>
+                          {allocMethod !== 'equal_split' && allocMethod !== 'revenue_share' && (
+                            <>
+                              <input
+                                type="number"
+                                value={d.weight}
+                                onChange={e => updateDest(i, j, { weight: parseFloat(e.target.value) || 0 })}
+                                placeholder={allocMethod === 'fixed_pct' ? '%' : allocMethod === 'weighted_ratio' ? 'units' : '₹'}
+                                className="w-20 bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-xs text-right"
+                              />
+                              <div className="w-16 text-[10px] text-theme-faint text-right">
+                                {allocMethod === 'weighted_ratio' && weightSum > 0 && (<>≈ {derivedPct.toFixed(1)}%</>)}
+                                {allocMethod === 'fixed_pct' && '%'}
+                              </div>
+                            </>
+                          )}
+                          <button onClick={() => removeDest(i, j)} className="text-theme-faint hover:text-red-400 p-1">
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                    {allocMethod === 'fixed_pct' && (
+                      <div className="text-[10px] text-theme-faint pl-2">
+                        Sum: <strong className={Math.abs(weightSum - 100) > 0.01 ? 'text-red-400' : 'text-emerald-400'}>{weightSum.toFixed(2)}%</strong>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {availableDests.length > 0 && (
+                  <select
+                    value=""
+                    onChange={e => { if (e.target.value) addDest(i, parseInt(e.target.value)); }}
+                    className="mt-1.5 bg-dark-700 border border-dark-400/40 rounded px-2 py-1 text-[11px]"
+                  >
+                    <option value="">+ Add destination</option>
+                    {availableDests.map(c => <option key={c.id} value={c.id}>{companyLabel(c)}</option>)}
+                  </select>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {configs.length === 0 && (
+        <p className="text-xs text-theme-faint italic">No branches added yet. Click "Add another branch" above.</p>
+      )}
     </div>
   );
 }

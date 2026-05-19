@@ -85,10 +85,33 @@ export interface AllocationRuleRow {
     | 'manual_amounts'
     | null;
   target_pl_section_key: string | null;
+
+  /** Multi-branch mode: JSON-encoded array of {source, destinations} groups.
+   *  When non-null, the engine iterates each entry as an independent pool-split
+   *  run sharing only `alloc_method` + `target_pl_section_key` with the rule
+   *  envelope. Rule-level `source_*` fields are ignored in this mode. */
+  branch_configs: string | null;
+}
+
+/** Parsed shape of one entry in `branch_configs`. */
+export interface BranchConfig {
+  label?: string;
+  source_type: 'ledger' | 'pl_line' | 'custom_amount';
+  source_company_id?: number | null;
+  source_ledger_name?: string | null;
+  source_pl_section_key?: string | null;
+  source_custom_amount?: number | null;
+  destinations: Array<{
+    destination_company_id: number;
+    weight: number;
+    weight_basis_label?: string | null;
+  }>;
 }
 
 export interface LoadedRule extends AllocationRuleRow {
   destinations: AllocationRuleDestinationRow[];
+  /** Parsed branch_configs, populated by loadActiveRules when the column is set. */
+  parsedBranchConfigs?: BranchConfig[] | null;
 }
 
 export interface AdjustmentEvent {
@@ -156,7 +179,24 @@ function loadActiveRules(
     byRule.get(d.rule_id)!.push(d);
   }
 
-  return rules.map(r => ({ ...r, destinations: byRule.get(r.id) || [] }));
+  return rules.map(r => ({
+    ...r,
+    destinations: byRule.get(r.id) || [],
+    parsedBranchConfigs: parseBranchConfigs(r.branch_configs),
+  }));
+}
+
+/** Defensive JSON parser — returns null on any failure so the engine can fall
+ *  back to single-source mode rather than crashing the whole report. */
+function parseBranchConfigs(raw: string | null): BranchConfig[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    return parsed as BranchConfig[];
+  } catch {
+    return null;
+  }
 }
 
 // ─── PLStatement helpers ───────────────────────────────────────────────────
@@ -502,6 +542,24 @@ function recomputeTotals(adjusted: PLStatement, base: PLStatement): void {
 
 // ─── Apply: pool_split ─────────────────────────────────────────────────────
 
+/** Inputs needed to run a single source→destinations allocation. Shared
+ *  shape between rule-level (single-source rules) and branch_config (multi-
+ *  branch rules) so the core logic doesn't need to care which it came from. */
+interface PoolSplitConfig {
+  /** Tag for diagnostics — rule name for single-source, "<rule> · <branch>" for multi. */
+  contextLabel: string;
+  source_type: 'ledger' | 'pl_line' | 'custom_amount' | null;
+  source_company_id: number | null;
+  source_ledger_name: string | null;
+  source_pl_section_key: string | null;
+  source_custom_amount: number | null;
+  destinations: Array<{
+    destination_company_id: number;
+    weight: number;
+    weight_basis_label: string | null;
+  }>;
+}
+
 function applyPoolSplit(
   db: DbHelper,
   rule: LoadedRule,
@@ -515,75 +573,101 @@ function applyPoolSplit(
     return;
   }
 
-  const { amount: sourceAmount, sourceCol, mutateSource } = resolveSourceAmount(
-    db,
-    rule,
-    adjusted,
-    period,
-  );
-
-  if (sourceAmount === 0) {
-    warnings.push(
-      `Rule "${rule.name}": source resolved to ₹0; nothing to distribute`,
-    );
+  // Multi-branch mode: iterate each config as an independent allocation.
+  if (rule.parsedBranchConfigs && rule.parsedBranchConfigs.length > 0) {
+    for (const [i, bc] of rule.parsedBranchConfigs.entries()) {
+      const branchTag = bc.label || `branch ${i + 1}`;
+      applyOneSplit(db, rule, {
+        contextLabel: `${rule.name} · ${branchTag}`,
+        source_type: bc.source_type,
+        source_company_id: bc.source_company_id ?? null,
+        source_ledger_name: bc.source_ledger_name ?? null,
+        source_pl_section_key: bc.source_pl_section_key ?? null,
+        source_custom_amount: bc.source_custom_amount ?? null,
+        destinations: bc.destinations.map(d => ({
+          destination_company_id: d.destination_company_id,
+          weight: d.weight,
+          weight_basis_label: d.weight_basis_label ?? null,
+        })),
+      }, adjusted, period, events, warnings);
+    }
     return;
   }
 
-  const distribution = distribute(rule, sourceAmount, adjusted, warnings);
+  // Single-source mode: use the rule-level source + destinations table.
+  applyOneSplit(db, rule, {
+    contextLabel: rule.name,
+    source_type: rule.source_type,
+    source_company_id: rule.source_company_id,
+    source_ledger_name: rule.source_ledger_name,
+    source_pl_section_key: rule.source_pl_section_key,
+    source_custom_amount: rule.source_custom_amount,
+    destinations: rule.destinations.map(d => ({
+      destination_company_id: d.destination_company_id,
+      weight: d.weight,
+      weight_basis_label: d.weight_basis_label,
+    })),
+  }, adjusted, period, events, warnings);
+}
+
+/** Core pool_split runner. Operates on one (source, destinations) pair.
+ *  The rule envelope provides alloc_method + target_pl_section_key, which
+ *  apply to every config in a multi-branch rule. */
+function applyOneSplit(
+  db: DbHelper,
+  rule: LoadedRule,
+  cfg: PoolSplitConfig,
+  adjusted: PLStatement,
+  period: { from: string; to: string },
+  events: AdjustmentEvent[],
+  warnings: string[],
+): void {
+  const { amount: sourceAmount, sourceCol, mutateSource } = resolveSourceAmountForConfig(
+    db, cfg, adjusted, period,
+  );
+
+  if (sourceAmount === 0) {
+    warnings.push(`${cfg.contextLabel}: source resolved to ₹0; nothing to distribute`);
+    return;
+  }
+
+  const distribution = distributeForConfig(rule, cfg, sourceAmount, adjusted, warnings);
   if (distribution.length === 0) return;
 
-  const targetSectionKey = rule.target_pl_section_key;
+  const targetSectionKey = rule.target_pl_section_key!;
 
-  // Mutate source side once (subtract the full amount), then apply each
-  // destination delta. Doing it in this order means the source cell can be
-  // queried by subsequent rules and reflect the post-split state.
   if (mutateSource && sourceCol) {
-    // For the source we want to DECREASE the cost (or revenue) that was
-    // booked there. The section the source lives in may differ from the
-    // target — but we mutate the source ledger's appropriate section.
-    //
-    // For the ledger source path we don't know which P&L section the
-    // ledger lives in without a lookup. Pragmatic choice: subtract from
-    // `target_pl_section_key` at the source column too. That's the most
-    // common case (rent ledger lives under Indirect Expenses and the
-    // target is also Indirect Expenses; the split is intra-section).
-    // If the source ledger is in a different section the accountant can
-    // model that with a pl_line source instead.
+    // Same pragmatic choice as before: pl_line source mutates its own section;
+    // ledger source mutates the target section (intra-section split). See the
+    // original comment for the reasoning.
     const sourceSectionKey =
-      rule.source_type === 'pl_line' && rule.source_pl_section_key
-        ? rule.source_pl_section_key
+      cfg.source_type === 'pl_line' && cfg.source_pl_section_key
+        ? cfg.source_pl_section_key
         : targetSectionKey;
 
     const ok = applyDeltaToCell(adjusted, sourceSectionKey, sourceCol, -sourceAmount);
     if (!ok) {
-      warnings.push(
-        `Rule "${rule.name}": could not locate source cell (${sourceSectionKey} @ ${sourceCol})`,
-      );
+      warnings.push(`${cfg.contextLabel}: could not locate source cell (${sourceSectionKey} @ ${sourceCol})`);
     }
   }
 
   for (const d of distribution) {
     const destCol = colFor(d.destinationCompanyId);
     if (sourceCol && destCol === sourceCol) {
-      warnings.push(
-        `Rule "${rule.name}": destination ${destCol} equals source; skipped`,
-      );
-      // We already subtracted from source for the full amount; add back the
-      // would-have-been-allocated portion so the net effect for that
-      // destination is zero.
+      warnings.push(`${cfg.contextLabel}: destination ${destCol} equals source; net adjustment for that company is zero`);
+      // We already subtracted the full amount from source; add back the
+      // would-have-been-allocated portion so the net effect is zero.
       applyDeltaToCell(adjusted, targetSectionKey, destCol, d.amount);
       continue;
     }
     const ok = applyDeltaToCell(adjusted, targetSectionKey, destCol, d.amount);
     if (!ok) {
-      warnings.push(
-        `Rule "${rule.name}": destination ${destCol} not in current report; skipped`,
-      );
+      warnings.push(`${cfg.contextLabel}: destination ${destCol} not in current report; skipped`);
       continue;
     }
     events.push({
       ruleId: rule.id,
-      ruleName: rule.name,
+      ruleName: cfg.contextLabel,
       ruleKind: 'pool_split',
       sourceCol: sourceCol || '',
       sourceLabel: sourceCol ? labelFor(adjusted, sourceCol) : 'Custom amount',
@@ -594,6 +678,76 @@ function applyPoolSplit(
       basisNote: d.basisNote,
     });
   }
+}
+
+/** Variant of resolveSourceAmount that works off a PoolSplitConfig instead
+ *  of the rule fields directly. Same semantics. */
+function resolveSourceAmountForConfig(
+  db: DbHelper,
+  cfg: PoolSplitConfig,
+  adjusted: PLStatement,
+  period: { from: string; to: string },
+): { amount: number; sourceCol: string | null; mutateSource: boolean } {
+  if (cfg.source_type === 'custom_amount') {
+    return {
+      amount: cfg.source_custom_amount || 0,
+      sourceCol: null,
+      mutateSource: false,
+    };
+  }
+  if (!cfg.source_company_id) {
+    return { amount: 0, sourceCol: null, mutateSource: false };
+  }
+  const sourceCol = colFor(cfg.source_company_id);
+  if (cfg.source_type === 'ledger') {
+    if (!cfg.source_ledger_name) {
+      return { amount: 0, sourceCol, mutateSource: true };
+    }
+    const movements = getLedgerMovements(db, cfg.source_company_id, period.from, period.to);
+    const hit = movements.find(m => m.ledgerName === cfg.source_ledger_name);
+    return { amount: Math.abs(hit?.movement || 0), sourceCol, mutateSource: true };
+  }
+  if (cfg.source_type === 'pl_line') {
+    if (!cfg.source_pl_section_key) {
+      return { amount: 0, sourceCol, mutateSource: true };
+    }
+    const section = findSection(adjusted.sections, cfg.source_pl_section_key);
+    if (!section) return { amount: 0, sourceCol, mutateSource: true };
+    return { amount: section.values[sourceCol] || 0, sourceCol, mutateSource: true };
+  }
+  return { amount: 0, sourceCol, mutateSource: false };
+}
+
+/** Variant of distribute() that takes the rule envelope (for alloc_method)
+ *  plus the per-config destinations. */
+function distributeForConfig(
+  rule: LoadedRule,
+  cfg: PoolSplitConfig,
+  sourceAmount: number,
+  adjusted: PLStatement,
+  warnings: string[],
+): Array<{ destinationCompanyId: number; amount: number; basisNote?: string }> {
+  // Build a synthetic LoadedRule with these destinations so the original
+  // distribute() logic can run unchanged.
+  const synth: LoadedRule = {
+    ...rule,
+    destinations: cfg.destinations.map((d, i) => ({
+      id: i,
+      rule_id: rule.id,
+      destination_company_id: d.destination_company_id,
+      weight: d.weight,
+      weight_basis_label: d.weight_basis_label ?? null,
+      sort_order: i,
+    })),
+  };
+  // Reuse the distribute() function we already had — it reads rule.alloc_method
+  // and rule.destinations, both of which the synthetic rule provides.
+  const result = distribute(synth, sourceAmount, adjusted, warnings);
+  return result.map(r => ({
+    destinationCompanyId: r.destinationCompanyId,
+    amount: r.amount,
+    basisNote: r.basisNote,
+  }));
 }
 
 // ─── Apply: cross_charge ───────────────────────────────────────────────────

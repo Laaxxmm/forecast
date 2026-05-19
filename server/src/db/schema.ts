@@ -606,6 +606,28 @@ export function initializeSchema(db: DbHelper) {
           ('fixed_pct','equal_split','revenue_share','weighted_ratio','manual_amounts')),
       target_pl_section_key TEXT DEFAULT 'indirectExpenses',
 
+      -- MULTI-BRANCH mode (one rule covers every branch). When non-null this
+      -- is a JSON-encoded array of "branch configs", each carrying its own
+      -- source + destinations. The engine treats each entry as an independent
+      -- pool-split run, sharing only the rule's alloc_method and
+      -- target_pl_section_key. Rule-level source_* fields are IGNORED when
+      -- branch_configs is set.
+      --
+      -- Shape: Array<{
+      --   label?: string,                    -- friendly tag e.g. "BTM"
+      --   source_type: 'ledger'|'pl_line'|'custom_amount',
+      --   source_company_id?: number,        -- omit for custom_amount
+      --   source_ledger_name?: string,
+      --   source_pl_section_key?: string,
+      --   source_custom_amount?: number,
+      --   destinations: Array<{ destination_company_id, weight, weight_basis_label? }>
+      -- }>
+      --
+      -- Use case: Rent ledger booked at the Clinic at each location, split by
+      -- sqft between Clinic and Pharmacy at the same location. One rule, N
+      -- branch configs, no rule explosion.
+      branch_configs TEXT,
+
       created_by INTEGER,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
@@ -880,6 +902,10 @@ export function initializeSchema(db: DbHelper) {
     // don't fail with "no such column".
     "ALTER TABLE daily_brief_recipients ADD COLUMN cadence TEXT NOT NULL DEFAULT 'daily'",
     "ALTER TABLE daily_brief_sends ADD COLUMN cadence TEXT NOT NULL DEFAULT 'daily'",
+    // Multi-branch rule mode — adds the JSON column carrying per-branch
+    // source+destinations groups so one rule can cover every branch
+    // (e.g. one "Rent Adjustment" rule for all 9 locations).
+    'ALTER TABLE vcfo_allocation_rules ADD COLUMN branch_configs TEXT',
   ];
   for (const sql of branchMigrations) {
     try { db.exec(sql); } catch { /* column already exists */ }
