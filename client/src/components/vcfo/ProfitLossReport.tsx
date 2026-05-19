@@ -230,15 +230,20 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
             </tr>
           </thead>
           <tbody>
-            {sections.map(section => renderRow(section, 0))}
-
-            {/* COGS breakdown — only shown when the tenant carries inventory.
-                Service-only tenants (clinics with no stock) skip this block
-                entirely. Negative values pass through unclamped — a Tally
-                data-quality signal worth surfacing rather than hiding. */}
-            {hasStock && (
-              <>
-                <tr className="border-b border-dark-400/20 hover:bg-dark-600/20">
+            {/* Sections render in order: Revenue, Direct Costs, Indirect Income,
+                Indirect Expenses. The COGS breakdown (Opening Stock / Closing
+                Stock / COGS subtotal) is injected immediately AFTER Direct
+                Costs since COGS is conceptually `Direct Costs + Opening −
+                Closing` — it belongs with the trading-account block, not
+                after the indirect P&L items. Only renders for inventory-
+                carrying tenants (hasStock). Negative values pass through
+                unclamped to surface Tally data-quality signals. */}
+            {sections.flatMap(section => {
+              const sectionNode = renderRow(section, 0);
+              if (!(hasStock && section.key === 'directCosts')) return sectionNode;
+              return [
+                sectionNode,
+                <tr key="cogs-opening-stock" className="border-b border-dark-400/20 hover:bg-dark-600/20">
                   <td className="py-2 sticky left-0 bg-dark-800 font-normal text-[13px] text-rose-300" style={{ paddingLeft: 16, paddingRight: 16 }}>
                     <span className="inline-flex items-center gap-1.5">
                       <span style={{ width: 14, display: 'inline-block' }} />
@@ -258,8 +263,8 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
                       {formatRs(data.grandTotals.stockOpening ?? 0)}
                     </td>
                   )}
-                </tr>
-                <tr className="border-b border-dark-400/20 hover:bg-dark-600/20">
+                </tr>,
+                <tr key="cogs-closing-stock" className="border-b border-dark-400/20 hover:bg-dark-600/20">
                   <td className="py-2 sticky left-0 bg-dark-800 font-normal text-[13px] text-emerald-300" style={{ paddingLeft: 16, paddingRight: 16 }}>
                     <span className="inline-flex items-center gap-1.5">
                       <span style={{ width: 14, display: 'inline-block' }} />
@@ -279,8 +284,8 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
                       {formatRs(data.grandTotals.stockClosing ?? 0)}
                     </td>
                   )}
-                </tr>
-                <tr className="border-b border-dark-400/30 bg-dark-700/30">
+                </tr>,
+                <tr key="cogs-subtotal" className="border-b border-dark-400/30 bg-dark-700/30">
                   <td className="px-4 py-2 font-semibold text-rose-200 sticky left-0 bg-dark-700/30">COGS</td>
                   {columns.map(c => (
                     <td key={c} className="px-4 py-2 text-right text-rose-200 font-mono font-semibold">
@@ -292,9 +297,9 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
                       {formatRs(data.grandTotals.cogs ?? 0)}
                     </td>
                   )}
-                </tr>
-              </>
-            )}
+                </tr>,
+              ];
+            })}
 
             {/* Gross Profit line */}
             <tr className="bg-dark-700/50 border-b border-accent-500/30">

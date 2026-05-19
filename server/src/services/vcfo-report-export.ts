@@ -81,7 +81,6 @@ function buildPLExportRows(report: PLStatement): PLExportRow[] {
     });
     if (sec.children) for (const ch of sec.children) walkSection(ch, depth + 1);
   };
-  for (const sec of report.sections) walkSection(sec, 0);
 
   // Same hasStock check the UI uses — skip the COGS block when the tenant
   // carries no inventory so service-only companies don't see zero rows.
@@ -90,31 +89,39 @@ function buildPLExportRows(report: PLStatement): PLExportRow[] {
   const stockClosing = report.computed.stockClosing || {};
   const cogsByCol = report.computed.cogs || {};
   const hasStock = cols.some(c => (stockOpening[c] ?? 0) !== 0 || (stockClosing[c] ?? 0) !== 0);
-  if (hasStock) {
-    rows.push({
-      label: '+ Opening Stock',
-      depth: 0,
-      values: stockOpening,
-      grandTotal: report.grandTotals.stockOpening ?? 0,
-      bold: false,
-      tone: 'expense',
-    });
-    rows.push({
-      label: '− Closing Stock',
-      depth: 0,
-      values: stockClosing,
-      grandTotal: report.grandTotals.stockClosing ?? 0,
-      bold: false,
-      tone: 'income', // reduces costs, displayed in green like other reducers
-    });
-    rows.push({
-      label: 'COGS',
-      depth: 0,
-      values: cogsByCol,
-      grandTotal: report.grandTotals.cogs ?? 0,
-      bold: true,
-      tone: 'expense',
-    });
+
+  // Render sections; inject COGS block immediately after Direct Costs so the
+  // trading-account flow (Direct Costs → ±Stock → COGS) reads in one
+  // continuous block, with Indirect Income / Indirect Expenses following
+  // separately as the P&L A/c portion. Matches the dashboard layout.
+  for (const sec of report.sections) {
+    walkSection(sec, 0);
+    if (hasStock && sec.key === 'directCosts') {
+      rows.push({
+        label: '+ Opening Stock',
+        depth: 0,
+        values: stockOpening,
+        grandTotal: report.grandTotals.stockOpening ?? 0,
+        bold: false,
+        tone: 'expense',
+      });
+      rows.push({
+        label: '− Closing Stock',
+        depth: 0,
+        values: stockClosing,
+        grandTotal: report.grandTotals.stockClosing ?? 0,
+        bold: false,
+        tone: 'income', // reduces costs, displayed in green like other reducers
+      });
+      rows.push({
+        label: 'COGS',
+        depth: 0,
+        values: cogsByCol,
+        grandTotal: report.grandTotals.cogs ?? 0,
+        bold: true,
+        tone: 'expense',
+      });
+    }
   }
 
   rows.push({
