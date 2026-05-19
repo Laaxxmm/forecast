@@ -514,6 +514,26 @@ export function initializeSchema(db: DbHelper) {
     CREATE INDEX IF NOT EXISTS idx_fyob_company_fystart
       ON vcfo_fy_opening_balances(company_id, fy_start);
 
+    -- Month-end closing balances for ledgers under the Stock-in-hand group.
+    -- Captured once per month via a TB-style TDL with SVTODATE=monthEnd,
+    -- which returns the manually-set closing balance on the ledger master
+    -- (the field accountants use when stock is tracked externally and only
+    -- the month-end value is typed into Tally). These values do NOT show up
+    -- in normal vouchers, so `computeDynamicTB` can't infer them — this
+    -- table is the dedicated source the P&L's COGS line reads from.
+    -- Credit-positive convention matches vcfo_trial_balance.
+    CREATE TABLE IF NOT EXISTS vcfo_stock_closing_balances (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL REFERENCES vcfo_companies(id) ON DELETE CASCADE,
+      as_of_date TEXT NOT NULL,
+      ledger_name TEXT NOT NULL,
+      group_name TEXT,
+      closing_value REAL DEFAULT 0,
+      UNIQUE(company_id, as_of_date, ledger_name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_stock_closing_company_date
+      ON vcfo_stock_closing_balances(company_id, as_of_date);
+
     -- Curated master list of compliances. Seeded on tenant DB init (see
     -- seedComplianceCatalog). state = NULL means "applies everywhere";
     -- otherwise two-letter code (KA, MH, etc.) restricts to that state.

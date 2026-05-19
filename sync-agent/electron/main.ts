@@ -27,6 +27,7 @@ import {
   extractTrialBalance,
   extractVoucherLedgerEntries,
   extractFyOpeningBalances,
+  extractStockMonthlyBalances,
 } from '../lib/tally/extractors';
 import type { AgentClient, AgentConfig, AuthState, AuthUser, ChooseClientResult, ClientStructure, CompanyMapping, LoginResult, MyClient, MyClientsResult, RemoveClientResult, SyncClientSummary, SyncResult, SyncStepLog, TallyStatus } from '../lib/types';
 import { OfflineQueue, isRetryableError } from '../lib/offline-queue';
@@ -911,6 +912,20 @@ async function runSync(): Promise<SyncResult> {
           const rows = await extractTrialBalance(conn, companyName, stockFrom, toDate);
           if (rows.length === 0) return { sent: 0, accepted: 0 };
           const res = await tryPush(clientApi, { kind: 'trialBalance', companyName, clientSlug: client.slug, rows });
+          return { sent: rows.length, accepted: res.rowsAccepted };
+        });
+
+        // Stock-in-hand monthly closing balances — month-end values typed
+        // directly onto the ledger master (the workflow tenants use when
+        // stock is tracked externally and only the closing balance gets
+        // entered into Tally each month). These do NOT generate vouchers,
+        // so `computeDynamicTB` can't see them — we extract them via a
+        // direct SVTODATE-anchored TB query per month-end and store them
+        // in their own table. Window matches the other point-in-time steps.
+        await runStep('stockMonthlyBalances', companyName, client, steps, counts, async () => {
+          const rows = await extractStockMonthlyBalances(conn, companyName, stockFrom, toDate);
+          if (rows.length === 0) return { sent: 0, accepted: 0 };
+          const res = await tryPush(clientApi, { kind: 'stockMonthlyBalances', companyName, clientSlug: client.slug, rows });
           return { sent: rows.length, accepted: res.rowsAccepted };
         });
 

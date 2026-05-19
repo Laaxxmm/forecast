@@ -101,6 +101,17 @@ export interface FyOpeningBalanceRow {
   openingBalance: number;
 }
 
+export interface StockMonthlyBalanceRow {
+  /** Month-end date in YYYY-MM-DD (e.g. '2026-04-30'). */
+  asOfDate: string;
+  ledgerName: string;
+  groupName?: string;
+  /** Credit-positive (assets surface as negative; the server flips for
+   *  display). Source is `$ClosingBalance` evaluated at SVTODATE=asOfDate
+   *  for ledgers under the Stock-in-hand group. */
+  closingBalance: number;
+}
+
 // ── Utilities ────────────────────────────────────────────────────────────────
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -894,6 +905,87 @@ export async function extractFyOpeningBalances(
       groupName: cleanString(r.F02) || undefined,
       openingBalance: parseAmount(r.F03),
     });
+  }
+  return out;
+}
+
+// ── Stock-in-hand monthly closing balances ─────────────────────────────────
+// Captures the per-month-end closing balance for ledgers under the
+// `Stock-in-hand` group. The intended source is the manual "Closing Balance"
+// entry on the ledger master (the Tally field accountants use when stock is
+// tracked externally and only the month-end value gets typed in). These
+// values DON'T appear in `Profit & Loss` voucher feeds, so
+// `computeDynamicTB` can't infer them — this extractor is the dedicated
+// path that feeds `vcfo_stock_closing_balances` on the server.
+//
+// Mechanism: re-fires the standard TB TDL once per month-end with
+// SVFROMDATE == SVTODATE == monthEnd. Tally then returns `$ClosingBalance`
+// evaluated at that exact date, which for stock ledgers resolves to the
+// manually-set master value (or the latest entry ≤ asOf if no entry exists
+// for that specific month). We also probe the month-end immediately BEFORE
+// `fromDate` so the dashboard can render an "opening stock" for the first
+// requested column without needing a separate FY-opening table for stock.
+
+/** All calendar month-ends in [fromDate, toDate], plus one month-end before
+ *  `fromDate` so callers can get an opening-of-period figure for free. */
+function monthEndsInRangeWithPrior(fromDate: string, toDate: string): string[] {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) throw new Error('fromDate must be YYYY-MM-DD');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(toDate)) throw new Error('toDate must be YYYY-MM-DD');
+  if (fromDate > toDate) throw new Error(`fromDate ${fromDate} is after toDate ${toDate}`);
+
+  const out: string[] = [];
+  const start = new Date(fromDate + 'T00:00:00Z');
+  const end = new Date(toDate + 'T00:00:00Z');
+  // Prior month-end: last day of the month before `fromDate`.
+  const prior = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 0));
+  if (prior.getUTCFullYear() > 1900) out.push(iso(prior));
+  // Roll forward through every subsequent month-end up to and including `end`.
+  let cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0));
+  for (let i = 0; i < 240 && cursor <= end; i++) {
+    out.push(iso(cursor));
+    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 2, 0));
+  }
+  return out;
+}
+
+export async function extractStockMonthlyBalances(
+  conn: TallyConnector,
+  companyName: string,
+  fromDate: string,
+  toDate: string,
+): Promise<StockMonthlyBalanceRow[]> {
+  if (!companyName) throw new Error('companyName required for extractStockMonthlyBalances');
+  const asOfDates = monthEndsInRangeWithPrior(fromDate, toDate);
+  const out: StockMonthlyBalanceRow[] = [];
+  for (const asOf of asOfDates) {
+    let rows: any[] = [];
+    try {
+      // Same TDL the FY-opening extractor uses — passing from==to anchors
+      // $ClosingBalance to a single point in time.
+      const raw = await conn.sendXML(tdlTrialBalance(companyName, asOf, asOf));
+      rows = rowsFromReport(raw);
+    } catch (err: any) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[tally] stockMonthlyBalances ${asOf} for ${companyName} failed: ${err?.message || err}`,
+      );
+      continue;
+    }
+    for (const r of rows) {
+      const ledgerName = cleanString(r.F01);
+      const groupName = cleanString(r.F02);
+      if (!ledgerName || !groupName) continue;
+      // Filter to Stock-in-hand group. Case-insensitive compare because
+      // Tally exports as lowercase 'h' on the design clients we ship to but
+      // other tenants may use different casing.
+      if (groupName.toLowerCase() !== 'stock-in-hand') continue;
+      out.push({
+        asOfDate: asOf,
+        ledgerName,
+        groupName,
+        closingBalance: parseAmount(r.F06),
+      });
+    }
   }
   return out;
 }

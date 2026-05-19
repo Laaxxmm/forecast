@@ -58,7 +58,8 @@ export interface SyncStepLog {
     | 'stockSummary'
     | 'trialBalance'
     | 'voucherLedgerEntries'
-    | 'fyOpeningBalances';
+    | 'fyOpeningBalances'
+    | 'stockMonthlyBalances';
   rowsSent: number;
   rowsAccepted: number;
   ok: boolean;

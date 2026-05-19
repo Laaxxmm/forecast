@@ -21,6 +21,7 @@
 //   trialBalance         → INSERT OR REPLACE  by (company_id, period_from, period_to, ledger_name)
 //   voucherLedgerEntries → DELETE by (company_id, sync_month) THEN INSERT
 //   fyOpeningBalances    → INSERT OR REPLACE  by (company_id, fy_start, ledger_name)
+//   stockMonthlyBalances → INSERT OR REPLACE  by (company_id, as_of_date, ledger_name)
 //
 // Why DELETE-then-INSERT for voucher tables: their UNIQUE keys include the
 // amount columns (debit/credit on voucherLedgerEntries, amount on vouchers)
@@ -402,6 +403,35 @@ function ingestFyOpeningBalances(db: DbHelper, companyId: number, rows: any[]): 
   return n;
 }
 
+function ingestStockMonthlyBalances(db: DbHelper, companyId: number, rows: any[]): number {
+  const num = (v: any) => (v == null ? 0 : Number(v) || 0);
+  let n = 0;
+  db.beginBatch();
+  try {
+    for (const r of rows) {
+      if (!r?.asOfDate || !r?.ledgerName) continue;
+      db.run(
+        `INSERT OR REPLACE INTO vcfo_stock_closing_balances
+           (company_id, as_of_date, ledger_name, group_name, closing_value)
+         VALUES (?, ?, ?, ?, ?)`,
+        [
+          companyId,
+          String(r.asOfDate),
+          String(r.ledgerName).trim(),
+          r.groupName ? String(r.groupName) : null,
+          num(r.closingBalance),
+        ],
+      );
+      n++;
+    }
+    db.endBatch();
+  } catch (e) {
+    db.rollbackBatch();
+    throw e;
+  }
+  return n;
+}
+
 // ─── Routes ─────────────────────────────────────────────────────────────────
 
 /** Handshake — verifies the key works and reports server identity back. */
@@ -424,7 +454,7 @@ router.post('/ping', requireAgentKey, (req: Request, res: Response) => {
 /**
  * Bulk upsert entry point. Body:
  *   {
- *     kind: 'companies' | 'ledgers' | 'vouchers' | 'groups' | 'stockSummary' | 'trialBalance' | 'voucherLedgerEntries' | 'fyOpeningBalances',
+ *     kind: 'companies' | 'ledgers' | 'vouchers' | 'groups' | 'stockSummary' | 'trialBalance' | 'voucherLedgerEntries' | 'fyOpeningBalances' | 'stockMonthlyBalances',
  *     companyName?: string,  // required for everything except 'companies'
  *     rows: Array<object>    // shape depends on `kind`
  *   }
@@ -461,7 +491,8 @@ router.post('/batch', requireAgentKey, (req: Request, res: Response) => {
       kind === 'stockSummary' ||
       kind === 'trialBalance' ||
       kind === 'voucherLedgerEntries' ||
-      kind === 'fyOpeningBalances'
+      kind === 'fyOpeningBalances' ||
+      kind === 'stockMonthlyBalances'
     ) {
       if (!companyName) {
         return res.status(400).json({ error: 'companyName required for ' + kind });
@@ -476,7 +507,8 @@ router.post('/batch', requireAgentKey, (req: Request, res: Response) => {
       else if (kind === 'stockSummary') accepted = ingestStockSummary(req.tenantDb, companyId, rows);
       else if (kind === 'trialBalance') accepted = ingestTrialBalance(req.tenantDb, companyId, rows);
       else if (kind === 'voucherLedgerEntries') accepted = ingestVoucherLedgerEntries(req.tenantDb, companyId, rows);
-      else accepted = ingestFyOpeningBalances(req.tenantDb, companyId, rows);
+      else if (kind === 'fyOpeningBalances') accepted = ingestFyOpeningBalances(req.tenantDb, companyId, rows);
+      else accepted = ingestStockMonthlyBalances(req.tenantDb, companyId, rows);
       // Any successful child-entity push marks this company as "active" so
       // the UI auto-selection picks the most recently touched one.
       if (accepted > 0) bumpLastSyncedAt(req.tenantDb, companyId);

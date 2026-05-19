@@ -417,6 +417,17 @@ function getStockAdjustment(
   from: string,
   to: string,
 ): { opening: number; closing: number; adjustment: number } {
+  // Preferred source: the dedicated `vcfo_stock_closing_balances` table
+  // populated monthly by the sync-agent's stockMonthlyBalances extractor.
+  // This captures the manually-set "Closing Balance" field on stock ledgers
+  // (the typical entry pattern when stock is tracked externally), which
+  // `computeDynamicTB` cannot see because no vouchers correspond to it.
+  const dedicated = getStockFromDedicatedTable(db, companyId, from, to);
+  if (dedicated.hasData) return dedicated;
+
+  // Fallback: voucher-derived TB lookup, for tenants who DO post month-end
+  // Closing Stock journal entries (so the voucher-composed dynamic TB
+  // reflects the right balances).
   const stockGroups = new Set(getGroupTree(db, companyId, 'Stock-in-hand'));
   if (stockGroups.size === 0) return { opening: 0, closing: 0, adjustment: 0 };
 
@@ -434,6 +445,58 @@ function getStockAdjustment(
   const closing = sumStockClosing(getBalancesAsOf(db, companyId, to));
 
   return { opening, closing, adjustment: closing - opening };
+}
+
+/**
+ * Look up opening + closing stock from `vcfo_stock_closing_balances`.
+ *
+ *   opening = ∑ closing_value of latest as_of_date < from, per ledger
+ *   closing = ∑ closing_value of latest as_of_date ≤ to, per ledger
+ *
+ * Storage convention is credit-positive (matches the TB convention from
+ * the underlying TDL), so stock values come out negative for the asset
+ * side; we flip sign on the way out so the display number is positive.
+ *
+ * `hasData = false` when the table has no rows for this company at all,
+ * which signals the caller to fall back to the legacy TB-ledger path.
+ * Returning hasData=true with zero values (a tenant with stock_closing
+ * rows but none on or before `to`) is intentional: it means "we know
+ * stock is tracked here, the value is just zero for this window".
+ */
+function getStockFromDedicatedTable(
+  db: DbHelper,
+  companyId: number,
+  from: string,
+  to: string,
+): { opening: number; closing: number; adjustment: number; hasData: boolean } {
+  const haveAny = db.get(
+    `SELECT 1 AS x FROM vcfo_stock_closing_balances WHERE company_id = ? LIMIT 1`,
+    companyId,
+  );
+  if (!haveAny) return { opening: 0, closing: 0, adjustment: 0, hasData: false };
+
+  const sumLatest = (cmp: '<' | '<=', boundary: string): number => {
+    const row = db.get(
+      `SELECT COALESCE(SUM(s.closing_value), 0) AS total
+         FROM vcfo_stock_closing_balances s
+         INNER JOIN (
+           SELECT ledger_name, MAX(as_of_date) AS max_as_of
+             FROM vcfo_stock_closing_balances
+            WHERE company_id = ? AND as_of_date ${cmp} ?
+            GROUP BY ledger_name
+         ) latest
+           ON latest.ledger_name = s.ledger_name
+          AND latest.max_as_of   = s.as_of_date
+        WHERE s.company_id = ?`,
+      companyId, boundary, companyId,
+    );
+    // closing_value is stored credit-positive; flip for display.
+    return -(Number(row?.total) || 0);
+  };
+
+  const opening = sumLatest('<', from);
+  const closing = sumLatest('<=', to);
+  return { opening, closing, adjustment: closing - opening, hasData: true };
 }
 
 /**
