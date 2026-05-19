@@ -273,13 +273,17 @@ function companyLabel(c: Company): string {
 }
 
 function summariseSource(r: Rule, companies: Company[]): string {
+  // Multi-branch always wins — roll up the count for both rule kinds since
+  // the rule-level source/provider field is NULL in multi-branch mode.
+  if (r.branch_configs && r.branch_configs.length > 0) {
+    if (r.rule_kind === 'cross_charge') {
+      return `${r.charge_pct?.toFixed(0) || '?'}% · ${r.branch_configs.length} regions`;
+    }
+    return `${r.branch_configs.length} branches`;
+  }
   if (r.rule_kind === 'cross_charge') {
     const provider = companies.find(c => c.id === r.provider_company_id);
     return `${r.charge_pct?.toFixed(0) || '?'}% → ${provider?.name || 'Provider?'}`;
-  }
-  // Multi-branch: roll up the count so the row stays readable.
-  if (r.branch_configs && r.branch_configs.length > 0) {
-    return `${r.branch_configs.length} branches`;
   }
   if (r.source_type === 'ledger') {
     const co = companies.find(c => c.id === r.source_company_id);
@@ -294,6 +298,16 @@ function summariseSource(r: Rule, companies: Company[]): string {
     return `Custom ₹${(r.source_custom_amount || 0).toLocaleString('en-IN')}`;
   }
   return '—';
+}
+
+/** Total destinations across a rule — sum across branch_configs when in
+ *  multi-branch mode, else rule-level destinations table. Used by the
+ *  rules list to show a meaningful "Destinations" count. */
+function totalDestinations(r: Rule): number {
+  if (r.branch_configs && r.branch_configs.length > 0) {
+    return r.branch_configs.reduce((sum, bc) => sum + bc.destinations.length, 0);
+  }
+  return r.destinations.length;
 }
 
 // ─── Main Page ───────────────────────────────────────────────────────────
@@ -408,7 +422,7 @@ export default function CostAllocationPage() {
                           ? ALLOC_METHODS.find(m => m.key === r.alloc_method)?.label || '—'
                           : `${r.charge_pct?.toFixed(0) || '?'}% cross-charge`}
                       </td>
-                      <td className="px-4 py-3 text-right">{r.destinations.length}</td>
+                      <td className="px-4 py-3 text-right">{totalDestinations(r)}</td>
                       <td className="px-4 py-3 text-right text-theme-faint">{r.priority}</td>
                       <td className="px-4 py-3 text-right">
                         <button onClick={() => setEditingRule(r)} className="text-theme-faint hover:text-accent-300 mr-2"><Pencil size={14} /></button>

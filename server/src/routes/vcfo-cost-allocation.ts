@@ -666,15 +666,25 @@ router.post('/_preview', async (req: Request, res: Response) => {
       })),
       // Multi-branch: pass parsed configs directly so loadActiveRules's JSON
       // parse isn't needed. branch_configs (the raw string column) stays null.
+      // IMPORTANT: include BOTH pool_split and cross_charge fields — the
+      // engine reads the subset matching the parent rule's rule_kind. Missing
+      // cross_charge fields here was the cause of a "missing
+      // provider_company_id" warning in Preview impact for cross_charge rules.
       branch_configs: null,
       parsedBranchConfigs: Array.isArray(payload.branch_configs) && payload.branch_configs.length > 0
         ? payload.branch_configs.map(bc => ({
             label: bc.label || undefined,
+            // pool_split fields
             source_type: bc.source_type,
             source_company_id: bc.source_company_id ?? null,
             source_ledger_name: bc.source_ledger_name ?? null,
             source_pl_section_key: bc.source_pl_section_key ?? null,
             source_custom_amount: bc.source_custom_amount ?? null,
+            // cross_charge fields
+            provider_company_id: bc.provider_company_id ?? null,
+            charge_basis_section_key: bc.charge_basis_section_key ?? null,
+            charge_pct: bc.charge_pct ?? null,
+            provider_credit_section_key: bc.provider_credit_section_key ?? null,
             destinations: bc.destinations.map(d => ({
               destination_company_id: d.destination_company_id,
               weight: d.weight,
