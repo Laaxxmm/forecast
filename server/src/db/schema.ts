@@ -519,8 +519,8 @@ export function initializeSchema(db: DbHelper) {
     -- which returns the manually-set closing balance on the ledger master
     -- (the field accountants use when stock is tracked externally and only
     -- the month-end value is typed into Tally). These values do NOT show up
-    -- in normal vouchers, so `computeDynamicTB` can't infer them — this
-    -- table is the dedicated source the P&L's COGS line reads from.
+    -- in normal vouchers, so computeDynamicTB cannot infer them -- this
+    -- table is the dedicated source the P&L COGS line reads from.
     -- Credit-positive convention matches vcfo_trial_balance.
     CREATE TABLE IF NOT EXISTS vcfo_stock_closing_balances (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
