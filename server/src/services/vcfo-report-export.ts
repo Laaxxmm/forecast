@@ -257,39 +257,76 @@ function writePLAdjustments(ws: ExcelJS.Worksheet, report: PLStatement) {
   if (!report.adjustments) return;
   const { events, warnings, adjusted } = report.adjustments;
   const cols = report.columns;
+  const companyCols = cols.filter(c => c !== 'total');
 
   ws.addRow([]);
   ws.addRow([]);
-  const heading = ws.addRow(['ADJUSTMENTS — true management P&L below']);
+  const heading = ws.addRow(['ADJUSTMENTS']);
   heading.font = { bold: true, size: 12 };
-  ws.addRow([]);
+  ws.addRow([{ richText: [{ text: 'cell = expense delta at that company (negative = expense reduced, positive = expense added)' }] } as any]);
 
-  // Group events by ruleId so each rule is its own sub-block.
-  const byRule = new Map<number, typeof events>();
+  // ── Columnar Rule × Company matrix (matches the on-screen Adjustments
+  // card). One row per rule, with per-company expense deltas, then a
+  // Net adjustments row and the Net Profit (books → after adjustments)
+  // footer so the bottom line reads off directly. ──────────────────────
+  const adjHeader = ws.addRow(['Rule', ...companyCols.map(c => plColumnLabel(report, c)), 'Total']);
+  adjHeader.font = { bold: true };
+  adjHeader.eachCell(c => { c.border = { bottom: { style: 'thin' } }; });
+
+  // Aggregate events into per-rule per-company deltas (strip multi-branch
+  // "<rule> · <branch>" prefixes so each rule is ONE row).
+  interface RS { ruleName: string; ruleKind: string; perCol: Record<string, number>; }
+  const byRule = new Map<number, RS>();
+  const order: number[] = [];
   for (const ev of events) {
-    const arr = byRule.get(ev.ruleId) || [];
-    arr.push(ev);
-    byRule.set(ev.ruleId, arr);
+    const dot = ev.ruleName.indexOf(' · ');
+    const headline = dot > 0 ? ev.ruleName.slice(0, dot) : ev.ruleName;
+    if (!byRule.has(ev.ruleId)) { byRule.set(ev.ruleId, { ruleName: headline, ruleKind: ev.ruleKind, perCol: {} }); order.push(ev.ruleId); }
+    const s = byRule.get(ev.ruleId)!;
+    s.perCol[ev.destinationCol] = (s.perCol[ev.destinationCol] || 0) + ev.amount;
   }
-  for (const arr of byRule.values()) {
-    const first = arr[0];
-    const ruleHeader = ws.addRow([
-      `${first.ruleName} (${first.ruleKind === 'pool_split' ? 'Pool split' : 'Cross-charge'})`,
-    ]);
-    ruleHeader.font = { bold: true };
-    for (const ev of arr) {
-      const sourceLabel = ev.sourceLabel
-        ? (report.columnLabels?.[ev.sourceCol] || ev.sourceLabel) + ' → '
-        : '';
-      const destLabel = report.columnLabels?.[ev.destinationCol] || ev.destinationLabel;
-      const sign = ev.amount < 0 ? -1 : 1;
-      const r = ws.addRow([
-        `    ${sourceLabel}${destLabel}${ev.basisNote ? ` (${ev.basisNote})` : ''}`,
-        ev.amount,
-      ]);
-      r.getCell(2).numFmt = '#,##0.00;(#,##0.00)';
-      r.getCell(2).font = { color: { argb: sign < 0 ? 'FF047857' : 'FFB91C1C' } };
+  // Each rule's Total = sum of its per-company cells (0 for zero-sum rules,
+  // the real net for one-sided add-backs).
+  for (const s of byRule.values()) s.perCol.total = companyCols.reduce((a, c) => a + (s.perCol[c] || 0), 0);
+  const totalsPerCol: Record<string, number> = {};
+  for (const s of byRule.values()) for (const [c, v] of Object.entries(s.perCol)) totalsPerCol[c] = (totalsPerCol[c] || 0) + v;
+
+  const kindLabel = (k: string) => k === 'pool_split' ? 'Pool split' : k === 'add_back' ? 'Add-back' : 'Cross-charge';
+  const expenseFmt = '#,##0;(#,##0)';
+  const colorExpense = (cell: ExcelJS.Cell, v: number) => {
+    cell.numFmt = expenseFmt;
+    cell.font = { ...(cell.font || {}), color: { argb: v < 0 ? 'FF047857' : v > 0 ? 'FFB91C1C' : 'FF9CA3AF' } };
+  };
+
+  for (const id of order) {
+    const s = byRule.get(id)!;
+    const row = ws.addRow([`${s.ruleName} (${kindLabel(s.ruleKind)})`, ...companyCols.map(c => s.perCol[c] || 0), s.perCol.total]);
+    for (let i = 0; i < companyCols.length + 1; i++) {
+      const col = i < companyCols.length ? companyCols[i] : 'total';
+      colorExpense(row.getCell(2 + i), s.perCol[col] || 0);
     }
+  }
+
+  const naRow = ws.addRow(['Net adjustments', ...companyCols.map(c => totalsPerCol[c] || 0), totalsPerCol.total || 0]);
+  naRow.font = { bold: true };
+  naRow.eachCell(c => { c.border = { top: { style: 'thin' } }; });
+  for (let i = 0; i < companyCols.length + 1; i++) {
+    const col = i < companyCols.length ? companyCols[i] : 'total';
+    colorExpense(naRow.getCell(2 + i), totalsPerCol[col] || 0);
+  }
+
+  const npBooks = ws.addRow(['Net Profit · books', ...companyCols.map(c => report.computed.netProfit[c] || 0), report.computed.netProfit.total || 0]);
+  for (let i = 0; i < companyCols.length + 1; i++) npBooks.getCell(2 + i).numFmt = expenseFmt;
+  npBooks.font = { color: { argb: 'FF6B7280' } };
+
+  const npAdj = ws.addRow(['Net Profit · after adjustments', ...companyCols.map(c => adjusted.computed.netProfit[c] || 0), adjusted.computed.netProfit.total || 0]);
+  npAdj.font = { bold: true };
+  npAdj.eachCell(c => { c.border = { top: { style: 'thin' }, bottom: { style: 'double' } }; });
+  for (let i = 0; i < companyCols.length + 1; i++) {
+    const v = i < companyCols.length ? (adjusted.computed.netProfit[companyCols[i]] || 0) : (adjusted.computed.netProfit.total || 0);
+    const cell = npAdj.getCell(2 + i);
+    cell.numFmt = expenseFmt;
+    cell.font = { bold: true, color: { argb: v < 0 ? 'FFB91C1C' : 'FF047857' } };
   }
 
   if (warnings.length > 0) {
@@ -484,35 +521,53 @@ function renderPLPdf(doc: PDFKit.PDFDocument, report: PLStatement) {
   // Adjustments + true P&L appended below the books table when present.
   if (report.adjustments && report.adjustments.events.length > 0) {
     const { events, warnings, adjusted } = report.adjustments;
-    doc.moveDown(1).fontSize(12).font('Helvetica-Bold').text('Adjustments — true management P&L below');
-    doc.moveDown(0.5).fontSize(10).font('Helvetica');
+    const cols = report.columns;
+    const companyCols = cols.filter(c => c !== 'total');
 
-    const byRule = new Map<number, typeof events>();
+    doc.moveDown(1).fontSize(12).font('Helvetica-Bold').text('Adjustments');
+    doc.moveDown(0.3).fontSize(8).font('Helvetica').fillColor('#6b7280')
+      .text('cell = expense delta at that company (negative = expense reduced, positive = expense added)');
+    doc.fillColor('black').fontSize(10);
+    doc.moveDown(0.3);
+
+    // Aggregate events into per-rule per-company deltas.
+    interface RS { ruleName: string; ruleKind: string; perCol: Record<string, number>; }
+    const byRule = new Map<number, RS>();
+    const order: number[] = [];
     for (const ev of events) {
-      const arr = byRule.get(ev.ruleId) || [];
-      arr.push(ev); byRule.set(ev.ruleId, arr);
+      const dot = ev.ruleName.indexOf(' · ');
+      const headline = dot > 0 ? ev.ruleName.slice(0, dot) : ev.ruleName;
+      if (!byRule.has(ev.ruleId)) { byRule.set(ev.ruleId, { ruleName: headline, ruleKind: ev.ruleKind, perCol: {} }); order.push(ev.ruleId); }
+      const s = byRule.get(ev.ruleId)!;
+      s.perCol[ev.destinationCol] = (s.perCol[ev.destinationCol] || 0) + ev.amount;
     }
-    for (const arr of byRule.values()) {
-      const first = arr[0];
-      doc.font('Helvetica-Bold').text(
-        `${first.ruleName} (${first.ruleKind === 'pool_split' ? 'Pool split' : 'Cross-charge'})`,
-      );
-      doc.font('Helvetica');
-      for (const ev of arr) {
-        const sourceLabel = ev.sourceLabel
-          ? (report.columnLabels?.[ev.sourceCol] || ev.sourceLabel) + ' → '
-          : '';
-        const destLabel = report.columnLabels?.[ev.destinationCol] || ev.destinationLabel;
-        const sign = ev.amount < 0 ? '−' : '+';
-        doc.text(`    ${sourceLabel}${destLabel}: ${sign}${INR(Math.abs(ev.amount))}${ev.basisNote ? ` (${ev.basisNote})` : ''}`);
-      }
-      doc.moveDown(0.3);
+    for (const s of byRule.values()) s.perCol.total = companyCols.reduce((a, c) => a + (s.perCol[c] || 0), 0);
+    const totalsPerCol: Record<string, number> = {};
+    for (const s of byRule.values()) for (const [c, v] of Object.entries(s.perCol)) totalsPerCol[c] = (totalsPerCol[c] || 0) + v;
+    const kindLabel = (k: string) => k === 'pool_split' ? 'Pool split' : k === 'add_back' ? 'Add-back' : 'Cross-charge';
+    const adjCell = (v: number) => (v === 0 ? '—' : `${v < 0 ? '−' : '+'}${INR(Math.abs(v))}`);
+
+    const labels = ['Rule', ...companyCols.map(c => plColumnLabel(report, c)), 'Total'];
+    const colCount = labels.length;
+    const firstCol = 200;
+    const restCols = Math.floor((720 - firstCol) / (colCount - 1));
+    const widths = [firstCol, ...Array(colCount - 1).fill(restCols)];
+
+    const rows: Array<{ cells: string[]; bold?: boolean }> = [];
+    for (const id of order) {
+      const s = byRule.get(id)!;
+      rows.push({ cells: [`${s.ruleName} (${kindLabel(s.ruleKind)})`, ...companyCols.map(c => adjCell(s.perCol[c] || 0)), adjCell(s.perCol.total || 0)] });
     }
+    rows.push({ cells: ['Net adjustments', ...companyCols.map(c => adjCell(totalsPerCol[c] || 0)), adjCell(totalsPerCol.total || 0)], bold: true });
+    rows.push({ cells: ['Net Profit · books', ...companyCols.map(c => INR(report.computed.netProfit[c] || 0)), INR(report.computed.netProfit.total || 0)] });
+    rows.push({ cells: ['Net Profit · after adjustments', ...companyCols.map(c => INR(adjusted.computed.netProfit[c] || 0)), INR(adjusted.computed.netProfit.total || 0)], bold: true });
+    pdfTable(doc, labels, rows, widths);
+
     if (warnings.length > 0) {
-      doc.moveDown(0.5).fillColor('#b45309').font('Helvetica-Bold').text('Warnings');
-      doc.font('Helvetica');
+      doc.moveDown(0.5).fillColor('#b45309').font('Helvetica-Bold').fontSize(10).text('Warnings');
+      doc.font('Helvetica').fontSize(9);
       for (const w of warnings) doc.text(`    ${w}`);
-      doc.fillColor('black');
+      doc.fillColor('black').fontSize(10);
     }
     doc.moveDown(1).fontSize(12).font('Helvetica-Bold').text('True P&L (after adjustments)').fontSize(10).font('Helvetica');
     doc.moveDown(0.5);
@@ -681,41 +736,45 @@ function buildPLDocx(report: PLStatement): Array<Paragraph | Table> {
 
   if (report.adjustments && report.adjustments.events.length > 0) {
     const { events, warnings, adjusted } = report.adjustments;
+    const cols = report.columns;
+    const companyCols = cols.filter(c => c !== 'total');
 
     out.push(new Paragraph({ text: '' }));
     out.push(new Paragraph({
       heading: HeadingLevel.HEADING_3,
-      children: [new TextRun({ text: 'Adjustments — true management P&L below', bold: true })],
+      children: [new TextRun({ text: 'Adjustments', bold: true })],
+    }));
+    out.push(new Paragraph({
+      children: [new TextRun({ text: 'cell = expense delta at that company (negative = expense reduced, positive = expense added)', italics: true, color: '6B7280' })],
     }));
 
-    const byRule = new Map<number, typeof events>();
+    // Aggregate events into per-rule per-company deltas (columnar matrix).
+    interface RS { ruleName: string; ruleKind: string; perCol: Record<string, number>; }
+    const byRule = new Map<number, RS>();
+    const order: number[] = [];
     for (const ev of events) {
-      const arr = byRule.get(ev.ruleId) || [];
-      arr.push(ev); byRule.set(ev.ruleId, arr);
+      const dot = ev.ruleName.indexOf(' · ');
+      const headline = dot > 0 ? ev.ruleName.slice(0, dot) : ev.ruleName;
+      if (!byRule.has(ev.ruleId)) { byRule.set(ev.ruleId, { ruleName: headline, ruleKind: ev.ruleKind, perCol: {} }); order.push(ev.ruleId); }
+      const s = byRule.get(ev.ruleId)!;
+      s.perCol[ev.destinationCol] = (s.perCol[ev.destinationCol] || 0) + ev.amount;
     }
-    for (const arr of byRule.values()) {
-      const first = arr[0];
-      out.push(new Paragraph({
-        children: [new TextRun({
-          text: `${first.ruleName} (${first.ruleKind === 'pool_split' ? 'Pool split' : 'Cross-charge'})`,
-          bold: true,
-        })],
-      }));
-      for (const ev of arr) {
-        const sourceLabel = ev.sourceLabel
-          ? (report.columnLabels?.[ev.sourceCol] || ev.sourceLabel) + ' → '
-          : '';
-        const destLabel = report.columnLabels?.[ev.destinationCol] || ev.destinationLabel;
-        const sign = ev.amount < 0 ? '−' : '+';
-        out.push(new Paragraph({
-          children: [
-            new TextRun({
-              text: `    ${sourceLabel}${destLabel}: ${sign}${INR(Math.abs(ev.amount))}${ev.basisNote ? ` (${ev.basisNote})` : ''}`,
-            }),
-          ],
-        }));
-      }
+    for (const s of byRule.values()) s.perCol.total = companyCols.reduce((a, c) => a + (s.perCol[c] || 0), 0);
+    const totalsPerCol: Record<string, number> = {};
+    for (const s of byRule.values()) for (const [c, v] of Object.entries(s.perCol)) totalsPerCol[c] = (totalsPerCol[c] || 0) + v;
+    const kindLabel = (k: string) => k === 'pool_split' ? 'Pool split' : k === 'add_back' ? 'Add-back' : 'Cross-charge';
+    const adjCell = (v: number) => (Math.round(v) === 0 ? '—' : `${v < 0 ? '−' : '+'}${INR(Math.abs(v))}`);
+
+    const headers = ['Rule', ...companyCols.map(c => plColumnLabel(report, c)), 'Total'];
+    const adjRows: Array<{ cells: string[]; bold?: boolean; expense?: boolean }> = [];
+    for (const id of order) {
+      const s = byRule.get(id)!;
+      adjRows.push({ cells: [`${s.ruleName} (${kindLabel(s.ruleKind)})`, ...companyCols.map(c => adjCell(s.perCol[c] || 0)), adjCell(s.perCol.total || 0)] });
     }
+    adjRows.push({ cells: ['Net adjustments', ...companyCols.map(c => adjCell(totalsPerCol[c] || 0)), adjCell(totalsPerCol.total || 0)], bold: true });
+    adjRows.push({ cells: ['Net Profit · books', ...companyCols.map(c => INR(report.computed.netProfit[c] || 0)), INR(report.computed.netProfit.total || 0)] });
+    adjRows.push({ cells: ['Net Profit · after adjustments', ...companyCols.map(c => INR(adjusted.computed.netProfit[c] || 0)), INR(adjusted.computed.netProfit.total || 0)], bold: true });
+    out.push(docxTable(headers, adjRows));
 
     if (warnings.length > 0) {
       out.push(new Paragraph({ text: '' }));
