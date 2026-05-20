@@ -109,6 +109,30 @@ export async function listAccessibleCompanies(req: Request): Promise<AccessibleC
 }
 
 /**
+ * All synced Tally companies for the tenant, IGNORING the sidebar
+ * branch/stream filter. Used by the allocation engine: cross-company rules
+ * (rent split, HO pool, lab cross-charge, salary add-back) must be computed
+ * against every company even when the user is viewing a single branch — the
+ * result is then projected back down to the viewed columns. Without this, a
+ * single-branch view can't see (or mis-computes) any rule that spans branches.
+ *
+ * Returns the same id/name shape buildProfitLossMulti expects. NULL-branch
+ * companies and every mapped company are included regardless of selection.
+ */
+export async function listAllSyncedCompanies(
+  req: Request,
+): Promise<Array<{ id: number; name: string }>> {
+  const db = req.tenantDb!;
+  return db.all(
+    `SELECT id, name
+       FROM vcfo_companies
+      WHERE is_active = 1
+        AND last_full_sync_at IS NOT NULL
+      ORDER BY name ASC`,
+  ) as Array<{ id: number; name: string }>;
+}
+
+/**
  * Convenience wrapper for query-scoping callers (e.g. BvA actuals SQL).
  *
  * Returns:

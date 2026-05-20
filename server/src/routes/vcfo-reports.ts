@@ -25,9 +25,9 @@ import {
   buildBalanceSheetMulti,
   buildCashFlowMulti,
 } from '../services/vcfo-report-builder.js';
-import { applyAllocationRules } from '../services/vcfo-allocation-engine.js';
+import { applyAllocationRules, projectAllocationResult } from '../services/vcfo-allocation-engine.js';
 import { buildDashboard } from '../services/vcfo-dashboard-builder.js';
-import { listAccessibleCompanies } from '../services/accessible-companies.js';
+import { listAccessibleCompanies, listAllSyncedCompanies } from '../services/accessible-companies.js';
 import {
   renderXlsx,
   renderPdf,
@@ -249,15 +249,36 @@ router.get('/profit-loss', async (req, res) => {
     const report = buildProfitLossMulti(req.tenantDb!, companies, from, to, view, bifurcate);
 
     // Opt-in management-P&L layer. Backward-compatible: callers that don't
-    // pass `withAdjustments=1` see the response shape unchanged. When opted
-    // in, the engine returns the base report (unchanged) plus an `adjusted`
-    // PLStatement with allocation rules applied, the per-rule events list,
-    // and any warnings (e.g. a rule whose source resolved to ₹0).
+    // pass `withAdjustments=1` see the response shape unchanged.
+    //
+    // Allocation rules are cross-company (rent split, HO pool, lab
+    // cross-charge, salary add-back), so they must be computed against EVERY
+    // synced company — even when the user is viewing a single branch.
+    // Otherwise rules touching other branches resolve to ₹0 or get skipped,
+    // and a single-branch view can't show its true adjustments. We therefore
+    // build the full-company PL, run the engine on it, then PROJECT the
+    // adjusted result down to the viewed companies' columns.
     if (withAdjustments && bifurcate) {
-      const result = applyAllocationRules(req.tenantDb!, report, {
+      const allCompanies = await listAllSyncedCompanies(req);
+      const viewedIds = new Set(companies.map(c => c.id));
+      const isSubset = allCompanies.length > companies.length;
+
+      // Build the statement the engine runs on — full set when scoped to a
+      // branch, otherwise the already-built (consolidated) report.
+      const engineBase = isSubset
+        ? buildProfitLossMulti(req.tenantDb!, allCompanies, from, to, view, true)
+        : report;
+
+      let result = applyAllocationRules(req.tenantDb!, engineBase, {
         effectiveFrom: from,
         effectiveTo: to,
       });
+
+      // Project back down to the viewed branch's columns.
+      if (isSubset) {
+        result = projectAllocationResult(result, [...viewedIds]);
+      }
+
       return res.json({
         ...report,
         adjustments: {
@@ -339,13 +360,22 @@ router.get('/download', async (req, res) => {
       const view = validView(req.query.view);
       const withAdjustments = validBool(req.query.withAdjustments);
       built = buildProfitLossMulti(req.tenantDb!, companies, from, to, view, bifurcate);
-      // For bifurcated PL exports we mirror the JSON endpoint: attach the
-      // adjustments block so renderers can print the events list + adjusted
-      // P&L below the books table. Renderers ignore it when absent.
+      // For bifurcated PL exports we mirror the JSON endpoint: compute the
+      // adjustments against ALL companies (cross-branch rules) then project
+      // down to the viewed columns, and attach the block so renderers can
+      // print the events + adjusted P&L. Renderers ignore it when absent.
       if (withAdjustments && bifurcate) {
-        const result = applyAllocationRules(req.tenantDb!, built, {
+        const allCompanies = await listAllSyncedCompanies(req);
+        const isSubset = allCompanies.length > companies.length;
+        const engineBase = isSubset
+          ? buildProfitLossMulti(req.tenantDb!, allCompanies, from, to, view, true)
+          : built;
+        let result = applyAllocationRules(req.tenantDb!, engineBase, {
           effectiveFrom: from, effectiveTo: to,
         });
+        if (isSubset) {
+          result = projectAllocationResult(result, companies.map(c => c.id));
+        }
         built.adjustments = {
           events: result.events,
           warnings: result.warnings,

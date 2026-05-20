@@ -1219,3 +1219,108 @@ export function applyAllocationRules(
 
   return { base, adjusted, events, warnings };
 }
+
+// ─── Projection (single-branch views) ──────────────────────────────────────
+
+/**
+ * Project a (globally-computed) AllocationResult down to a subset of company
+ * columns — used when the user views one branch but the rules must be computed
+ * against ALL companies first (cross-branch rules, global HO pool, etc.).
+ *
+ * Keeps only the viewed companies' `co:<id>` columns, recomputes the `total`
+ * column + grandTotals as the sum over the viewed subset, and drops events
+ * whose destinationCol falls outside the viewed set. Per-company values are
+ * untouched (each column is independent), so the viewed branch sees exactly
+ * its true global effect.
+ */
+export function projectAllocationResult(
+  result: AllocationResult,
+  viewedCompanyIds: number[],
+): AllocationResult {
+  const viewedCols = viewedCompanyIds.map(id => `co:${id}`);
+  const viewedSet = new Set(viewedCols);
+
+  const projectStatement = (full: PLStatement): PLStatement => {
+    const sumViewed = (vals: Record<string, number>): number =>
+      viewedCols.reduce((a, c) => a + (vals[c] || 0), 0);
+
+    const projValues = (vals: Record<string, number>): Record<string, number> => {
+      const out: Record<string, number> = {};
+      for (const c of viewedCols) out[c] = vals[c] || 0;
+      out.total = sumViewed(vals);
+      return out;
+    };
+
+    const projSection = (s: PLSection): PLSection => ({
+      key: s.key,
+      label: s.label,
+      isExpense: s.isExpense,
+      values: projValues(s.values),
+      grandTotal: sumViewed(s.values),
+      children: s.children ? s.children.map(projSection) : undefined,
+    });
+
+    const sections = full.sections.map(projSection);
+    const findVal = (key: string, col: string) =>
+      full.sections.find(s => s.key === key)?.values[col] || 0;
+
+    const computed: PLStatement['computed'] = {
+      grossProfit: {}, grossMargin: {}, netProfit: {},
+      stockOpening: {}, stockClosing: {}, cogs: {},
+    };
+    for (const c of viewedCols) {
+      computed.grossProfit[c] = full.computed.grossProfit[c] || 0;
+      computed.netProfit[c] = full.computed.netProfit[c] || 0;
+      computed.grossMargin[c] = full.computed.grossMargin[c] || 0;
+      computed.stockOpening[c] = full.computed.stockOpening?.[c] || 0;
+      computed.stockClosing[c] = full.computed.stockClosing?.[c] || 0;
+      computed.cogs[c] = full.computed.cogs?.[c] || 0;
+    }
+    const sumC = (m: Record<string, number>) => viewedCols.reduce((a, c) => a + (m[c] || 0), 0);
+    computed.grossProfit.total = sumC(computed.grossProfit);
+    computed.netProfit.total = sumC(computed.netProfit);
+    computed.stockOpening.total = sumC(computed.stockOpening);
+    computed.stockClosing.total = sumC(computed.stockClosing);
+    computed.cogs.total = sumC(computed.cogs);
+    const revTotal = viewedCols.reduce((a, c) => a + findVal('revenue', c), 0);
+    computed.grossMargin.total = revTotal !== 0
+      ? Math.round((computed.grossProfit.total / revTotal) * 10000) / 100 : 0;
+
+    const sectByKey = (k: string) => sections.find(s => s.key === k);
+    return {
+      period: { ...full.period },
+      view: full.view,
+      columns: [...viewedCols, 'total'],
+      columnLabels: full.columnLabels
+        ? Object.fromEntries(
+            Object.entries(full.columnLabels).filter(([k]) => viewedSet.has(k) || k === 'total'),
+          )
+        : undefined,
+      bifurcated: full.bifurcated,
+      companies: full.companies?.filter(c => viewedSet.has(`co:${c.id}`)),
+      sections,
+      computed,
+      grandTotals: {
+        revenue: sectByKey('revenue')?.grandTotal || 0,
+        directCosts: sectByKey('directCosts')?.grandTotal || 0,
+        indirectIncome: sectByKey('indirectIncome')?.grandTotal || 0,
+        indirectExpenses: sectByKey('indirectExpenses')?.grandTotal || 0,
+        grossProfit: computed.grossProfit.total,
+        netProfit: computed.netProfit.total,
+        stockOpening: computed.stockOpening.total,
+        stockClosing: computed.stockClosing.total,
+        cogs: computed.cogs.total,
+      },
+    };
+  };
+
+  return {
+    base: projectStatement(result.base),
+    adjusted: projectStatement(result.adjusted),
+    // Keep only events landing on a viewed company column.
+    events: result.events.filter(e => viewedSet.has(e.destinationCol)),
+    // Drop the "source resolved to ₹0" noise that the global compute no longer
+    // produces; keep any genuine warnings that mention a viewed company.
+    warnings: result.warnings.filter(w => !/source resolved to ₹0/.test(w)),
+  };
+}
