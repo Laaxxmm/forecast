@@ -93,6 +93,12 @@ export interface AllocationRuleRow {
    *  run sharing only `alloc_method` + `target_pl_section_key` with the rule
    *  envelope. Rule-level `source_*` fields are ignored in this mode. */
   branch_configs: string | null;
+
+  /** 1 = one-sided add-back / normalisation. rule_kind stays 'pool_split' for
+   *  the DB CHECK, but the engine routes to applyAddBack. The per-company
+   *  entries live in branch_configs (source_company_id + source_pl_section_key
+   *  + source_custom_amount). */
+  is_add_back?: number | null;
 }
 
 /** Parsed shape of one entry in `branch_configs`.
@@ -134,7 +140,7 @@ export interface LoadedRule extends AllocationRuleRow {
 export interface AdjustmentEvent {
   ruleId: number;
   ruleName: string;
-  ruleKind: 'pool_split' | 'cross_charge';
+  ruleKind: 'pool_split' | 'cross_charge' | 'add_back';
   /** Source column (e.g. 'co:336'); empty for custom_amount / cross_charge per-consumer events. */
   sourceCol: string;
   /** Friendly label of source company; empty for custom_amount / cross_charge per-consumer events. */
@@ -1091,6 +1097,66 @@ function applyOneCrossCharge(
   }
 }
 
+// ─── Apply: add_back (one-sided normalisation) ─────────────────────────────
+
+/**
+ * One-sided management normalisation. For each entry, REMOVES a fixed amount
+ * from a P&L line at one company so its profit rises — nothing moves
+ * elsewhere, so consolidated Net Profit goes UP. Used for things like adding
+ * back excess owner/doctor salary that was drawn to clear surplus cash.
+ *
+ * Entries live in branch_configs (reusing the source_* fields):
+ *   source_company_id     → the company to normalise
+ *   source_pl_section_key → the P&L line to reduce (e.g. Director's Remuneration)
+ *   source_custom_amount  → the amount to add back (positive = remove from expense)
+ */
+function applyAddBack(
+  rule: LoadedRule,
+  adjusted: PLStatement,
+  events: AdjustmentEvent[],
+  warnings: string[],
+): void {
+  const entries = rule.parsedBranchConfigs || [];
+  if (entries.length === 0) {
+    warnings.push(`Rule "${rule.name}": add-back has no entries; skipped`);
+    return;
+  }
+  for (const [i, e] of entries.entries()) {
+    const companyId = e.source_company_id;
+    const sectionKey = e.source_pl_section_key || rule.target_pl_section_key || 'indirectExpenses';
+    const amount = e.source_custom_amount || 0;
+    const tag = e.label || `entry ${i + 1}`;
+    if (!companyId) {
+      warnings.push(`Rule "${rule.name}" · ${tag}: missing company; skipped`);
+      continue;
+    }
+    if (Math.abs(amount) < 0.005) {
+      warnings.push(`Rule "${rule.name}" · ${tag}: add-back amount is ₹0; skipped`);
+      continue;
+    }
+    const col = colFor(companyId);
+    // Add-back REDUCES the expense line → subtract the amount. Profit at that
+    // company rises by the same figure.
+    const ok = applyDeltaToCell(adjusted, sectionKey, col, -amount);
+    if (!ok) {
+      warnings.push(`Rule "${rule.name}" · ${tag}: cell (${sectionKey} @ ${col}) not found; skipped`);
+      continue;
+    }
+    events.push({
+      ruleId: rule.id,
+      ruleName: rule.name,
+      ruleKind: 'add_back',
+      sourceCol: '',
+      sourceLabel: '',
+      destinationCol: col,
+      destinationLabel: labelFor(adjusted, col),
+      targetSectionKey: sectionKey,
+      amount: -amount,
+      basisNote: 'added back to profit',
+    });
+  }
+}
+
 // ─── Public entry point ────────────────────────────────────────────────────
 
 /**
@@ -1127,7 +1193,10 @@ export function applyAllocationRules(
 
   for (const rule of rules) {
     try {
-      if (rule.rule_kind === 'pool_split') {
+      // Add-back is a flag on top of rule_kind='pool_split' — check it first.
+      if (rule.is_add_back) {
+        applyAddBack(rule, adjusted, events, warnings);
+      } else if (rule.rule_kind === 'pool_split') {
         applyPoolSplit(
           db,
           rule,

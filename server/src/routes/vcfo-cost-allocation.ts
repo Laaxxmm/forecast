@@ -109,6 +109,11 @@ interface RuleInput {
    *  takes precedence over rule-level source_* and the destinations array.
    *  Only meaningful for pool_split rules. */
   branch_configs?: BranchConfigInput[];
+
+  /** One-sided add-back / normalisation. rule_kind stays 'pool_split'; the
+   *  per-company entries live in branch_configs (source_company_id +
+   *  source_pl_section_key + source_custom_amount). */
+  is_add_back?: boolean | number | null;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -153,6 +158,24 @@ function validateRulePayload(p: RuleInput): void {
   }
   if (p.effective_from && p.effective_to && p.effective_to < p.effective_from) {
     throw new Error('effective_to must be on or after effective_from');
+  }
+
+  // Add-back / normalisation: one-sided removal of an amount from a P&L line
+  // at chosen companies. Entries live in branch_configs; each needs a company,
+  // a section, and a non-zero amount. No destinations / provider.
+  if (p.is_add_back) {
+    if (!Array.isArray(p.branch_configs) || p.branch_configs.length === 0) {
+      throw new Error('add-back needs at least one company entry');
+    }
+    for (const [i, bc] of p.branch_configs.entries()) {
+      const tag = bc.label || `entry ${i + 1}`;
+      if (!bc.source_company_id) throw new Error(`${tag}: company is required`);
+      if (!bc.source_pl_section_key) throw new Error(`${tag}: P&L line is required`);
+      if (!Number.isFinite(bc.source_custom_amount) || Math.abs(bc.source_custom_amount as number) < 0.005) {
+        throw new Error(`${tag}: add-back amount must be a non-zero number`);
+      }
+    }
+    return;
   }
 
   // Multi-branch mode: validate branch_configs and skip rule-level fields.
@@ -337,19 +360,32 @@ function writeRule(
 
   // For cross_charge rules, the pool_split fields stay NULL (and vice versa).
   // Normalising here keeps the row honest regardless of what the client sent.
-  const isPool = p.rule_kind === 'pool_split';
-  const isCross = p.rule_kind === 'cross_charge';
+  const isAddBack = !!p.is_add_back;
+  // Add-back stores rule_kind='pool_split' but is its own engine path; treat
+  // it as neither pool nor cross for the rule-level column normalisation.
+  const isPool = p.rule_kind === 'pool_split' && !isAddBack;
+  const isCross = p.rule_kind === 'cross_charge' && !isAddBack;
 
   // Multi-branch mode: rule-level provider/source fields stay NULL because
   // the engine ignores them. The branch_configs JSON column carries the
-  // per-branch data. Supported for both pool_split and cross_charge.
-  const isMultiBranch = Array.isArray(p.branch_configs) && p.branch_configs.length > 0;
+  // per-branch data. Supported for pool_split, cross_charge, and add-back.
+  const isMultiBranch = !isAddBack && Array.isArray(p.branch_configs) && p.branch_configs.length > 0;
 
   // Rule-level aggregate-source flag — only meaningful for a single-source
   // pool_split with source_type='pl_line'. (Multi-branch carries its own
   // per-branch source_all_companies inside branch_configs.)
   const ruleLevelPooled = isPool && !isMultiBranch && p.source_type === 'pl_line' && !!p.source_all_companies;
-  const branchConfigsJson = isMultiBranch
+  const branchConfigsJson = isAddBack
+    // Add-back entries: per-company {company, section, amount}. Reuses the
+    // source_* field names so the engine reads them uniformly.
+    ? JSON.stringify((p.branch_configs || []).map(bc => ({
+        label: bc.label?.trim() || null,
+        source_company_id: toIntOrNull(bc.source_company_id),
+        source_pl_section_key: bc.source_pl_section_key || null,
+        source_custom_amount: toNumOrNull(bc.source_custom_amount),
+        destinations: [],
+      })))
+    : isMultiBranch
     ? JSON.stringify(p.branch_configs!.map(bc => {
         if (isPool) {
           const pooled = bc.source_type === 'pl_line' && !!bc.source_all_companies;
@@ -397,16 +433,17 @@ function writeRule(
          source_all_companies,
          provider_company_id, charge_basis_section_key, charge_pct, provider_credit_section_key,
          alloc_method, target_pl_section_key,
-         branch_configs,
+         branch_configs, is_add_back,
          created_by
-       ) VALUES (?,?,?,?,?,?,?, ?,?,?,?,?, ?, ?,?,?,?, ?,?, ?, ?)`,
+       ) VALUES (?,?,?,?,?,?,?, ?,?,?,?,?, ?, ?,?,?,?, ?,?, ?,?, ?)`,
       p.name.trim(),
       p.description?.trim() || null,
       enabled,
       isoDateOrNull(p.effective_from),
       isoDateOrNull(p.effective_to),
       priority,
-      p.rule_kind,
+      // Add-back stores rule_kind='pool_split' (the engine routes on is_add_back).
+      isAddBack ? 'pool_split' : p.rule_kind,
       // In multi-branch mode the rule-level source fields are NOT used by the
       // engine, so we deliberately store them as NULL even if the client
       // happened to send them. Keeps the row honest.
@@ -427,6 +464,7 @@ function writeRule(
       isPool ? p.alloc_method || null : null,
       p.target_pl_section_key || (isCross ? 'directCosts' : 'indirectExpenses'),
       branchConfigsJson,
+      isAddBack ? 1 : 0,
       userId,
     );
     ruleId = info.lastInsertRowid;
@@ -441,7 +479,7 @@ function writeRule(
          provider_company_id = ?, charge_basis_section_key = ?, charge_pct = ?,
          provider_credit_section_key = ?,
          alloc_method = ?, target_pl_section_key = ?,
-         branch_configs = ?,
+         branch_configs = ?, is_add_back = ?,
          updated_at = datetime('now')
        WHERE id = ?`,
       p.name.trim(),
@@ -450,7 +488,7 @@ function writeRule(
       isoDateOrNull(p.effective_from),
       isoDateOrNull(p.effective_to),
       priority,
-      p.rule_kind,
+      isAddBack ? 'pool_split' : p.rule_kind,
       isPool && !isMultiBranch ? p.source_type || null : null,
       isPool && !isMultiBranch && !ruleLevelPooled ? toIntOrNull(p.source_company_id) : null,
       isPool && !isMultiBranch ? p.source_ledger_name?.trim() || null : null,
@@ -464,6 +502,7 @@ function writeRule(
       isPool ? p.alloc_method || null : null,
       p.target_pl_section_key || (isCross ? 'directCosts' : 'indirectExpenses'),
       branchConfigsJson,
+      isAddBack ? 1 : 0,
       ruleId,
     );
     // Wipe-and-rewrite destinations is simpler than diffing — the table is
@@ -474,9 +513,9 @@ function writeRule(
   }
 
   // Only write destinations table rows in single-source mode. Multi-branch
-  // rules carry their destinations inside the branch_configs JSON.
-  if (!isMultiBranch) {
-    for (const [i, d] of p.destinations.entries()) {
+  // and add-back rules carry their data inside the branch_configs JSON.
+  if (!isMultiBranch && !isAddBack) {
+    for (const [i, d] of (p.destinations || []).entries()) {
       db.run(
         `INSERT INTO vcfo_allocation_rule_destinations
            (rule_id, destination_company_id, weight, weight_basis_label, sort_order)
@@ -678,6 +717,7 @@ router.post('/_preview', async (req: Request, res: Response) => {
       provider_credit_section_key: payload.provider_credit_section_key ?? null,
       alloc_method: payload.alloc_method ?? null,
       target_pl_section_key: payload.target_pl_section_key ?? null,
+      is_add_back: payload.is_add_back ? 1 : 0,
       destinations: (payload.destinations || []).map((d, i) => ({
         id: 0,
         rule_id: 0,
@@ -708,7 +748,7 @@ router.post('/_preview', async (req: Request, res: Response) => {
             charge_basis_section_key: bc.charge_basis_section_key ?? null,
             charge_pct: bc.charge_pct ?? null,
             provider_credit_section_key: bc.provider_credit_section_key ?? null,
-            destinations: bc.destinations.map(d => ({
+            destinations: (bc.destinations || []).map(d => ({
               destination_company_id: d.destination_company_id,
               weight: d.weight,
               weight_basis_label: d.weight_basis_label ?? null,

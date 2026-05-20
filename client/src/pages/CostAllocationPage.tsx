@@ -24,6 +24,8 @@ import api from '../api/client';
 // ─── Types ───────────────────────────────────────────────────────────────
 
 type RuleKind = 'pool_split' | 'cross_charge';
+// UI-only kind: 'add_back' maps to { rule_kind:'pool_split', is_add_back:1 } at the API.
+type EditorKind = 'pool_split' | 'cross_charge' | 'add_back';
 type SourceType = 'ledger' | 'pl_line' | 'custom_amount';
 type AllocMethod = 'fixed_pct' | 'equal_split' | 'revenue_share' | 'weighted_ratio' | 'manual_amounts';
 
@@ -82,6 +84,10 @@ interface Rule {
   /** Multi-branch mode: non-null array means use these per-branch (source,
    *  destinations) groups instead of rule-level source/destinations. */
   branch_configs?: BranchConfig[] | null;
+  /** One-sided add-back / normalisation. When 1, branch_configs holds
+   *  per-company {source_company_id, source_pl_section_key, source_custom_amount}
+   *  entries and the engine removes each amount from that line. */
+  is_add_back?: number | boolean | null;
 }
 
 interface Company {
@@ -256,6 +262,17 @@ function emptyBranchConfig(): BranchConfig {
   };
 }
 
+/** Empty add-back entry — reuses source_* fields: company + line + amount. */
+function emptyAddBackEntry(): BranchConfig {
+  return {
+    label: '',
+    source_company_id: null,
+    source_pl_section_key: 'indirectExpenses',
+    source_custom_amount: 0,
+    destinations: [],
+  };
+}
+
 /** Empty branch_config shell for cross_charge rules. */
 function emptyCrossChargeBranch(): BranchConfig {
   return {
@@ -275,6 +292,11 @@ function companyLabel(c: Company): string {
 }
 
 function summariseSource(r: Rule, companies: Company[]): string {
+  // Add-back: roll up the total amount across entries.
+  if (r.is_add_back) {
+    const total = (r.branch_configs || []).reduce((a, e) => a + Number(e.source_custom_amount || 0), 0);
+    return `+₹${Math.round(total).toLocaleString('en-IN')} added back`;
+  }
   // Multi-branch always wins — roll up the count for both rule kinds since
   // the rule-level source/provider field is NULL in multi-branch mode.
   if (r.branch_configs && r.branch_configs.length > 0) {
@@ -306,8 +328,10 @@ function summariseSource(r: Rule, companies: Company[]): string {
  *  multi-branch mode, else rule-level destinations table. Used by the
  *  rules list to show a meaningful "Destinations" count. */
 function totalDestinations(r: Rule): number {
+  // Add-back: one entry per company.
+  if (r.is_add_back) return (r.branch_configs || []).length;
   if (r.branch_configs && r.branch_configs.length > 0) {
-    return r.branch_configs.reduce((sum, bc) => sum + bc.destinations.length, 0);
+    return r.branch_configs.reduce((sum, bc) => sum + (bc.destinations?.length || 0), 0);
   }
   return r.destinations.length;
 }
@@ -414,13 +438,18 @@ export default function CostAllocationPage() {
                       </td>
                       <td className="px-4 py-3 font-medium">{r.name}</td>
                       <td className="px-4 py-3">
-                        <span className={`px-2 py-0.5 rounded text-[11px] font-medium ${r.rule_kind === 'pool_split' ? 'bg-blue-500/15 text-blue-300' : 'bg-purple-500/15 text-purple-300'}`}>
-                          {r.rule_kind === 'pool_split' ? 'Pool split' : 'Cross-charge'}
+                        <span className={`px-2 py-0.5 rounded text-[11px] font-medium ${
+                          r.is_add_back ? 'bg-emerald-500/15 text-emerald-300'
+                            : r.rule_kind === 'pool_split' ? 'bg-blue-500/15 text-blue-300'
+                            : 'bg-purple-500/15 text-purple-300'}`}>
+                          {r.is_add_back ? 'Add-back' : r.rule_kind === 'pool_split' ? 'Pool split' : 'Cross-charge'}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-theme-muted">{summariseSource(r, companies)}</td>
                       <td className="px-4 py-3 text-theme-muted text-xs">
-                        {r.rule_kind === 'pool_split'
+                        {r.is_add_back
+                          ? 'One-sided'
+                          : r.rule_kind === 'pool_split'
                           ? ALLOC_METHODS.find(m => m.key === r.alloc_method)?.label || '—'
                           : `${r.charge_pct?.toFixed(0) || '?'}% cross-charge`}
                       </td>
@@ -505,13 +534,48 @@ function RuleEditorModal(props: {
     setR(prev => ({ ...prev, destinations: prev.destinations.filter((_, i) => i !== idx) }));
   };
 
-  const isMultiBranch = !!(r.branch_configs && r.branch_configs.length > 0);
+  const isAddBack = !!r.is_add_back;
+  const isMultiBranch = !isAddBack && !!(r.branch_configs && r.branch_configs.length > 0);
+  const editorKind: EditorKind = isAddBack ? 'add_back' : r.rule_kind;
+
+  // Switch the editor between the three kinds, keeping the underlying
+  // rule_kind + is_add_back flag in sync.
+  const setEditorKind = (k: EditorKind) => {
+    if (k === 'add_back') {
+      // Seed one empty add-back entry so the editor isn't blank.
+      setR(prev => ({
+        ...prev,
+        rule_kind: 'pool_split',
+        is_add_back: 1,
+        branch_configs: prev.is_add_back && prev.branch_configs?.length
+          ? prev.branch_configs
+          : [emptyAddBackEntry()],
+      }));
+    } else {
+      setR(prev => ({ ...prev, rule_kind: k, is_add_back: 0, branch_configs: null }));
+    }
+  };
 
   // Client-side validation.
   const validation = useMemo(() => {
     if (!r.name.trim()) return 'Name is required';
     if (r.effective_from && r.effective_to && r.effective_to < r.effective_from) {
       return 'Effective "to" date must be on or after "from" date';
+    }
+
+    // Add-back: each entry needs company + line + non-zero amount.
+    if (isAddBack) {
+      const entries = r.branch_configs || [];
+      if (entries.length === 0) return 'Add at least one company to add back';
+      for (const [i, e] of entries.entries()) {
+        const tag = e.label?.trim() || `Entry ${i + 1}`;
+        if (!e.source_company_id) return `${tag}: company is required`;
+        if (!e.source_pl_section_key) return `${tag}: P&L line is required`;
+        if (!Number.isFinite(e.source_custom_amount) || Math.abs(Number(e.source_custom_amount)) < 0.005) {
+          return `${tag}: add-back amount must be non-zero`;
+        }
+      }
+      return null;
     }
 
     if (r.rule_kind === 'pool_split') {
@@ -667,22 +731,24 @@ function RuleEditorModal(props: {
           <div>
             <label className="block text-xs font-medium text-theme-muted mb-1.5">Rule kind</label>
             <div className="inline-flex bg-dark-700 rounded-lg p-1 text-sm">
-              {(['pool_split', 'cross_charge'] as RuleKind[]).map(k => (
+              {(['pool_split', 'cross_charge', 'add_back'] as EditorKind[]).map(k => (
                 <button
                   key={k}
-                  onClick={() => set('rule_kind', k)}
+                  onClick={() => setEditorKind(k)}
                   className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                    r.rule_kind === k ? 'bg-accent-500 text-white' : 'text-theme-muted hover:text-theme-primary'
+                    editorKind === k ? 'bg-accent-500 text-white' : 'text-theme-muted hover:text-theme-primary'
                   }`}
                 >
-                  {k === 'pool_split' ? 'Pool split' : 'Cross-charge'}
+                  {k === 'pool_split' ? 'Pool split' : k === 'cross_charge' ? 'Cross-charge' : 'Add-back'}
                 </button>
               ))}
             </div>
             <p className="text-[11px] text-theme-faint mt-1.5">
-              {r.rule_kind === 'pool_split'
-                ? 'One source bucket fanned out across destinations (e.g. rent split by sqft).'
-                : 'Destinations charged X% of their own metric; sum credits a single provider (e.g. central lab fees).'}
+              {editorKind === 'pool_split'
+                ? 'One source bucket fanned out across destinations (e.g. rent split by sqft). Zero-sum.'
+                : editorKind === 'cross_charge'
+                ? 'Destinations charged X% of their own metric; sum credits a single provider (e.g. central lab fees). Zero-sum.'
+                : 'One-sided normalisation: remove a fixed amount from a P&L line at chosen companies so profit rises (e.g. add back excess doctor salary). Consolidated profit goes UP.'}
             </p>
           </div>
 
@@ -742,10 +808,10 @@ function RuleEditorModal(props: {
             </div>
           </div>
 
-          {/* Multi-branch mode toggle — supported for both rule kinds. Lets
-              one rule cover every region: e.g. one "Rent Adjustment" rule
-              with a branch per location, or one "Diagnostics" rule with a
-              branch per regional lab provider. */}
+          {/* Multi-branch mode toggle — pool_split + cross_charge only (not
+              add-back, which is already per-company). Lets one rule cover
+              every region. */}
+          {!isAddBack && (
           <div className="border-t border-dark-400/30 pt-4">
             <label className="flex items-start gap-3 cursor-pointer">
               <input
@@ -823,9 +889,20 @@ function RuleEditorModal(props: {
               </div>
             </label>
           </div>
+          )}
+
+          {/* Add-back editor — per-company {company, P&L line, amount} entries */}
+          {isAddBack && (
+            <AddBackEditor
+              entries={r.branch_configs || []}
+              onChange={entries => set('branch_configs', entries)}
+              companies={companies}
+              sectionTree={sectionTree}
+            />
+          )}
 
           {/* Pool-split fields (single-source mode) */}
-          {r.rule_kind === 'pool_split' && !isMultiBranch && (
+          {r.rule_kind === 'pool_split' && !isAddBack && !isMultiBranch && (
             <>
               <div className="border-t border-dark-400/30 pt-4">
                 <h4 className="text-sm font-semibold text-theme-muted mb-3">Source</h4>
@@ -948,7 +1025,7 @@ function RuleEditorModal(props: {
 
           {/* Distribution section — applies to BOTH single-source and
               multi-branch pool_split rules (shared alloc_method + target). */}
-          {r.rule_kind === 'pool_split' && (
+          {r.rule_kind === 'pool_split' && !isAddBack && (
             <>
               <div className="border-t border-dark-400/30 pt-4">
                 <h4 className="text-sm font-semibold text-theme-muted mb-3">Distribution</h4>
@@ -1055,8 +1132,8 @@ function RuleEditorModal(props: {
           )}
 
           {/* Destinations (rule-level — single-source pool_split + all cross_charge).
-              Hidden in multi-branch mode: each branch carries its own dests. */}
-          {!isMultiBranch && (
+              Hidden in multi-branch mode and add-back: each carries its own data. */}
+          {!isMultiBranch && !isAddBack && (
           <div className="border-t border-dark-400/30 pt-4">
             <h4 className="text-sm font-semibold text-theme-muted mb-3">
               {r.rule_kind === 'pool_split' ? 'Destinations' : 'Consumers'}
@@ -1586,4 +1663,115 @@ function MultiBranchEditor(props: {
       )}
     </div>
   );
+}
+
+// ─── Add-back editor ─────────────────────────────────────────────────────
+// One row per company: pick the company, the P&L line to reduce, and the
+// fixed amount to add back. Each amount is REMOVED from that line so the
+// company's profit rises (one-sided — nothing moves elsewhere).
+
+function AddBackEditor(props: {
+  entries: BranchConfig[];
+  onChange: (entries: BranchConfig[]) => void;
+  companies: Company[];
+  sectionTree: SectionNode[];
+}) {
+  const { entries, onChange, companies, sectionTree } = props;
+
+  const update = (idx: number, patch: Partial<BranchConfig>) => {
+    onChange(entries.map((e, i) => i === idx ? { ...e, ...patch } : e));
+  };
+  const removeEntry = (idx: number) => onChange(entries.filter((_, i) => i !== idx));
+  const addEntry = () => onChange([...entries, emptyAddBackEntry()]);
+
+  const totalAddBack = entries.reduce((a, e) => a + Number(e.source_custom_amount || 0), 0);
+
+  return (
+    <div className="border-t border-dark-400/30 pt-4">
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-sm font-semibold text-theme-muted">
+          Companies to normalise
+          <span className="text-theme-faint ml-2 font-normal text-[11px]">{entries.length} added</span>
+        </h4>
+        <button onClick={addEntry} className="inline-flex items-center gap-1 text-xs text-accent-400 hover:text-accent-300">
+          <Plus size={12} /> Add company
+        </button>
+      </div>
+      <p className="text-[11px] text-theme-faint mb-3">
+        Each amount is <strong>removed</strong> from the chosen P&amp;L line at that company, so its profit rises by that figure.
+        For excess salary added back, pick the salary/remuneration line and type the excess.
+      </p>
+
+      <div className="space-y-2">
+        {entries.map((e, i) => {
+          const co = companies.find(c => c.id === e.source_company_id);
+          return (
+            <div key={i} className="bg-dark-700/40 border border-dark-400/40 rounded-lg p-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] text-theme-muted mb-1">Company</label>
+                  <select
+                    value={e.source_company_id || ''}
+                    onChange={ev => update(i, {
+                      source_company_id: ev.target.value ? parseInt(ev.target.value) : null,
+                      label: ev.target.value ? (companies.find(c => c.id === parseInt(ev.target.value))?.name || '') : e.label,
+                    })}
+                    className="w-full bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-xs"
+                  >
+                    <option value="">— choose company —</option>
+                    {companies.map(c => <option key={c.id} value={c.id}>{companyLabel(c)}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] text-theme-muted mb-1">Amount to add back (₹)</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      value={e.source_custom_amount ?? ''}
+                      onChange={ev => update(i, { source_custom_amount: ev.target.value === '' ? null : parseFloat(ev.target.value) })}
+                      placeholder="e.g. 200000"
+                      className="flex-1 bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-xs text-right"
+                    />
+                    <button onClick={() => removeEntry(i)} className="text-theme-faint hover:text-red-400 p-1" title="Remove">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-2">
+                <label className="block text-[11px] text-theme-muted mb-1">P&amp;L line to reduce</label>
+                <select
+                  value={e.source_pl_section_key || 'indirectExpenses'}
+                  onChange={ev => update(i, { source_pl_section_key: ev.target.value })}
+                  className="w-full bg-dark-700 border border-dark-400/40 rounded px-2 py-1.5 text-xs font-mono"
+                >
+                  {sectionOptions(sectionTree)}
+                </select>
+              </div>
+              {co && Number(e.source_custom_amount || 0) > 0 && (
+                <p className="text-[10px] text-emerald-400 mt-1.5">
+                  {co.name}'s profit rises by {formatRsLocal(Number(e.source_custom_amount))}.
+                </p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {entries.length === 0 ? (
+        <p className="text-xs text-theme-faint italic mt-2">No companies added yet. Click "Add company" above.</p>
+      ) : (
+        <div className="text-[11px] text-theme-faint mt-2 pl-1">
+          Total added back across {entries.length} {entries.length === 1 ? 'company' : 'companies'}:{' '}
+          <strong className="text-emerald-400">{formatRsLocal(totalAddBack)}</strong> — consolidated profit rises by this.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Local ₹ formatter for the add-back editor previews (avoids importing the
+ *  P&L formatter for one string). */
+function formatRsLocal(n: number): string {
+  return `₹${Math.round(n).toLocaleString('en-IN')}`;
 }

@@ -645,6 +645,19 @@ export function initializeSchema(db: DbHelper) {
       -- branch configs, no rule explosion.
       branch_configs TEXT,
 
+      -- ADD-BACK / NORMALISATION mode. When 1, this rule is a one-sided
+      -- management normalisation rather than a (zero-sum) reallocation:
+      -- it REMOVES a fixed amount from a P&L line at chosen companies so
+      -- their profit rises, and nothing moves elsewhere (consolidated NP
+      -- goes UP). rule_kind stays 'pool_split' for the CHECK constraint, but
+      -- the engine/UI treat is_add_back as a distinct kind. The per-company
+      -- entries live in branch_configs, each as
+      --   { label, source_company_id, source_pl_section_key, source_custom_amount }
+      -- where source_custom_amount is the excess to add back at that company.
+      -- Use case: doctors at some clinics drew extra salary to clear surplus
+      -- cash; for management reporting that excess is added back to profit.
+      is_add_back INTEGER NOT NULL DEFAULT 0,
+
       created_by INTEGER,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
@@ -926,6 +939,9 @@ export function initializeSchema(db: DbHelper) {
     // Aggregate-source mode — pool a pl_line across every company into one
     // bucket (Head-Office redistribution as a single rule).
     'ALTER TABLE vcfo_allocation_rules ADD COLUMN source_all_companies INTEGER NOT NULL DEFAULT 0',
+    // Add-back / normalisation — one-sided removal of an amount from a P&L
+    // line at chosen companies (e.g. excess doctor salary added back).
+    'ALTER TABLE vcfo_allocation_rules ADD COLUMN is_add_back INTEGER NOT NULL DEFAULT 0',
   ];
   for (const sql of branchMigrations) {
     try { db.exec(sql); } catch { /* column already exists */ }

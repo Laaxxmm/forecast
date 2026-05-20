@@ -17,7 +17,7 @@ import {
 interface AdjustmentEvent {
   ruleId: number;
   ruleName: string;
-  ruleKind: 'pool_split' | 'cross_charge';
+  ruleKind: 'pool_split' | 'cross_charge' | 'add_back';
   sourceCol: string;
   sourceLabel: string;
   destinationCol: string;
@@ -677,7 +677,7 @@ function AdjustmentsBlockCard(props: {
   interface RuleSummary {
     ruleId: number;
     ruleName: string;
-    ruleKind: 'pool_split' | 'cross_charge';
+    ruleKind: 'pool_split' | 'cross_charge' | 'add_back';
     perCol: Record<string, number>;
   }
   const ruleSummaries: RuleSummary[] = [];
@@ -831,8 +831,11 @@ function AdjustmentsBlockCard(props: {
                 <td className="py-2 sticky left-0 bg-dark-800 font-medium text-[13px] text-theme-primary" style={{ paddingLeft: 16, paddingRight: 16 }}>
                   <span className="inline-flex items-center gap-1.5">
                     {s.ruleName}
-                    <span className={`px-1.5 py-0.5 rounded text-[9px] ${s.ruleKind === 'pool_split' ? 'bg-blue-500/15 text-blue-300' : 'bg-purple-500/15 text-purple-300'}`}>
-                      {s.ruleKind === 'pool_split' ? 'Pool split' : 'Cross-charge'}
+                    <span className={`px-1.5 py-0.5 rounded text-[9px] ${
+                      s.ruleKind === 'add_back' ? 'bg-emerald-500/15 text-emerald-300'
+                        : s.ruleKind === 'pool_split' ? 'bg-blue-500/15 text-blue-300'
+                        : 'bg-purple-500/15 text-purple-300'}`}>
+                      {s.ruleKind === 'add_back' ? 'Add-back' : s.ruleKind === 'pool_split' ? 'Pool split' : 'Cross-charge'}
                     </span>
                   </span>
                 </td>
