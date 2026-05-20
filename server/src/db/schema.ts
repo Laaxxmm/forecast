@@ -603,6 +603,13 @@ export function initializeSchema(db: DbHelper) {
       source_ledger_name TEXT,
       source_pl_section_key TEXT,
       source_custom_amount REAL,
+      -- When 1 (only meaningful with source_type='pl_line'): pool the chosen
+      -- P&L line across EVERY company into one bucket, drain each company's
+      -- share, then redistribute the whole pool by the alloc_method. Turns
+      -- Head-Office redistribution ("everyone's HO line → spread by headcount")
+      -- into a single rule instead of one branch group per source entity.
+      -- source_company_id is ignored / NULL in this mode.
+      source_all_companies INTEGER NOT NULL DEFAULT 0,
 
       -- CROSS_CHARGE: many destinations -> one provider
       provider_company_id INTEGER REFERENCES vcfo_companies(id) ON DELETE CASCADE,
@@ -916,6 +923,9 @@ export function initializeSchema(db: DbHelper) {
     // source+destinations groups so one rule can cover every branch
     // (e.g. one "Rent Adjustment" rule for all 9 locations).
     'ALTER TABLE vcfo_allocation_rules ADD COLUMN branch_configs TEXT',
+    // Aggregate-source mode — pool a pl_line across every company into one
+    // bucket (Head-Office redistribution as a single rule).
+    'ALTER TABLE vcfo_allocation_rules ADD COLUMN source_all_companies INTEGER NOT NULL DEFAULT 0',
   ];
   for (const sql of branchMigrations) {
     try { db.exec(sql); } catch { /* column already exists */ }

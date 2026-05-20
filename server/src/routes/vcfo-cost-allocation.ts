@@ -64,6 +64,7 @@ interface BranchConfigInput {
   source_ledger_name?: string | null;
   source_pl_section_key?: string | null;
   source_custom_amount?: number | null;
+  source_all_companies?: boolean | number | null;
   // cross_charge — provider + per-branch overrides for basis/pct/credit
   provider_company_id?: number | null;
   charge_basis_section_key?: string | null;
@@ -88,6 +89,7 @@ interface RuleInput {
   source_ledger_name?: string | null;
   source_pl_section_key?: string | null;
   source_custom_amount?: number | null;
+  source_all_companies?: boolean | number | null;
 
   // cross_charge
   provider_company_id?: number | null;
@@ -191,8 +193,11 @@ function validateRulePayload(p: RuleInput): void {
             throw new Error(`${tag}: source_ledger_name is required when source_type=ledger`);
           }
         } else if (bc.source_type === 'pl_line') {
-          if (!bc.source_company_id) throw new Error(`${tag}: source_company_id is required when source_type=pl_line`);
           if (!bc.source_pl_section_key) throw new Error(`${tag}: source_pl_section_key is required when source_type=pl_line`);
+          // Pooled (all-companies) pl_line needs no source company.
+          if (!bc.source_all_companies && !bc.source_company_id) {
+            throw new Error(`${tag}: source_company_id is required when source_type=pl_line (or tick "pool across all companies")`);
+          }
         } else if (bc.source_type === 'custom_amount') {
           if (!Number.isFinite(bc.source_custom_amount)) {
             throw new Error(`${tag}: source_custom_amount must be a number when source_type=custom_amount`);
@@ -256,8 +261,11 @@ function validateRulePayload(p: RuleInput): void {
         throw new Error('source_ledger_name is required when source_type=ledger');
       }
     } else if (p.source_type === 'pl_line') {
-      if (!p.source_company_id) throw new Error('source_company_id is required when source_type=pl_line');
       if (!p.source_pl_section_key) throw new Error('source_pl_section_key is required when source_type=pl_line');
+      // Pooled (all-companies) pl_line needs no source company.
+      if (!p.source_all_companies && !p.source_company_id) {
+        throw new Error('source_company_id is required when source_type=pl_line (or enable "pool across all companies")');
+      }
     } else if (p.source_type === 'custom_amount') {
       if (!Number.isFinite(p.source_custom_amount)) {
         throw new Error('source_custom_amount must be a number when source_type=custom_amount');
@@ -336,16 +344,24 @@ function writeRule(
   // the engine ignores them. The branch_configs JSON column carries the
   // per-branch data. Supported for both pool_split and cross_charge.
   const isMultiBranch = Array.isArray(p.branch_configs) && p.branch_configs.length > 0;
+
+  // Rule-level aggregate-source flag — only meaningful for a single-source
+  // pool_split with source_type='pl_line'. (Multi-branch carries its own
+  // per-branch source_all_companies inside branch_configs.)
+  const ruleLevelPooled = isPool && !isMultiBranch && p.source_type === 'pl_line' && !!p.source_all_companies;
   const branchConfigsJson = isMultiBranch
     ? JSON.stringify(p.branch_configs!.map(bc => {
         if (isPool) {
+          const pooled = bc.source_type === 'pl_line' && !!bc.source_all_companies;
           return {
             label: bc.label?.trim() || null,
             source_type: bc.source_type,
-            source_company_id: bc.source_type === 'custom_amount' ? null : toIntOrNull(bc.source_company_id),
+            // Pooled pl_line has no single source company.
+            source_company_id: (bc.source_type === 'custom_amount' || pooled) ? null : toIntOrNull(bc.source_company_id),
             source_ledger_name: bc.source_type === 'ledger' ? (bc.source_ledger_name?.trim() || null) : null,
             source_pl_section_key: bc.source_type === 'pl_line' ? (bc.source_pl_section_key || null) : null,
             source_custom_amount: bc.source_type === 'custom_amount' ? toNumOrNull(bc.source_custom_amount) : null,
+            source_all_companies: pooled ? 1 : 0,
             destinations: bc.destinations.map((d, i) => ({
               destination_company_id: d.destination_company_id,
               weight: Number.isFinite(d.weight) ? d.weight : 0,
@@ -378,11 +394,12 @@ function writeRule(
       `INSERT INTO vcfo_allocation_rules (
          name, description, enabled, effective_from, effective_to, priority, rule_kind,
          source_type, source_company_id, source_ledger_name, source_pl_section_key, source_custom_amount,
+         source_all_companies,
          provider_company_id, charge_basis_section_key, charge_pct, provider_credit_section_key,
          alloc_method, target_pl_section_key,
          branch_configs,
          created_by
-       ) VALUES (?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?, ?, ?)`,
+       ) VALUES (?,?,?,?,?,?,?, ?,?,?,?,?, ?, ?,?,?,?, ?,?, ?, ?)`,
       p.name.trim(),
       p.description?.trim() || null,
       enabled,
@@ -394,10 +411,12 @@ function writeRule(
       // engine, so we deliberately store them as NULL even if the client
       // happened to send them. Keeps the row honest.
       isPool && !isMultiBranch ? p.source_type || null : null,
-      isPool && !isMultiBranch ? toIntOrNull(p.source_company_id) : null,
+      // Pooled (all-companies) pl_line has no single source company.
+      isPool && !isMultiBranch && !ruleLevelPooled ? toIntOrNull(p.source_company_id) : null,
       isPool && !isMultiBranch ? p.source_ledger_name?.trim() || null : null,
       isPool && !isMultiBranch ? p.source_pl_section_key || null : null,
       isPool && !isMultiBranch ? toNumOrNull(p.source_custom_amount) : null,
+      ruleLevelPooled ? 1 : 0,
       // For multi-branch cross_charge: provider_company_id is per-branch so
       // rule-level value is NULL. The other fields (basis/pct/credit) stay
       // as rule-level defaults that branches can inherit or override.
@@ -418,6 +437,7 @@ function writeRule(
          effective_from = ?, effective_to = ?, priority = ?, rule_kind = ?,
          source_type = ?, source_company_id = ?, source_ledger_name = ?,
          source_pl_section_key = ?, source_custom_amount = ?,
+         source_all_companies = ?,
          provider_company_id = ?, charge_basis_section_key = ?, charge_pct = ?,
          provider_credit_section_key = ?,
          alloc_method = ?, target_pl_section_key = ?,
@@ -432,10 +452,11 @@ function writeRule(
       priority,
       p.rule_kind,
       isPool && !isMultiBranch ? p.source_type || null : null,
-      isPool && !isMultiBranch ? toIntOrNull(p.source_company_id) : null,
+      isPool && !isMultiBranch && !ruleLevelPooled ? toIntOrNull(p.source_company_id) : null,
       isPool && !isMultiBranch ? p.source_ledger_name?.trim() || null : null,
       isPool && !isMultiBranch ? p.source_pl_section_key || null : null,
       isPool && !isMultiBranch ? toNumOrNull(p.source_custom_amount) : null,
+      ruleLevelPooled ? 1 : 0,
       isCross && !isMultiBranch ? toIntOrNull(p.provider_company_id) : null,
       isCross ? p.charge_basis_section_key || null : null,
       isCross ? toNumOrNull(p.charge_pct) : null,
@@ -650,6 +671,7 @@ router.post('/_preview', async (req: Request, res: Response) => {
       source_ledger_name: payload.source_ledger_name ?? null,
       source_pl_section_key: payload.source_pl_section_key ?? null,
       source_custom_amount: payload.source_custom_amount ?? null,
+      source_all_companies: payload.source_all_companies ? 1 : 0,
       provider_company_id: payload.provider_company_id ?? null,
       charge_basis_section_key: payload.charge_basis_section_key ?? null,
       charge_pct: payload.charge_pct ?? null,
@@ -680,6 +702,7 @@ router.post('/_preview', async (req: Request, res: Response) => {
             source_ledger_name: bc.source_ledger_name ?? null,
             source_pl_section_key: bc.source_pl_section_key ?? null,
             source_custom_amount: bc.source_custom_amount ?? null,
+            source_all_companies: bc.source_all_companies ? 1 : 0,
             // cross_charge fields
             provider_company_id: bc.provider_company_id ?? null,
             charge_basis_section_key: bc.charge_basis_section_key ?? null,

@@ -70,6 +70,8 @@ export interface AllocationRuleRow {
   source_ledger_name: string | null;
   source_pl_section_key: string | null;
   source_custom_amount: number | null;
+  /** 1 = pool source_pl_section_key across ALL companies (Head-Office mode). */
+  source_all_companies?: number | null;
 
   // cross_charge
   provider_company_id: number | null;
@@ -109,6 +111,7 @@ export interface BranchConfig {
   source_ledger_name?: string | null;
   source_pl_section_key?: string | null;
   source_custom_amount?: number | null;
+  source_all_companies?: number | null;
   // cross_charge fields
   provider_company_id?: number | null;
   charge_basis_section_key?: string | null;
@@ -616,6 +619,8 @@ interface PoolSplitConfig {
   source_ledger_name: string | null;
   source_pl_section_key: string | null;
   source_custom_amount: number | null;
+  /** Pool the pl_line across every company column (Head-Office mode). */
+  source_all_companies?: boolean;
   destinations: Array<{
     destination_company_id: number;
     weight: number;
@@ -647,6 +652,7 @@ function applyPoolSplit(
         source_ledger_name: bc.source_ledger_name ?? null,
         source_pl_section_key: bc.source_pl_section_key ?? null,
         source_custom_amount: bc.source_custom_amount ?? null,
+        source_all_companies: !!bc.source_all_companies,
         destinations: bc.destinations.map(d => ({
           destination_company_id: d.destination_company_id,
           weight: d.weight,
@@ -665,6 +671,7 @@ function applyPoolSplit(
     source_ledger_name: rule.source_ledger_name,
     source_pl_section_key: rule.source_pl_section_key,
     source_custom_amount: rule.source_custom_amount,
+    source_all_companies: !!rule.source_all_companies,
     destinations: rule.destinations.map(d => ({
       destination_company_id: d.destination_company_id,
       weight: d.weight,
@@ -685,6 +692,15 @@ function applyOneSplit(
   events: AdjustmentEvent[],
   warnings: string[],
 ): void {
+  // ── Aggregate-source (Head-Office) mode ────────────────────────────────
+  // Pool the chosen pl_line across EVERY company into one bucket, drain each
+  // contributing company, then redistribute the pool by the alloc_method.
+  // Distinct enough from the single-source path that it gets its own branch.
+  if (cfg.source_all_companies && cfg.source_type === 'pl_line' && cfg.source_pl_section_key) {
+    applyPooledSplit(rule, cfg, adjusted, events, warnings);
+    return;
+  }
+
   const { amount: sourceAmount, sourceCol, mutateSource } = resolveSourceAmountForConfig(
     db, cfg, adjusted, period,
   );
@@ -765,6 +781,90 @@ function applyOneSplit(
       ruleKind: 'pool_split',
       sourceCol: sourceCol || '',
       sourceLabel: sourceCol ? labelFor(adjusted, sourceCol) : 'Custom amount',
+      destinationCol: destCol,
+      destinationLabel: labelFor(adjusted, destCol),
+      targetSectionKey,
+      amount: d.amount,
+      basisNote: d.basisNote,
+    });
+  }
+}
+
+/**
+ * Aggregate-source ("Head-Office") pool split. Pools `source_pl_section_key`
+ * across EVERY company column into a single bucket, drains each contributing
+ * company, then redistributes the pool across the destinations by the rule's
+ * alloc_method.
+ *
+ * Net effect for an entity that both contributes HO and is a destination:
+ *   final = (its share of the pool)   [drained its full HO, received its share]
+ * Total pool is conserved across the destinations. Emits one "pool drained"
+ * event per contributing company (so the columnar Adjustments table nets
+ * correctly) plus one event per destination receiving its share.
+ */
+function applyPooledSplit(
+  rule: LoadedRule,
+  cfg: PoolSplitConfig,
+  adjusted: PLStatement,
+  events: AdjustmentEvent[],
+  warnings: string[],
+): void {
+  const sectionKey = cfg.source_pl_section_key!;
+  const section = findSection(adjusted.sections, sectionKey);
+  if (!section) {
+    warnings.push(`${cfg.contextLabel}: pooled source section '${sectionKey}' not found; skipped`);
+    return;
+  }
+
+  const companyCols = adjusted.columns.filter(c => c !== 'total');
+  // Pool = sum of the section's value across every company column. Expense
+  // sections are stored positive, so the pool is the total HO booked anywhere.
+  let pool = 0;
+  for (const c of companyCols) pool += section.values[c] || 0;
+
+  if (Math.abs(pool) < 0.005) {
+    warnings.push(`${cfg.contextLabel}: pooled source resolved to ₹0 across all companies; nothing to distribute`);
+    return;
+  }
+
+  const targetSectionKey = rule.target_pl_section_key!;
+
+  // Drain each contributing company's share of the line (remove HO from where
+  // it was booked). Drain from the SOURCE section (which may be a nested
+  // child); applyDeltaToCell propagates to ancestors.
+  for (const c of companyCols) {
+    const v = section.values[c] || 0;
+    if (Math.abs(v) < 0.005) continue;
+    applyDeltaToCell(adjusted, sectionKey, c, -v);
+    events.push({
+      ruleId: rule.id,
+      ruleName: cfg.contextLabel,
+      ruleKind: 'pool_split',
+      sourceCol: '',
+      sourceLabel: '',
+      destinationCol: c,
+      destinationLabel: `${labelFor(adjusted, c)} (pooled out)`,
+      targetSectionKey: sectionKey,
+      amount: -v,
+      basisNote: 'HO pooled across all companies',
+    });
+  }
+
+  // Redistribute the pool by the alloc_method to the destinations.
+  const distribution = distributeForConfig(rule, cfg, pool, adjusted, warnings);
+  for (const d of distribution) {
+    const destCol = colFor(d.destinationCompanyId);
+    const ok = applyDeltaToCell(adjusted, targetSectionKey, destCol, d.amount);
+    if (!ok) {
+      warnings.push(`${cfg.contextLabel}: destination ${destCol} not in current report; skipped`);
+      continue;
+    }
+    events.push({
+      ruleId: rule.id,
+      ruleName: cfg.contextLabel,
+      ruleKind: 'pool_split',
+      sourceCol: '',
+      sourceLabel: 'Pooled (all companies)',
       destinationCol: destCol,
       destinationLabel: labelFor(adjusted, destCol),
       targetSectionKey,

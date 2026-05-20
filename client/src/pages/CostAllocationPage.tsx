@@ -47,6 +47,7 @@ interface BranchConfig {
   source_ledger_name?: string | null;
   source_pl_section_key?: string | null;
   source_custom_amount?: number | null;
+  source_all_companies?: number | boolean | null;
   // cross_charge fields
   provider_company_id?: number | null;
   charge_basis_section_key?: string | null;
@@ -70,6 +71,7 @@ interface Rule {
   source_ledger_name: string | null;
   source_pl_section_key: string | null;
   source_custom_amount: number | null;
+  source_all_companies?: number | boolean | null;
   provider_company_id: number | null;
   charge_basis_section_key: string | null;
   charge_pct: number | null;
@@ -525,8 +527,8 @@ function RuleEditorModal(props: {
             if (!bc.source_company_id) return `${tag}: source company is required for ledger source`;
             if (!bc.source_ledger_name?.trim()) return `${tag}: source ledger name is required`;
           } else if (bc.source_type === 'pl_line') {
-            if (!bc.source_company_id) return `${tag}: source company is required for P&L line source`;
             if (!bc.source_pl_section_key) return `${tag}: source P&L section is required`;
+            if (!bc.source_all_companies && !bc.source_company_id) return `${tag}: source company is required (or tick "pool across all companies")`;
           }
           if (r.alloc_method === 'fixed_pct') {
             const sum = bc.destinations.reduce((a, d) => a + Number(d.weight || 0), 0);
@@ -547,8 +549,8 @@ function RuleEditorModal(props: {
         if (!r.source_company_id) return 'Source company is required for ledger source';
         if (!r.source_ledger_name?.trim()) return 'Source ledger name is required';
       } else if (r.source_type === 'pl_line') {
-        if (!r.source_company_id) return 'Source company is required for P&L line source';
         if (!r.source_pl_section_key) return 'Source P&L section is required';
+        if (!r.source_all_companies && !r.source_company_id) return 'Source company is required for P&L line source (or tick "pool across all companies")';
       }
       // Note: source company IS allowed as a destination — that's the
       // standard rent-split case (source company keeps its share).
@@ -840,7 +842,7 @@ function RuleEditorModal(props: {
                       <option value="custom_amount">Custom amount</option>
                     </select>
                   </div>
-                  {r.source_type !== 'custom_amount' && (
+                  {r.source_type !== 'custom_amount' && !(r.source_type === 'pl_line' && r.source_all_companies) && (
                     <div>
                       <label className="block text-xs text-theme-muted mb-1.5">Source company</label>
                       <select
@@ -886,9 +888,27 @@ function RuleEditorModal(props: {
                       {sectionOptions(sectionTree)}
                     </select>
                     <p className="text-[10px] text-theme-faint mt-1">
-                      The selected section's current value at the source company column is used as the pool.
-                      Indented entries are nested sub-lines under their parent.
+                      {r.source_all_companies
+                        ? "This line's value across EVERY company is pooled into one bucket, drained from wherever it sits, and redistributed below."
+                        : "The selected section's current value at the source company column is used as the pool. Indented entries are nested sub-lines under their parent."}
                     </p>
+                    {/* Aggregate-source toggle — the Head-Office redistribution
+                        shortcut. One rule pools the line across all companies. */}
+                    <label className="flex items-start gap-2 cursor-pointer mt-2 bg-dark-700/50 border border-dark-400/40 rounded-lg px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={!!r.source_all_companies}
+                        onChange={e => {
+                          set('source_all_companies', e.target.checked ? 1 : 0);
+                          if (e.target.checked) set('source_company_id', null);
+                        }}
+                        className="mt-0.5 w-3.5 h-3.5 accent-accent-500"
+                      />
+                      <span className="text-[11px]">
+                        <span className="text-theme-primary font-medium">Pool this line across ALL companies</span>
+                        <span className="text-theme-faint"> — for Head-Office redistribution: pools the chosen line everywhere it's booked and spreads it across your destinations by the method below. No source company needed.</span>
+                      </span>
+                    </label>
                   </div>
                 )}
                 {r.source_type === 'custom_amount' && (
@@ -1347,7 +1367,7 @@ function MultiBranchEditor(props: {
                     <option value="custom_amount">Custom amount</option>
                   </select>
                 </div>
-                {bc.source_type !== 'custom_amount' && (
+                {bc.source_type !== 'custom_amount' && !(bc.source_type === 'pl_line' && bc.source_all_companies) && (
                   <div>
                     <label className="block text-[11px] text-theme-muted mb-1">Source company</label>
                     <select
@@ -1390,6 +1410,20 @@ function MultiBranchEditor(props: {
                   >
                     {sectionOptions(sectionTree)}
                   </select>
+                  <label className="flex items-start gap-2 cursor-pointer mt-1.5">
+                    <input
+                      type="checkbox"
+                      checked={!!bc.source_all_companies}
+                      onChange={e => update(i, {
+                        source_all_companies: e.target.checked ? 1 : 0,
+                        ...(e.target.checked ? { source_company_id: null } : {}),
+                      })}
+                      className="mt-0.5 w-3.5 h-3.5 accent-accent-500"
+                    />
+                    <span className="text-[10px] text-theme-faint">
+                      <span className="text-theme-secondary">Pool this line across ALL companies</span> (no source company)
+                    </span>
+                  </label>
                 </div>
               )}
               {bc.source_type === 'custom_amount' && (
