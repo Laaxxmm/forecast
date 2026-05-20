@@ -494,10 +494,20 @@ export function initializeSchema(db: DbHelper) {
     -- sales voucher that hits Sales + Debtors + GST lands as three rows.
     -- debit/credit are magnitudes (>= 0); the sign is carried by the column
     -- choice so SUM(credit) - SUM(debit) yields credit-positive movement.
-    -- Including (debit, credit) in the UNIQUE handles Tally's legitimate case
-    -- of the same ledger appearing twice in one voucher with different amounts
-    -- (e.g. a voucher with two line items that both hit the same GST ledger
-    -- at different rates).
+    --
+    -- IMPORTANT — one row per (voucher, ledger): the ingest layer
+    -- (ingestVoucherLedgerEntries) AGGREGATES all lines of a voucher that hit
+    -- the same ledger into a single summed row before inserting. This is
+    -- deliberate: the UNIQUE below includes (debit, credit), and an earlier
+    -- INSERT OR IGNORE silently dropped the second line whenever a voucher
+    -- posted the same ledger with the SAME amount twice (a common Tally
+    -- pattern — a payment settling two equal bills, two cost-centre splits of
+    -- the same value, etc.), under-counting that ledger and making the
+    -- dashboard P&L disagree with Tally on specific lines. Aggregating first
+    -- makes each (voucher, ledger) pair a single row, so the UNIQUE never
+    -- collides and SUM(debit)/SUM(credit) — all the dynamic-TB service reads —
+    -- stays exact. The UNIQUE is now effectively redundant (the DELETE-by-
+    -- sync_month on re-ingest handles idempotency) but harmless.
     CREATE TABLE IF NOT EXISTS vcfo_voucher_ledger_entries (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       company_id INTEGER NOT NULL REFERENCES vcfo_companies(id) ON DELETE CASCADE,

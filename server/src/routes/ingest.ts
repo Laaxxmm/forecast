@@ -337,9 +337,51 @@ function ingestVoucherLedgerEntries(db: DbHelper, companyId: number, rows: any[]
       );
     }
 
+    // Aggregate per (voucher_date, voucher_type, voucher_number, ledger_name),
+    // summing debit + credit, BEFORE inserting.
+    //
+    // Why: the table's UNIQUE(company_id, voucher_date, voucher_type,
+    // voucher_number, ledger_name, debit, credit) + INSERT OR IGNORE silently
+    // DROPS a second line when one voucher posts the same ledger with the same
+    // amount twice — a common Tally pattern (a payment settling two equal
+    // bills, two cost-centre splits of the same value, etc.). That under-counts
+    // the ledger by exactly the dropped line's amount and made the dashboard
+    // P&L disagree with Tally on specific lines (e.g. Medicines/consumables,
+    // Headoffice Expenses). Collapsing each voucher-ledger pair into a single
+    // summed row makes the SUM exact and removes the collision entirely — the
+    // dynamic-TB service only ever reads SUM(debit)/SUM(credit) per ledger, so
+    // aggregating loses nothing the reports care about.
+    const agg = new Map<string, {
+      date: string; type: string; number: string; ledger: string;
+      debit: number; credit: number; isParty: number;
+      narration: string | null; syncMonth: string;
+    }>();
     for (const r of rows) {
       if (!r?.voucherDate || !r?.ledgerName) continue;
-      const syncMonth = String(r.voucherDate).slice(0, 7);
+      const date = String(r.voucherDate);
+      const type = r.voucherType ? String(r.voucherType) : '';
+      const number = r.voucherNumber ? String(r.voucherNumber) : '';
+      const ledger = String(r.ledgerName).trim();
+      const key = `${date} ${type} ${number} ${ledger}`;
+      let e = agg.get(key);
+      if (!e) {
+        e = {
+          date, type, number, ledger,
+          debit: 0, credit: 0,
+          isParty: r.isPartyLedger ? 1 : 0,
+          narration: r.narration ? String(r.narration) : null,
+          syncMonth: date.slice(0, 7),
+        };
+        agg.set(key, e);
+      }
+      e.debit += num(r.debit);
+      e.credit += num(r.credit);
+      // Keep the first non-empty narration / any party flag we see.
+      if (r.isPartyLedger) e.isParty = 1;
+      if (!e.narration && r.narration) e.narration = String(r.narration);
+    }
+
+    for (const e of agg.values()) {
       db.run(
         `INSERT OR IGNORE INTO vcfo_voucher_ledger_entries
            (company_id, voucher_date, voucher_type, voucher_number, ledger_name,
@@ -347,15 +389,15 @@ function ingestVoucherLedgerEntries(db: DbHelper, companyId: number, rows: any[]
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           companyId,
-          String(r.voucherDate),
-          r.voucherType ? String(r.voucherType) : '',
-          r.voucherNumber ? String(r.voucherNumber) : '',
-          String(r.ledgerName).trim(),
-          num(r.debit),
-          num(r.credit),
-          r.isPartyLedger ? 1 : 0,
-          r.narration ? String(r.narration) : null,
-          syncMonth,
+          e.date,
+          e.type,
+          e.number,
+          e.ledger,
+          e.debit,
+          e.credit,
+          e.isParty,
+          e.narration,
+          e.syncMonth,
         ],
       );
       n++;
