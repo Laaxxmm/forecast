@@ -606,6 +606,7 @@ export default function ProfitLossReport({ companyId, companyIds, from, to, view
           displayCols={displayCols}
           labelFor={labelFor}
           showTrailingTotal={showTrailingTotal}
+          baseNetProfit={computed.netProfit}
         />
       )}
       {data.adjustments && data.adjustments.events.length > 0 && (
@@ -666,9 +667,11 @@ function AdjustmentsBlockCard(props: {
   displayCols: string[];
   labelFor: (col: string) => string;
   showTrailingTotal: boolean;
+  baseNetProfit: Record<string, number>;
 }) {
-  const { adjustments, groupResult, displayCols, labelFor, showTrailingTotal } = props;
+  const { adjustments, groupResult, displayCols, labelFor, showTrailingTotal, baseNetProfit } = props;
   const events = adjustments.events;
+  const adjustedNetProfit = adjustments.adjusted.computed.netProfit;
 
   // Build per-rule per-column NET deltas by summing events.
   interface RuleSummary {
@@ -718,6 +721,20 @@ function AdjustmentsBlockCard(props: {
     const n = v || 0;
     if (n === 0) return 'text-theme-faint';
     return n < 0 ? 'text-emerald-300' : 'text-rose-300';
+  };
+
+  // Net Profit is INCOME, so the colour convention flips vs the expense-delta
+  // rows above: positive NP = good (emerald), negative = loss (rose). Values
+  // are absolute rupees (not signed deltas).
+  const fmtNP = (v: number | undefined): string => {
+    const n = Math.round(v || 0);
+    if (n === 0) return '—';
+    return n < 0 ? `−${formatRs(Math.abs(n))}` : formatRs(n);
+  };
+  const npTone = (v: number | undefined): string => {
+    const n = v || 0;
+    if (n === 0) return 'text-theme-faint';
+    return n < 0 ? 'text-rose-300' : 'text-emerald-300';
   };
 
   return (
@@ -831,8 +848,8 @@ function AdjustmentsBlockCard(props: {
               </tr>
             ))}
           </tbody>
-          {ruleSummaries.length > 1 && (
-            <tfoot>
+          <tfoot>
+            {ruleSummaries.length > 1 && (
               <tr className="bg-dark-700/50 border-t-2 border-amber-500/30">
                 <td className="px-4 py-2.5 font-semibold text-amber-300 sticky left-0 bg-dark-700/50 text-[13px]">
                   Net adjustments
@@ -847,8 +864,38 @@ function AdjustmentsBlockCard(props: {
                   </td>
                 ))}
               </tr>
-            </tfoot>
-          )}
+            )}
+            {/* Bottom line: books NP → adjusted NP, so the management view's
+                effect on each company's profit reads off directly here. */}
+            <tr className={`border-t border-dark-400/30 ${ruleSummaries.length > 1 ? '' : 'border-t-2 border-amber-500/30'}`}>
+              <td className="px-4 py-2 text-theme-faint sticky left-0 bg-dark-800 text-[12px]">
+                Net Profit · books
+              </td>
+              {displayCols.map(c => (
+                <td
+                  key={c}
+                  className="px-4 py-2 text-right font-mono text-[12px] text-theme-faint"
+                  style={separatorBetweenLocationGroups(groupResult, c)}
+                >
+                  {fmtNP(baseNetProfit[c])}
+                </td>
+              ))}
+            </tr>
+            <tr className="bg-accent-500/10 border-t border-accent-500/40">
+              <td className="px-4 py-3 font-bold text-accent-300 sticky left-0 bg-accent-500/10 text-[13px]">
+                Net Profit · after adjustments
+              </td>
+              {displayCols.map(c => (
+                <td
+                  key={c}
+                  className={`px-4 py-3 text-right font-mono font-bold text-[13px] ${npTone(adjustedNetProfit[c])}`}
+                  style={separatorBetweenLocationGroups(groupResult, c)}
+                >
+                  {fmtNP(adjustedNetProfit[c])}
+                </td>
+              ))}
+            </tr>
+          </tfoot>
         </table>
       </div>
 
