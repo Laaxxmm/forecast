@@ -702,6 +702,16 @@ function AdjustmentsBlockCard(props: {
     s.perCol[ev.destinationCol] = (s.perCol[ev.destinationCol] || 0) + ev.amount;
   }
 
+  // Derive each rule's 'total' column as the arithmetic SUM of its
+  // per-company cells. Events never carry a 'total' key, so without this the
+  // total renders as 0/em-dash. For zero-sum rules (pool_split, cross_charge)
+  // the sum is ~0 (correct — money just moved between companies); for the
+  // one-sided add-back it's the real net effect (e.g. total salary added back).
+  const companyCols = displayCols.filter(c => c !== 'total');
+  for (const s of ruleSummaries) {
+    s.perCol.total = companyCols.reduce((sum, c) => sum + (s.perCol[c] || 0), 0);
+  }
+
   // Compute the column-wise totals across all rules (renders as a footer row).
   const totalsPerCol: Record<string, number> = {};
   for (const s of ruleSummaries) {
