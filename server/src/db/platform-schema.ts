@@ -186,6 +186,60 @@ export function initializePlatformSchema(db: DbHelper) {
     );
     CREATE INDEX IF NOT EXISTS idx_agent_keys_hash ON agent_keys(key_hash);
     CREATE INDEX IF NOT EXISTS idx_agent_keys_client ON agent_keys(client_id);
+
+    -- ── Zoho Books integration ───────────────────────────────────────────
+    -- A Zoho "connection" = one OAuth credential set (one Zoho login). Some
+    -- connections are firm-level (scope='firm', client_id NULL) and expose
+    -- many organizations spanning multiple of our clients; others belong to
+    -- a single client (scope='client', client_id set). This is the "mix"
+    -- topology the operator asked for. ALL Zoho auth state lives here in
+    -- platform.db (never a tenant DB) because a firm login spans tenants —
+    -- same reasoning as agent_keys above.
+    --
+    -- Secrets: refresh_token_enc + access_token_enc hold AES-256-GCM
+    -- ciphertext (utils/crypto.ts), never plaintext tokens. The refresh
+    -- token does not expire until revoked; the access token (1 hr) is cached
+    -- with its expiry so we reuse it within the hour instead of minting a new
+    -- one on every call (Zoho caps minting to 10 per refresh token / 10 min).
+    CREATE TABLE IF NOT EXISTS zoho_connections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      label TEXT NOT NULL,
+      dc_region TEXT NOT NULL DEFAULT 'in',           -- in | com | eu | com.au | jp | ca
+      scope TEXT NOT NULL DEFAULT 'firm',             -- 'firm' | 'client'
+      client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+      refresh_token_enc TEXT,
+      access_token_enc TEXT,
+      access_token_expires_at TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',         -- pending | connected | error | revoked
+      last_error TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_zoho_conn_client ON zoho_connections(client_id);
+
+    -- Each Zoho organization (a client's "books") routes into exactly one
+    -- tenant company. target_client_id picks the tenant DB;
+    -- target_company_name is the vcfo_companies.name key within it (auto-
+    -- created on first sync, identical to the Tally ingest path). is_enabled
+    -- lets the operator stage mappings before turning sync on.
+    CREATE TABLE IF NOT EXISTS zoho_org_mappings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      connection_id INTEGER NOT NULL REFERENCES zoho_connections(id) ON DELETE CASCADE,
+      zoho_org_id TEXT NOT NULL,
+      zoho_org_name TEXT,
+      base_currency TEXT,
+      fiscal_year_start_month INTEGER DEFAULT 4,
+      target_client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+      target_company_name TEXT,
+      is_enabled INTEGER DEFAULT 0,
+      last_synced_at TEXT,
+      last_sync_status TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(connection_id, zoho_org_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_zoho_org_conn ON zoho_org_mappings(connection_id);
+    CREATE INDEX IF NOT EXISTS idx_zoho_org_target ON zoho_org_mappings(target_client_id);
   `);
 
   // One-time migration: copy legacy TallyVision `vcfo_agent_keys` rows (if the

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import AgentKeysPanel from '../components/admin/AgentKeysPanel';
 import AutoSyncHealthPanel from '../components/admin/AutoSyncHealthPanel';
+import ZohoBooksPanel from '../components/admin/ZohoBooksPanel';
 import { CLIENT_ROLE_LABELS, type ClientRole } from '../utils/roles';
 import DataTable, { type ColumnDef } from '../components/common/DataTable';
 
@@ -35,7 +36,7 @@ interface Integration {
   key: string; name: string; description: string; enabled: boolean; group?: string;
 }
 
-type Tab = 'clients' | 'team' | 'agent_keys' | 'auto_sync_health';
+type Tab = 'clients' | 'team' | 'agent_keys' | 'auto_sync_health' | 'zoho_books';
 type ClientDetailTab = 'users' | 'modules' | 'integrations' | 'streams' | 'dashboard_cards' | 'branches' | 'assigned_team';
 
 /* ─── Tone helpers ───────────────────────────────────────── */
@@ -66,13 +67,18 @@ const STREAM_DOT: Record<string, string> = {
 /* ─── Main Page ──────────────────────────────────────────── */
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<Tab>('clients');
+  // Land on the Zoho Books tab when returning from the OAuth callback
+  // (server 302s to /admin?zoho=connected|error).
+  const [tab, setTab] = useState<Tab>(
+    () => (new URLSearchParams(window.location.search).get('zoho') ? 'zoho_books' : 'clients'),
+  );
   const isOwner = localStorage.getItem('is_owner') === '1';
 
   const tabs = [
     { key: 'clients' as Tab, label: 'Clients', icon: Building2 },
     ...(isOwner ? [{ key: 'team' as Tab, label: 'Team', icon: Shield }] : []),
     { key: 'agent_keys' as Tab, label: 'Agent Keys', icon: KeyRound },
+    { key: 'zoho_books' as Tab, label: 'Zoho Books', icon: BookOpen },
     { key: 'auto_sync_health' as Tab, label: 'Auto-Sync Health', icon: Activity },
   ];
 
@@ -119,6 +125,7 @@ export default function AdminPage() {
       {tab === 'clients' && <ClientsPanel />}
       {tab === 'team' && isOwner && <TeamPanel />}
       {tab === 'agent_keys' && <AgentKeysPanel />}
+      {tab === 'zoho_books' && <ZohoBooksPanel />}
       {tab === 'auto_sync_health' && <AutoSyncHealthPanel />}
     </div>
   );

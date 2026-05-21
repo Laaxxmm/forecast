@@ -38,6 +38,7 @@ import vcfoComplianceRoutes from './routes/vcfo-compliances.js';
 import vcfoComplianceServicesRoutes from './routes/vcfo-compliance-services.js';
 import vcfoAccountingTasksRoutes from './routes/vcfo-accounting-tasks.js';
 import vcfoCostAllocationRoutes from './routes/vcfo-cost-allocation.js';
+import zohoRoutes from './routes/zoho.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -241,6 +242,13 @@ app.use('/api/ingest', ingestRoutes);
 
 // ─── Admin routes (super admin only, no tenant context) ─────────────────────
 app.use('/api/admin', requireAuth, requireSuperAdmin, adminRoutes);
+
+// ─── Zoho Books integration (firm / super admin) ────────────────────────────
+// Mounted WITHOUT auth middleware here on purpose: the OAuth callback
+// (GET /api/zoho/oauth/callback) is hit by Zoho's browser redirect with no
+// auth header, so it must stay public. The router declares that one route
+// before applying requireAuth + requireSuperAdmin to everything else.
+app.use('/api/zoho', zohoRoutes);
 
 // ─── Client-scoped routes (require auth + tenant + branch + module) ────────
 const forecastOps = [requireAuth, resolveTenant, resolveBranch, requireModule('forecast_ops')];
